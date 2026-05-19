@@ -1,0 +1,192 @@
+"use client"
+
+import Link from "next/link"
+import { usePathname, useRouter } from "next/navigation"
+import type { ReactNode } from "react"
+import { useEffect, useMemo, useState } from "react"
+import { supabase } from "@/lib/supabase"
+
+const navItems = [
+    ["Dashboard", "/dashboard"],
+    ["Products", "/dashboard/products"],
+    ["Customers", "/dashboard/customers"],
+    ["Invoices", "/dashboard/invoices"],
+    ["Orders", "/dashboard/orders"],
+    ["Billing", "/dashboard/billing"],
+    ["Inventory", "/dashboard/inventory"],
+    ["Analytics", "/dashboard/charts"],
+    ["Settings", "/dashboard/settings"],
+]
+
+export default function DashboardLayout({ children }: { children: ReactNode }) {
+    const router = useRouter()
+    const pathname = usePathname()
+    const [loading, setLoading] = useState(true)
+    const [businessName, setBusinessName] = useState("My Business")
+    const [ownerEmail, setOwnerEmail] = useState("")
+    const [mobileNavOpen, setMobileNavOpen] = useState(false)
+
+    useEffect(() => {
+        queueMicrotask(async () => {
+            try {
+                const {
+                    data: { user },
+                } = await supabase.auth.getUser()
+
+                if (!user) {
+                    router.replace("/login")
+                    return
+                }
+
+                const { data: profile, error: profileError } = await supabase
+                    .from("profiles")
+                    .select("approved,business_created,role")
+                    .eq("id", user.id)
+                    .single()
+
+                if (profileError || !profile || !profile.approved) {
+                    router.replace("/pending-approval")
+                    return
+                }
+
+                if (profile.role === "admin") {
+                    router.replace("/admin")
+                    return
+                }
+
+                const { data: membership } = await supabase
+                    .from("organization_members")
+                    .select("organization_id")
+                    .eq("user_id", user.id)
+                    .maybeSingle()
+
+                if (membership?.organization_id) {
+                    const { data: organization } = await supabase
+                        .from("organizations")
+                        .select("name")
+                        .eq("id", membership.organization_id)
+                        .maybeSingle()
+
+                    if (organization?.name) setBusinessName(organization.name)
+                }
+
+                setOwnerEmail(user.email || "owner@bezgrow.com")
+                setLoading(false)
+            } catch (error) {
+                console.error("Dashboard access error:", error)
+                setLoading(false)
+            }
+        })
+    }, [router])
+
+    const workspaceInitial = useMemo(() => businessName.charAt(0).toUpperCase() || "B", [businessName])
+
+    async function handleLogout() {
+        await supabase.auth.signOut()
+        router.replace("/login")
+    }
+
+    if (loading) {
+        return (
+            <div className="relative flex h-screen items-center justify-center overflow-hidden bg-black text-white">
+                <div className="inventory-grid-bg absolute inset-0 opacity-40" />
+                <div className="relative flex flex-col items-center">
+                    <div className="h-24 w-24 animate-spin rounded-full border-[6px] border-neutral-800 border-t-cyan-300 shadow-[0_0_55px_rgba(34,211,238,0.2)]" />
+                    <h1 className="mt-8 text-2xl font-black">Loading Workspace</h1>
+                    <p className="mt-2 text-sm text-neutral-500">Preparing global ERP operations.</p>
+                </div>
+            </div>
+        )
+    }
+
+    return (
+        <div className="flex h-screen overflow-hidden bg-black text-white">
+            <aside className="hidden w-[292px] shrink-0 border-r border-white/10 bg-[#060909] p-5 lg:flex lg:flex-col">
+                <div className="inventory-sheen rounded-[30px] border border-white/10 bg-white/[0.035] p-5">
+                    <div className="flex items-center gap-4">
+                        <div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-gradient-to-br from-cyan-400 to-blue-600 text-xl font-black text-black">
+                            {workspaceInitial}
+                        </div>
+                        <div className="min-w-0">
+                            <p className="truncate text-lg font-black">Bezgrow</p>
+                            <p className="truncate text-xs uppercase tracking-[0.18em] text-neutral-500">{businessName}</p>
+                        </div>
+                    </div>
+                </div>
+
+                <nav className="mt-6 flex-1 space-y-2 overflow-y-auto pr-1">
+                    {navItems.map(([name, href]) => {
+                        const active = pathname === href
+                        return (
+                            <Link
+                                key={href}
+                                href={href}
+                                className={`flex min-h-12 items-center rounded-2xl border px-4 text-sm font-bold transition-all duration-300 ${active
+                                    ? "border-cyan-400/30 bg-cyan-500/10 text-cyan-100 shadow-[0_0_30px_rgba(34,211,238,0.12)]"
+                                    : "border-transparent text-neutral-400 hover:border-white/10 hover:bg-white/[0.04] hover:text-white"
+                                    }`}
+                            >
+                                {name}
+                            </Link>
+                        )
+                    })}
+                </nav>
+
+                <div className="mt-5 rounded-[26px] border border-white/10 bg-white/[0.035] p-4">
+                    <p className="truncate text-sm font-bold text-white">{businessName}</p>
+                    <p className="mt-1 truncate text-xs text-neutral-500">{ownerEmail}</p>
+                    <button onClick={handleLogout} className="mt-4 h-11 w-full rounded-2xl bg-red-500/15 text-sm font-bold text-red-200 hover:bg-red-500/25">
+                        Logout
+                    </button>
+                </div>
+            </aside>
+
+            <div className="flex min-w-0 flex-1 flex-col overflow-hidden">
+                <header className="z-30 border-b border-white/10 bg-black/80 px-5 py-4 backdrop-blur-xl lg:px-8">
+                    <div className="flex items-center justify-between gap-3">
+                        <button
+                            onClick={() => setMobileNavOpen((value) => !value)}
+                            className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl border border-white/10 bg-white/[0.04] text-lg font-black lg:hidden"
+                            aria-label="Open navigation"
+                        >
+                            {mobileNavOpen ? "X" : "≡"}
+                        </button>
+                        <div className="min-w-0">
+                            <h1 className="truncate text-2xl font-black">Global ERP Workspace</h1>
+                            <p className="mt-1 truncate text-sm text-neutral-500">
+                                Inventory, billing, retail POS, analytics, and launch operations.
+                            </p>
+                        </div>
+                        <Link href="/profile" className="flex h-12 items-center gap-3 rounded-2xl border border-white/10 bg-white/[0.04] px-3 hover:border-cyan-400/30">
+                            <span className="flex h-9 w-9 items-center justify-center rounded-xl bg-cyan-400 text-sm font-black text-black">
+                                {workspaceInitial}
+                            </span>
+                            <span className="hidden max-w-[180px] truncate text-sm font-bold lg:block">{businessName}</span>
+                        </Link>
+                    </div>
+                    {mobileNavOpen && (
+                        <nav className="mt-4 grid grid-cols-2 gap-2 rounded-2xl border border-white/10 bg-[#060909] p-3 sm:grid-cols-3 lg:hidden">
+                            {navItems.map(([name, href]) => {
+                                const active = pathname === href
+                                return (
+                                    <Link
+                                        key={href}
+                                        href={href}
+                                        onClick={() => setMobileNavOpen(false)}
+                                        className={`flex min-h-11 items-center justify-center rounded-xl border px-3 text-center text-xs font-bold ${active ? "border-cyan-300/40 bg-cyan-300/10 text-cyan-100" : "border-white/10 bg-white/[0.03] text-white/65"}`}
+                                    >
+                                        {name}
+                                    </Link>
+                                )
+                            })}
+                        </nav>
+                    )}
+                </header>
+
+                <main className="min-h-0 flex-1 overflow-y-auto bg-black">
+                    {children}
+                </main>
+            </div>
+        </div>
+    )
+}

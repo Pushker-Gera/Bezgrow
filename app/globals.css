@@ -1,26 +1,150 @@
 @import "tailwindcss";
 
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
-}
-
-@theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
-}
-
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
+  --background: #000000;
+  --foreground: #ededed;
 }
 
 body {
   background: var(--background);
   color: var(--foreground);
   font-family: Arial, Helvetica, sans-serif;
+  overflow-x: hidden;
+}
+
+/* Logo Glow Animation */
+@keyframes softGlow {
+  0%, 100% {
+    box-shadow: 0 0 15px rgba(255,255,255,0.15),
+                0 0 40px rgba(255,255,255,0.05);
+  }
+  50% {
+    box-shadow: 0 0 25px rgba(255,255,255,0.25),
+                0 0 60px rgba(255,255,255,0.08);
+  }
+}
+
+.glow-logo {
+  animation: softGlow 4s ease-in-out infinite;
+}
+/* Smooth Fade Up Animation */
+@keyframes fadeUp {
+  from {
+    opacity: 0;
+    transform: translateY(40px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.animate-fadeUp {
+  animation: fadeUp 1s ease-out forwards;
+}
+
+@keyframes inventoryGridShift {
+  from {
+    background-position: 0 0, 0 0;
+  }
+
+  to {
+    background-position: 42px 42px, 0 0;
+  }
+}
+
+@keyframes inventorySheen {
+  0% {
+    transform: translateX(-120%);
+  }
+
+  100% {
+    transform: translateX(120%);
+  }
+}
+
+.inventory-grid-bg {
+  background-image:
+    linear-gradient(rgba(255,255,255,0.045) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255,255,255,0.045) 1px, transparent 1px),
+    radial-gradient(circle at 18% 0%, rgba(34, 197, 94, 0.13), transparent 28%),
+    radial-gradient(circle at 88% 18%, rgba(14, 165, 233, 0.12), transparent 30%),
+    linear-gradient(135deg, #050505 0%, #071012 42%, #090b16 100%);
+  background-size: 42px 42px, 42px 42px, auto, auto, auto;
+  animation: inventoryGridShift 22s linear infinite;
+}
+
+.inventory-sheen::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  transform: translateX(-120%);
+  background: linear-gradient(90deg, transparent, rgba(255,255,255,0.08), transparent);
+  animation: inventorySheen 6s ease-in-out infinite;
+  pointer-events: none;
+}
+
+@keyframes landingFloat {
+  0%, 100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(-10px);
+  }
+}
+
+@keyframes landingFadeUp {
+  from {
+    opacity: 0;
+    transform: translateY(18px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes landingMarquee {
+  from {
+    transform: translateX(0);
+  }
+  to {
+    transform: translateX(-33.333%);
+  }
+}
+
+@keyframes landingAurora {
+  0%, 100% {
+    opacity: 0.5;
+    transform: translateX(-50%) scale(1);
+  }
+  50% {
+    opacity: 0.85;
+    transform: translateX(-50%) scale(1.08);
+  }
+}
+
+.landing-float {
+  animation: landingFloat 6s ease-in-out infinite;
+}
+
+.landing-fade-up {
+  animation: landingFadeUp 700ms ease-out both;
+}
+
+.landing-marquee {
+  animation: landingMarquee 26s linear infinite;
+}
+
+.payment-card-rise {
+  animation: landingFadeUp 550ms ease-out both;
+}
+
+.landing-aurora {
+  animation: landingAurora 8s ease-in-out infinite;
+}
+
+.landing-feature-card {
+  animation: landingFadeUp 650ms ease-out both;
 }
