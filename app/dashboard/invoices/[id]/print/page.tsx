@@ -37,7 +37,7 @@ type ProductRow = {
   name: string | null
 }
 
-type BillLayout = "a4" | "compact" | "thermal"
+type BillLayout = "a4" | "compact" | "register" | "thermal"
 
 function stringFrom(row: Record<string, unknown> | null, fields: string[]) {
   if (!row) return ""
@@ -67,6 +67,16 @@ function currencySymbol(currency: string) {
 function dateText(value: string | null | undefined) {
   if (!value) return "-"
   return new Date(value).toLocaleDateString()
+}
+
+function compactDateText(value: string | null | undefined) {
+  if (!value) return "-"
+  return new Date(value).toLocaleDateString("en-GB")
+}
+
+function shortText(value: string, length: number) {
+  if (!value) return "-"
+  return value.length > length ? `${value.slice(0, length - 1)}.` : value
 }
 
 export default function PrintInvoicePage() {
@@ -194,23 +204,26 @@ export default function PrintInvoicePage() {
   const productMap = new Map(products.map((product) => [product.id, product.name || "Product"]))
   const invoiceType = stringFrom(invoice, ["invoice_type"])
   const isNoGst = invoiceType === "no_gst" || totals.tax === 0
-  const previewWidth = billLayout === "thermal" ? "w-[360px]" : billLayout === "compact" ? "w-[680px]" : "w-[820px]"
+  const previewWidth = billLayout === "thermal" ? "w-[360px]" : billLayout === "compact" ? "w-[680px]" : billLayout === "register" ? "w-[560px]" : "w-[820px]"
   const sheetPadding = billLayout === "thermal" ? "p-4" : "p-6"
+  const printPageSize = billLayout === "thermal" ? "80mm 297mm" : billLayout === "register" ? "148mm 210mm" : "A4"
+  const printPageMargin = billLayout === "thermal" ? "3mm" : billLayout === "register" ? "6mm" : "8mm"
 
   return (
     <>
       <style jsx global>{`
         @page {
-          size: A4;
-          margin: 8mm;
+          size: ${printPageSize};
+          margin: ${printPageMargin};
         }
 
         @media print {
           html,
           body {
-            width: 210mm !important;
-            height: 297mm !important;
-            overflow: hidden !important;
+            width: auto !important;
+            height: auto !important;
+            min-height: 0 !important;
+            overflow: visible !important;
             background: white !important;
           }
           body * {
@@ -221,29 +234,92 @@ export default function PrintInvoicePage() {
             visibility: visible !important;
           }
           .print-sheet {
-            position: fixed !important;
+            position: absolute !important;
             left: 50% !important;
-            top: 50% !important;
+            top: 0 !important;
             width: 186mm !important;
-            max-height: 277mm !important;
-            overflow: hidden !important;
-            transform: translate(-50%, -50%) scale(0.98) !important;
-            transform-origin: center center !important;
+            max-width: 186mm !important;
+            height: auto !important;
+            max-height: none !important;
+            min-height: 0 !important;
+            overflow: visible !important;
+            transform: translateX(-50%) !important;
+            transform-origin: top center !important;
             box-shadow: none !important;
             border: 0 !important;
             border-radius: 0 !important;
+            color: #020617 !important;
             page-break-after: avoid !important;
             break-after: avoid !important;
           }
           .print-sheet[data-layout="compact"] {
             width: 150mm !important;
-            max-height: 277mm !important;
-            transform: translate(-50%, -50%) scale(1) !important;
+            max-width: 150mm !important;
+            transform: translateX(-50%) !important;
+          }
+          .print-sheet[data-layout="register"] {
+            width: 136mm !important;
+            max-width: 136mm !important;
+            min-height: 198mm !important;
+            transform: translateX(-50%) !important;
+          }
+          .print-sheet[data-layout="register"] .register-print {
+            min-height: 198mm !important;
+            font-size: 7.8px !important;
+            line-height: 1.16 !important;
+          }
+          .print-sheet[data-layout="register"] .register-print th,
+          .print-sheet[data-layout="register"] .register-print td,
+          .print-sheet[data-layout="register"] .register-print p,
+          .print-sheet[data-layout="register"] .register-print span {
+            font-size: 7.8px !important;
+            line-height: 1.16 !important;
+          }
+          .print-sheet[data-layout="register"] .register-print h1 {
+            font-size: 16px !important;
+            line-height: 1.05 !important;
+          }
+          .print-sheet[data-layout="register"] .register-print h2 {
+            font-size: 16px !important;
+            line-height: 1.05 !important;
+          }
+          .print-sheet[data-layout="register"] .register-card {
+            border-radius: 6px !important;
+            padding: 6px !important;
           }
           .print-sheet[data-layout="thermal"] {
-            width: 82mm !important;
-            max-height: 277mm !important;
-            transform: translate(-50%, -50%) scale(0.78) !important;
+            left: 50% !important;
+            width: 72mm !important;
+            max-width: 72mm !important;
+            transform: translateX(-50%) !important;
+            font-size: 9px !important;
+            line-height: 1.25 !important;
+          }
+          .print-sheet[data-layout="thermal"] header,
+          .print-sheet[data-layout="thermal"] section {
+            padding: 3mm !important;
+          }
+          .print-sheet[data-layout="thermal"] h1 {
+            font-size: 16px !important;
+            line-height: 1.15 !important;
+          }
+          .print-sheet[data-layout="thermal"] h2 {
+            font-size: 11px !important;
+            line-height: 1.2 !important;
+          }
+          .print-sheet[data-layout="thermal"] p,
+          .print-sheet[data-layout="thermal"] td,
+          .print-sheet[data-layout="thermal"] th,
+          .print-sheet[data-layout="thermal"] span {
+            font-size: 9px !important;
+            line-height: 1.25 !important;
+          }
+          .print-sheet[data-layout="thermal"] .thermal-hide-print {
+            display: none !important;
+          }
+          .print-sheet[data-layout="thermal"] .thermal-card {
+            border-radius: 6px !important;
+            padding: 8px !important;
           }
           .print-items-table,
           .print-items-table tr,
@@ -258,6 +334,12 @@ export default function PrintInvoicePage() {
           .print-sheet[data-layout="thermal"] .print-footer {
             margin-top: 10px !important;
             padding-top: 10px !important;
+          }
+          .print-preview-shell {
+            display: block !important;
+            padding: 0 !important;
+            margin: 0 !important;
+            background: white !important;
           }
           .no-print {
             display: none !important;
@@ -276,6 +358,7 @@ export default function PrintInvoicePage() {
             {[
               ["a4", "A4 Global Invoice"],
               ["compact", "Half A4 / Compact"],
+              ["register", "Half A4 Portrait"],
               ["thermal", "Thermal POS"],
             ].map(([value, label]) => (
               <button
@@ -305,7 +388,7 @@ export default function PrintInvoicePage() {
             <div className="mx-auto flex max-w-6xl flex-col gap-4 md:flex-row md:items-center md:justify-between">
               <div>
                 <h2 className="text-3xl font-black">Professional Bill Preview</h2>
-                <p className="mt-1 text-sm text-slate-500">A4, compact, and thermal layouts for global billing workflows.</p>
+                <p className="mt-1 text-sm text-slate-500">A4, compact, half-A4 portrait, and thermal layouts for global billing workflows.</p>
               </div>
               <button onClick={() => window.print()} className="h-12 rounded-2xl bg-black px-7 font-bold text-white">
                 Print
@@ -313,8 +396,128 @@ export default function PrintInvoicePage() {
             </div>
           </div>
 
-          <div className="flex justify-center px-4 py-8">
+          <div className="print-preview-shell flex justify-center px-4 py-8">
             <div data-layout={billLayout} className={`print-sheet ${previewWidth} overflow-hidden rounded-[22px] border border-slate-200 bg-white shadow-[0_24px_100px_rgba(15,23,42,0.12)]`}>
+              {billLayout === "register" ? (
+                <div className="register-print flex min-h-[794px] flex-col bg-white p-6 font-sans text-[11px] leading-tight text-slate-950">
+                  <header className="grid grid-cols-[1.1fr_0.9fr] gap-3 border-b-2 border-slate-950 pb-3">
+                    <div>
+                      <p className="text-[10px] font-black uppercase tracking-[0.24em] text-blue-700">{businessIndustry}</p>
+                      <h1 className="mt-1 text-2xl font-black leading-none">{businessName}</h1>
+                      <p className="mt-2 max-w-[280px] text-[10px] leading-4 text-slate-600">
+                        Professional half-A4 portrait invoice generated by Bezgrow.
+                      </p>
+                    </div>
+                    <div className="register-card rounded-xl border border-slate-300 bg-slate-50 p-3">
+                      <p className="text-[10px] font-black uppercase tracking-[0.2em] text-slate-500">Invoice Details</p>
+                      <div className="mt-2 grid grid-cols-2 gap-x-3 gap-y-1 text-[11px]">
+                        <span className="text-slate-500">Invoice</span>
+                        <span className="break-words text-right font-black">{invoice.invoice_number}</span>
+                        <span className="text-slate-500">Date</span>
+                        <span className="text-right font-bold">{compactDateText(invoice.created_at)}</span>
+                        <span className="text-slate-500">Mode</span>
+                        <span className="text-right font-bold">{isNoGst ? "No GST" : "GST"}</span>
+                        <span className="text-slate-500">Status</span>
+                        <span className="text-right font-bold uppercase">{stringFrom(invoice, ["payment_status"]) || "unpaid"}</span>
+                      </div>
+                    </div>
+                    <div className="register-card col-span-2 grid grid-cols-[1fr_auto] items-center rounded-xl bg-slate-950 p-3 text-white">
+                      <p className="text-[10px] font-black uppercase tracking-[0.2em] text-cyan-200">Grand Total</p>
+                      <h2 className="text-2xl font-black leading-none">{symbol} {totals.grandTotal.toFixed(2)}</h2>
+                      <p className="col-span-2 mt-1 text-[10px] text-white/65">Currency {currency}</p>
+                    </div>
+                  </header>
+
+                  <section className="mt-3 grid grid-cols-2 gap-3">
+                    <div className="register-card rounded-xl border border-slate-300 bg-white p-3">
+                      <p className="text-[10px] font-black uppercase tracking-[0.18em] text-slate-500">Bill To</p>
+                      <h3 className="mt-1 text-base font-black">{customerName}</h3>
+                      <p className="mt-1 text-[11px] text-slate-600">Phone: {customerPhone}</p>
+                      <p className="text-[11px] text-slate-600">Email: {customerEmail}</p>
+                    </div>
+                    <div className="register-card rounded-xl border border-slate-300 bg-white p-3">
+                      <p className="text-[10px] font-black uppercase tracking-[0.18em] text-slate-500">Tax & Payment</p>
+                      <div className="mt-2 grid grid-cols-2 gap-y-1 text-[11px]">
+                        <span className="text-slate-500">GSTIN</span>
+                        <span className="text-right font-bold">{customerGst}</span>
+                        <span className="text-slate-500">Payment</span>
+                        <span className="text-right font-bold">{stringFrom(invoice, ["payment_method"]) || "Cash"}</span>
+                        <span className="text-slate-500">Due Date</span>
+                        <span className="text-right font-bold">{dateText(stringFrom(invoice, ["due_date"]))}</span>
+                      </div>
+                    </div>
+                    <div className="register-card col-span-2 rounded-xl border border-slate-300 bg-slate-50 p-3">
+                      <p className="text-[10px] font-black uppercase tracking-[0.18em] text-slate-500">Summary</p>
+                      <div className="mt-2 grid grid-cols-3 gap-3 text-[11px]">
+                        <div>
+                        <span className="text-slate-500">Lines</span>
+                        <p className="font-bold">{items.length}</p>
+                        </div>
+                        <div>
+                        <span className="text-slate-500">Quantity</span>
+                        <p className="font-bold">{items.reduce((sum, item) => sum + Number(item.quantity || 0), 0).toFixed(2)}</p>
+                        </div>
+                        <div>
+                        <span className="text-slate-500">Tax</span>
+                        <p className="font-bold">{symbol} {totals.tax.toFixed(2)}</p>
+                        </div>
+                      </div>
+                    </div>
+                  </section>
+
+                  <table className="mt-3 w-full table-fixed border-collapse overflow-hidden rounded-xl border border-slate-300">
+                    <thead>
+                      <tr className="bg-slate-950 text-[10px] font-black uppercase tracking-[0.12em] text-white">
+                        <th className="w-[28px] px-2 py-2 text-left">No</th>
+                        <th className="px-2 py-2 text-left">Item</th>
+                        <th className="w-[58px] px-2 py-2 text-right">Qty</th>
+                        <th className="w-[72px] px-2 py-2 text-right">Rate</th>
+                        <th className="w-[54px] px-2 py-2 text-right">Tax</th>
+                        <th className="w-[84px] px-2 py-2 text-right">Amount</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {items.map((item, index) => {
+                        const base = Number(item.quantity || 0) * Number(item.unit_price || 0)
+                        const discount = (base * Number(item.discount_percent || 0)) / 100
+                        const amount = Number(item.line_total || base - discount) + Number(item.gst_amount || 0)
+                        const productName = item.product_name || (item.product_id ? productMap.get(item.product_id) : "") || item.product_id || "Product"
+
+                        return (
+                          <tr key={item.id || `${invoice.id}-${index}`} className="border-b border-slate-200 align-top last:border-none">
+                            <td className="px-2 py-2 font-bold text-slate-500">{index + 1}</td>
+                            <td className="px-2 py-2 font-bold">{shortText(productName, 42)}</td>
+                            <td className="px-2 py-2 text-right font-bold">{Number(item.quantity || 0).toFixed(Number(item.quantity || 0) % 1 ? 2 : 0)}</td>
+                            <td className="px-2 py-2 text-right">{symbol} {Number(item.unit_price || 0).toFixed(2)}</td>
+                            <td className="px-2 py-2 text-right">{isNoGst ? "0" : item.tax_percent || 0}%</td>
+                            <td className="px-2 py-2 text-right font-black">{symbol} {amount.toFixed(2)}</td>
+                          </tr>
+                        )
+                      })}
+                    </tbody>
+                  </table>
+
+                  <footer className="mt-auto grid grid-cols-[1fr_210px] gap-3 pt-3">
+                    <div className="register-card rounded-xl border border-slate-300 bg-slate-50 p-3">
+                      <p className="text-[10px] font-black uppercase tracking-[0.18em] text-slate-500">Notes</p>
+                      <p className="mt-2 text-[11px] leading-5 text-slate-600">{stringFrom(invoice, ["notes"]) || "Thank you for your business."}</p>
+                      <p className="mt-3 text-[10px] text-slate-500">Digitally generated invoice. Verify local tax compliance before statutory filing.</p>
+                    </div>
+                    <div className="register-card rounded-xl border border-slate-300 bg-white p-3">
+                      <div className="space-y-1 text-[11px]">
+                        <div className="flex justify-between"><span className="text-slate-500">Subtotal</span><span className="font-bold">{symbol} {totals.subtotal.toFixed(2)}</span></div>
+                        <div className="flex justify-between"><span className="text-slate-500">Discount</span><span className="font-bold">- {symbol} {totals.discount.toFixed(2)}</span></div>
+                        <div className="flex justify-between"><span className="text-slate-500">{isNoGst ? "GST not charged" : "GST/Tax"}</span><span className="font-bold">{symbol} {totals.tax.toFixed(2)}</span></div>
+                        <div className="mt-2 flex justify-between border-t border-slate-300 pt-2 text-base font-black">
+                          <span>Total</span>
+                          <span className="text-blue-700">{symbol} {totals.grandTotal.toFixed(2)}</span>
+                        </div>
+                      </div>
+                    </div>
+                  </footer>
+                </div>
+              ) : (
+                <>
               <header className={`${sheetPadding} border-b border-slate-200`}>
                 <div className={`flex gap-6 ${billLayout === "thermal" ? "flex-col text-center" : "items-start justify-between"}`}>
                   <div className="min-w-0 flex-1">
@@ -337,7 +540,7 @@ export default function PrintInvoicePage() {
 
               <section className={`${sheetPadding} border-b border-slate-200`}>
                 <div className={`grid gap-5 ${billLayout === "thermal" ? "grid-cols-1" : "grid-cols-2"}`}>
-                  <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+                  <div className="thermal-card rounded-2xl border border-slate-200 bg-slate-50 p-4">
                     <p className="text-xs font-bold uppercase tracking-[0.2em] text-slate-400">Bill To</p>
                     <h3 className="mt-2 text-xl font-black">{customerName}</h3>
                     <div className="mt-3 space-y-1 text-sm text-slate-600">
@@ -346,7 +549,7 @@ export default function PrintInvoicePage() {
                       <p>GST: {customerGst}</p>
                     </div>
                   </div>
-                  <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+                  <div className="thermal-card rounded-2xl border border-slate-200 bg-slate-50 p-4">
                     <p className="text-xs font-bold uppercase tracking-[0.2em] text-slate-400">Billing Details</p>
                     <div className="mt-3 grid grid-cols-2 gap-3 text-sm">
                       <div><p className="text-slate-400">Payment</p><p className="mt-1 font-bold">{stringFrom(invoice, ["payment_method"]) || "Cash"}</p></div>
@@ -420,6 +623,8 @@ export default function PrintInvoicePage() {
                   )}
                 </footer>
               </section>
+                </>
+              )}
             </div>
           </div>
         </main>

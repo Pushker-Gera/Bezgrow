@@ -35,7 +35,8 @@ export default function ProfilePage() {
       .from("organization_members")
       .select("organization_id")
       .eq("user_id", data.user.id)
-      .single()
+      .limit(1)
+      .maybeSingle()
 
     if (membership?.organization_id) {
       const { data: org } = await supabase
@@ -84,24 +85,24 @@ export default function ProfilePage() {
 
       </div>
 
-      <div className="relative z-10 h-screen w-full flex items-center justify-center px-6 py-6 overflow-hidden">
+      <div className="relative z-10 min-h-screen w-full px-4 py-5 sm:px-6 lg:flex lg:items-center lg:justify-center lg:overflow-hidden">
 
-        <div className="w-full max-w-[1500px] h-full grid grid-cols-12 gap-6">
+        <div className="grid w-full max-w-[1500px] grid-cols-1 gap-5 lg:min-h-[calc(100vh-48px)] lg:grid-cols-12 lg:gap-6">
 
-          <div className="col-span-3 rounded-[36px] border border-white/10 bg-gradient-to-b from-zinc-900 to-black backdrop-blur-2xl p-7 flex flex-col justify-between shadow-[0_0_60px_rgba(0,0,0,0.55)] overflow-hidden relative">
+          <div className="relative flex flex-col justify-between overflow-hidden rounded-[28px] border border-white/10 bg-gradient-to-b from-zinc-900 to-black p-5 shadow-[0_0_60px_rgba(0,0,0,0.55)] backdrop-blur-2xl sm:p-7 lg:col-span-3">
 
             <div className="absolute inset-0 bg-[radial-gradient(circle_at_top,rgba(34,211,238,0.12),transparent_35%)]"></div>
 
             <div className="relative z-10">
 
-              <div className="flex items-center gap-4 mb-10">
+              <div className="mb-8 flex min-w-0 items-center gap-4 lg:mb-10">
 
-                <div className="w-20 h-20 rounded-[28px] bg-gradient-to-br from-cyan-400 via-blue-500 to-blue-700 flex items-center justify-center text-4xl font-black shadow-[0_0_50px_rgba(34,211,238,0.3)]">
+                <div className="flex h-16 w-16 shrink-0 items-center justify-center rounded-[24px] bg-gradient-to-br from-cyan-400 via-blue-500 to-blue-700 text-3xl font-black shadow-[0_0_50px_rgba(34,211,238,0.3)] sm:h-20 sm:w-20 sm:rounded-[28px] sm:text-4xl">
                   {organization?.business_name?.charAt(0) || "B"}
                 </div>
 
-                <div>
-                  <h2 className="text-2xl font-black leading-tight">
+                <div className="min-w-0">
+                  <h2 className="truncate text-xl font-black leading-tight sm:text-2xl">
                     {organization?.business_name || "Bezgrow ERP"}
                   </h2>
 
@@ -150,42 +151,42 @@ export default function ProfilePage() {
 
             <button
               onClick={logout}
-              className="relative z-10 w-full py-4 rounded-2xl bg-gradient-to-r from-red-600 to-red-500 hover:from-red-500 hover:to-red-400 transition-all duration-300 font-bold text-base shadow-[0_0_40px_rgba(239,68,68,0.3)] hover:scale-[1.02]"
+              className="relative z-10 mt-6 w-full rounded-2xl bg-gradient-to-r from-red-600 to-red-500 py-4 text-base font-bold shadow-[0_0_40px_rgba(239,68,68,0.3)] transition-all duration-300 hover:scale-[1.02] hover:from-red-500 hover:to-red-400 lg:mt-0"
             >
               Logout Workspace
             </button>
 
           </div>
 
-          <div className="col-span-6 rounded-[40px] border border-white/10 bg-gradient-to-br from-zinc-900/95 via-black to-zinc-950 backdrop-blur-2xl p-8 shadow-[0_0_80px_rgba(0,0,0,0.65)] relative overflow-hidden flex flex-col justify-between">
+          <div className="relative flex flex-col justify-between overflow-hidden rounded-[30px] border border-white/10 bg-gradient-to-br from-zinc-900/95 via-black to-zinc-950 p-5 shadow-[0_0_80px_rgba(0,0,0,0.65)] backdrop-blur-2xl sm:p-8 lg:col-span-6">
 
             <div className="absolute inset-0 bg-[radial-gradient(circle_at_top_left,rgba(34,211,238,0.12),transparent_30%),radial-gradient(circle_at_bottom_right,rgba(59,130,246,0.08),transparent_35%)]"></div>
 
             <div className="relative z-10">
 
-              <div className="inline-flex items-center gap-2 px-4 py-2 rounded-full border border-cyan-500/20 bg-cyan-500/10 text-cyan-300 text-xs tracking-[0.2em] uppercase mb-6">
+              <div className="mb-5 inline-flex max-w-full items-center gap-2 rounded-full border border-cyan-500/20 bg-cyan-500/10 px-4 py-2 text-[10px] uppercase tracking-[0.16em] text-cyan-300 sm:mb-6 sm:text-xs sm:tracking-[0.2em]">
                 Global ERP Infrastructure
               </div>
 
-              <h1 className="text-6xl font-black tracking-tight leading-none bg-gradient-to-r from-white via-cyan-100 to-blue-300 bg-clip-text text-transparent">
+              <h1 className="bg-gradient-to-r from-white via-cyan-100 to-blue-300 bg-clip-text text-4xl font-black leading-tight tracking-tight text-transparent sm:text-5xl xl:text-6xl xl:leading-none">
                 Business Profile
               </h1>
 
-              <p className="text-lg text-neutral-400 leading-8 mt-6 max-w-3xl">
+              <p className="mt-5 max-w-3xl text-base leading-7 text-neutral-400 sm:mt-6 sm:text-lg sm:leading-8">
                 Centralized enterprise identity management for your global inventory,
                 billing, fulfillment and warehouse operations.
               </p>
 
             </div>
 
-            <div className="relative z-10 grid grid-cols-2 gap-5 mt-10">
+            <div className="relative z-10 mt-8 grid grid-cols-1 gap-4 sm:grid-cols-2 sm:gap-5 lg:mt-10">
 
               <div className="rounded-3xl border border-white/10 bg-white/[0.03] p-6 hover:border-cyan-400/30 transition-all duration-300 hover:-translate-y-1">
                 <p className="text-xs uppercase tracking-[0.18em] text-neutral-500 mb-3">
                   ERP Status
                 </p>
 
-                <h3 className="text-4xl font-black text-green-300">
+                <h3 className="text-3xl font-black text-green-300 sm:text-4xl">
                   Live
                 </h3>
               </div>
@@ -195,7 +196,7 @@ export default function ProfilePage() {
                   Cloud Sync
                 </p>
 
-                <h3 className="text-4xl font-black text-cyan-300">
+                <h3 className="text-3xl font-black text-cyan-300 sm:text-4xl">
                   Active
                 </h3>
               </div>
@@ -215,7 +216,7 @@ export default function ProfilePage() {
                   Infrastructure
                 </p>
 
-                <h3 className="text-4xl font-black text-white">
+                <h3 className="text-3xl font-black text-white sm:text-4xl">
                   Global
                 </h3>
               </div>
@@ -224,23 +225,23 @@ export default function ProfilePage() {
 
           </div>
 
-          <div className="col-span-3 flex flex-col gap-6">
+          <div className="flex flex-col gap-5 lg:col-span-3 lg:gap-6">
 
-            <div className="flex-1 rounded-[36px] border border-white/10 bg-gradient-to-b from-zinc-900 to-black backdrop-blur-2xl p-7 shadow-[0_0_60px_rgba(0,0,0,0.45)]">
+            <div className="flex-1 rounded-[28px] border border-white/10 bg-gradient-to-b from-zinc-900 to-black p-5 shadow-[0_0_60px_rgba(0,0,0,0.45)] backdrop-blur-2xl sm:p-7">
 
-              <div className="flex items-center justify-between mb-8">
+              <div className="mb-6 flex items-center justify-between gap-4 sm:mb-8">
 
-                <div>
+                <div className="min-w-0">
                   <p className="text-xs uppercase tracking-[0.18em] text-neutral-500 mb-2">
                     Operations
                   </p>
 
-                  <h3 className="text-3xl font-black">
+                  <h3 className="text-2xl font-black sm:text-3xl">
                     Quick Actions
                   </h3>
                 </div>
 
-                <div className="w-12 h-12 rounded-2xl bg-cyan-500/10 border border-cyan-500/20 flex items-center justify-center text-cyan-300 text-xl">
+                <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl border border-cyan-500/20 bg-cyan-500/10 text-xl text-cyan-300">
                   ⚡
                 </div>
 
@@ -250,7 +251,7 @@ export default function ProfilePage() {
 
                 <Link
                   href="/dashboard/products"
-                  className="group flex items-center justify-between rounded-2xl border border-white/10 bg-white/[0.03] px-5 py-5 hover:bg-cyan-500/[0.05] hover:border-cyan-500/30 transition-all duration-300 hover:-translate-y-1"
+                  className="group flex items-center justify-between gap-4 rounded-2xl border border-white/10 bg-white/[0.03] px-4 py-4 transition-all duration-300 hover:-translate-y-1 hover:border-cyan-500/30 hover:bg-cyan-500/[0.05] sm:px-5 sm:py-5"
                 >
                   <div>
                     <p className="font-semibold text-white text-lg">
@@ -269,7 +270,7 @@ export default function ProfilePage() {
 
                 <Link
                   href="/dashboard/orders"
-                  className="group flex items-center justify-between rounded-2xl border border-white/10 bg-white/[0.03] px-5 py-5 hover:bg-cyan-500/[0.05] hover:border-cyan-500/30 transition-all duration-300 hover:-translate-y-1"
+                  className="group flex items-center justify-between gap-4 rounded-2xl border border-white/10 bg-white/[0.03] px-4 py-4 transition-all duration-300 hover:-translate-y-1 hover:border-cyan-500/30 hover:bg-cyan-500/[0.05] sm:px-5 sm:py-5"
                 >
                   <div>
                     <p className="font-semibold text-white text-lg">
@@ -288,7 +289,7 @@ export default function ProfilePage() {
 
                 <Link
                   href="/dashboard/invoices"
-                  className="group flex items-center justify-between rounded-2xl border border-white/10 bg-white/[0.03] px-5 py-5 hover:bg-cyan-500/[0.05] hover:border-cyan-500/30 transition-all duration-300 hover:-translate-y-1"
+                  className="group flex items-center justify-between gap-4 rounded-2xl border border-white/10 bg-white/[0.03] px-4 py-4 transition-all duration-300 hover:-translate-y-1 hover:border-cyan-500/30 hover:bg-cyan-500/[0.05] sm:px-5 sm:py-5"
                 >
                   <div>
                     <p className="font-semibold text-white text-lg">
@@ -307,7 +308,7 @@ export default function ProfilePage() {
 
                 <Link
                   href="/dashboard"
-                  className="group flex items-center justify-between rounded-2xl border border-cyan-500/20 bg-cyan-500/10 px-5 py-5 hover:bg-cyan-500/20 transition-all duration-300 hover:-translate-y-1"
+                  className="group flex items-center justify-between gap-4 rounded-2xl border border-cyan-500/20 bg-cyan-500/10 px-4 py-4 transition-all duration-300 hover:-translate-y-1 hover:bg-cyan-500/20 sm:px-5 sm:py-5"
                 >
                   <div>
                     <p className="font-semibold text-cyan-100 text-lg">
