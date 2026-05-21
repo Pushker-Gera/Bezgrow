@@ -202,7 +202,7 @@ export default function BillingPage() {
                 Billing, collections, tax, inventory value, and launch readiness.
               </h1>
               <p className="mt-5 max-w-4xl text-base leading-8 text-neutral-400 md:text-lg">
-                A professional ERP billing hub for global SaaS scaling: live revenue, payment risk,
+                A professional ERP billing hub for global SaaS scaling: live revenue, collection risk,
                 GST/tax visibility, invoice creation, print workflows, product readiness, and operational controls.
               </p>
             </div>
@@ -397,7 +397,7 @@ export default function BillingPage() {
               <h3 className="text-2xl font-black">Next Build Priorities</h3>
               <div className="mt-6 space-y-3 text-sm text-neutral-400">
                 <p>1. Add multi-currency and country tax profiles.</p>
-                <p>2. Add payment gateway reconciliation.</p>
+                <p>2. Add bank and collection reconciliation.</p>
                 <p>3. Add recurring invoice reminders and customer ledger follow-ups.</p>
                 <p>4. Add accountant exports for GST, VAT, and sales ledgers.</p>
               </div>

@@ -137,10 +137,6 @@ body {
   animation: landingMarquee 26s linear infinite;
 }
 
-.payment-card-rise {
-  animation: landingFadeUp 550ms ease-out both;
-}
-
 .landing-aurora {
   animation: landingAurora 8s ease-in-out infinite;
 }

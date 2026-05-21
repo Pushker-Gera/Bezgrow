@@ -3,18 +3,20 @@ import { supabase } from "./supabase"
 export async function getOrganizationId() {
     const {
         data: { user },
+        error: userError,
     } = await supabase.auth.getUser()
 
-    if (!user) return null
+    if (userError || !user) return null
 
     const { data, error } = await supabase
         .from("organization_members")
         .select("organization_id")
         .eq("user_id", user.id)
-        .single()
+        .limit(1)
+        .maybeSingle()
 
     if (error || !data) {
-        console.error(error)
+        if (error) console.error("Organization lookup failed:", error.message)
         return null
     }
 

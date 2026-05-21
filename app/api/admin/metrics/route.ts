@@ -50,7 +50,6 @@ export async function GET(request: Request) {
       invoices.error ||
       invoiceItems.error ||
       orders.error ||
-      logs.error ||
       usersCount.error ||
       pendingUsers.error
 
@@ -66,7 +65,7 @@ export async function GET(request: Request) {
       invoices: invoices.data || [],
       invoiceItems: invoiceItems.data || [],
       orders: orders.data || [],
-      logs: logs.data || [],
+      logs: logs.error ? [] : logs.data || [],
       usersCount: usersCount.count || 0,
       pendingUsers: pendingUsers.data || [],
     })

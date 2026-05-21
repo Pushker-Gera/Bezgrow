@@ -160,7 +160,7 @@ export default function CreateBusiness() {
             return
         }
 
-        // update or repair user profile after a successful payment/admin approval path
+        // Update or repair user profile after approval-based workspace setup.
         const { error: profileError } = await supabase
             .from("profiles")
             .upsert({

@@ -288,6 +288,39 @@ export default function CreateInvoicePage() {
     }
   }
 
+  function validateSaleableStock() {
+    const requested = new Map<string, number>()
+
+    items.forEach((item) => {
+      if (!item.product_id) return
+      requested.set(item.product_id, (requested.get(item.product_id) || 0) + Number(item.quantity || 0))
+    })
+
+    const validationErrors: string[] = []
+    const today = new Date()
+    today.setHours(0, 0, 0, 0)
+
+    requested.forEach((quantity, productId) => {
+      const product = productsMap.get(productId)
+      if (!product) return
+
+      const stock = Number(product.stock || 0)
+      if (quantity > stock) {
+        validationErrors.push(`${product.name} has only ${stock} in stock, but ${quantity} is selected.`)
+      }
+
+      if (hasExpiryTracking && product.expiry_date) {
+        const expiry = new Date(product.expiry_date)
+        expiry.setHours(0, 0, 0, 0)
+        if (expiry < today) {
+          validationErrors.push(`${product.name} is expired and cannot be billed.`)
+        }
+      }
+    })
+
+    return validationErrors
+  }
+
   function switchInvoiceMode(mode: "gst" | "no_gst") {
     setInvoiceMode(mode)
     if (mode === "no_gst") {
@@ -342,6 +375,16 @@ export default function CreateInvoicePage() {
     }
     if (items.some((item) => !item.product_id || item.quantity <= 0)) {
       setNotice({ title: "Invalid Products", message: "Select valid products and quantities for all invoice rows.", type: "warning" })
+      return
+    }
+
+    const stockValidationErrors = validateSaleableStock()
+    if (stockValidationErrors.length > 0) {
+      setNotice({
+        title: "Stock Validation Failed",
+        message: stockValidationErrors.slice(0, 3).join(" "),
+        type: "error",
+      })
       return
     }
 

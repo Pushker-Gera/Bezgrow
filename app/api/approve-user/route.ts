@@ -44,28 +44,65 @@ export async function GET(req: Request) {
         if (!userId) {
 
             return NextResponse.json({
-                success: false
-            })
+                success: false,
+                error: "Missing userId"
+            }, { status: 400 })
 
         }
 
-        // update status
+        const { data: pendingUser, error: pendingError } = await supabase
+            .from("pending_users")
+            .select("id,email")
+            .eq("id", userId)
+            .maybeSingle()
 
-        const { error } = await supabase
+        if (pendingError) {
+
+            console.error(pendingError)
+
+            return NextResponse.json({
+                success: false,
+                error: pendingError.message
+            }, { status: 500 })
+
+        }
+
+        const { error: profileError } = await supabase
+            .from("profiles")
+            .upsert({
+                id: userId,
+                email: pendingUser?.email || null,
+                approved: true,
+                business_created: false,
+                role: "user"
+            }, { onConflict: "id" })
+
+        if (profileError) {
+
+            console.error(profileError)
+
+            return NextResponse.json({
+                success: false,
+                error: profileError.message
+            }, { status: 500 })
+
+        }
+
+        const { error: pendingUpdateError } = await supabase
             .from("pending_users")
             .update({
                 status: "approved"
             })
-            .eq("user_id", userId)
+            .eq("id", userId)
 
-        if (error) {
+        if (pendingUpdateError) {
 
-            console.error(error)
+            console.error(pendingUpdateError)
 
             return NextResponse.json({
                 success: false,
-                error
-            })
+                error: pendingUpdateError.message
+            }, { status: 500 })
 
         }
 

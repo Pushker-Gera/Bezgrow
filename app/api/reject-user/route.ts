@@ -41,12 +41,26 @@ export async function GET(req: Request) {
 
         const userId = searchParams.get("userId")
 
-        await supabase
+        if (!userId) {
+            return NextResponse.json({
+                success: false,
+                error: "Missing userId"
+            }, { status: 400 })
+        }
+
+        const { error } = await supabase
             .from("pending_users")
             .update({
                 status: "rejected"
             })
-            .eq("user_id", userId)
+            .eq("id", userId)
+
+        if (error) {
+            return NextResponse.json({
+                success: false,
+                error: error.message
+            }, { status: 500 })
+        }
 
         return NextResponse.redirect(`${origin}/admin/users?approval=rejected`)
 

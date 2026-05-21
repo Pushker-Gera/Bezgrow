@@ -40,14 +40,36 @@ type ProductStockRow = {
 }
 
 const featureCatalog = [
+  ["pos_billing", "POS Billing", "Fast counter billing for retail stores, malls, and walk-in checkout teams."],
+  ["quick_checkout", "Quick Checkout", "Speed-focused billing flows for counters with high daily invoice volume."],
+  ["gst_b2b", "GST B2B Billing", "Business invoices, buyer tax IDs, GST-ready line items, and tax visibility."],
   ["batch_tracking", "Batch Tracking", "Track lots, expiry, manufacturing, and procurement batches."],
   ["expiry_tracking", "Expiry Tracking", "Alerts for pharmacy, grocery, cosmetics, and perishable inventory."],
   ["barcode_scanning", "Barcode Scanning", "Enable SKU/barcode workflows for retail and warehouse teams."],
+  ["thermal_printing", "Thermal Printing", "POS receipt layout support for counters, malls, and small format printers."],
+  ["purchase_orders", "Purchase Orders", "Supplier purchasing, procurement controls, and incoming inventory planning."],
+  ["warehouse_transfers", "Warehouse Transfers", "Move stock across branches, stores, warehouses, and fulfillment locations."],
+  ["bulk_inventory", "Bulk Inventory", "High-volume stock operations for distributors and wholesale teams."],
   ["shipping_labels", "Shipping Labels", "Courier metadata, tracking numbers, and parcel-ready operations."],
+  ["awb_tracking", "AWB Tracking", "Airway bill and courier reference tracking for shipped orders."],
+  ["parcel_qr", "Parcel QR", "Parcel QR codes for packing, dispatch, and delivery handoff workflows."],
   ["bulk_pricing", "Wholesale Billing", "Wholesale invoices, bulk pricing, and B2B billing flows."],
   ["size_variants", "Variants", "Size, color, and variant-ready inventory structures."],
+  ["color_variants", "Color Variants", "Color-level product variants for apparel, cosmetics, and catalog-heavy inventory."],
   ["serial_numbers", "Serial Numbers", "Device, electronics, warranty, and serialized stock control."],
   ["warranty_tracking", "Warranty Tracking", "Capture warranty-ready sales and service workflows."],
+  ["prescription_required", "Prescription Required", "Medicine sale controls for prescription-only products."],
+  ["prescription_upload", "Prescription Upload", "Attach prescription evidence to pharmacy customer billing."],
+  ["kot_printing", "KOT Printing", "Kitchen order ticket workflows for restaurant and cafe operations."],
+  ["table_management", "Table Management", "Table-aware order and billing workflows for dine-in businesses."],
+  ["raw_materials", "Raw Materials", "Track input stock used for manufacturing, food, or assembled products."],
+  ["recipe_tracking", "Recipe Tracking", "Connect recipes or bills of materials to stock consumption."],
+  ["production_batches", "Production Batches", "Batch manufactured goods with cost, quantity, and traceability."],
+  ["quotation_system", "Quotation System", "Create quotations before converting them into invoices."],
+  ["service_invoices", "Service Invoices", "Service-led billing for consultants, repairs, agencies, and support teams."],
+  ["weight_inventory", "Weight Inventory", "Weight-based stock for grocery, jewellery, loose goods, and bulk products."],
+  ["weight_tracking", "Weight Tracking", "Track sold and remaining quantity by weight units."],
+  ["purity_tracking", "Purity Tracking", "Jewellery purity and material-grade tracking for high-value inventory."],
 ]
 
 function valueText(value: unknown) {
@@ -149,7 +171,7 @@ export default function SettingsPage() {
       ["Business profile", Boolean(form.name.trim() && form.industry.trim())],
       ["Currency configured", Boolean(form.currency)],
       ["Industry features", enabledFeatureSet.size >= 3],
-      ["Billing ready", enabledFeatureSet.has("bulk_pricing") || enabledFeatureSet.has("shipping_labels")],
+      ["Billing ready", enabledFeatureSet.has("pos_billing") || enabledFeatureSet.has("bulk_pricing") || enabledFeatureSet.has("shipping_labels")],
       ["Inventory controls", enabledFeatureSet.has("batch_tracking") || enabledFeatureSet.has("barcode_scanning")],
     ]
   }, [enabledFeatureSet, form.currency, form.industry, form.name])
