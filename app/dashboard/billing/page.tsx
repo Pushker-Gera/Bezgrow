@@ -398,7 +398,7 @@ export default function BillingPage() {
               <div className="mt-6 space-y-3 text-sm text-neutral-400">
                 <p>1. Add multi-currency and country tax profiles.</p>
                 <p>2. Add payment gateway reconciliation.</p>
-                <p>3. Add recurring invoices and subscriptions.</p>
+                <p>3. Add recurring invoice reminders and customer ledger follow-ups.</p>
                 <p>4. Add accountant exports for GST, VAT, and sales ledgers.</p>
               </div>
             </div>

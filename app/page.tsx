@@ -6,10 +6,10 @@ const capabilityGroups = [
   ["Inventory", "Stock, batches, suppliers, warehouses"],
   ["Billing", "GST, no-GST, A4, thermal, collections"],
   ["Retail POS", "Barcode scan, quick sale, customer message"],
-  ["Admin", "Approvals, subscriptions, businesses, analytics"],
+  ["Admin", "Approvals, businesses, analytics, launch controls"],
 ]
 
-const signals = ["Realtime stock", "Smart invoices", "UPI activation", "Mobile ready", "Global operations", "Thermal POS"]
+const signals = ["Realtime stock", "Smart invoices", "Approval workflow", "Mobile ready", "Global operations", "Thermal POS"]
 
 export default function Home() {
   const router = useRouter()
@@ -31,8 +31,8 @@ export default function Home() {
           </button>
           <div className="hidden rounded-full border border-white/10 bg-white/[0.035] px-4 py-2 text-sm font-bold text-white/50 md:flex md:gap-5">
             <span>Product</span>
-            <span>Pricing</span>
-            <span>Security</span>
+            <span>Inventory</span>
+            <span>Billing</span>
             <span>Admin</span>
           </div>
           <div className="flex items-center gap-3">
@@ -54,14 +54,14 @@ export default function Home() {
               Run your entire business from one beautiful workspace.
             </h1>
             <p className="mx-auto mt-6 max-w-3xl text-center text-base leading-8 text-white/62 sm:text-lg">
-              Inventory, billing, customers, orders, payments, analytics, and admin control designed for fast teams that want professional software from day one.
+              Inventory, billing, customers, orders, analytics, and admin control designed for fast teams that want professional software from day one.
             </p>
             <div className="mt-8 flex flex-col gap-3 sm:flex-row">
               <button onClick={() => router.push("/signup")} className="h-14 rounded-2xl bg-cyan-300 px-8 font-black text-black shadow-[0_0_44px_rgba(34,211,238,0.25)] transition hover:-translate-y-0.5 hover:bg-cyan-200">
                 Create Workspace
               </button>
-              <button onClick={() => router.push("/payment")} className="h-14 rounded-2xl border border-white/12 bg-white/[0.04] px-8 font-bold text-white/85 transition hover:-translate-y-0.5 hover:border-white/30">
-                View Plans
+              <button onClick={() => router.push("/login")} className="h-14 rounded-2xl border border-white/12 bg-white/[0.04] px-8 font-bold text-white/85 transition hover:-translate-y-0.5 hover:border-white/30">
+                Login
               </button>
             </div>
           </div>
@@ -99,7 +99,7 @@ export default function Home() {
           {[
             ["Sell faster", "Barcode scan, quick invoice, thermal bill, and customer SMS bill handoff."],
             ["Control stock", "Batch, supplier, warehouse, low-stock, expiry, and stock audit trails."],
-            ["Scale cleanly", "Admin approvals, paid activation, business monitoring, and launch controls."],
+            ["Scale cleanly", "Admin approvals, business monitoring, and launch controls."],
           ].map(([title, copy]) => (
             <article key={title} className="rounded-[24px] border border-white/10 bg-white/[0.035] p-6 text-center transition hover:-translate-y-1 hover:border-cyan-300/25">
               <h3 className="text-2xl font-black">{title}</h3>

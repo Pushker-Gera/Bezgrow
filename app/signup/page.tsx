@@ -69,10 +69,10 @@ export default function SignupPage() {
                 return
             }
 
-            setStatusMessage("Application submitted successfully. Choose payment activation or wait for admin approval.")
+            setStatusMessage("Application submitted successfully. Please wait for admin approval.")
 
             setTimeout(() => {
-                router.push("/payment")
+                router.push("/pending-approval")
             }, 1500)
 
         } catch (err) {
@@ -156,11 +156,11 @@ export default function SignupPage() {
                     disabled={loading}
                     className="w-full bg-white text-black py-3 rounded-lg font-semibold disabled:opacity-50"
                 >
-                    {loading ? "Submitting Application..." : "Request Access / Pay to Activate"}
+                    {loading ? "Submitting Application..." : "Request Admin Approval"}
                 </button>
 
                 <p className="mt-4 text-center text-sm text-gray-500">
-                    Monthly plan Rs 250. Yearly plan Rs 2000. Admin approval is still available after signup.
+                    Your account will open after an admin approves your request.
                 </p>
 
             </div>
