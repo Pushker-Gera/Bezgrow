@@ -3,11 +3,8 @@
 import type { FormEvent } from "react"
 import { useCallback, useEffect, useState } from "react"
 import { supabase } from "@/lib/supabase"
-import { useRouter } from "next/navigation"
 
 export default function LoginPage() {
-
-    const router = useRouter()
 
     const [email, setEmail] = useState("")
     const [password, setPassword] = useState("")
@@ -41,42 +38,18 @@ export default function LoginPage() {
         setErrorMessage(message)
     }
 
-    const routeAuthenticatedUser = useCallback(async (accessToken: string) => {
-        const response = await fetch("/api/workspace/bootstrap", {
-            headers: { Authorization: `Bearer ${accessToken}` },
-            cache: "no-store",
+    const getSiteUrl = useCallback(() => {
+        return (process.env.NEXT_PUBLIC_SITE_URL || window.location.origin).replace(/\/$/, "")
+    }, [])
+
+    const redirectToCallback = useCallback((accessToken: string, refreshToken: string, nextPath = getSafeNextPath("/dashboard")) => {
+        const params = new URLSearchParams({
+            access_token: accessToken,
+            refresh_token: refreshToken,
+            next: nextPath,
         })
-        const payload = (await response.json()) as {
-            profile?: {
-                role?: string
-                approved?: boolean
-                business_created?: boolean
-                is_suspended?: boolean
-            }
-            error?: string
-        }
-
-        if (!response.ok || !payload.profile) {
-            setErrorMessage(payload.error || "Your account profile is not ready yet.")
-            return
-        }
-
-        if (payload.profile.role === "admin") {
-            router.push(getSafeNextPath("/admin"))
-        }
-        else if (payload.profile.is_suspended) {
-            setErrorMessage("This account is suspended. Please contact support.")
-        }
-        else if (!payload.profile.approved) {
-            router.push("/pending-approval")
-        }
-        else if (!payload.profile.business_created) {
-            router.push("/create-business")
-        }
-        else {
-            router.push(getSafeNextPath("/dashboard"))
-        }
-    }, [getSafeNextPath, router])
+        window.location.assign(`${getSiteUrl()}/auth/callback?${params.toString()}`)
+    }, [getSafeNextPath, getSiteUrl])
 
     useEffect(() => {
 
@@ -92,15 +65,15 @@ export default function LoginPage() {
                 return
             }
 
-            if (session?.access_token) {
-                await routeAuthenticatedUser(session.access_token)
+            if (session?.access_token && session.refresh_token) {
+                redirectToCallback(session.access_token, session.refresh_token)
             }
 
         }
 
         checkUser()
 
-    }, [routeAuthenticatedUser])
+    }, [redirectToCallback])
 
     async function login(event?: FormEvent<HTMLFormElement>) {
         event?.preventDefault()
@@ -146,8 +119,8 @@ export default function LoginPage() {
 
             setSuccessMessage("Login successful")
 
-            if (data.session?.access_token) {
-                await routeAuthenticatedUser(data.session.access_token)
+            if (data.session?.access_token && data.session.refresh_token) {
+                redirectToCallback(data.session.access_token, data.session.refresh_token)
             }
 
         } catch {
@@ -172,7 +145,7 @@ export default function LoginPage() {
             const { data, error } = await supabase.auth.signInWithOAuth({
                 provider: "google",
                 options: {
-                    redirectTo: `${window.location.origin}/auth/callback?next=${encodeURIComponent(getSafeNextPath("/dashboard"))}`,
+                    redirectTo: `${getSiteUrl()}/auth/callback?next=${encodeURIComponent(getSafeNextPath("/dashboard"))}`,
                     skipBrowserRedirect: true,
                 }
             })

@@ -1,5 +1,6 @@
 "use client"
 
+import { useEffect } from "react"
 import { useRouter } from "next/navigation"
 
 const capabilityGroups = [
@@ -13,6 +14,12 @@ const signals = ["Realtime stock", "Smart invoices", "Approval workflow", "Mobil
 
 export default function Home() {
   const router = useRouter()
+
+  useEffect(() => {
+    if (window.location.hash.includes("access_token=")) {
+      window.location.replace(`/auth/callback?${window.location.hash.slice(1)}`)
+    }
+  }, [])
 
   return (
     <main className="min-h-dvh overflow-x-hidden bg-[#020403] text-white">
