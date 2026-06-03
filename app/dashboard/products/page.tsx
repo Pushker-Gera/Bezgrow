@@ -80,6 +80,22 @@ type Analytics = {
     warehousesCount: number
 }
 
+type ProductsListResponse = {
+    data?: ProductRow[]
+    pagination?: {
+        total?: number
+    }
+    error?: string
+}
+
+type ProductActionResponse = {
+    success: boolean
+    error?: string
+    product?: {
+        id: string
+    }
+}
+
 const emptyForm: ProductForm = {
     name: "",
     description: "",
@@ -115,32 +131,6 @@ const emptyAnalytics: Analytics = {
     suppliersCount: 0,
     warehousesCount: 0,
 }
-
-const productSelect = `
-    id,
-    organization_id,
-    name,
-    description,
-    sku,
-    barcode,
-    category,
-    unit,
-    supplier,
-    warehouse,
-    manufacturer,
-    price,
-    stock,
-    batch_no,
-    mrp,
-    purchase_rate,
-    sale_rate,
-    gst,
-    expiry_date,
-    purchase_date,
-    min_stock,
-    created_at,
-    deleted_at
-`
 
 function numberValue(value: string) {
     return value.trim() === "" ? null : Number(value)
@@ -260,56 +250,50 @@ export default function ProductsPage() {
             return
         }
 
-        let query = supabase
-            .from("products")
-            .select(productSelect)
-            .eq("organization_id", orgId)
-            .is("deleted_at", null)
-            .order("created_at", { ascending: false })
+        const {
+            data: { session },
+        } = await supabase.auth.getSession()
+        const params = new URLSearchParams({
+            page: String(currentPage),
+            limit: String(itemsPerPage),
+            sort: String(sortField),
+            direction: sortAsc ? "asc" : "desc",
+        })
 
-        if (debouncedSearch.trim()) {
-            query = query.or(
-                `name.ilike.%${debouncedSearch.trim()}%,sku.ilike.%${debouncedSearch.trim()}%,category.ilike.%${debouncedSearch.trim()}%,supplier.ilike.%${debouncedSearch.trim()}%`
-            )
-        }
+        if (debouncedSearch.trim()) params.set("search", debouncedSearch.trim())
 
-        const start = (currentPage - 1) * itemsPerPage
-        const end = start + itemsPerPage - 1
-        const { data, error } = await query.range(start, end)
+        const response = await fetch(`/api/products/list?${params.toString()}`, {
+            headers: session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : undefined,
+            cache: "no-store",
+        })
+        const payload = (await response.json()) as ProductsListResponse
 
-        if (error) {
-            setNotice(error.message)
+        if (!response.ok) {
+            setNotice(payload.error || "Products failed to load.")
             return
         }
 
-        setProducts((data || []) as unknown as ProductRow[])
+        setProducts(payload.data || [])
     }
 
     async function fetchAnalytics(orgId = organizationId) {
         if (!orgId) return
 
-        const { data, error } = await supabase
-            .from("products")
-            .select(`
-                stock,
-                sale_rate,
-                purchase_rate,
-                price,
-                expiry_date,
-                min_stock,
-                category,
-                supplier,
-                warehouse
-            `)
-            .eq("organization_id", orgId)
-            .is("deleted_at", null)
+        const {
+            data: { session },
+        } = await supabase.auth.getSession()
+        const response = await fetch("/api/products/list?limit=100&sort=created_at&direction=desc", {
+            headers: session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : undefined,
+            cache: "no-store",
+        })
+        const payload = (await response.json()) as ProductsListResponse
 
-        if (error || !data) {
-            setNotice(error?.message || "Unable to load product analytics.")
+        if (!response.ok) {
+            setNotice(payload.error || "Unable to load product analytics.")
             return
         }
 
-        const rows = data as unknown as ProductRow[]
+        const rows = payload.data || []
         const categories = new Set(rows.map((row) => row.category).filter(Boolean))
         const suppliers = new Set(rows.map((row) => row.supplier).filter(Boolean))
         const warehouses = new Set(rows.map((row) => row.warehouse).filter(Boolean))
@@ -372,28 +356,6 @@ export default function ProductsPage() {
         setMovementLoading(false)
     }
 
-    async function createStockMovement(
-        productId: string,
-        quantity: number,
-        previousStock: number,
-        newStock: number,
-        reason: string
-    ) {
-        if (!organizationId) return
-
-        const { error } = await supabase.from("stock_movements").insert({
-            organization_id: organizationId,
-            product_id: productId,
-            type: previousStock === 0 ? "opening_stock" : "adjustment",
-            quantity,
-            previous_stock: previousStock,
-            new_stock: newStock,
-            reason,
-        })
-
-        if (error) setNotice(error.message)
-    }
-
     function updateForm<K extends keyof ProductForm>(field: K, value: ProductForm[K]) {
         setForm((current) => ({ ...current, [field]: value }))
     }
@@ -425,7 +387,6 @@ export default function ProductsPage() {
 
         const stockValue = Number(form.stock || 0)
         const payload = {
-            organization_id: organizationId,
             name: form.name.trim(),
             description: form.description.trim() || null,
             manufacturer: form.manufacturer.trim() || null,
@@ -447,52 +408,23 @@ export default function ProductsPage() {
             purchase_date: form.purchaseDate || null,
         }
 
-        if (editProduct) {
-            const previousStock = Number(editProduct.stock || 0)
-            const stockDifference = stockValue - previousStock
-            const { error } = await supabase
-                .from("products")
-                .update(payload)
-                .eq("id", editProduct.id)
-                .eq("organization_id", organizationId)
+        const {
+            data: { session },
+        } = await supabase.auth.getSession()
+        const response = await fetch(editProduct ? "/api/products/update" : "/api/products/create", {
+            method: "POST",
+            headers: {
+                "Content-Type": "application/json",
+                ...(session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : {}),
+            },
+            body: JSON.stringify(editProduct ? { id: editProduct.id, ...payload } : payload),
+        })
+        const result = (await response.json()) as ProductActionResponse
 
-            if (error) {
-                setNotice(error.message)
-                setSaving(false)
-                return
-            }
-
-            if (stockDifference !== 0) {
-                await createStockMovement(
-                    editProduct.id,
-                    stockDifference,
-                    previousStock,
-                    stockValue,
-                    "Manual product master stock adjustment"
-                )
-            }
-        } else {
-            const { data, error } = await supabase
-                .from("products")
-                .insert(payload)
-                .select("id")
-                .single()
-
-            if (error) {
-                setNotice(error.message)
-                setSaving(false)
-                return
-            }
-
-            if (data?.id) {
-                await createStockMovement(
-                    data.id,
-                    stockValue,
-                    0,
-                    stockValue,
-                    "Initial product master stock"
-                )
-            }
+        if (!response.ok || !result.success) {
+            setNotice(result.error || "Product could not be saved.")
+            setSaving(false)
+            return
         }
 
         setShowFormModal(false)
@@ -510,14 +442,21 @@ export default function ProductsPage() {
         setConfirmDeleteId(null)
         setProducts((current) => current.filter((product) => product.id !== idToDelete))
 
-        const { error } = await supabase
-            .from("products")
-            .update({ deleted_at: new Date().toISOString() })
-            .eq("id", idToDelete)
-            .eq("organization_id", organizationId)
+        const {
+            data: { session },
+        } = await supabase.auth.getSession()
+        const response = await fetch("/api/products/archive", {
+            method: "POST",
+            headers: {
+                "Content-Type": "application/json",
+                ...(session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : {}),
+            },
+            body: JSON.stringify({ id: idToDelete }),
+        })
+        const payload = (await response.json()) as ProductActionResponse
 
-        if (error) {
-            setNotice(error.message)
+        if (!response.ok || !payload.success) {
+            setNotice(payload.error || "Product could not be archived.")
             await fetchProducts()
             return
         }
@@ -728,7 +667,7 @@ export default function ProductsPage() {
 
     if (loading) {
         return (
-            <div className="inventory-grid-bg flex min-h-screen items-center justify-center text-white">
+            <div className="inventory-grid-bg flex min-h-dvh items-center justify-center text-white">
                 <div className="relative overflow-hidden rounded-lg border border-white/10 bg-black/70 p-8 shadow-2xl inventory-sheen">
                     <div className="flex items-center gap-4">
                         <div className="h-9 w-9 rounded-full border-2 border-sky-400/30 border-t-sky-300 animate-spin" />

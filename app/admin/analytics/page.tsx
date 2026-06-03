@@ -74,14 +74,9 @@ export default function AdminAnalyticsPage() {
       data: { session },
     } = await supabase.auth.getSession()
 
-    if (!session?.access_token) {
-      setNotice("Admin session not found. Please log in again.")
-      setLoading(false)
-      return
-    }
-
     const response = await fetch("/api/admin/metrics", {
-      headers: { Authorization: `Bearer ${session.access_token}` },
+      headers: session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : undefined,
+      cache: "no-store",
     })
     const payload = (await response.json()) as AdminMetricsResponse
 
@@ -127,6 +122,7 @@ export default function AdminAnalyticsPage() {
       const date = new Date()
       date.setMonth(date.getMonth() - (5 - index))
       const month = date.toLocaleDateString(undefined, { month: "short" })
+      const key = `${date.getFullYear()}-${date.getMonth()}`
       const monthInvoices = invoices.filter((invoice) => {
         if (!invoice.created_at) return false
         const invoiceDate = new Date(invoice.created_at)
@@ -137,7 +133,7 @@ export default function AdminAnalyticsPage() {
         if (metric === "tax") return sum + numberFrom(invoice, ["tax_amount", "tax_total"])
         return sum + numberFrom(invoice, ["grand_total", "total_amount", "total"])
       }, 0)
-      return { month, total }
+      return { key, month, total }
     })
 
     const organizationRevenue = organizations
@@ -244,8 +240,8 @@ export default function AdminAnalyticsPage() {
           <h2 className="text-3xl font-black">Six Month Trend</h2>
           <p className="mt-2 text-sm text-neutral-500">Metric changes instantly from the selector above.</p>
           <div className="mt-8 flex h-72 items-end gap-4">
-            {analytics.monthBars.map((bar) => (
-              <div key={bar.month} className="flex flex-1 flex-col items-center gap-3">
+            {analytics.monthBars.map((bar, index) => (
+              <div key={`${bar.key}-${index}`} className="flex flex-1 flex-col items-center gap-3">
                 <div className="flex h-56 w-full items-end rounded-2xl border border-white/10 bg-black/40 p-2">
                   <div className="w-full rounded-xl bg-gradient-to-t from-cyan-500 to-blue-300" style={{ height: `${Math.max(8, (bar.total / analytics.maxMonth) * 100)}%` }} />
                 </div>

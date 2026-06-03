@@ -1,7 +1,6 @@
 "use client"
 
 import { useState } from "react"
-import { supabase } from "@/lib/supabase"
 import { useRouter } from "next/navigation"
 
 export default function SignupPage() {
@@ -13,6 +12,7 @@ export default function SignupPage() {
     const [phone, setPhone] = useState("")
     const [email, setEmail] = useState("")
     const [password, setPassword] = useState("")
+    const [termsAccepted, setTermsAccepted] = useState(false)
     const [loading, setLoading] = useState(false)
     const [statusMessage, setStatusMessage] = useState("")
     const [errorMessage, setErrorMessage] = useState("")
@@ -31,40 +31,29 @@ export default function SignupPage() {
                 return
             }
 
-            const { data: authData, error: authError } = await supabase.auth.signUp({
-                email,
-                password,
+            if (!termsAccepted) {
+                setErrorMessage("Please accept the terms and privacy policy.")
+                setLoading(false)
+                return
+            }
+
+            const response = await fetch("/api/auth/register", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                    fullName,
+                    businessName,
+                    phone,
+                    email,
+                    password,
+                    termsAccepted,
+                }),
             })
 
-            if (authError) {
-                setErrorMessage(authError.message)
-                setLoading(false)
-                return
-            }
+            const result = await response.json()
 
-            const userId = authData.user?.id
-
-            if (!userId) {
-                setErrorMessage("User account was not created")
-                setLoading(false)
-                return
-            }
-
-            const { error: pendingError } = await supabase
-                .from("pending_users")
-                .upsert([
-                    {
-                        id: userId,
-                        full_name: fullName,
-                        business_name: businessName,
-                        phone,
-                        email,
-                        status: "pending"
-                    }
-                ])
-
-            if (pendingError) {
-                setErrorMessage(pendingError.message)
+            if (!response.ok) {
+                setErrorMessage(result.error || result.message || "Application could not be submitted.")
                 setLoading(false)
                 return
             }
@@ -75,9 +64,8 @@ export default function SignupPage() {
                 router.push("/pending-approval")
             }, 1500)
 
-        } catch (err) {
+        } catch {
 
-            console.error(err)
             setErrorMessage("Something went wrong")
 
         } finally {
@@ -89,13 +77,13 @@ export default function SignupPage() {
     }
 
     return (
-        <div className="inventory-grid-bg flex min-h-screen items-center justify-center px-5 py-8 text-white">
+        <div className="inventory-grid-bg flex min-h-dvh items-center justify-center px-3 py-5 text-white sm:px-5 sm:py-8">
 
-            <div className="w-full max-w-md rounded-[28px] border border-white/10 bg-neutral-950/85 p-6 shadow-[0_28px_120px_rgba(0,0,0,0.45)] backdrop-blur-xl sm:p-8">
+            <div className="w-full max-w-md rounded-[22px] border border-white/10 bg-neutral-950/85 p-5 shadow-[0_28px_120px_rgba(0,0,0,0.45)] backdrop-blur-xl sm:rounded-[28px] sm:p-8">
 
-                <h1 className="text-3xl font-bold mb-2">Apply for Access</h1>
+                <h1 className="mb-2 text-2xl font-bold sm:text-3xl">Apply for Access</h1>
 
-                <p className="text-gray-400 text-sm mb-6">
+                <p className="mb-5 text-sm leading-6 text-gray-400 sm:mb-6">
                     Create your business account and submit your application for approval.
                 </p>
 
@@ -115,7 +103,7 @@ export default function SignupPage() {
                     type="text"
                     placeholder="Full Name"
                     value={fullName}
-                    className="w-full p-3 mb-4 bg-black border border-gray-700 rounded-lg outline-none"
+                    className="mb-4 min-h-12 w-full rounded-lg border border-gray-700 bg-black p-3 outline-none focus:border-cyan-300"
                     onChange={(e) => setFullName(e.target.value)}
                 />
 
@@ -123,7 +111,7 @@ export default function SignupPage() {
                     type="text"
                     placeholder="Business Name"
                     value={businessName}
-                    className="w-full p-3 mb-4 bg-black border border-gray-700 rounded-lg outline-none"
+                    className="mb-4 min-h-12 w-full rounded-lg border border-gray-700 bg-black p-3 outline-none focus:border-cyan-300"
                     onChange={(e) => setBusinessName(e.target.value)}
                 />
 
@@ -131,7 +119,7 @@ export default function SignupPage() {
                     type="tel"
                     placeholder="Phone Number"
                     value={phone}
-                    className="w-full p-3 mb-4 bg-black border border-gray-700 rounded-lg outline-none"
+                    className="mb-4 min-h-12 w-full rounded-lg border border-gray-700 bg-black p-3 outline-none focus:border-cyan-300"
                     onChange={(e) => setPhone(e.target.value)}
                 />
 
@@ -139,7 +127,7 @@ export default function SignupPage() {
                     type="email"
                     placeholder="Business Email"
                     value={email}
-                    className="w-full p-3 mb-4 bg-black border border-gray-700 rounded-lg outline-none"
+                    className="mb-4 min-h-12 w-full rounded-lg border border-gray-700 bg-black p-3 outline-none focus:border-cyan-300"
                     onChange={(e) => setEmail(e.target.value)}
                 />
 
@@ -147,14 +135,24 @@ export default function SignupPage() {
                     type="password"
                     placeholder="Create Password"
                     value={password}
-                    className="w-full p-3 mb-6 bg-black border border-gray-700 rounded-lg outline-none"
+                    className="mb-6 min-h-12 w-full rounded-lg border border-gray-700 bg-black p-3 outline-none focus:border-cyan-300"
                     onChange={(e) => setPassword(e.target.value)}
                 />
+
+                <label className="mb-6 flex items-start gap-3 text-sm leading-5 text-gray-400">
+                    <input
+                        type="checkbox"
+                        checked={termsAccepted}
+                        onChange={(e) => setTermsAccepted(e.target.checked)}
+                        className="mt-1"
+                    />
+                    <span>I agree to the terms, privacy policy, and approval-based access process.</span>
+                </label>
 
                 <button
                     onClick={signup}
                     disabled={loading}
-                    className="w-full bg-white text-black py-3 rounded-lg font-semibold disabled:opacity-50"
+                    className="min-h-12 w-full rounded-lg bg-white py-3 font-semibold text-black disabled:opacity-50"
                 >
                     {loading ? "Submitting Application..." : "Request Admin Approval"}
                 </button>

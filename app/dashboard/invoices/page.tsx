@@ -369,7 +369,7 @@ export default function InvoicesPage() {
   }
 
   return (
-    <div className="relative min-h-screen overflow-y-auto overflow-x-hidden bg-black text-white">
+    <div className="relative min-h-dvh overflow-y-auto overflow-x-hidden bg-black text-white">
       <div className="pointer-events-none absolute inset-0 overflow-hidden">
         <div className="inventory-grid-bg absolute inset-0 opacity-40" />
         <div className="absolute left-[-160px] top-[-160px] h-[520px] w-[520px] rounded-full bg-cyan-500/10 blur-[170px] animate-pulse" />

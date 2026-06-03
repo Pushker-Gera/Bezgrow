@@ -391,31 +391,6 @@ export default function InventoryPage() {
         }
     }
 
-    async function createMovement(
-        product: InventoryProduct,
-        qty: number,
-        type: "stock_in" | "transfer",
-        nextStock: number
-    ) {
-        const payload = {
-            organization_id: organizationId,
-            product_id: product.id,
-            quantity: type === "transfer" ? -qty : qty,
-            type,
-            previous_stock: product.currentStock,
-            new_stock: nextStock,
-            warehouse_id: warehouseId || null,
-            shipping_qr: hasShippingLabels ? shippingQr || null : null,
-            reason:
-                type === "transfer"
-                    ? "Inventory moved to selected warehouse"
-                    : "Manual stock addition",
-        }
-
-        const { error } = await supabase.from("stock_movements").insert(payload)
-        if (error) throw new Error(error.message)
-    }
-
     async function applyStockChange(mode: "add" | "transfer") {
         setNotice("")
         const product = products.find((item) => item.id === selectedProductId)
@@ -442,35 +417,29 @@ export default function InventoryPage() {
         setActionLoading(true)
 
         try {
-            const updatePayload: Partial<ProductRow> = {
-                stock: nextStock,
-            }
+            const {
+                data: { session },
+            } = await supabase.auth.getSession()
+            const response = await fetch("/api/inventory/simple-movement", {
+                method: "POST",
+                headers: {
+                    "Content-Type": "application/json",
+                    ...(session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : {}),
+                },
+                body: JSON.stringify({
+                    product_id: product.id,
+                    quantity: qty,
+                    mode,
+                    warehouse_id: warehouseId || null,
+                    expiry_date: mode === "add" && hasExpiryTracking ? expiryDate || product.expiry_date || null : null,
+                    batch_no: mode === "add" && hasBatchTracking ? batchNo || product.batch_no || null : null,
+                    barcode: mode === "add" && hasBarcodeScanning ? barcode || product.barcode || null : null,
+                    shipping_qr: hasShippingLabels ? shippingQr || null : null,
+                }),
+            })
+            const result = (await response.json()) as { error?: string }
+            if (!response.ok) throw new Error(result.error || "Stock update failed.")
 
-            if (warehouseId) updatePayload.warehouse_id = warehouseId
-            if (mode === "add" && hasExpiryTracking) {
-                updatePayload.expiry_date = expiryDate || product.expiry_date
-            }
-            if (mode === "add" && hasBatchTracking) {
-                updatePayload.batch_no = batchNo || product.batch_no
-            }
-            if (mode === "add" && hasBarcodeScanning) {
-                updatePayload.barcode = barcode || product.barcode
-            }
-
-            const { error } = await supabase
-                .from("products")
-                .update(updatePayload)
-                .eq("id", product.id)
-                .eq("organization_id", organizationId)
-
-            if (error) throw new Error(error.message)
-
-            await createMovement(
-                product,
-                qty,
-                mode === "add" ? "stock_in" : "transfer",
-                nextStock
-            )
             await fetchInventoryData(organizationId)
             resetActionForm()
             setShowAddStockModal(false)
@@ -643,7 +612,7 @@ export default function InventoryPage() {
 
     if (loading) {
         return (
-            <div className="inventory-grid-bg flex min-h-screen items-center justify-center text-white">
+            <div className="inventory-grid-bg flex min-h-dvh items-center justify-center text-white">
                 <div className="relative overflow-hidden rounded-lg border border-white/10 bg-black/70 p-8 shadow-2xl inventory-sheen">
                     <div className="flex items-center gap-4">
                         <div className="h-9 w-9 rounded-full border-2 border-emerald-400/30 border-t-emerald-300 animate-spin" />
@@ -662,7 +631,7 @@ export default function InventoryPage() {
     }
 
     return (
-        <div className="inventory-grid-bg h-screen overflow-y-auto overflow-x-hidden text-white">
+        <div className="inventory-grid-bg min-h-dvh overflow-y-auto overflow-x-hidden text-white">
             <div className="mx-auto max-w-[1800px] space-y-6 px-4 py-5 sm:px-6 lg:px-8">
                 <section className="relative overflow-hidden rounded-lg border border-white/10 bg-black/70 p-6 shadow-2xl backdrop-blur-xl inventory-sheen lg:p-8">
                     <div className="relative z-10 grid gap-8 xl:grid-cols-[1.15fr_0.85fr] xl:items-end">

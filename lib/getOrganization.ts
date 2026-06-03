@@ -1,24 +1,35 @@
 import { supabase } from "./supabase"
 
+type WorkspaceBootstrapResponse = {
+    success: boolean
+    organization?: {
+        id?: string | null
+    } | null
+}
+
 export async function getOrganizationId() {
     const {
-        data: { user },
-        error: userError,
-    } = await supabase.auth.getUser()
+        data: { session },
+    } = await supabase.auth.getSession()
 
-    if (userError || !user) return null
+    const headers: HeadersInit = session?.access_token
+        ? { Authorization: `Bearer ${session.access_token}` }
+        : {}
 
-    const { data, error } = await supabase
-        .from("organization_members")
-        .select("organization_id")
-        .eq("user_id", user.id)
-        .limit(1)
-        .maybeSingle()
+    try {
+        const response = await fetch("/api/workspace/bootstrap", {
+            headers,
+            cache: "no-store",
+            credentials: "include",
+        })
 
-    if (error || !data) {
-        if (error) console.error("Organization lookup failed:", error.message)
+        if (!response.ok) return null
+
+        const payload = (await response.json()) as WorkspaceBootstrapResponse
+        if (!payload.success) return null
+
+        return payload.organization?.id || null
+    } catch {
         return null
     }
-
-    return data.organization_id
 }

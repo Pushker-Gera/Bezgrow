@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from "react"
 import { supabase } from "@/lib/supabase"
 
 type PlatformSettings = {
+  id?: string
   platform_name: string
   support_email: string
   maintenance_mode: boolean
@@ -43,17 +44,21 @@ function ToggleCard({
   title,
   description,
   enabled,
+  disabled = false,
   onClick,
 }: {
   title: string
   description: string
   enabled: boolean
+  disabled?: boolean
   onClick: () => void
 }) {
   return (
     <button
+      type="button"
       onClick={onClick}
-      className={`rounded-3xl border p-5 text-left transition-all duration-300 ${enabled ? "border-cyan-400/30 bg-cyan-500/10" : "border-white/10 bg-black/35"}`}
+      disabled={disabled}
+      className={`rounded-3xl border p-5 text-left transition-all duration-300 disabled:cursor-not-allowed disabled:opacity-50 ${enabled ? "border-cyan-400/30 bg-cyan-500/10" : "border-white/10 bg-black/35"}`}
     >
       <div className="flex items-start justify-between gap-4">
         <div>
@@ -74,42 +79,60 @@ export default function AdminSettingsPage() {
   const [usersCount, setUsersCount] = useState(0)
   const [pendingCount, setPendingCount] = useState(0)
   const [logs, setLogs] = useState<LogRow[]>([])
+  const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
   const [notice, setNotice] = useState("")
 
   async function fetchSettings() {
-    const settingsResult = await supabase.from("platform_settings").select("*").maybeSingle()
-    const {
-      data: { session },
-    } = await supabase.auth.getSession()
+    setLoading(true)
+    setNotice("")
 
-    if (!session?.access_token) {
-      setNotice("Admin session not found. Please log in again.")
-      return
+    try {
+      const {
+        data: { session },
+        error: sessionError,
+      } = await supabase.auth.getSession()
+
+      if (sessionError) {
+        setNotice("Admin session could not be checked. Retrying with secure cookies.")
+      }
+
+      const [settingsResult, metricsResponse] = await Promise.all([
+        supabase.from("platform_settings").select("*").maybeSingle(),
+        fetch("/api/admin/metrics", {
+          headers: session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : undefined,
+          cache: "no-store",
+        }),
+      ])
+
+      if (settingsResult.error) {
+        setNotice(settingsResult.error.message)
+      }
+
+      const metrics = (await metricsResponse.json()) as AdminMetricsResponse
+
+      if (!metricsResponse.ok || !metrics.success) {
+        setNotice(metrics.error || "Admin settings metrics failed to load.")
+      }
+
+      const pendingProfiles = (metrics.profiles || []).filter((profile) => profile.approved === false)
+
+      if (settingsResult.data) {
+        setSettings({
+          ...defaultSettings,
+          ...(settingsResult.data as Partial<PlatformSettings>),
+        })
+      }
+
+      setOrganizationsCount(metrics.organizations?.length || 0)
+      setUsersCount(metrics.usersCount || metrics.profiles?.length || 0)
+      setPendingCount(pendingProfiles.length)
+      setLogs(metrics.logs || [])
+    } catch {
+      setNotice("Admin settings could not connect. Please refresh or try again later.")
+    } finally {
+      setLoading(false)
     }
-
-    const metricsResponse = await fetch("/api/admin/metrics", {
-      headers: { Authorization: `Bearer ${session.access_token}` },
-    })
-    const metrics = (await metricsResponse.json()) as AdminMetricsResponse
-
-    if (!metrics.success) {
-      setNotice(metrics.error || "Admin settings metrics failed to load.")
-    }
-
-    const pendingProfiles = (metrics.profiles || []).filter((profile) => profile.approved === false)
-
-    if (settingsResult.data) {
-      setSettings({
-        ...defaultSettings,
-        ...(settingsResult.data as Partial<PlatformSettings>),
-      })
-    }
-
-    setOrganizationsCount(metrics.organizations?.length || 0)
-    setUsersCount(metrics.usersCount || metrics.profiles?.length || 0)
-    setPendingCount(pendingProfiles.length)
-    setLogs(metrics.logs || [])
   }
 
   useEffect(() => {
@@ -141,23 +164,50 @@ export default function AdminSettingsPage() {
     setSaving(true)
     setNotice("")
 
-    const { error } = await supabase.from("platform_settings").upsert(settings)
-    if (error) {
-      setNotice(error.message)
-      setSaving(false)
-      return
-    }
+    try {
+      const supportEmail = settings.support_email.trim().toLowerCase()
+      const platformName = settings.platform_name.trim()
 
-    await writeSystemLog("SETTINGS_UPDATED", "Platform settings updated from admin control center.", false)
-    setNotice("Platform settings saved successfully.")
-    setSaving(false)
-    await fetchSettings()
+      if (!platformName) {
+        setNotice("Platform name is required.")
+        return
+      }
+
+      if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(supportEmail)) {
+        setNotice("Enter a valid support email address.")
+        return
+      }
+
+      const payload = {
+        ...settings,
+        platform_name: platformName,
+        support_email: supportEmail,
+      }
+
+      const { error } = await supabase.from("platform_settings").upsert(payload)
+      if (error) {
+        setNotice(error.message)
+        return
+      }
+
+      await writeSystemLog("SETTINGS_UPDATED", "Platform settings updated from admin control center.", false)
+      setNotice("Platform settings saved successfully.")
+      await fetchSettings()
+    } catch {
+      setNotice("Settings could not be saved. Please try again.")
+    } finally {
+      setSaving(false)
+    }
   }
 
   async function writeSystemLog(action: string, description: string, showNotice = true) {
-    const { error } = await supabase.from("admin_logs").insert({ action, description })
-    if (showNotice) setNotice(error ? error.message : description)
-    if (!error) await fetchSettings()
+    try {
+      const { error } = await supabase.from("admin_logs").insert({ action, description })
+      if (showNotice) setNotice(error ? error.message : description)
+      if (!error) await fetchSettings()
+    } catch {
+      if (showNotice) setNotice("System action could not be recorded.")
+    }
   }
 
   return (
@@ -169,13 +219,19 @@ export default function AdminSettingsPage() {
             <h1 className="max-w-5xl text-4xl font-black leading-tight md:text-6xl">Global SaaS settings, launch controls, and audit operations.</h1>
             <p className="mt-5 max-w-3xl text-neutral-400">Control platform identity, approval behavior, customer notifications, billing, inventory, maintenance mode, and admin audit actions.</p>
           </div>
-          <button onClick={saveSettings} disabled={saving} className="h-14 rounded-2xl bg-white px-7 font-black text-black disabled:opacity-50">
+          <button type="button" onClick={saveSettings} disabled={saving || loading} className="h-14 rounded-2xl bg-white px-7 font-black text-black disabled:cursor-not-allowed disabled:opacity-50">
             {saving ? "Saving..." : "Save Settings"}
           </button>
         </div>
       </section>
 
       {notice && <div className="rounded-3xl border border-cyan-400/25 bg-cyan-500/10 px-6 py-4 text-sm text-cyan-100">{notice}</div>}
+
+      {loading && (
+        <div className="rounded-3xl border border-white/10 bg-white/[0.035] px-6 py-4 text-sm font-semibold text-neutral-300">
+          Loading secure platform settings...
+        </div>
+      )}
 
       <section className="grid grid-cols-1 gap-5 md:grid-cols-2 2xl:grid-cols-4">
         {[
@@ -211,30 +267,35 @@ export default function AdminSettingsPage() {
               title="Maintenance Mode"
               description="Pause customer operations during planned platform maintenance."
               enabled={settings.maintenance_mode}
+              disabled={saving || loading}
               onClick={() => updateSetting("maintenance_mode", !settings.maintenance_mode)}
             />
             <ToggleCard
               title="Email Notifications"
               description="Send approval, billing, and operational notifications from the platform."
               enabled={settings.email_notifications}
+              disabled={saving || loading}
               onClick={() => updateSetting("email_notifications", !settings.email_notifications)}
             />
             <ToggleCard
               title="Auto Approvals"
               description="Automatically approve verified businesses without manual admin review."
               enabled={settings.auto_approvals}
+              disabled={saving || loading}
               onClick={() => updateSetting("auto_approvals", !settings.auto_approvals)}
             />
             <ToggleCard
               title="Inventory Tracking"
               description="Enable product stock intelligence, low-stock alerts, and inventory modules."
               enabled={settings.inventory_tracking}
+              disabled={saving || loading}
               onClick={() => updateSetting("inventory_tracking", !settings.inventory_tracking)}
             />
             <ToggleCard
               title="Billing Automation"
               description="Enable invoices, payment status control, print routes, and billing automation."
               enabled={settings.billing_automation}
+              disabled={saving || loading}
               onClick={() => updateSetting("billing_automation", !settings.billing_automation)}
             />
           </div>
@@ -259,10 +320,10 @@ export default function AdminSettingsPage() {
           <div className="rounded-[36px] border border-white/10 bg-white/[0.035] p-7">
             <h2 className="text-3xl font-black">System Actions</h2>
             <div className="mt-6 grid gap-3">
-              <button onClick={() => void writeSystemLog("CACHE_CLEAR", "Platform cache clear requested by admin.")} className="h-12 rounded-2xl border border-white/10 text-sm font-bold">Log Cache Clear</button>
-              <button onClick={() => void writeSystemLog("BACKUP_REQUESTED", "Secure platform backup requested by admin.")} className="h-12 rounded-2xl border border-white/10 text-sm font-bold">Log Backup</button>
-              <button onClick={() => void writeSystemLog("SERVICE_CHECK", "Platform service check requested by admin.")} className="h-12 rounded-2xl border border-white/10 text-sm font-bold">Log Service Check</button>
-              <button onClick={() => void writeSystemLog("SECURITY_REVIEW", "Security and RLS review requested before global launch.")} className="h-12 rounded-2xl border border-white/10 text-sm font-bold">Log Security Review</button>
+              <button type="button" disabled={loading || saving} onClick={() => void writeSystemLog("CACHE_CLEAR", "Platform cache clear requested by admin.")} className="h-12 rounded-2xl border border-white/10 text-sm font-bold disabled:cursor-not-allowed disabled:opacity-50">Log Cache Clear</button>
+              <button type="button" disabled={loading || saving} onClick={() => void writeSystemLog("BACKUP_REQUESTED", "Secure platform backup requested by admin.")} className="h-12 rounded-2xl border border-white/10 text-sm font-bold disabled:cursor-not-allowed disabled:opacity-50">Log Backup</button>
+              <button type="button" disabled={loading || saving} onClick={() => void writeSystemLog("SERVICE_CHECK", "Platform service check requested by admin.")} className="h-12 rounded-2xl border border-white/10 text-sm font-bold disabled:cursor-not-allowed disabled:opacity-50">Log Service Check</button>
+              <button type="button" disabled={loading || saving} onClick={() => void writeSystemLog("SECURITY_REVIEW", "Security and RLS review requested before global launch.")} className="h-12 rounded-2xl border border-white/10 text-sm font-bold disabled:cursor-not-allowed disabled:opacity-50">Log Security Review</button>
             </div>
           </div>
         </div>

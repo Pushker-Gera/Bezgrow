@@ -23,6 +23,10 @@ type Customer = {
 }
 
 type InvoiceRow = Record<string, unknown>
+type ListResponse<T> = {
+  data?: T[]
+  error?: string
+}
 
 type CustomerForm = {
   name: string
@@ -137,59 +141,38 @@ export default function CustomersPage() {
   async function fetchData(orgId = organizationId) {
     if (!orgId) return
 
-    let customerQuery = supabase
-      .from("customers")
-      .select(`
-        id,
-        name,
-        phone,
-        email,
-        address,
-        gst_number,
-        created_at,
-        is_active,
-        organization_id,
-        total_sales,
-        last_purchase_at,
-        deleted_at,
-        customer_type
-      `)
-      .eq("organization_id", orgId)
-      .is("deleted_at", null)
-      .order("created_at", { ascending: false })
+    const {
+      data: { session },
+    } = await supabase.auth.getSession()
+    const headers = session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : undefined
+    const customerParams = new URLSearchParams({
+      limit: "100",
+      search: debouncedSearch.trim(),
+      sort: "created_at",
+      direction: "desc",
+    })
 
-    if (debouncedSearch.trim()) {
-      const term = debouncedSearch.trim()
-      customerQuery = customerQuery.or(
-        `name.ilike.%${term}%,phone.ilike.%${term}%,email.ilike.%${term}%,gst_number.ilike.%${term}%`
-      )
-    }
-
-    if (statusFilter === "active") customerQuery = customerQuery.eq("is_active", true)
-    if (statusFilter === "inactive") customerQuery = customerQuery.eq("is_active", false)
-
-    const invoicesQuery = supabase
-      .from("invoices")
-      .select("*")
-      .eq("organization_id", orgId)
-      .order("created_at", { ascending: false })
-      .limit(1000)
-
-    const [customersResult, invoicesResult] = await Promise.all([
-      customerQuery,
-      invoicesQuery,
+    const [customersResponse, invoicesResponse] = await Promise.all([
+      fetch(`/api/customers/list?${customerParams.toString()}`, { headers, cache: "no-store" }),
+      fetch("/api/invoices/list?limit=100", { headers, cache: "no-store" }),
     ])
 
-    if (customersResult.error) {
-      setNotice(customersResult.error.message)
+    const customersResult = (await customersResponse.json()) as ListResponse<Customer>
+    const invoicesResult = (await invoicesResponse.json()) as ListResponse<InvoiceRow>
+
+    if (!customersResponse.ok) {
+      setNotice(customersResult.error || "Customers failed to load.")
       return
     }
-    if (invoicesResult.error) {
-      setNotice(invoicesResult.error.message)
+    if (!invoicesResponse.ok) {
+      setNotice(invoicesResult.error || "Invoices failed to load.")
     }
 
-    setCustomers((customersResult.data || []) as unknown as Customer[])
-    setInvoices((invoicesResult.data || []) as InvoiceRow[])
+    let nextCustomers = customersResult.data || []
+    if (statusFilter === "active") nextCustomers = nextCustomers.filter((customer) => customer.is_active)
+    if (statusFilter === "inactive") nextCustomers = nextCustomers.filter((customer) => !customer.is_active)
+    setCustomers(nextCustomers)
+    setInvoices(invoicesResult.data || [])
   }
 
   function updateForm<K extends keyof CustomerForm>(field: K, value: CustomerForm[K]) {
@@ -227,31 +210,26 @@ export default function CustomersPage() {
       customer_type: form.customerType || "retail",
     }
 
-    if (editCustomer) {
-      const { error } = await supabase
-        .from("customers")
-        .update(payload)
-        .eq("id", editCustomer.id)
-        .eq("organization_id", organizationId)
-
-      if (error) {
-        setNotice(error.message)
-        setSaving(false)
-        return
-      }
-    } else {
-      const { error } = await supabase.from("customers").insert({
+    const {
+      data: { session },
+    } = await supabase.auth.getSession()
+    const response = await fetch("/api/customers/save", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        ...(session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : {}),
+      },
+      body: JSON.stringify({
+        id: editCustomer?.id,
         ...payload,
-        organization_id: organizationId,
-        is_active: true,
-        total_sales: 0,
-      })
+      }),
+    })
+    const result = (await response.json()) as { error?: string }
 
-      if (error) {
-        setNotice(error.message)
-        setSaving(false)
-        return
-      }
+    if (!response.ok) {
+      setNotice(result.error || "Customer could not be saved.")
+      setSaving(false)
+      return
     }
 
     setShowFormModal(false)
@@ -265,17 +243,21 @@ export default function CustomersPage() {
   async function toggleCustomerStatus(customer: Customer, active: boolean) {
     if (!organizationId) return
 
-    const { error } = await supabase
-      .from("customers")
-      .update({
-        is_active: active,
-        deleted_at: null,
-      })
-      .eq("id", customer.id)
-      .eq("organization_id", organizationId)
+    const {
+      data: { session },
+    } = await supabase.auth.getSession()
+    const response = await fetch("/api/customers/status", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        ...(session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : {}),
+      },
+      body: JSON.stringify({ id: customer.id, active }),
+    })
+    const result = (await response.json()) as { error?: string }
 
-    if (error) {
-      setNotice(error.message)
+    if (!response.ok) {
+      setNotice(result.error || "Customer status could not be updated.")
       return
     }
 
@@ -286,17 +268,21 @@ export default function CustomersPage() {
   async function archiveCustomer() {
     if (!confirmCustomer || !organizationId) return
 
-    const { error } = await supabase
-      .from("customers")
-      .update({
-        is_active: false,
-        deleted_at: new Date().toISOString(),
-      })
-      .eq("id", confirmCustomer.id)
-      .eq("organization_id", organizationId)
+    const {
+      data: { session },
+    } = await supabase.auth.getSession()
+    const response = await fetch("/api/customers/status", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        ...(session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : {}),
+      },
+      body: JSON.stringify({ id: confirmCustomer.id, archive: true }),
+    })
+    const result = (await response.json()) as { error?: string }
 
-    if (error) {
-      setNotice(error.message)
+    if (!response.ok) {
+      setNotice(result.error || "Customer could not be archived.")
       return
     }
 

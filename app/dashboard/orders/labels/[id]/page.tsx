@@ -57,7 +57,7 @@ export default function LabelPage() {
 
         return (
 
-            <div className="min-h-screen bg-black text-white flex items-center justify-center">
+            <div className="flex min-h-dvh items-center justify-center bg-black text-white">
 
                 Loading shipping label...
 
@@ -70,7 +70,7 @@ export default function LabelPage() {
 
         return (
 
-            <div className="min-h-screen bg-black text-white flex items-center justify-center">
+            <div className="flex min-h-dvh items-center justify-center bg-black text-white">
 
                 Order not found
 
@@ -81,7 +81,7 @@ export default function LabelPage() {
 
     return (
 
-        <div className="min-h-screen bg-neutral-950 p-10 flex flex-col items-center gap-8">
+        <div className="flex min-h-dvh flex-col items-center gap-5 bg-neutral-950 p-4 sm:gap-8 sm:p-10">
 
             <ShippingLabel
 

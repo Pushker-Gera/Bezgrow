@@ -1,6 +1,6 @@
 "use client"
 
-import { useEffect, useMemo, useState } from "react"
+import { useCallback, useEffect, useMemo, useState } from "react"
 import { useDebounce } from "use-debounce"
 import { supabase } from "@/lib/supabase"
 
@@ -11,6 +11,7 @@ type ProfileRow = {
   role: string | null
   approved: boolean | null
   business_created: boolean | null
+  is_suspended?: boolean | null
   organization_id: string | null
   created_at?: string | null
 }
@@ -18,6 +19,12 @@ type ProfileRow = {
 type OrganizationRow = {
   id: string
   name: string | null
+}
+
+type MembershipRow = {
+  user_id: string
+  organization_id: string
+  role: string | null
 }
 
 type UserView = ProfileRow & {
@@ -30,6 +37,21 @@ type AdminMetricsResponse = {
   error?: string
   profiles?: ProfileRow[]
   organizations?: OrganizationRow[]
+  stats?: {
+    total: number
+    approved: number
+    pending: number
+    suspended: number
+  }
+}
+
+function calculateStats(profileRows: ProfileRow[]) {
+  return {
+    total: profileRows.length,
+    approved: profileRows.filter((profile) => profile.approved === true && !profile.is_suspended).length,
+    pending: profileRows.filter((profile) => profile.approved !== true && !profile.is_suspended).length,
+    suspended: profileRows.filter((profile) => profile.is_suspended).length,
+  }
 }
 
 function formatDate(value: string | null | undefined) {
@@ -40,56 +62,105 @@ function formatDate(value: string | null | undefined) {
 export default function AdminUsersPage() {
   const [profiles, setProfiles] = useState<ProfileRow[]>([])
   const [organizations, setOrganizations] = useState<OrganizationRow[]>([])
+  const [serverStats, setServerStats] = useState({
+    total: 0,
+    approved: 0,
+    pending: 0,
+    suspended: 0,
+  })
   const [search, setSearch] = useState("")
   const [debouncedSearch] = useDebounce(search, 300)
   const [statusFilter, setStatusFilter] = useState("all")
   const [loading, setLoading] = useState(true)
+  const [actionLoading, setActionLoading] = useState<string | null>(null)
   const [notice, setNotice] = useState("")
 
-  async function fetchUsers() {
+  const fetchUsers = useCallback(async () => {
     setLoading(true)
+    setNotice("")
 
     const {
       data: { session },
     } = await supabase.auth.getSession()
 
-    if (!session?.access_token) {
-      setNotice("Admin session not found. Please log in again.")
-      setLoading(false)
-      return
+    let nextProfiles: ProfileRow[] = []
+    let nextOrganizations: OrganizationRow[] = []
+    let nextStats = calculateStats([])
+    let apiError = ""
+
+    try {
+      const response = await fetch("/api/admin/users?limit=100", {
+        headers: session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : undefined,
+        cache: "no-store",
+      })
+      const payload = (await response.json()) as AdminMetricsResponse
+
+      if (payload.success) {
+        nextProfiles = payload.profiles || []
+        nextOrganizations = payload.organizations || []
+        nextStats = payload.stats || calculateStats(nextProfiles)
+      } else {
+        apiError = payload.error || "Admin users failed to load."
+      }
+    } catch {
+      apiError = "Admin users failed to load."
     }
 
-    const response = await fetch("/api/admin/metrics", {
-      headers: { Authorization: `Bearer ${session.access_token}` },
-    })
-    const payload = (await response.json()) as AdminMetricsResponse
+    if (nextStats.total === 0) {
+      const { data: profileRows, error: profileError } = await supabase
+        .from("profiles")
+        .select("id,email,full_name,role,approved,business_created,is_suspended,created_at")
+        .order("created_at", { ascending: false })
 
-    if (!payload.success) {
-      setNotice(payload.error || "Admin users failed to load.")
-      setLoading(false)
-      return
+      if (!profileError && profileRows?.length) {
+        const ids = profileRows.map((profile) => profile.id)
+        const memberMap = new Map<string, MembershipRow>()
+
+        const { data: memberships } = await supabase
+          .from("organization_members")
+          .select("user_id,organization_id,role")
+          .in("user_id", ids)
+
+        ;((memberships || []) as MembershipRow[]).forEach((membership) => {
+          if (!memberMap.has(membership.user_id) || membership.role === "owner") {
+            memberMap.set(membership.user_id, membership)
+          }
+        })
+
+        const organizationIds = Array.from(new Set(Array.from(memberMap.values()).map((membership) => membership.organization_id)))
+        const { data: organizationRows } = organizationIds.length
+          ? await supabase.from("organizations").select("id,name").in("id", organizationIds)
+          : { data: [] }
+
+        nextProfiles = (profileRows as ProfileRow[]).map((profile) => ({
+          ...profile,
+          organization_id: memberMap.get(profile.id)?.organization_id ?? null,
+        }))
+        nextOrganizations = (organizationRows || []) as OrganizationRow[]
+        nextStats = calculateStats(nextProfiles)
+        apiError = ""
+      } else if (apiError || profileError) {
+        setNotice(apiError || profileError?.message || "Admin users failed to load.")
+      }
     }
 
-    setProfiles(payload.profiles || [])
-    setOrganizations(payload.organizations || [])
+    setProfiles(nextProfiles)
+    setOrganizations(nextOrganizations)
+    setServerStats(nextStats)
     setLoading(false)
-  }
+  }, [])
 
   useEffect(() => {
     queueMicrotask(() => {
       void fetchUsers()
     })
-  }, [])
+  }, [fetchUsers])
 
   const orgMap = useMemo(() => new Map(organizations.map((org) => [org.id, org.name || "No Organization"])), [organizations])
 
   const users = useMemo<UserView[]>(() => {
     return profiles.map((profile) => {
-      const status = profile.approved
-        ? profile.business_created === false
-          ? "Suspended"
-          : "Approved"
-        : "Pending"
+      const status = profile.is_suspended ? "Suspended" : profile.approved ? "Approved" : "Pending"
 
       return {
         ...profile,
@@ -110,27 +181,36 @@ export default function AdminUsersPage() {
   }, [debouncedSearch, statusFilter, users])
 
   async function updateUser(user: UserView, action: "approve" | "suspend" | "activate") {
-    const payload =
-      action === "approve" || action === "activate"
-        ? { approved: true, business_created: true }
-        : { business_created: false }
+    const {
+      data: { session },
+    } = await supabase.auth.getSession()
 
-    const { error } = await supabase.from("profiles").update(payload).eq("id", user.id)
-    if (error) {
-      setNotice(error.message)
+    if (action === "suspend" && !window.confirm(`Suspend ${user.email || "this user"}?`)) {
       return
     }
 
-    setNotice(`${user.email || "User"} updated successfully.`)
+    setActionLoading(`${action}:${user.id}`)
+    const response = await fetch(`/api/admin/users/${action}`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        ...(session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : {}),
+      },
+      body: JSON.stringify({ userId: user.id }),
+    })
+    const payload = (await response.json()) as { success: boolean; error?: string; message?: string }
+    setActionLoading(null)
+
+    if (!payload.success) {
+      setNotice(payload.error || "Unable to update user.")
+      return
+    }
+
+    setNotice(payload.message || `${user.email || "User"} updated successfully.`)
     await fetchUsers()
   }
 
-  const stats = {
-    total: users.length,
-    approved: users.filter((user) => user.status === "Approved").length,
-    pending: users.filter((user) => user.status === "Pending").length,
-    suspended: users.filter((user) => user.status === "Suspended").length,
-  }
+  const stats = serverStats
 
   return (
     <div className="space-y-8 text-white">
@@ -192,9 +272,23 @@ export default function AdminUsersPage() {
                 <p className="text-sm capitalize text-neutral-400">{user.role || "user"}</p>
                 <p className="text-sm text-neutral-500">{formatDate(user.created_at)}</p>
                 <div className="flex flex-wrap gap-2 xl:justify-end">
-                  <button onClick={() => void updateUser(user, "approve")} className="rounded-xl bg-white px-4 py-2 text-sm font-black text-black">Approve</button>
-                  <button onClick={() => void updateUser(user, user.status === "Suspended" ? "activate" : "suspend")} className="rounded-xl border border-white/10 px-4 py-2 text-sm font-bold text-white">
-                    {user.status === "Suspended" ? "Activate" : "Suspend"}
+                  <button
+                    disabled={actionLoading === `approve:${user.id}`}
+                    onClick={() => void updateUser(user, "approve")}
+                    className="rounded-xl bg-white px-4 py-2 text-sm font-black text-black disabled:cursor-not-allowed disabled:opacity-60"
+                  >
+                    {actionLoading === `approve:${user.id}` ? "Approving..." : "Approve"}
+                  </button>
+                  <button
+                    disabled={actionLoading === `${user.status === "Suspended" ? "activate" : "suspend"}:${user.id}`}
+                    onClick={() => void updateUser(user, user.status === "Suspended" ? "activate" : "suspend")}
+                    className="rounded-xl border border-white/10 px-4 py-2 text-sm font-bold text-white disabled:cursor-not-allowed disabled:opacity-60"
+                  >
+                    {actionLoading === `activate:${user.id}` || actionLoading === `suspend:${user.id}`
+                      ? "Working..."
+                      : user.status === "Suspended"
+                        ? "Activate"
+                        : "Suspend"}
                   </button>
                 </div>
               </div>

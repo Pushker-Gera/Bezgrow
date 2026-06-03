@@ -73,7 +73,7 @@ export default function ProfilePage() {
   }
 
   return (
-    <div className="w-full min-h-screen bg-black text-white relative overflow-x-hidden">
+    <div className="responsive-shell relative min-h-dvh w-full overflow-x-hidden bg-black text-white">
 
       <div className="fixed inset-0 overflow-hidden pointer-events-none -z-10">
 
@@ -85,19 +85,19 @@ export default function ProfilePage() {
 
       </div>
 
-      <div className="relative z-10 min-h-screen w-full px-4 py-5 sm:px-6 lg:flex lg:items-center lg:justify-center lg:overflow-hidden">
+      <div className="relative z-10 min-h-dvh w-full px-3 py-4 sm:px-6 sm:py-5 lg:flex lg:items-center lg:justify-center lg:overflow-hidden">
 
-        <div className="grid w-full max-w-[1500px] grid-cols-1 gap-5 lg:min-h-[calc(100vh-48px)] lg:grid-cols-12 lg:gap-6">
+        <div className="grid w-full max-w-[1500px] grid-cols-1 gap-4 sm:gap-5 lg:min-h-[calc(100dvh-48px)] lg:grid-cols-12 lg:gap-6">
 
-          <div className="relative flex flex-col justify-between overflow-hidden rounded-[28px] border border-white/10 bg-gradient-to-b from-zinc-900 to-black p-5 shadow-[0_0_60px_rgba(0,0,0,0.55)] backdrop-blur-2xl sm:p-7 lg:col-span-3">
+          <div className="relative flex flex-col justify-between overflow-hidden rounded-[22px] border border-white/10 bg-gradient-to-b from-zinc-900 to-black p-4 shadow-[0_0_60px_rgba(0,0,0,0.55)] backdrop-blur-2xl sm:rounded-[28px] sm:p-7 lg:col-span-3">
 
             <div className="absolute inset-0 bg-[radial-gradient(circle_at_top,rgba(34,211,238,0.12),transparent_35%)]"></div>
 
             <div className="relative z-10">
 
-              <div className="mb-8 flex min-w-0 items-center gap-4 lg:mb-10">
+              <div className="mb-6 flex min-w-0 items-center gap-3 sm:gap-4 lg:mb-10">
 
-                <div className="flex h-16 w-16 shrink-0 items-center justify-center rounded-[24px] bg-gradient-to-br from-cyan-400 via-blue-500 to-blue-700 text-3xl font-black shadow-[0_0_50px_rgba(34,211,238,0.3)] sm:h-20 sm:w-20 sm:rounded-[28px] sm:text-4xl">
+                <div className="flex h-14 w-14 shrink-0 items-center justify-center rounded-[20px] bg-gradient-to-br from-cyan-400 via-blue-500 to-blue-700 text-2xl font-black shadow-[0_0_50px_rgba(34,211,238,0.3)] sm:h-20 sm:w-20 sm:rounded-[28px] sm:text-4xl">
                   {organization?.business_name?.charAt(0) || "B"}
                 </div>
 
@@ -158,7 +158,7 @@ export default function ProfilePage() {
 
           </div>
 
-          <div className="relative flex flex-col justify-between overflow-hidden rounded-[30px] border border-white/10 bg-gradient-to-br from-zinc-900/95 via-black to-zinc-950 p-5 shadow-[0_0_80px_rgba(0,0,0,0.65)] backdrop-blur-2xl sm:p-8 lg:col-span-6">
+          <div className="relative flex flex-col justify-between overflow-hidden rounded-[24px] border border-white/10 bg-gradient-to-br from-zinc-900/95 via-black to-zinc-950 p-4 shadow-[0_0_80px_rgba(0,0,0,0.65)] backdrop-blur-2xl sm:rounded-[30px] sm:p-8 lg:col-span-6">
 
             <div className="absolute inset-0 bg-[radial-gradient(circle_at_top_left,rgba(34,211,238,0.12),transparent_30%),radial-gradient(circle_at_bottom_right,rgba(59,130,246,0.08),transparent_35%)]"></div>
 
@@ -168,11 +168,11 @@ export default function ProfilePage() {
                 Global ERP Infrastructure
               </div>
 
-              <h1 className="bg-gradient-to-r from-white via-cyan-100 to-blue-300 bg-clip-text text-4xl font-black leading-tight tracking-tight text-transparent sm:text-5xl xl:text-6xl xl:leading-none">
+              <h1 className="bg-gradient-to-r from-white via-cyan-100 to-blue-300 bg-clip-text text-3xl font-black leading-tight tracking-tight text-transparent sm:text-5xl xl:text-6xl xl:leading-none">
                 Business Profile
               </h1>
 
-              <p className="mt-5 max-w-3xl text-base leading-7 text-neutral-400 sm:mt-6 sm:text-lg sm:leading-8">
+              <p className="mt-4 max-w-3xl text-sm leading-6 text-neutral-400 sm:mt-6 sm:text-lg sm:leading-8">
                 Centralized enterprise identity management for your global inventory,
                 billing, fulfillment and warehouse operations.
               </p>

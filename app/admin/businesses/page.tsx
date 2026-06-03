@@ -21,6 +21,7 @@ type Profile = {
   full_name?: string | null
   approved: boolean | null
   business_created: boolean | null
+  is_suspended?: boolean | null
 }
 
 type ProductMetric = {
@@ -111,6 +112,7 @@ export default function AdminBusinessesPage() {
   const [statusFilter, setStatusFilter] = useState("all")
   const [riskFilter, setRiskFilter] = useState("all")
   const [loading, setLoading] = useState(true)
+  const [actionLoading, setActionLoading] = useState<string | null>(null)
   const [notice, setNotice] = useState("")
 
   async function fetchBusinesses() {
@@ -121,14 +123,9 @@ export default function AdminBusinessesPage() {
       data: { session },
     } = await supabase.auth.getSession()
 
-    if (!session?.access_token) {
-      setNotice("Admin session not found. Please log in again.")
-      setLoading(false)
-      return
-    }
-
     const response = await fetch("/api/admin/metrics", {
-      headers: { Authorization: `Bearer ${session.access_token}` },
+      headers: session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : undefined,
+      cache: "no-store",
     })
     const payload = (await response.json()) as AdminMetricsResponse
 
@@ -174,7 +171,7 @@ export default function AdminBusinessesPage() {
       const grossProfit = revenue - costOfGoods
       const marginPercent = revenue > 0 ? Math.round((grossProfit / revenue) * 100) : 0
       const lowStockCount = orgProducts.filter((product) => Number(product.stock || 0) <= Number(product.min_stock || 0)).length
-      const status = owner?.approved === false ? "Pending" : owner?.business_created === false ? "Suspended" : "Active"
+      const status = owner?.is_suspended ? "Suspended" : owner?.approved === false ? "Pending" : "Active"
       const readinessChecks = [
         Boolean(org.name),
         Boolean(owner?.email),
@@ -235,20 +232,21 @@ export default function AdminBusinessesPage() {
       data: { session },
     } = await supabase.auth.getSession()
 
-    if (!session?.access_token) {
-      setNotice("Admin session not found. Please log in again.")
+    if (action === "suspend" && !window.confirm(`Suspend ${business.name || "this business"}?`)) {
       return
     }
 
+    setActionLoading(`${action}:${business.id}`)
     const response = await fetch("/api/admin/business-lifecycle", {
       method: "POST",
       headers: {
-        Authorization: `Bearer ${session.access_token}`,
         "Content-Type": "application/json",
+        ...(session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : {}),
       },
-      body: JSON.stringify({ ownerId: business.owner_id, businessName: business.name, action }),
+      body: JSON.stringify({ ownerId: business.owner_id, businessName: business.name, organizationId: business.id, action }),
     })
     const payload = (await response.json()) as { success: boolean; error?: string; message?: string }
+    setActionLoading(null)
 
     if (!payload.success) {
       setNotice(payload.error || "Business lifecycle update failed.")
@@ -391,11 +389,19 @@ export default function AdminBusinessesPage() {
                   <span className="mt-3 inline-flex rounded-full border border-cyan-400/20 bg-cyan-500/10 px-3 py-1 text-xs font-bold text-cyan-200">{business.status}</span>
                 </div>
                 <div className="grid gap-3 sm:grid-cols-2 2xl:grid-cols-1">
-                  <button onClick={() => void setBusinessLifecycle(business, "activate")} className="h-11 rounded-xl bg-white px-4 text-sm font-black text-black">
-                    Activate
+                  <button
+                    disabled={actionLoading === `activate:${business.id}`}
+                    onClick={() => void setBusinessLifecycle(business, "activate")}
+                    className="h-11 rounded-xl bg-white px-4 text-sm font-black text-black disabled:cursor-not-allowed disabled:opacity-60"
+                  >
+                    {actionLoading === `activate:${business.id}` ? "Activating..." : "Activate"}
                   </button>
-                  <button onClick={() => void setBusinessLifecycle(business, "suspend")} className="h-11 rounded-xl border border-red-400/20 px-4 text-sm font-bold text-red-200">
-                    Suspend
+                  <button
+                    disabled={actionLoading === `suspend:${business.id}`}
+                    onClick={() => void setBusinessLifecycle(business, "suspend")}
+                    className="h-11 rounded-xl border border-red-400/20 px-4 text-sm font-bold text-red-200 disabled:cursor-not-allowed disabled:opacity-60"
+                  >
+                    {actionLoading === `suspend:${business.id}` ? "Suspending..." : "Suspend"}
                   </button>
                 </div>
               </div>

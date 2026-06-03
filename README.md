@@ -1,36 +1,50 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Bezgrow SaaS ERP
 
-## Getting Started
+Production Next.js + Supabase workspace for admin approval, multi-tenant ERP dashboards, inventory, customers, invoices, and orders.
 
-First, run the development server:
+## Local Development
 
 ```bash
+npm install
 npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+Open `http://localhost:3000`.
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+## Required Environment Variables
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+Set these in `.env.local` and in Vercel production:
 
-## Learn More
+```bash
+NEXT_PUBLIC_SITE_URL=https://bezgrow.com
+NEXT_PUBLIC_SUPABASE_URL=https://your-project.supabase.co
+NEXT_PUBLIC_SUPABASE_ANON_KEY=your-anon-key
+SUPABASE_SERVICE_ROLE_KEY=your-service-role-key
+```
 
-To learn more about Next.js, take a look at the following resources:
+Payments are not enabled for the current launch. Access is approval-based through admin approval, suspension, business creation, and organization membership checks.
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+Never expose `SUPABASE_SERVICE_ROLE_KEY` to client-side code.
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+## Supabase Setup
 
-## Deploy on Vercel
+Apply every migration in `supabase/migrations` before launch. The launch hardening migration repairs recursive `organization_members` RLS, backfills `order_items.organization_id`, creates tenant indexes, and keeps future subscription/payment tables available without enforcing payments in the app.
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+Required Supabase Auth URLs:
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+- Site URL: `https://bezgrow.com`
+- Redirect URL: `https://bezgrow.com/auth/callback`
+- Password reset redirect: `https://bezgrow.com/reset-password`
+- Local redirect URL: `http://localhost:3000/auth/callback`
+- Local password reset URL: `http://localhost:3000/reset-password`
+
+For Google OAuth, configure the provider in Supabase and Google Cloud with the Supabase callback URL shown in the Supabase dashboard.
+
+## Validation
+
+```bash
+npm run lint
+npm run build
+```
+
+Both commands must pass before deployment.

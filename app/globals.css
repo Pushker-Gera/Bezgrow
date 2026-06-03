@@ -12,6 +12,76 @@ body {
   overflow-x: hidden;
 }
 
+html {
+  overflow-x: hidden;
+  -webkit-text-size-adjust: 100%;
+}
+
+img,
+svg,
+canvas,
+video {
+  max-width: 100%;
+}
+
+.responsive-shell,
+.responsive-shell header,
+.responsive-shell main {
+  min-width: 0;
+}
+
+@media (max-width: 640px) {
+  input,
+  select,
+  textarea,
+  button {
+    font-size: 16px;
+  }
+
+  .inventory-grid-bg {
+    background-size: 30px 30px, 30px 30px, auto, auto, auto;
+  }
+
+  .inventory-sheen {
+    border-radius: 22px;
+  }
+
+  .responsive-shell {
+    font-size: 15px;
+  }
+
+  .responsive-shell [class*="rounded-[40px]"],
+  .responsive-shell [class*="rounded-[36px]"],
+  .responsive-shell [class*="rounded-[32px]"],
+  .responsive-shell [class*="rounded-[30px]"] {
+    border-radius: 22px !important;
+  }
+
+  .responsive-shell section[class*="p-8"],
+  .responsive-shell section[class*="p-7"],
+  .responsive-shell article[class*="p-8"],
+  .responsive-shell article[class*="p-7"],
+  .responsive-shell div[class*="p-8"],
+  .responsive-shell div[class*="p-7"] {
+    padding: 1rem !important;
+  }
+
+  .responsive-shell h1[class*="text-4xl"],
+  .responsive-shell h1[class*="text-5xl"],
+  .responsive-shell h1[class*="text-6xl"] {
+    font-size: 2rem !important;
+    line-height: 1.08 !important;
+  }
+
+  .responsive-shell table {
+    font-size: 0.8rem;
+  }
+
+  .responsive-shell .overflow-x-auto {
+    -webkit-overflow-scrolling: touch;
+  }
+}
+
 /* Logo Glow Animation */
 @keyframes softGlow {
   0%, 100% {

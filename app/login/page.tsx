@@ -1,6 +1,7 @@
 "use client"
 
-import { useState, useEffect } from "react"
+import type { FormEvent } from "react"
+import { useCallback, useEffect, useState } from "react"
 import { supabase } from "@/lib/supabase"
 import { useRouter } from "next/navigation"
 
@@ -13,47 +14,96 @@ export default function LoginPage() {
     const [rememberMe, setRememberMe] = useState(false)
 
     const [loading, setLoading] = useState(false)
+    const [googleLoading, setGoogleLoading] = useState(false)
     const [errorMessage, setErrorMessage] = useState("")
     const [successMessage, setSuccessMessage] = useState("")
     const [resetLoading, setResetLoading] = useState(false)
+
+    const getSafeNextPath = useCallback((fallback: string) => {
+        if (typeof window === "undefined") {
+            return fallback
+        }
+
+        const requested = new URLSearchParams(window.location.search).get("next")
+        if (!requested || !requested.startsWith("/") || requested.startsWith("//")) {
+            return fallback
+        }
+
+        return requested
+    }, [])
+
+    function showAuthError(message: string) {
+        if (message.toLowerCase().includes("invalid api key")) {
+            setErrorMessage("Supabase API key is invalid on this deployment. Update NEXT_PUBLIC_SUPABASE_ANON_KEY in Vercel and redeploy.")
+            return
+        }
+
+        setErrorMessage(message)
+    }
+
+    const routeAuthenticatedUser = useCallback(async (accessToken: string) => {
+        const response = await fetch("/api/workspace/bootstrap", {
+            headers: { Authorization: `Bearer ${accessToken}` },
+            cache: "no-store",
+        })
+        const payload = (await response.json()) as {
+            profile?: {
+                role?: string
+                approved?: boolean
+                business_created?: boolean
+                is_suspended?: boolean
+            }
+            error?: string
+        }
+
+        if (!response.ok || !payload.profile) {
+            setErrorMessage(payload.error || "Your account profile is not ready yet.")
+            return
+        }
+
+        if (payload.profile.role === "admin") {
+            router.push(getSafeNextPath("/admin"))
+        }
+        else if (payload.profile.is_suspended) {
+            setErrorMessage("This account is suspended. Please contact support.")
+        }
+        else if (!payload.profile.approved) {
+            router.push("/pending-approval")
+        }
+        else if (!payload.profile.business_created) {
+            router.push("/create-business")
+        }
+        else {
+            router.push(getSafeNextPath("/dashboard"))
+        }
+    }, [getSafeNextPath, router])
 
     useEffect(() => {
 
         async function checkUser() {
 
             const {
-                data: { session }
+                data: { session },
+                error,
             } = await supabase.auth.getSession()
 
-            if (session?.user) {
+            if (error) {
+                showAuthError(error.message)
+                return
+            }
 
-                const { data: profile } = await supabase
-                    .from("profiles")
-                    .select("*")
-                    .eq("id", session.user.id)
-                    .single()
-
-                if (profile?.role === "admin") {
-                    router.push("/admin")
-                }
-                else if (!profile?.approved) {
-                    router.push("/pending-approval")
-                }
-                else if (!profile?.business_created) {
-                    router.push("/create-business")
-                }
-                else {
-                    router.push("/dashboard")
-                }
+            if (session?.access_token) {
+                await routeAuthenticatedUser(session.access_token)
             }
 
         }
 
         checkUser()
 
-    }, [router])
+    }, [routeAuthenticatedUser])
 
-    async function login() {
+    async function login(event?: FormEvent<HTMLFormElement>) {
+        event?.preventDefault()
 
         try {
 
@@ -80,11 +130,14 @@ export default function LoginPage() {
                 if (error.message.includes("Invalid login credentials")) {
                     setErrorMessage("Incorrect email or password")
                 }
+                else if (error.message.toLowerCase().includes("invalid api key")) {
+                    showAuthError(error.message)
+                }
                 else if (error.message.includes("Email not confirmed")) {
                     setErrorMessage("Please verify your email before logging in")
                 }
                 else {
-                    setErrorMessage(error.message)
+                    showAuthError(error.message)
                 }
 
                 setLoading(false)
@@ -93,28 +146,11 @@ export default function LoginPage() {
 
             setSuccessMessage("Login successful")
 
-            const { data: profile } = await supabase
-                .from("profiles")
-                .select("*")
-                .eq("id", data.user.id)
-                .single()
-
-            if (profile?.role === "admin") {
-                router.push("/admin")
-            }
-            else if (!profile?.approved) {
-                router.push("/pending-approval")
-            }
-            else if (!profile?.business_created) {
-                router.push("/create-business")
-            }
-            else {
-                router.push("/dashboard")
+            if (data.session?.access_token) {
+                await routeAuthenticatedUser(data.session.access_token)
             }
 
-        } catch (err) {
-
-            console.error(err)
+        } catch {
 
             setErrorMessage("Something went wrong")
 
@@ -129,23 +165,33 @@ export default function LoginPage() {
     async function loginWithGoogle() {
 
         try {
+            setGoogleLoading(true)
+            setErrorMessage("")
+            setSuccessMessage("")
 
-            const { error } = await supabase.auth.signInWithOAuth({
+            const { data, error } = await supabase.auth.signInWithOAuth({
                 provider: "google",
                 options: {
-                    redirectTo: `${window.location.origin}/login`
+                    redirectTo: `${window.location.origin}/auth/callback?next=${encodeURIComponent(getSafeNextPath("/dashboard"))}`,
+                    skipBrowserRedirect: true,
                 }
             })
 
             if (error) {
-                setErrorMessage(error.message)
+                showAuthError(error.message)
+                setGoogleLoading(false)
+                return
             }
 
-        } catch (err) {
+            if (data.url) {
+                window.location.assign(data.url)
+                return
+            }
 
-            console.error(err)
+        } catch {
 
             setErrorMessage("Google login failed")
+            setGoogleLoading(false)
 
         }
 
@@ -170,16 +216,15 @@ export default function LoginPage() {
             })
 
             if (error) {
-                setErrorMessage(error.message)
+                showAuthError(error.message)
                 setResetLoading(false)
                 return
             }
 
             setSuccessMessage("Password reset link sent to your email")
 
-        } catch (err) {
+    } catch {
 
-            console.error(err)
             setErrorMessage("Failed to send reset email")
 
         } finally {
@@ -189,15 +234,15 @@ export default function LoginPage() {
     }
 
     return (
-        <div className="inventory-grid-bg flex min-h-screen items-center justify-center px-5 py-8 text-white">
+        <div className="inventory-grid-bg flex min-h-dvh items-center justify-center px-3 py-5 text-white sm:px-5 sm:py-8">
 
-            <div className="w-full max-w-md rounded-[28px] border border-white/10 bg-neutral-950/85 p-6 shadow-[0_28px_120px_rgba(0,0,0,0.45)] backdrop-blur-xl sm:p-8">
+            <form onSubmit={login} className="w-full max-w-md rounded-[22px] border border-white/10 bg-neutral-950/85 p-5 shadow-[0_28px_120px_rgba(0,0,0,0.45)] backdrop-blur-xl sm:rounded-[28px] sm:p-8">
 
-                <h1 className="text-3xl font-bold mb-2">
+                <h1 className="mb-2 text-2xl font-bold sm:text-3xl">
                     Welcome Back
                 </h1>
 
-                <p className="text-gray-400 text-sm mb-6">
+                <p className="mb-5 text-sm leading-6 text-gray-400 sm:mb-6">
                     Login to manage your inventory, billing, customers, and business operations.
                 </p>
 
@@ -217,7 +262,7 @@ export default function LoginPage() {
                     type="email"
                     placeholder="Enter your business email"
                     value={email}
-                    className="w-full p-3 mb-4 bg-black border border-gray-700 rounded-lg outline-none focus:border-cyan-300"
+                    className="mb-4 min-h-12 w-full rounded-lg border border-gray-700 bg-black p-3 outline-none focus:border-cyan-300"
                     onChange={(e) => setEmail(e.target.value)}
                 />
 
@@ -225,11 +270,11 @@ export default function LoginPage() {
                     type="password"
                     placeholder="Password"
                     value={password}
-                    className="w-full p-3 mb-4 bg-black border border-gray-700 rounded-lg outline-none focus:border-cyan-300"
+                    className="mb-4 min-h-12 w-full rounded-lg border border-gray-700 bg-black p-3 outline-none focus:border-cyan-300"
                     onChange={(e) => setPassword(e.target.value)}
                 />
 
-                <div className="flex items-center justify-between mb-6 text-sm">
+                <div className="mb-6 flex flex-col gap-3 text-sm min-[380px]:flex-row min-[380px]:items-center min-[380px]:justify-between">
 
                     <label className="flex items-center gap-2 text-gray-400 cursor-pointer">
                         <input
@@ -252,9 +297,9 @@ export default function LoginPage() {
                 </div>
 
                 <button
-                    onClick={login}
+                    type="submit"
                     disabled={loading}
-                    className="w-full bg-white text-black py-3 rounded-lg font-semibold disabled:opacity-50"
+                    className="min-h-12 w-full rounded-lg bg-white py-3 font-semibold text-black disabled:opacity-50"
                 >
                     {loading ? "Logging in..." : "Login"}
                 </button>
@@ -272,17 +317,19 @@ export default function LoginPage() {
                 </div>
 
                 <button
+                    type="button"
                     onClick={loginWithGoogle}
-                    className="w-full bg-red-500 hover:bg-red-600 text-white py-3 rounded-lg font-semibold transition"
+                    disabled={googleLoading}
+                    className="min-h-12 w-full rounded-lg bg-red-500 py-3 font-semibold text-white transition hover:bg-red-600 disabled:cursor-not-allowed disabled:opacity-50"
                 >
-                    Continue with Google
+                    {googleLoading ? "Opening Google..." : "Continue with Google"}
                 </button>
 
                 <p className="text-center text-gray-500 text-sm mt-6">
                     Secure business access powered by Supabase authentication.
                 </p>
 
-            </div>
+            </form>
 
         </div>
     )

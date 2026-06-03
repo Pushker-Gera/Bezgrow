@@ -1,78 +1,11 @@
-import { NextResponse } from "next/server"
-import { createClient } from "@supabase/supabase-js"
+import { fail } from "@/lib/api/responses"
 
-const supabase = createClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.SUPABASE_SERVICE_ROLE_KEY!
-)
+export const dynamic = "force-dynamic"
 
-function getRequestOrigin(req: Request) {
-    const url = new URL(req.url)
-    const forwardedHost = req.headers.get("x-forwarded-host")
-    const forwardedProto = req.headers.get("x-forwarded-proto") || "https"
-    const configuredSiteUrl = process.env.NEXT_PUBLIC_SITE_URL
-    const vercelUrl = process.env.VERCEL_URL
-
-    if (forwardedHost) {
-        return `${forwardedProto}://${forwardedHost}`
-    }
-
-    if (configuredSiteUrl && !configuredSiteUrl.includes("localhost")) {
-        return configuredSiteUrl
-    }
-
-    if (vercelUrl) {
-        return `https://${vercelUrl}`
-    }
-
-    if (url.origin && !url.origin.includes("localhost")) {
-        return url.origin
-    }
-
-    return configuredSiteUrl || url.origin
+export async function GET() {
+  return fail("This public rejection endpoint has been retired.", 410)
 }
 
-export async function GET(req: Request) {
-
-    try {
-
-        const { searchParams } = new URL(req.url)
-        const origin = getRequestOrigin(req)
-
-        const userId = searchParams.get("userId")
-
-        if (!userId) {
-            return NextResponse.json({
-                success: false,
-                error: "Missing userId"
-            }, { status: 400 })
-        }
-
-        const { error } = await supabase
-            .from("pending_users")
-            .update({
-                status: "rejected"
-            })
-            .eq("id", userId)
-
-        if (error) {
-            return NextResponse.json({
-                success: false,
-                error: error.message
-            }, { status: 500 })
-        }
-
-        return NextResponse.redirect(`${origin}/admin/users?approval=rejected`)
-
-    } catch (error) {
-
-        console.error(error)
-
-        return NextResponse.json({
-            success: false,
-            error
-        })
-
-    }
-
+export async function POST() {
+  return fail("Use the secure admin rejection endpoint.", 410)
 }

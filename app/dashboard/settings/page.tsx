@@ -27,16 +27,11 @@ type InvoiceCorrectionRow = Record<string, unknown> & {
   created_at?: string | null
 }
 
-type InvoiceCorrectionItem = {
-  id: string
-  invoice_id: string | null
-  product_id: string | null
-  quantity: number | null
-}
-
-type ProductStockRow = {
-  id: string
-  stock: number | null
+type ListResponse<T> = { data?: T[]; error?: string }
+type WorkspaceResponse = {
+  organization?: Organization
+  features?: FeatureRow[]
+  error?: string
 }
 
 const featureCatalog = [
@@ -126,23 +121,22 @@ export default function SettingsPage() {
     }
 
     setOrganizationId(orgId)
-    const [orgResult, featureResult, invoiceResult] = await Promise.all([
-      supabase.from("organizations").select("*").eq("id", orgId).single(),
-      supabase.from("organization_features").select("*").eq("organization_id", orgId),
-      supabase
-        .from("invoices")
-        .select("*")
-        .eq("organization_id", orgId)
-        .order("created_at", { ascending: false })
-        .limit(100),
+    const {
+      data: { session },
+    } = await supabase.auth.getSession()
+    const headers = session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : undefined
+    const [workspaceResponse, invoiceResponse] = await Promise.all([
+      fetch("/api/workspace/bootstrap", { headers, cache: "no-store" }),
+      fetch("/api/invoices/list?limit=100", { headers, cache: "no-store" }),
     ])
+    const workspace = (await workspaceResponse.json()) as WorkspaceResponse
+    const invoices = (await invoiceResponse.json()) as ListResponse<InvoiceCorrectionRow>
 
-    if (orgResult.error) setNotice(orgResult.error.message)
-    if (featureResult.error) setNotice(featureResult.error.message)
-    if (invoiceResult.error) setNotice(invoiceResult.error.message)
+    if (!workspaceResponse.ok) setNotice(workspace.error || "Workspace settings failed to load.")
+    if (!invoiceResponse.ok) setNotice(invoices.error || "Invoices failed to load.")
 
-    if (orgResult.data) {
-      const org = orgResult.data as Organization
+    if (workspace.organization) {
+      const org = workspace.organization
       setOrganization(org)
       setForm({
         name: valueText(org.name || org.business_name),
@@ -152,8 +146,8 @@ export default function SettingsPage() {
         businessCategory: valueText(org.business_category) || "general",
       })
     }
-    if (featureResult.data) setFeatures(featureResult.data as FeatureRow[])
-    if (invoiceResult.data) setRecentInvoices(invoiceResult.data as InvoiceCorrectionRow[])
+    if (workspace.features) setFeatures(workspace.features)
+    if (invoices.data) setRecentInvoices(invoices.data)
   }
 
   useEffect(() => {
@@ -184,19 +178,27 @@ export default function SettingsPage() {
     }
 
     setSaving(true)
-    const { error } = await supabase
-      .from("organizations")
-      .update({
+    const {
+      data: { session },
+    } = await supabase.auth.getSession()
+    const response = await fetch("/api/settings/update-organization", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        ...(session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : {}),
+      },
+      body: JSON.stringify({
         name: form.name.trim(),
         industry: form.industry.trim(),
         currency: form.currency,
         business_type: form.businessType,
         business_category: form.businessCategory,
-      })
-      .eq("id", organizationId)
+      }),
+    })
+    const result = (await response.json()) as { error?: string }
 
-    if (error) {
-      setNotice(error.message)
+    if (!response.ok) {
+      setNotice(result.error || "Settings could not be saved.")
       setSaving(false)
       return
     }
@@ -228,23 +230,23 @@ export default function SettingsPage() {
       ]
     })
 
-    if (existing?.id) {
-      const { error } = await supabase
-        .from("organization_features")
-        .update({ is_enabled: nextEnabled })
-        .eq("id", existing.id)
-
-      if (error) setNotice(error.message)
-      return
-    }
-
-    const { error } = await supabase.from("organization_features").insert({
-      organization_id: organizationId,
-      feature_key: featureKey,
-      is_enabled: nextEnabled,
+    const {
+      data: { session },
+    } = await supabase.auth.getSession()
+    const response = await fetch("/api/settings/toggle-feature", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        ...(session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : {}),
+      },
+      body: JSON.stringify({ feature_key: featureKey, is_enabled: nextEnabled }),
     })
+    const result = (await response.json()) as { error?: string }
 
-    if (error) setNotice(error.message)
+    if (!response.ok) {
+      setNotice(result.error || "Feature could not be updated.")
+      await initializeSettings()
+    }
   }
 
   async function deleteMistakenInvoice() {
@@ -257,98 +259,27 @@ export default function SettingsPage() {
     setSaving(true)
     setNotice("")
 
-    const invoice = recentInvoices.find((row) => row.id === deletingInvoiceId)
-    if (!invoice) {
+    if (!recentInvoices.some((row) => row.id === deletingInvoiceId)) {
       setNotice("Select a valid invoice to delete.")
       setSaving(false)
       return
     }
 
-    const { data: invoiceItems, error: itemError } = await supabase
-      .from("invoice_items")
-      .select("id,invoice_id,product_id,quantity")
-      .eq("organization_id", organizationId)
-      .eq("invoice_id", deletingInvoiceId)
+    const {
+      data: { session },
+    } = await supabase.auth.getSession()
+    const response = await fetch("/api/invoices/delete-with-stock-restore", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        ...(session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : {}),
+      },
+      body: JSON.stringify({ invoice_id: deletingInvoiceId, confirmation: "DELETE" }),
+    })
+    const result = (await response.json()) as { error?: string }
 
-    if (itemError) {
-      setNotice(itemError.message)
-      setSaving(false)
-      return
-    }
-
-    const typedItems = (invoiceItems || []) as InvoiceCorrectionItem[]
-    const productIds = Array.from(new Set(typedItems.map((item) => item.product_id).filter(Boolean))) as string[]
-
-    if (productIds.length > 0) {
-      const { data: products, error: productError } = await supabase
-        .from("products")
-        .select("id,stock")
-        .eq("organization_id", organizationId)
-        .in("id", productIds)
-
-      if (productError) {
-        setNotice(productError.message)
-        setSaving(false)
-        return
-      }
-
-      const productStockMap = new Map((products || []).map((product) => [product.id, product as ProductStockRow]))
-
-      for (const item of typedItems) {
-        if (!item.product_id) continue
-        const product = productStockMap.get(item.product_id)
-        if (!product) continue
-
-        const previousStock = Number(product.stock || 0)
-        const quantity = Number(item.quantity || 0)
-        const nextStock = previousStock + quantity
-
-        const { error: stockError } = await supabase
-          .from("products")
-          .update({ stock: nextStock })
-          .eq("id", item.product_id)
-          .eq("organization_id", organizationId)
-
-        if (stockError) {
-          setNotice(stockError.message)
-          setSaving(false)
-          return
-        }
-
-        await supabase.from("stock_movements").insert({
-          organization_id: organizationId,
-          product_id: item.product_id,
-          type: "adjustment",
-          quantity,
-          previous_stock: previousStock,
-          new_stock: nextStock,
-          reason: `Invoice ${invoice.invoice_number || deletingInvoiceId} deleted and stock restored`,
-        })
-
-        productStockMap.set(item.product_id, { ...product, stock: nextStock })
-      }
-    }
-
-    const { error: deleteItemsError } = await supabase
-      .from("invoice_items")
-      .delete()
-      .eq("organization_id", organizationId)
-      .eq("invoice_id", deletingInvoiceId)
-
-    if (deleteItemsError) {
-      setNotice(deleteItemsError.message)
-      setSaving(false)
-      return
-    }
-
-    const { error: deleteInvoiceError } = await supabase
-      .from("invoices")
-      .delete()
-      .eq("organization_id", organizationId)
-      .eq("id", deletingInvoiceId)
-
-    if (deleteInvoiceError) {
-      setNotice(deleteInvoiceError.message)
+    if (!response.ok) {
+      setNotice(result.error || "Invoice could not be deleted.")
       setSaving(false)
       return
     }
@@ -361,7 +292,7 @@ export default function SettingsPage() {
   }
 
   return (
-    <div className="relative min-h-screen overflow-y-auto overflow-x-hidden bg-black text-white">
+    <div className="relative min-h-dvh overflow-y-auto overflow-x-hidden bg-black text-white">
       <div className="pointer-events-none absolute inset-0 overflow-hidden">
         <div className="inventory-grid-bg absolute inset-0 opacity-40" />
         <div className="absolute left-[-160px] top-[-160px] h-[520px] w-[520px] rounded-full bg-cyan-500/10 blur-[170px] animate-pulse" />

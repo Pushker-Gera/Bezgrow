@@ -16,7 +16,7 @@ type AdminMetricsResponse = {
     success: boolean
     error?: string
     organizations?: unknown[]
-    profiles?: Array<{ approved: boolean | null; business_created: boolean | null }>
+    profiles?: Array<{ approved: boolean | null; business_created: boolean | null; is_suspended?: boolean | null }>
     pendingUsers?: PendingUser[]
     usersCount?: number
 }
@@ -35,6 +35,7 @@ export default function AdminPage() {
     const [pendingCount, setPendingCount] = useState(0)
     const [approvedUsers, setApprovedUsers] = useState(0)
     const [loading, setLoading] = useState(true)
+    const [actionLoading, setActionLoading] = useState<string | null>(null)
     const [notice, setNotice] = useState("")
 
     const loadUsers = useCallback(async () => {
@@ -44,14 +45,9 @@ export default function AdminPage() {
             data: { session },
         } = await supabase.auth.getSession()
 
-        if (!session?.access_token) {
-            setNotice("Admin session not found. Please log in again.")
-            setLoading(false)
-            return
-        }
-
         const response = await fetch("/api/admin/metrics", {
-            headers: { Authorization: `Bearer ${session.access_token}` },
+            headers: session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : undefined,
+            cache: "no-store",
         })
         const payload = (await response.json()) as AdminMetricsResponse
 
@@ -67,7 +63,7 @@ export default function AdminPage() {
         setUsers(pendingRows)
         setPendingCount(pendingRows.length)
         setTotalUsers(payload.usersCount || profileRows.length)
-        setApprovedUsers(profileRows.filter((profile) => profile.approved !== false && profile.business_created !== false).length)
+        setApprovedUsers(profileRows.filter((profile) => profile.approved !== false && !profile.is_suspended).length)
         setTotalBusinesses(payload.organizations?.length || 0)
         setLoading(false)
     }, [])
@@ -108,34 +104,28 @@ export default function AdminPage() {
     }, [approvedUsers, totalUsers])
 
     async function approveUser(user: PendingUser) {
-        const { error: profileError } = await supabase
-            .from("profiles")
-            .upsert([
-                {
-                    id: user.id,
-                    email: user.email,
-                    approved: true,
-                    business_created: false,
-                    role: "user",
-                },
-            ])
+        const {
+            data: { session },
+        } = await supabase.auth.getSession()
 
-        if (profileError) {
-            setNotice(profileError.message)
+        setActionLoading(user.id)
+        const response = await fetch("/api/admin/users/approve", {
+            method: "POST",
+            headers: {
+                "Content-Type": "application/json",
+                ...(session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : {}),
+            },
+            body: JSON.stringify({ userId: user.id }),
+        })
+        const payload = (await response.json()) as { success: boolean; error?: string; message?: string }
+        setActionLoading(null)
+
+        if (!payload.success) {
+            setNotice(payload.error || "Unable to approve user.")
             return
         }
 
-        const { error: deleteError } = await supabase
-            .from("pending_users")
-            .delete()
-            .eq("id", user.id)
-
-        if (deleteError) {
-            setNotice(deleteError.message)
-            return
-        }
-
-        setNotice(`${user.email || "User"} approved successfully.`)
+        setNotice(payload.message || `${user.email || "User"} approved successfully.`)
         await loadUsers()
     }
 
@@ -214,10 +204,11 @@ export default function AdminPage() {
                                 </div>
                                 <p className="text-sm text-neutral-500">{formatDate(user.created_at)}</p>
                                 <button
+                                    disabled={actionLoading === user.id}
                                     onClick={() => void approveUser(user)}
-                                    className="h-12 rounded-2xl bg-white px-5 font-black text-black hover:bg-cyan-100"
+                                    className="h-12 rounded-2xl bg-white px-5 font-black text-black hover:bg-cyan-100 disabled:cursor-not-allowed disabled:opacity-60"
                                 >
-                                    Approve
+                                    {actionLoading === user.id ? "Approving..." : "Approve"}
                                 </button>
                             </div>
                         ))}

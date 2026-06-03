@@ -3,7 +3,6 @@
 import Link from "next/link"
 import type { ReactNode } from "react"
 import { useEffect, useMemo, useState } from "react"
-import { getOrganizationFeatures } from "@/lib/get-organization-features"
 import { getOrganizationId } from "@/lib/getOrganization"
 import { supabase } from "@/lib/supabase"
 
@@ -42,6 +41,23 @@ type Notice = {
   message: string
   type: "error" | "warning" | "success"
 } | null
+
+type ListResponse<T> = {
+  data?: T[]
+  error?: string
+}
+
+type WorkspaceBootstrapResponse = {
+  success: boolean
+  features?: string[]
+}
+
+type InvoiceCreateResponse = {
+  success: boolean
+  error?: string
+  invoice_id?: string
+  invoice_number?: string
+}
 
 function createClientId() {
   if (typeof crypto !== "undefined" && "randomUUID" in crypto) {
@@ -82,7 +98,6 @@ function FieldLabel({ label, children }: { label: string; children: ReactNode })
 }
 
 export default function CreateInvoicePage() {
-  const [organizationId, setOrganizationId] = useState("")
   const [features, setFeatures] = useState<string[]>([])
   const [customers, setCustomers] = useState<Customer[]>([])
   const [products, setProducts] = useState<Product[]>([])
@@ -122,37 +137,44 @@ export default function CreateInvoicePage() {
       return
     }
 
-    setOrganizationId(orgId)
-    const orgFeatures = await getOrganizationFeatures(orgId)
-    setFeatures(Array.isArray(orgFeatures) ? orgFeatures : [])
-    await Promise.all([fetchCustomers(orgId), fetchProducts(orgId)])
+    const {
+      data: { session },
+    } = await supabase.auth.getSession()
+    const workspaceResponse = await fetch("/api/workspace/bootstrap", {
+      headers: session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : undefined,
+      cache: "no-store",
+    })
+    const workspace = (await workspaceResponse.json()) as WorkspaceBootstrapResponse
+    setFeatures(Array.isArray(workspace.features) ? workspace.features : [])
+    await Promise.all([fetchCustomers(), fetchProducts()])
   }
 
-  async function fetchCustomers(orgId: string) {
-    const { data, error } = await supabase
-      .from("customers")
-      .select("id,name,phone,gst_number")
-      .eq("organization_id", orgId)
-      .eq("is_active", true)
-      .is("deleted_at", null)
-      .order("name", { ascending: true })
-      .limit(1000)
+  async function fetchCustomers() {
+    const {
+      data: { session },
+    } = await supabase.auth.getSession()
+    const response = await fetch("/api/customers/list?limit=100", {
+      headers: session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : undefined,
+      cache: "no-store",
+    })
+    const payload = (await response.json()) as ListResponse<Customer>
 
-    if (error) setNotice({ title: "Customers failed", message: error.message, type: "error" })
-    if (data) setCustomers(data)
+    if (!response.ok) setNotice({ title: "Customers failed", message: payload.error || "Customers failed to load.", type: "error" })
+    if (payload.data) setCustomers(payload.data.filter((customer) => customer.name))
   }
 
-  async function fetchProducts(orgId: string) {
-    const { data, error } = await supabase
-      .from("products")
-      .select("id,name,sale_rate,price,gst,stock,sku,barcode,batch_no,expiry_date,min_stock")
-      .eq("organization_id", orgId)
-      .is("deleted_at", null)
-      .order("name", { ascending: true })
-      .limit(1000)
+  async function fetchProducts() {
+    const {
+      data: { session },
+    } = await supabase.auth.getSession()
+    const response = await fetch("/api/products/list?limit=100&sort=name&direction=asc", {
+      headers: session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : undefined,
+      cache: "no-store",
+    })
+    const payload = (await response.json()) as ListResponse<Product>
 
-    if (error) setNotice({ title: "Products failed", message: error.message, type: "error" })
-    if (data) setProducts(data)
+    if (!response.ok) setNotice({ title: "Products failed", message: payload.error || "Products failed to load.", type: "error" })
+    if (payload.data) setProducts(payload.data)
   }
 
   useEffect(() => {
@@ -393,9 +415,7 @@ export default function CreateInvoicePage() {
     setSmsBillLink("")
 
     const invoicePayload = {
-      invoice_number: `INV-${new Date().getFullYear()}-${Date.now()}`,
       customer_id: selectedCustomer,
-      organization_id: organizationId,
       subtotal: totals.subtotal,
       tax_amount: totals.tax,
       total_amount: totals.grandTotal,
@@ -420,7 +440,6 @@ export default function CreateInvoicePage() {
         quantity: item.quantity,
         unit_price: item.unit_price,
         tax_percent: invoiceMode === "no_gst" ? 0 : item.tax_percent,
-        organization_id: organizationId,
         discount_percent: item.discount_percent,
         line_total: discountedBase,
         gst_amount: gstAmount,
@@ -428,21 +447,32 @@ export default function CreateInvoicePage() {
       }
     })
 
-    const { data, error } = await supabase.rpc("create_invoice_transaction", {
-      p_invoice: invoicePayload,
-      p_items: invoiceItems,
+    const {
+      data: { session },
+    } = await supabase.auth.getSession()
+    const response = await fetch("/api/invoices/create", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        ...(session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : {}),
+      },
+      body: JSON.stringify({
+        ...invoicePayload,
+        items: invoiceItems,
+      }),
     })
+    const data = (await response.json()) as InvoiceCreateResponse
 
-    if (error || !data?.success) {
-      setNotice({ title: "Transaction Failed", message: error?.message || "Invoice transaction failed.", type: "error" })
+    if (!response.ok || !data.success) {
+      setNotice({ title: "Transaction Failed", message: data.error || "Invoice transaction failed.", type: "error" })
       setLoading(false)
       return
     }
 
-    await fetchProducts(organizationId)
+    await fetchProducts()
 
     if (data?.invoice_id && sendSmsMessage) {
-      const link = createSmsBillLink(data.invoice_id, invoicePayload.invoice_number)
+      const link = createSmsBillLink(data.invoice_id, data.invoice_number || "Invoice")
       if (link) {
         setSmsBillLink(link)
         window.open(link, "_blank", "noopener,noreferrer")
@@ -469,7 +499,7 @@ export default function CreateInvoicePage() {
   }
 
   return (
-    <div className="relative min-h-screen overflow-y-auto overflow-x-hidden bg-black text-white">
+    <div className="relative min-h-dvh overflow-y-auto overflow-x-hidden bg-black text-white">
       <div className="pointer-events-none absolute inset-0 overflow-hidden">
         <div className="inventory-grid-bg absolute inset-0 opacity-40" />
         <div className="absolute left-[-160px] top-[-160px] h-[520px] w-[520px] rounded-full bg-cyan-500/10 blur-[170px] animate-pulse" />

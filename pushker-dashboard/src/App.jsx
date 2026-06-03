@@ -165,7 +165,7 @@ export default function App() {
         <section style={cardStyle}>
           <h2>📈 Performance Stats</h2>
           <p>Streak: {streak} Days</p>
-          <p>Today's Lectures Done: {todayLectures}</p>
+          <p>Today&apos;s Lectures Done: {todayLectures}</p>
         </section>
 
         {/* Weight */}

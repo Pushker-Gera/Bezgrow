@@ -19,6 +19,10 @@ type OrderRow = Record<string, unknown> & {
   id: string
   created_at?: string | null
 }
+type ListResponse<T> = {
+  data?: T[]
+  error?: string
+}
 
 type OrderItem = {
   product_id: string
@@ -89,37 +93,40 @@ export default function OrdersPage() {
 
   async function fetchProducts(orgId = organizationId) {
     if (!orgId) return
-    const { data, error } = await supabase
-      .from("products")
-      .select("id,name,price,sale_rate,stock,sku")
-      .eq("organization_id", orgId)
-      .is("deleted_at", null)
-      .order("created_at", { ascending: false })
-      .limit(1000)
+    const {
+      data: { session },
+    } = await supabase.auth.getSession()
+    const response = await fetch("/api/products/list?limit=100", {
+      headers: session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : undefined,
+      cache: "no-store",
+    })
+    const result = (await response.json()) as ListResponse<Product>
 
-    if (error) {
-      setNotice(error.message)
+    if (!response.ok) {
+      setNotice(result.error || "Products failed to load.")
       return
     }
 
-    setProducts(data || [])
+    setProducts(result.data || [])
   }
 
   async function fetchOrders(orgId = organizationId) {
     if (!orgId) return
-    const { data, error } = await supabase
-      .from("orders")
-      .select("*")
-      .eq("organization_id", orgId)
-      .order("created_at", { ascending: false })
-      .limit(1000)
+    const {
+      data: { session },
+    } = await supabase.auth.getSession()
+    const response = await fetch("/api/orders/list?limit=100", {
+      headers: session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : undefined,
+      cache: "no-store",
+    })
+    const result = (await response.json()) as ListResponse<OrderRow>
 
-    if (error) {
-      setNotice(error.message)
+    if (!response.ok) {
+      setNotice(result.error || "Orders failed to load.")
       return
     }
 
-    setOrders((data || []) as OrderRow[])
+    setOrders(result.data || [])
   }
 
   useEffect(() => {
@@ -229,55 +236,36 @@ export default function OrdersPage() {
     setNotice("")
 
     const orderPayload = {
-      organization_id: organizationId,
       customer_name: customerName.trim(),
       customer_phone: customerPhone.trim() || null,
       customer_address: customerAddress.trim() || null,
-      order_number: `ORD-${new Date().getFullYear()}-${Date.now()}`,
-      total_amount: grandTotal,
       courier_name: courierName.trim() || null,
       tracking_number: trackingNumber.trim() || null,
-    }
-
-    let { data: order, error } = await supabase
-      .from("orders")
-      .insert({
-        ...orderPayload,
-        payment_mode: paymentMode,
-        sales_channel: channel,
-      })
-      .select()
-      .single()
-
-    if (error?.message?.toLowerCase().includes("column")) {
-      const fallback = await supabase
-        .from("orders")
-        .insert(orderPayload)
-        .select()
-        .single()
-
-      order = fallback.data
-      error = fallback.error
-    }
-
-    if (error || !order) {
-      setNotice(error?.message || "Failed to create order.")
-      setLoading(false)
-      return
-    }
-
-    const { error: itemsError } = await supabase.from("order_items").insert(
-      items.map((item) => ({
-        order_id: order.id,
+      payment_mode: paymentMode,
+      sales_channel: channel,
+      items: items.map((item) => ({
         product_id: item.product_id,
         quantity: item.quantity,
         unit_price: item.unit_price,
         total: item.total,
-      }))
-    )
+      })),
+    }
 
-    if (itemsError) {
-      setNotice(itemsError.message)
+    const {
+      data: { session },
+    } = await supabase.auth.getSession()
+    const response = await fetch("/api/orders/create", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        ...(session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : {}),
+      },
+      body: JSON.stringify(orderPayload),
+    })
+    const result = (await response.json()) as { error?: string }
+
+    if (!response.ok) {
+      setNotice(result.error || "Failed to create order.")
       setLoading(false)
       return
     }
@@ -318,7 +306,7 @@ export default function OrdersPage() {
   }
 
   return (
-    <div className="relative min-h-screen overflow-y-auto overflow-x-hidden bg-black text-white">
+    <div className="relative min-h-dvh overflow-y-auto overflow-x-hidden bg-black text-white">
       <div className="pointer-events-none absolute inset-0 overflow-hidden">
         <div className="inventory-grid-bg absolute inset-0 opacity-40" />
         <div className="absolute left-[-160px] top-[-160px] h-[520px] w-[520px] rounded-full bg-cyan-500/10 blur-[170px] animate-pulse" />

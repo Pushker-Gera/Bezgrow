@@ -2,11 +2,8 @@
 
 import { useEffect, useState } from "react"
 import { useRouter } from "next/navigation"
+import { businessTypeFeatures, categoryFeatures } from "@/lib/business-features"
 import { supabase } from "@/lib/supabase"
-import {
-    businessTypeFeatures,
-    categoryFeatures,
-} from "@/lib/business-features"
 
 export default function CreateBusiness() {
 
@@ -87,93 +84,28 @@ export default function CreateBusiness() {
             return
         }
 
-        // create organization
-        const { data: org, error: orgError } = await supabase
-            .from("organizations")
-            .insert({
+        const {
+            data: { session },
+        } = await supabase.auth.getSession()
+
+        const response = await fetch("/api/workspace/create-business", {
+            method: "POST",
+            headers: {
+                "Content-Type": "application/json",
+                ...(session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : {}),
+            },
+            body: JSON.stringify({
                 name: name.trim(),
                 industry: industry.trim(),
-                currency: currency,
+                currency,
                 business_type: businessType,
                 business_category: businessCategory,
-                owner_id: user.id
-            })
-            .select()
-            .single()
+            }),
+        })
+        const result = (await response.json()) as { success?: boolean; error?: string }
 
-        if (orgError || !org) {
-            console.error("Organization creation failed:", orgError)
-            setErrorMessage("Failed to create business")
-            setLoading(false)
-            return
-        }
-
-        const typeFeatures =
-            businessTypeFeatures[businessType] || []
-
-        const industryFeatures =
-            categoryFeatures[businessCategory] || []
-
-        const allFeatures = [
-            ...new Set([
-                ...typeFeatures,
-                ...industryFeatures,
-            ]),
-        ]
-
-        if (allFeatures.length > 0) {
-
-            const featureRows = allFeatures.map(
-                (feature) => ({
-                    organization_id: org.id,
-                    feature_key: feature,
-                    is_enabled: true,
-                })
-            )
-
-            const { error: featureError } =
-                await supabase
-                    .from("organization_features")
-                    .insert(featureRows)
-
-            if (featureError) {
-                console.error(
-                    "Feature initialization failed:",
-                    featureError
-                )
-            }
-        }
-
-        // add user as organization owner
-        const { error: memberError } = await supabase
-            .from("organization_members")
-            .insert({
-                user_id: user.id,
-                organization_id: org.id,
-                role: "owner"
-            })
-
-        if (memberError) {
-            console.error("Failed to add organization member:", memberError)
-            setErrorMessage("Failed to configure organization")
-            setLoading(false)
-            return
-        }
-
-        // Update or repair user profile after approval-based workspace setup.
-        const { error: profileError } = await supabase
-            .from("profiles")
-            .upsert({
-                id: user.id,
-                email: user.email || "",
-                approved: true,
-                business_created: true,
-                role: "user"
-            })
-
-        if (profileError) {
-            console.error("Profile update failed:", profileError)
-            setErrorMessage("Failed to complete setup")
+        if (!response.ok || !result.success) {
+            setErrorMessage(result.error || "Failed to create business")
             setLoading(false)
             return
         }
@@ -189,15 +121,15 @@ export default function CreateBusiness() {
 
     return (
 
-        <div className="inventory-grid-bg min-h-screen overflow-y-auto px-5 py-8 text-white">
+        <div className="inventory-grid-bg min-h-dvh overflow-y-auto px-3 py-5 text-white sm:px-5 sm:py-8">
 
-            <div className="mx-auto w-full max-w-2xl rounded-[28px] border border-white/10 bg-neutral-950/85 p-6 shadow-[0_28px_120px_rgba(0,0,0,0.45)] backdrop-blur-xl sm:p-10">
+            <div className="mx-auto w-full max-w-2xl rounded-[22px] border border-white/10 bg-neutral-950/85 p-5 shadow-[0_28px_120px_rgba(0,0,0,0.45)] backdrop-blur-xl sm:rounded-[28px] sm:p-10">
 
-                <h1 className="text-3xl font-bold mb-2">
+                <h1 className="mb-2 text-2xl font-bold sm:text-3xl">
                     Create Your Business
                 </h1>
 
-                <p className="text-gray-400 text-sm mb-6">
+                <p className="mb-5 text-sm leading-6 text-gray-400 sm:mb-6">
                     Set up your intelligent ERP workspace with dynamic inventory, billing, warehouse, and industry-specific workflows.
                 </p>
 
@@ -223,7 +155,7 @@ export default function CreateBusiness() {
                         placeholder="Enter your business name"
                         value={name}
                         onChange={(e) => setName(e.target.value)}
-                        className="w-full p-3 rounded bg-gray-800 border border-gray-700"
+                        className="min-h-12 w-full rounded border border-gray-700 bg-gray-800 p-3"
                     />
 
                 </div>
@@ -238,7 +170,7 @@ export default function CreateBusiness() {
                         placeholder="Retail, Wholesale, Medical, Electronics, etc."
                         value={industry}
                         onChange={(e) => setIndustry(e.target.value)}
-                        className="w-full p-3 rounded bg-gray-800 border border-gray-700"
+                        className="min-h-12 w-full rounded border border-gray-700 bg-gray-800 p-3"
                     />
 
                 </div>
@@ -252,7 +184,7 @@ export default function CreateBusiness() {
                     <select
                         value={currency}
                         onChange={(e) => setCurrency(e.target.value)}
-                        className="w-full p-3 rounded bg-gray-800 border border-gray-700"
+                        className="min-h-12 w-full rounded border border-gray-700 bg-gray-800 p-3"
                     >
                         <option value="INR">Indian Rupee (INR)</option>
                         <option value="USD">US Dollar (USD)</option>
@@ -273,7 +205,7 @@ export default function CreateBusiness() {
                         onChange={(e) =>
                             setBusinessType(e.target.value)
                         }
-                        className="w-full p-3 rounded bg-gray-800 border border-gray-700"
+                        className="min-h-12 w-full rounded border border-gray-700 bg-gray-800 p-3"
                     >
 
                         <option value="retail">
@@ -323,7 +255,7 @@ export default function CreateBusiness() {
                         onChange={(e) =>
                             setBusinessCategory(e.target.value)
                         }
-                        className="w-full p-3 rounded bg-gray-800 border border-gray-700"
+                        className="min-h-12 w-full rounded border border-gray-700 bg-gray-800 p-3"
                     >
 
                         <option value="general">
@@ -370,7 +302,7 @@ export default function CreateBusiness() {
 
                 </div>
 
-                <div className="mb-6 rounded-xl border border-gray-700 bg-gray-800 p-4">
+                <div className="mb-6 rounded-xl border border-gray-700 bg-gray-800 p-3 sm:p-4">
 
                     <h3 className="text-sm font-semibold text-white mb-3">
                         ERP Features Preview
@@ -390,7 +322,7 @@ export default function CreateBusiness() {
                         ].map((feature) => (
                             <div
                                 key={feature}
-                                className="px-3 py-1 rounded-full bg-black border border-gray-600 text-xs text-green-400"
+                                className="rounded-full border border-gray-600 bg-black px-3 py-1 text-xs text-green-400"
                             >
                                 {feature.replaceAll("_", " ")}
                             </div>
@@ -403,7 +335,7 @@ export default function CreateBusiness() {
                 <button
                     onClick={createBusiness}
                     disabled={loading}
-                    className="w-full bg-white text-black p-3 rounded-lg font-semibold hover:bg-gray-200 transition disabled:opacity-50"
+                    className="min-h-12 w-full rounded-lg bg-white p-3 font-semibold text-black transition hover:bg-gray-200 disabled:opacity-50"
                 >
                     {loading ? "Creating Business..." : "Create Business"}
                 </button>
