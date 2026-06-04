@@ -1,6 +1,7 @@
 import "server-only"
 import type { User } from "@supabase/supabase-js"
 import { z } from "zod"
+import { isConfiguredAdmin } from "@/lib/admin-role"
 import { adminSupabase } from "@/lib/supabase/admin"
 import { createServerSupabase } from "@/lib/supabase/server"
 
@@ -70,11 +71,13 @@ export async function requireAdmin(request: Request): Promise<
     .eq("id", user.id)
     .maybeSingle()
 
-  if (profileError || profile?.role !== "admin") {
+  const isAdmin = isConfiguredAdmin(user.email, profile?.role)
+
+  if (profileError || !isAdmin) {
     return { ok: false, status: 403, error: "Admin access required." }
   }
 
-  if (profile.is_suspended) {
+  if (profile?.is_suspended) {
     return { ok: false, status: 403, error: "Admin account is suspended." }
   }
 

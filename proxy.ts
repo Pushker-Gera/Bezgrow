@@ -15,6 +15,15 @@ type ProfileGate = {
   is_suspended: boolean | null
 }
 
+function isConfiguredAdmin(email: string | null | undefined, role?: string | null) {
+  if (role === "admin") return true
+
+  const configuredAdminEmail = process.env.ADMIN_EMAIL?.trim().toLowerCase()
+  if (!configuredAdminEmail || !email) return false
+
+  return email.trim().toLowerCase() === configuredAdminEmail
+}
+
 function redirectWithCookies(request: NextRequest, response: NextResponse, pathname: string) {
   const redirectUrl = new URL(pathname, request.url)
   const redirectResponse = NextResponse.redirect(redirectUrl)
@@ -108,14 +117,19 @@ export async function proxy(request: NextRequest) {
     userId: user.id,
     role: profile?.role || null,
     approved: profile?.approved ?? null,
+    adminEmailMatch: isConfiguredAdmin(user.email, null),
   })
+
+  if (!profile && adminRoute && isConfiguredAdmin(user.email, null)) {
+    return response
+  }
 
   if (!profile || profile.is_suspended) {
     return redirectWithCookies(request, response, profile?.is_suspended ? "/login?error=account_suspended" : "/login?error=profile_missing")
   }
 
   if (adminRoute) {
-    if (profile.role !== "admin") {
+    if (!isConfiguredAdmin(user.email, profile.role)) {
       return redirectWithCookies(request, response, "/dashboard")
     }
     return response

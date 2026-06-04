@@ -1,6 +1,7 @@
 import { adminSupabase } from "@/lib/supabase/admin"
 import { getAuthenticatedUser } from "@/lib/api/auth"
 import { fail, ok, serverFail } from "@/lib/api/responses"
+import { isConfiguredAdmin } from "@/lib/admin-role"
 
 export const dynamic = "force-dynamic"
 
@@ -29,7 +30,9 @@ export async function GET(request: Request) {
       .eq("id", user.id)
       .maybeSingle()
 
-    if (profileError || !profile) return fail("Profile not found.", 404)
+    if (profileError || !profile) {
+      if (!isConfiguredAdmin(user.email, null)) return fail("Profile not found.", 404)
+    }
 
     const { data: membershipRow } = await adminSupabase
       .from("organization_members")
@@ -84,19 +87,19 @@ export async function GET(request: Request) {
     const currency = organization?.currency || "INR"
     const timezone = organization?.timezone || "Asia/Kolkata"
     const locale = organization?.locale || "en-IN"
-    const isAdmin = profile.role === "admin"
+    const isAdmin = isConfiguredAdmin(user.email ?? profile?.email, profile?.role)
 
     return ok({
       user: {
         id: user.id,
-        email: user.email ?? profile.email ?? null,
+        email: user.email ?? profile?.email ?? null,
       },
       profile: {
-        id: profile.id,
-        role: isAdmin ? "admin" : profile.role || "user",
-        approved: Boolean(profile.approved),
-        is_suspended: Boolean(profile.is_suspended),
-        business_created: Boolean(profile.business_created),
+        id: profile?.id ?? user.id,
+        role: isAdmin ? "admin" : profile?.role || "user",
+        approved: isAdmin || Boolean(profile?.approved),
+        is_suspended: Boolean(profile?.is_suspended),
+        business_created: isAdmin || Boolean(profile?.business_created),
       },
       organization,
       membership: organization
@@ -113,8 +116,8 @@ export async function GET(request: Request) {
       locale,
       permissions: {
         admin: isAdmin,
-        canAccessDashboard: Boolean(profile.approved && profile.business_created && !profile.is_suspended),
-        canManageBilling: Boolean(profile.approved && !profile.is_suspended),
+        canAccessDashboard: isAdmin || Boolean(profile?.approved && profile.business_created && !profile.is_suspended),
+        canManageBilling: isAdmin || Boolean(profile?.approved && !profile.is_suspended),
       },
     })
   } catch {

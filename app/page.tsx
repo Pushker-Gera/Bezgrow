@@ -16,6 +16,15 @@ export default function Home() {
   const router = useRouter()
 
   useEffect(() => {
+    const params = new URLSearchParams(window.location.search)
+    const code = params.get("code")
+
+    if (code) {
+      const callbackParams = new URLSearchParams({ code, next: "/reset-password" })
+      window.location.replace(`/auth/callback?${callbackParams.toString()}`)
+      return
+    }
+
     if (window.location.hash.includes("access_token=")) {
       window.location.replace(`/auth/callback?${window.location.hash.slice(1)}`)
     }

@@ -1,7 +1,7 @@
 "use client"
 
 import type { FormEvent } from "react"
-import { useState } from "react"
+import { useEffect, useState } from "react"
 import { useRouter } from "next/navigation"
 import { supabase } from "@/lib/supabase"
 
@@ -12,6 +12,47 @@ export default function ResetPasswordPage() {
   const [loading, setLoading] = useState(false)
   const [notice, setNotice] = useState("")
   const [error, setError] = useState("")
+
+  useEffect(() => {
+    async function recoverSessionFromUrl() {
+      const url = new URL(window.location.href)
+      const code = url.searchParams.get("code")
+      const accessToken = url.hash ? new URLSearchParams(url.hash.slice(1)).get("access_token") : null
+      const refreshToken = url.hash ? new URLSearchParams(url.hash.slice(1)).get("refresh_token") : null
+
+      if (code) {
+        setNotice("Verifying password reset link...")
+        const { error: exchangeError } = await supabase.auth.exchangeCodeForSession(code)
+        if (exchangeError) {
+          setNotice("")
+          setError(exchangeError.message)
+          return
+        }
+
+        window.history.replaceState({}, "", "/reset-password")
+        setNotice("Reset link verified. Choose a new password.")
+        return
+      }
+
+      if (accessToken && refreshToken) {
+        setNotice("Verifying password reset link...")
+        const { error: sessionError } = await supabase.auth.setSession({
+          access_token: accessToken,
+          refresh_token: refreshToken,
+        })
+        if (sessionError) {
+          setNotice("")
+          setError(sessionError.message)
+          return
+        }
+
+        window.history.replaceState({}, "", "/reset-password")
+        setNotice("Reset link verified. Choose a new password.")
+      }
+    }
+
+    void recoverSessionFromUrl()
+  }, [])
 
   async function resetPassword(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()

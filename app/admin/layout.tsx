@@ -39,15 +39,6 @@ export default function AdminLayout({ children }: { children: ReactNode }) {
         queueMicrotask(async () => {
             try {
                 const {
-                    data: { user },
-                } = await supabase.auth.getUser()
-
-                if (!user) {
-                    router.push("/login")
-                    return
-                }
-
-                const {
                     data: { session },
                 } = await supabase.auth.getSession()
 
@@ -58,11 +49,11 @@ export default function AdminLayout({ children }: { children: ReactNode }) {
                 const payload = (await response.json()) as BootstrapResponse
 
                 if (!payload.success || (!payload.permissions?.admin && payload.profile?.role !== "admin")) {
-                    router.push("/dashboard")
+                    router.push(response.status === 401 ? "/login" : "/dashboard")
                     return
                 }
 
-                setAdminEmail(payload.user?.email || user.email || "")
+                setAdminEmail(payload.user?.email || "")
                 setLoading(false)
             } catch (error) {
                 console.error("Admin auth error:", error)

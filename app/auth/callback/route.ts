@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server"
+import { isConfiguredAdmin } from "@/lib/admin-role"
 import { adminSupabase } from "@/lib/supabase/admin"
 import { createServerSupabase } from "@/lib/supabase/server"
 
@@ -14,7 +15,7 @@ function getSafeNextPath(next: string | null) {
   return next?.startsWith("/") && !next.startsWith("//") ? next : "/dashboard"
 }
 
-async function getProfileRedirect(userId: string, requestedNext: string) {
+async function getProfileRedirect(userId: string, email: string | null | undefined, requestedNext: string) {
   const { data: profile, error: profileError } = await adminSupabase
     .from("profiles")
     .select("role, approved, is_suspended")
@@ -24,12 +25,15 @@ async function getProfileRedirect(userId: string, requestedNext: string) {
   let destination = "/dashboard"
   let reason = "approved_user"
 
-  if (profile?.is_suspended) {
+  if (requestedNext === "/reset-password") {
+    destination = "/reset-password"
+    reason = "password_recovery"
+  } else if (profile?.is_suspended) {
     destination = "/login?error=account_suspended"
     reason = "suspended"
-  } else if (profile?.role === "admin") {
+  } else if (isConfiguredAdmin(email, profile?.role)) {
     destination = "/admin"
-    reason = "profile_admin"
+    reason = profile?.role === "admin" ? "profile_admin" : "configured_admin_email"
   } else if (profileError || !profile) {
     destination = "/login?error=profile_missing"
     reason = profileError ? "profile_lookup_error" : "profile_missing"
@@ -43,6 +47,7 @@ async function getProfileRedirect(userId: string, requestedNext: string) {
   console.info("[auth/callback] profile redirect", {
     userId,
     role: profile?.role || null,
+    adminEmailMatch: isConfiguredAdmin(email, null),
     approved: profile?.approved ?? null,
     destination,
     reason,
@@ -94,7 +99,7 @@ export async function GET(request: Request) {
   }
 
   console.info("[auth/callback] session user", { userId: user.id })
-  const redirectPath = await getProfileRedirect(user.id, safeNext)
+  const redirectPath = await getProfileRedirect(user.id, user.email, safeNext)
   console.info("[auth/callback] redirect destination", { userId: user.id, redirectPath })
   return NextResponse.redirect(new URL(redirectPath, siteUrl))
 }
@@ -131,7 +136,7 @@ export async function POST(request: Request) {
   }
 
   console.info("[auth/callback] post session user", { userId: user.id })
-  const redirectPath = await getProfileRedirect(user.id, getSafeNextPath(body.next || null))
+  const redirectPath = await getProfileRedirect(user.id, user.email, getSafeNextPath(body.next || null))
   console.info("[auth/callback] post redirect destination", { userId: user.id, redirectPath })
   return NextResponse.json({ redirectTo: new URL(redirectPath, siteUrl).toString() })
 }

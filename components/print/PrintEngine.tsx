@@ -195,6 +195,7 @@ function PrintEngineStyles() {
   return (
     <style jsx global>{`
       @page { size: A4 portrait; margin: 8mm; }
+      @page half-a4 { size: 210mm 148mm; margin: 5mm; }
       @page thermal { size: 80mm auto; margin: 2mm; }
       html[data-print-format="thermal"] { print-color-adjust: exact; -webkit-print-color-adjust: exact; }
       .enterprise-print-shell { min-height: 100dvh; display: grid; grid-template-columns: 320px 1fr; background: #0a0d12; color: #f8fafc; }
@@ -214,10 +215,10 @@ function PrintEngineStyles() {
       .invoice-paper, .invoice-paper * { box-sizing: border-box; }
       .invoice-paper { position: relative; overflow: visible; background: #fff; color: #111827; font-family: Arial, Helvetica, sans-serif; box-shadow: 0 24px 90px rgba(0,0,0,.35); print-color-adjust: exact; -webkit-print-color-adjust: exact; }
       .print-a4 { width: 194mm; min-height: 281mm; padding: 7mm; }
-      .print-half-compact { width: 194mm; min-height: 136mm; padding: 5mm; }
-      .print-half-top { width: 194mm; min-height: 281mm; padding: 0; }
-      .top-half-content { min-height: 136mm; overflow: visible; border: 1px solid #0f172a; padding: 5mm; background: #fff; }
-      .manual-notes-space { height: 145mm; border: 0; background: #fff; color: transparent; padding: 0; }
+      .print-half-compact { page: half-a4; width: 200mm; min-height: 138mm; padding: 5mm; }
+      .print-half-top { page: half-a4; width: 200mm; min-height: 138mm; padding: 0; }
+      .top-half-content { min-height: 138mm; overflow: visible; border: 1px solid #0f172a; padding: 5mm; background: #fff; }
+      .manual-notes-space { display: none; }
       .print-thermal { page: thermal; width: 80mm; min-height: auto; padding: 3mm; font-family: "Courier New", monospace; box-shadow: 0 20px 70px rgba(0,0,0,.28); background: #fff; color: #000; }
       .thermal-58 { width: 58mm; padding: 2mm; }
       .thermal-80, .thermal-auto { width: 80mm; }
@@ -284,17 +285,18 @@ function PrintEngineStyles() {
         .enterprise-print-shell, .print-preview-stage, .preview-scroll, .print-document { display: block !important; width: auto !important; min-width: 0 !important; height: auto !important; min-height: 0 !important; overflow: visible !important; padding: 0 !important; margin: 0 !important; background: #fff !important; color: #000 !important; transform: none !important; }
         .print-document { position: static !important; transform: none !important; transition: none !important; }
         .invoice-paper { box-shadow: none !important; margin: 0 auto !important; overflow: visible !important; background: #fff !important; color: #000 !important; break-inside: auto; page-break-inside: auto; }
-        .print-a4 { width: 194mm !important; min-height: 281mm !important; padding: 6mm !important; }
-        .print-half-compact { width: 194mm !important; min-height: 136mm !important; padding: 4mm !important; }
-        .print-half-top { width: 194mm !important; min-height: 281mm !important; padding: 0 !important; }
-        .top-half-content { min-height: 136mm !important; overflow: visible !important; padding: 4mm !important; background: #fff !important; }
-        .manual-notes-space { height: 145mm !important; background: #fff !important; border: 0 !important; color: transparent !important; }
+        .print-a4 { page: auto !important; width: 194mm !important; min-height: 281mm !important; padding: 6mm !important; }
+        .print-half-compact { page: half-a4 !important; width: 200mm !important; min-height: 138mm !important; padding: 4mm !important; }
+        .print-half-top { page: half-a4 !important; width: 200mm !important; min-height: 138mm !important; padding: 0 !important; }
+        .top-half-content { min-height: 138mm !important; overflow: visible !important; padding: 4mm !important; background: #fff !important; }
+        .manual-notes-space { display: none !important; }
         .print-header-block, .customer-grid, .total-grid, .payment-grid, .footer-row, .codes-block, .signature-grid, .info-card, .invoice-meta-card, .terms-card, .total-card { break-inside: avoid !important; page-break-inside: avoid !important; }
         .item-table { width: 100% !important; max-width: 100% !important; table-layout: fixed !important; page-break-inside: auto !important; }
         .item-table tr { break-inside: avoid !important; page-break-inside: avoid !important; }
         .item-table th { position: static !important; }
-        html[data-print-format="thermal"] .invoice-paper { width: 80mm !important; min-height: auto !important; margin: 0 !important; padding: 2mm !important; box-shadow: none !important; background: #fff !important; color: #000 !important; }
-        html[data-print-format="thermal"] .enterprise-print-shell, html[data-print-format="thermal"] .print-preview-stage, html[data-print-format="thermal"] .preview-scroll, html[data-print-format="thermal"] .print-document { width: 80mm !important; background: #fff !important; }
+        html[data-print-format="thermal"] .invoice-paper { page: thermal !important; width: 76mm !important; min-height: auto !important; margin: 0 !important; padding: 2mm !important; box-shadow: none !important; background: #fff !important; color: #000 !important; }
+        html[data-print-format="thermal"] .enterprise-print-shell, html[data-print-format="thermal"] .print-preview-stage, html[data-print-format="thermal"] .preview-scroll, html[data-print-format="thermal"] .print-document { width: 80mm !important; max-width: 80mm !important; background: #fff !important; }
+        html[data-print-format="thermal"], html[data-print-format="thermal"] body { width: 80mm !important; }
       }
     `}</style>
   )

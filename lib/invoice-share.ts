@@ -8,8 +8,12 @@ export type InvoiceShareInput = {
 }
 
 export function normalizeWhatsAppPhone(phone: string | null | undefined) {
-  const digits = String(phone || "").replace(/\D/g, "")
+  let digits = String(phone || "").replace(/\D/g, "")
   if (!digits) return ""
+  if (digits.length === 11 && digits.startsWith("0")) digits = digits.slice(1)
+  if (digits.length === 12 && digits.startsWith("91") && digits[2] === "0") {
+    digits = `91${digits.slice(3)}`
+  }
   if (digits.length === 10) return `91${digits}`
   if (digits.length >= 11 && digits.length <= 15) return digits
   return ""
@@ -29,5 +33,5 @@ export function createWhatsAppInvoiceUrl(input: InvoiceShareInput) {
   const phone = normalizeWhatsAppPhone(input.customerPhone)
   if (!phone) return ""
 
-  return `https://wa.me/${phone}?text=${encodeURIComponent(createInvoiceShareText(input))}`
+  return `https://api.whatsapp.com/send?phone=${phone}&text=${encodeURIComponent(createInvoiceShareText(input))}`
 }
