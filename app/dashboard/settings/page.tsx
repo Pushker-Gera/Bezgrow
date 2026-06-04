@@ -129,9 +129,10 @@ export default function SettingsPage() {
       data: { session },
     } = await supabase.auth.getSession()
     const headers = session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : undefined
+    const invoiceParams = new URLSearchParams({ limit: "100", organization_id: orgId })
     const [workspaceResponse, invoiceResponse] = await Promise.all([
       fetch("/api/workspace/bootstrap", { headers, cache: "no-store" }),
-      fetch("/api/invoices/list?limit=100", { headers, cache: "no-store" }),
+      fetch(`/api/invoices/list?${invoiceParams.toString()}`, { headers, cache: "no-store" }),
     ])
     const workspace = (await workspaceResponse.json()) as WorkspaceResponse
     const invoices = (await invoiceResponse.json()) as ListResponse<InvoiceCorrectionRow>
@@ -151,7 +152,7 @@ export default function SettingsPage() {
       })
     }
     if (workspace.features) setFeatures(workspace.features)
-    if (invoices.data) setRecentInvoices(invoices.data)
+    setRecentInvoices(invoices.data || [])
   }
 
   useEffect(() => {
@@ -295,7 +296,8 @@ export default function SettingsPage() {
     const {
       data: { session },
     } = await supabase.auth.getSession()
-    const response = await fetch("/api/invoices/delete-with-stock-restore", {
+    const deleteParams = new URLSearchParams({ organization_id: organizationId })
+    const response = await fetch(`/api/invoices/delete-with-stock-restore?${deleteParams.toString()}`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -504,9 +506,14 @@ export default function SettingsPage() {
                   className="h-14 rounded-2xl border border-white/10 bg-black/50 px-5 text-sm font-semibold text-white outline-none focus:border-red-300/50"
                 >
                   <option value="">Select invoice to delete</option>
+                  {filteredCorrectionInvoices.length === 0 && (
+                    <option value="" disabled>
+                      No invoices found
+                    </option>
+                  )}
                   {filteredCorrectionInvoices.map((invoice) => (
                     <option key={invoice.id} value={invoice.id}>
-                      {stringFrom(invoice, ["customer_name"]) || "Customer"} - {invoice.invoice_number || "Invoice"} - ID {invoice.id} - {money(numberFrom(invoice, ["grand_total", "total_amount", "total"]))}
+                      {stringFrom(invoice, ["customer_name"]) || "Customer"} - {invoice.invoice_number || "Invoice"} - {formatDate(invoice.created_at)} - ID {invoice.id} - {money(numberFrom(invoice, ["grand_total", "total_amount", "total"]))}
                     </option>
                   ))}
                 </select>
@@ -526,6 +533,11 @@ export default function SettingsPage() {
               </div>
 
               <div className="mt-5 grid grid-cols-1 gap-3 md:grid-cols-3">
+                {filteredCorrectionInvoices.length === 0 && (
+                  <div className="rounded-2xl border border-white/10 bg-black/35 p-4 text-sm font-semibold text-neutral-400 md:col-span-3">
+                    {recentInvoices.length === 0 ? "No invoices found" : "No invoices match this search."}
+                  </div>
+                )}
                 {filteredCorrectionInvoices.slice(0, 3).map((invoice) => (
                   <button
                     key={invoice.id}
@@ -533,7 +545,8 @@ export default function SettingsPage() {
                     className="rounded-2xl border border-white/10 bg-black/35 p-4 text-left hover:border-red-300/30"
                   >
                     <p className="truncate text-sm font-black">{stringFrom(invoice, ["customer_name"]) || "Customer"}</p>
-                    <p className="mt-2 truncate text-xs text-neutral-500">{invoice.invoice_number || "Invoice"} - ID {invoice.id}</p>
+                    <p className="mt-2 truncate text-xs text-neutral-500">{invoice.invoice_number || "Invoice"} - {formatDate(invoice.created_at)}</p>
+                    <p className="mt-1 truncate text-xs text-neutral-600">ID {invoice.id}</p>
                     <p className="mt-1 text-sm font-bold text-cyan-200">{money(numberFrom(invoice, ["grand_total", "total_amount", "total"]))}</p>
                   </button>
                 ))}

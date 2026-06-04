@@ -6,6 +6,20 @@ import type { ReactNode } from "react"
 import { useEffect, useState } from "react"
 import { supabase } from "@/lib/supabase"
 
+type BootstrapResponse = {
+    success?: boolean
+    error?: string
+    user?: {
+        email?: string | null
+    }
+    profile?: {
+        role?: string | null
+    }
+    permissions?: {
+        admin?: boolean
+    }
+}
+
 const navItems = [
     ["Dashboard", "/admin"],
     ["User Approvals", "/admin/users"],
@@ -33,19 +47,22 @@ export default function AdminLayout({ children }: { children: ReactNode }) {
                     return
                 }
 
-                setAdminEmail(user.email || "")
+                const {
+                    data: { session },
+                } = await supabase.auth.getSession()
 
-                const { data: profile, error } = await supabase
-                    .from("profiles")
-                    .select("role")
-                    .eq("id", user.id)
-                    .single()
+                const response = await fetch("/api/workspace/bootstrap", {
+                    headers: session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : undefined,
+                    cache: "no-store",
+                })
+                const payload = (await response.json()) as BootstrapResponse
 
-                if (error || !profile || profile.role !== "admin") {
+                if (!payload.success || (!payload.permissions?.admin && payload.profile?.role !== "admin")) {
                     router.push("/dashboard")
                     return
                 }
 
+                setAdminEmail(payload.user?.email || user.email || "")
                 setLoading(false)
             } catch (error) {
                 console.error("Admin auth error:", error)

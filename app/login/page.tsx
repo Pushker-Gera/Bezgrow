@@ -4,6 +4,19 @@ import type { FormEvent } from "react"
 import { useCallback, useEffect, useState } from "react"
 import { supabase } from "@/lib/supabase"
 
+type BootstrapResponse = {
+    success?: boolean
+    error?: string
+    profile?: {
+        role?: string | null
+        approved?: boolean
+        is_suspended?: boolean
+    }
+    permissions?: {
+        admin?: boolean
+    }
+}
+
 export default function LoginPage() {
 
     const [email, setEmail] = useState("")
@@ -39,7 +52,9 @@ export default function LoginPage() {
     }
 
     const getSiteUrl = useCallback(() => {
-        return (process.env.NEXT_PUBLIC_SITE_URL || window.location.origin).replace(/\/$/, "")
+        const configuredUrl = process.env.NEXT_PUBLIC_SITE_URL?.trim()
+        if (configuredUrl) return configuredUrl.replace(/\/$/, "")
+        return (window.location.origin || "http://localhost:3000").replace(/\/$/, "")
     }, [])
 
     const redirectToCallback = useCallback((accessToken: string, refreshToken: string, nextPath = getSafeNextPath("/dashboard")) => {
@@ -54,6 +69,29 @@ export default function LoginPage() {
     useEffect(() => {
 
         async function checkUser() {
+            const urlError = new URLSearchParams(window.location.search).get("error")
+            if (urlError === "profile_missing") {
+                setErrorMessage("Your login succeeded, but no profile was found for this account. Contact support to repair the admin profile.")
+            } else if (urlError === "account_suspended") {
+                setErrorMessage("This account is suspended.")
+            }
+
+            const bootstrapResponse = await fetch("/api/workspace/bootstrap", { cache: "no-store" })
+            if (bootstrapResponse.ok) {
+                const payload = (await bootstrapResponse.json()) as BootstrapResponse
+                if (payload.success) {
+                    if (payload.permissions?.admin || payload.profile?.role === "admin") {
+                        window.location.replace("/admin")
+                        return
+                    }
+                    if (payload.profile?.approved) {
+                        window.location.replace("/dashboard")
+                        return
+                    }
+                    window.location.replace("/pending-approval")
+                    return
+                }
+            }
 
             const {
                 data: { session },

@@ -57,6 +57,7 @@ export async function requireWorkspace(request: Request): Promise<
   }
 
   const userId = user.id
+  const requestedOrganizationId = new URL(request.url).searchParams.get("organization_id")
 
   const { data: profile, error: profileError } = await adminSupabase
     .from("profiles")
@@ -80,12 +81,16 @@ export async function requireWorkspace(request: Request): Promise<
     return { ok: false, status: 403, error: "Business setup is required." }
   }
 
-  const { data: membership, error: membershipError } = await adminSupabase
+  let membershipQuery = adminSupabase
     .from("organization_members")
     .select("organization_id, role")
     .eq("user_id", userId)
-    .limit(1)
-    .maybeSingle()
+
+  if (requestedOrganizationId) {
+    membershipQuery = membershipQuery.eq("organization_id", requestedOrganizationId)
+  }
+
+  const { data: membership, error: membershipError } = await membershipQuery.limit(1).maybeSingle()
 
   if (membershipError || !membership?.organization_id) {
     return { ok: false, status: 403, error: "No workspace is connected to this account." }

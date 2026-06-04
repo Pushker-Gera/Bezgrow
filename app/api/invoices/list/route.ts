@@ -25,7 +25,7 @@ export async function GET(request: Request) {
   }
 
   const { data, error, count } = await query
-  if (error) return fail("Invoices failed to load.", 500)
+  if (error) return fail(`Invoices failed to load: ${error.message}`, 500)
 
   return NextResponse.json(
     { data: data || [], pagination: { ...pagination, total: count || 0 } },

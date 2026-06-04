@@ -93,7 +93,7 @@ export async function GET(request: Request) {
       },
       profile: {
         id: profile.id,
-        role: profile.role || "user",
+        role: isAdmin ? "admin" : profile.role || "user",
         approved: Boolean(profile.approved),
         is_suspended: Boolean(profile.is_suspended),
         business_created: Boolean(profile.business_created),

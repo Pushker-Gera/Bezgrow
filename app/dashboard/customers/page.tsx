@@ -147,14 +147,16 @@ export default function CustomersPage() {
     const headers = session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : undefined
     const customerParams = new URLSearchParams({
       limit: "100",
+      organization_id: orgId,
       search: debouncedSearch.trim(),
       sort: "created_at",
       direction: "desc",
     })
+    const invoiceParams = new URLSearchParams({ limit: "100", organization_id: orgId })
 
     const [customersResponse, invoicesResponse] = await Promise.all([
       fetch(`/api/customers/list?${customerParams.toString()}`, { headers, cache: "no-store" }),
-      fetch("/api/invoices/list?limit=100", { headers, cache: "no-store" }),
+      fetch(`/api/invoices/list?${invoiceParams.toString()}`, { headers, cache: "no-store" }),
     ])
 
     const customersResult = (await customersResponse.json()) as ListResponse<Customer>

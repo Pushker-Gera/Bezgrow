@@ -21,6 +21,16 @@ type AdminMetricsResponse = {
     usersCount?: number
 }
 
+type BootstrapResponse = {
+    success?: boolean
+    profile?: {
+        role?: string | null
+    }
+    permissions?: {
+        admin?: boolean
+    }
+}
+
 function formatDate(value: string | null | undefined) {
     if (!value) return "New request"
     return new Date(value).toLocaleDateString()
@@ -78,13 +88,17 @@ export default function AdminPage() {
             return
         }
 
-        const { data: profile } = await supabase
-            .from("profiles")
-            .select("role")
-            .eq("id", user.id)
-            .maybeSingle()
+        const {
+            data: { session },
+        } = await supabase.auth.getSession()
 
-        if (!profile || profile.role !== "admin") {
+        const response = await fetch("/api/workspace/bootstrap", {
+            headers: session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : undefined,
+            cache: "no-store",
+        })
+        const payload = (await response.json()) as BootstrapResponse
+
+        if (!payload.success || (!payload.permissions?.admin && payload.profile?.role !== "admin")) {
             router.push("/dashboard")
             return
         }

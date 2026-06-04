@@ -1,6 +1,5 @@
 import { createServerClient } from "@supabase/ssr"
 import { NextResponse, type NextRequest } from "next/server"
-import { isConfiguredAdminEmail } from "@/lib/admin-access"
 
 const protectedPrefixes = ["/dashboard", "/profile"]
 const adminPrefixes = ["/admin"]
@@ -70,6 +69,7 @@ export async function proxy(request: NextRequest) {
   } = await supabase.auth.getUser()
 
   if (!user) {
+    console.info("[auth/proxy] no session user", { pathname })
     return redirectToLogin(request, response)
   }
 
@@ -103,25 +103,22 @@ export async function proxy(request: NextRequest) {
     }
   }
 
+  console.info("[auth/proxy] route guard", {
+    pathname,
+    userId: user.id,
+    role: profile?.role || null,
+    approved: profile?.approved ?? null,
+  })
+
   if (!profile || profile.is_suspended) {
-    if (!isConfiguredAdminEmail(user.email)) {
-      return redirectWithCookies(request, response, "/login")
-    }
+    return redirectWithCookies(request, response, profile?.is_suspended ? "/login?error=account_suspended" : "/login?error=profile_missing")
   }
 
   if (adminRoute) {
-    if (profile?.role !== "admin" && !isConfiguredAdminEmail(user.email)) {
+    if (profile.role !== "admin") {
       return redirectWithCookies(request, response, "/dashboard")
     }
     return response
-  }
-
-  if (!profile && isConfiguredAdminEmail(user.email)) {
-    return redirectWithCookies(request, response, "/admin")
-  }
-
-  if (!profile) {
-    return redirectWithCookies(request, response, "/login")
   }
 
   if (!profile.approved) {
