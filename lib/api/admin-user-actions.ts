@@ -55,8 +55,22 @@ export async function runAdminUserAction(request: Request, action: AdminUserActi
   try {
     const { data: profile } = await adminSupabase
       .from("profiles")
-      .select("id, email")
+      .select("id, email, business_created")
       .eq("id", userId)
+      .maybeSingle()
+
+    const { data: membership } = await adminSupabase
+      .from("organization_members")
+      .select("organization_id")
+      .eq("user_id", userId)
+      .limit(1)
+      .maybeSingle()
+
+    const { data: ownedOrganization } = await adminSupabase
+      .from("organizations")
+      .select("id")
+      .eq("owner_id", userId)
+      .limit(1)
       .maybeSingle()
 
     const { data: pendingUser } = await adminSupabase
@@ -75,7 +89,7 @@ export async function runAdminUserAction(request: Request, action: AdminUserActi
         email: profile?.email ?? pendingUser?.email ?? null,
         full_name: pendingUser?.full_name ?? null,
         approved: true,
-        business_created: false,
+        business_created: Boolean(profile?.business_created || membership?.organization_id || ownedOrganization?.id),
         role: "user",
         is_suspended: false,
         suspended_at: null,
@@ -138,18 +152,12 @@ export async function runAdminUserAction(request: Request, action: AdminUserActi
     }
 
     const config = actionConfig[action]
-    const { data: membership } = await adminSupabase
-      .from("organization_members")
-      .select("organization_id")
-      .eq("user_id", userId)
-      .limit(1)
-      .maybeSingle()
 
     await writeAdminLog({
       action: config.action,
       description: config.log,
       adminUserId: admin.context.adminUserId,
-      organizationId: membership?.organization_id ?? null,
+      organizationId: membership?.organization_id ?? ownedOrganization?.id ?? null,
       metadata: {
         target_user_id: userId,
         target_email: profile?.email ?? pendingUser?.email ?? null,

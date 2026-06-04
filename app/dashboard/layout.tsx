@@ -48,16 +48,16 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
                     data: { session },
                 } = await supabase.auth.getSession()
 
-                if (!session?.user) {
-                    router.replace("/login")
-                    return
-                }
-
                 const response = await fetch("/api/workspace/bootstrap", {
-                    headers: session.access_token ? { Authorization: `Bearer ${session.access_token}` } : undefined,
+                    headers: session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : undefined,
                     cache: "no-store",
                 })
                 const payload = (await response.json()) as WorkspaceBootstrapResponse
+
+                if (response.status === 401) {
+                    router.replace("/login")
+                    return
+                }
 
                 if (!payload.success || !payload.profile?.approved) {
                     router.replace("/pending-approval")
@@ -71,7 +71,7 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
 
                 if (payload.organization?.name) setBusinessName(payload.organization.name)
 
-                setOwnerEmail(payload.user?.email || session.user.email || "owner@bezgrow.com")
+                setOwnerEmail(payload.user?.email || session?.user.email || "owner@bezgrow.com")
                 setLoading(false)
             } catch (error) {
                 console.error("Dashboard access error:", error)

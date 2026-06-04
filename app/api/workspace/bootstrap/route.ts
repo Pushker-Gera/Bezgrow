@@ -67,7 +67,16 @@ export async function GET(request: Request) {
       if (organization) membershipRole ||= "owner"
     }
 
+    const isAdmin = isConfiguredAdmin(user.email ?? profile?.email, profile?.role)
     const organizationId = organization?.id || null
+    const hasCompletedBusiness = isAdmin || Boolean(profile?.business_created || organizationId)
+
+    if (organizationId && profile && profile.business_created === false) {
+      await adminSupabase
+        .from("profiles")
+        .update({ business_created: true, updated_at: new Date().toISOString() })
+        .eq("id", user.id)
+    }
 
     const [{ data: features }, { data: settings }] = await Promise.all([
       organizationId
@@ -87,7 +96,6 @@ export async function GET(request: Request) {
     const currency = organization?.currency || "INR"
     const timezone = organization?.timezone || "Asia/Kolkata"
     const locale = organization?.locale || "en-IN"
-    const isAdmin = isConfiguredAdmin(user.email ?? profile?.email, profile?.role)
 
     return ok({
       user: {
@@ -99,7 +107,7 @@ export async function GET(request: Request) {
         role: isAdmin ? "admin" : profile?.role || "user",
         approved: isAdmin || Boolean(profile?.approved),
         is_suspended: Boolean(profile?.is_suspended),
-        business_created: isAdmin || Boolean(profile?.business_created),
+        business_created: hasCompletedBusiness,
       },
       organization,
       membership: organization
@@ -116,7 +124,7 @@ export async function GET(request: Request) {
       locale,
       permissions: {
         admin: isAdmin,
-        canAccessDashboard: isAdmin || Boolean(profile?.approved && profile.business_created && !profile.is_suspended),
+        canAccessDashboard: Boolean((isAdmin || profile?.approved) && hasCompletedBusiness && !profile?.is_suspended),
         canManageBilling: isAdmin || Boolean(profile?.approved && !profile.is_suspended),
       },
     })

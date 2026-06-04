@@ -24,33 +24,38 @@ export default function CreateBusiness() {
     useEffect(() => {
 
         async function checkProfile() {
+            const {
+                data: { session },
+            } = await supabase.auth.getSession()
 
-            const { data: userData } = await supabase.auth.getUser()
+            const response = await fetch("/api/workspace/bootstrap", {
+                headers: session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : undefined,
+                cache: "no-store",
+            })
 
-            const user = userData.user
-
-            if (!user) {
+            if (response.status === 401) {
                 router.push("/login")
                 return
             }
 
-            const { data: profile, error: profileError } = await supabase
-                .from("profiles")
-                .select("*")
-                .eq("id", user.id)
-                .single()
+            const payload = (await response.json()) as {
+                success?: boolean
+                profile?: { role?: string | null; approved?: boolean; business_created?: boolean }
+                organization?: { id?: string | null } | null
+                permissions?: { admin?: boolean }
+            }
 
-            if (profile?.role === "admin") {
+            if (payload.permissions?.admin || payload.profile?.role === "admin") {
                 router.push("/admin")
                 return
             }
 
-            if (profileError || !profile?.approved) {
+            if (!payload.success || !payload.profile?.approved) {
                 router.push("/pending-approval")
                 return
             }
 
-            if (profile?.business_created) {
+            if (payload.profile.business_created || payload.organization?.id) {
                 router.push("/dashboard")
                 return
             }

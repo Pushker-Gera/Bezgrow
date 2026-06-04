@@ -24,6 +24,45 @@ function isConfiguredAdmin(email: string | null | undefined, role?: string | nul
   return email.trim().toLowerCase() === configuredAdminEmail
 }
 
+async function hasConnectedWorkspace(userId: string) {
+  if (!supabaseUrl || !supabaseServiceRoleKey) return false
+
+  try {
+    const membershipResponse = await fetch(
+      `${supabaseUrl}/rest/v1/organization_members?user_id=eq.${encodeURIComponent(userId)}&select=organization_id&limit=1`,
+      {
+        headers: {
+          apikey: supabaseServiceRoleKey,
+          authorization: `Bearer ${supabaseServiceRoleKey}`,
+        },
+        cache: "no-store",
+      }
+    )
+
+    if (membershipResponse.ok) {
+      const memberships = (await membershipResponse.json()) as Array<{ organization_id?: string | null }>
+      if (memberships[0]?.organization_id) return true
+    }
+
+    const ownerResponse = await fetch(
+      `${supabaseUrl}/rest/v1/organizations?owner_id=eq.${encodeURIComponent(userId)}&select=id&limit=1`,
+      {
+        headers: {
+          apikey: supabaseServiceRoleKey,
+          authorization: `Bearer ${supabaseServiceRoleKey}`,
+        },
+        cache: "no-store",
+      }
+    )
+
+    if (!ownerResponse.ok) return false
+    const organizations = (await ownerResponse.json()) as Array<{ id?: string | null }>
+    return Boolean(organizations[0]?.id)
+  } catch {
+    return false
+  }
+}
+
 function redirectWithCookies(request: NextRequest, response: NextResponse, pathname: string) {
   const redirectUrl = new URL(pathname, request.url)
   const redirectResponse = NextResponse.redirect(redirectUrl)
@@ -139,7 +178,7 @@ export async function proxy(request: NextRequest) {
     return redirectWithCookies(request, response, "/pending-approval")
   }
 
-  if (!profile.business_created) {
+  if (!profile.business_created && !(await hasConnectedWorkspace(user.id))) {
     return redirectWithCookies(request, response, "/create-business")
   }
 
