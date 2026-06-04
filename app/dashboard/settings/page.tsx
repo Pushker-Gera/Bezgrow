@@ -1,6 +1,8 @@
 "use client"
 
 import { useEffect, useMemo, useState } from "react"
+import { readStoredPrintSettings, saveStoredPrintSettings } from "@/components/print/settings/defaults"
+import type { PrintFormat, PrintSettings } from "@/components/print/types"
 import { getOrganizationId } from "@/lib/getOrganization"
 import { supabase } from "@/lib/supabase"
 
@@ -101,8 +103,10 @@ export default function SettingsPage() {
   const [organization, setOrganization] = useState<Organization | null>(null)
   const [features, setFeatures] = useState<FeatureRow[]>([])
   const [recentInvoices, setRecentInvoices] = useState<InvoiceCorrectionRow[]>([])
+  const [invoiceSearch, setInvoiceSearch] = useState("")
   const [deletingInvoiceId, setDeletingInvoiceId] = useState("")
   const [deleteConfirmText, setDeleteConfirmText] = useState("")
+  const [printSettings, setPrintSettings] = useState<PrintSettings>(() => readStoredPrintSettings())
   const [saving, setSaving] = useState(false)
   const [notice, setNotice] = useState("")
   const [form, setForm] = useState({
@@ -133,7 +137,7 @@ export default function SettingsPage() {
     const invoices = (await invoiceResponse.json()) as ListResponse<InvoiceCorrectionRow>
 
     if (!workspaceResponse.ok) setNotice(workspace.error || "Workspace settings failed to load.")
-    if (!invoiceResponse.ok) setNotice(invoices.error || "Invoices failed to load.")
+    if (!invoiceResponse.ok) setNotice(invoices.error || `Invoices failed to load. HTTP ${invoiceResponse.status}`)
 
     if (workspace.organization) {
       const org = workspace.organization
@@ -156,6 +160,12 @@ export default function SettingsPage() {
     })
   }, [])
 
+  function updatePrintSettings(next: Partial<PrintSettings>) {
+    const updated = { ...printSettings, ...next }
+    setPrintSettings(updated)
+    saveStoredPrintSettings(updated)
+  }
+
   const enabledFeatureSet = useMemo(() => {
     return new Set(features.filter((feature) => feature.is_enabled).map((feature) => feature.feature_key))
   }, [features])
@@ -169,6 +179,23 @@ export default function SettingsPage() {
       ["Inventory controls", enabledFeatureSet.has("batch_tracking") || enabledFeatureSet.has("barcode_scanning")],
     ]
   }, [enabledFeatureSet, form.currency, form.industry, form.name])
+
+  const filteredCorrectionInvoices = useMemo(() => {
+    const term = invoiceSearch.trim().toLowerCase()
+    if (!term) return recentInvoices
+
+    return recentInvoices.filter((invoice) =>
+      [
+        invoice.id,
+        stringFrom(invoice, ["invoice_number"]),
+        stringFrom(invoice, ["customer_name"]),
+        formatDate(invoice.created_at),
+      ]
+        .join(" ")
+        .toLowerCase()
+        .includes(term)
+    )
+  }, [invoiceSearch, recentInvoices])
 
   async function saveOrganization() {
     if (!organizationId) return
@@ -287,6 +314,7 @@ export default function SettingsPage() {
     setNotice("Invoice deleted and stock restored successfully.")
     setDeletingInvoiceId("")
     setDeleteConfirmText("")
+    setInvoiceSearch("")
     await initializeSettings()
     setSaving(false)
   }
@@ -355,6 +383,74 @@ export default function SettingsPage() {
               </button>
             </div>
 
+            <div className="rounded-[36px] border border-cyan-400/20 bg-cyan-500/[0.06] p-7 backdrop-blur-2xl">
+              <div className="flex flex-col gap-2 md:flex-row md:items-end md:justify-between">
+                <div>
+                  <h2 className="text-3xl font-black">Print Settings</h2>
+                  <p className="mt-2 text-sm text-neutral-500">Configure default invoice printing behavior for A4, half A4, and thermal formats.</p>
+                </div>
+                <span className="rounded-full border border-cyan-400/20 bg-cyan-500/10 px-4 py-2 text-xs font-black uppercase tracking-[0.16em] text-cyan-100">
+                  Local Default
+                </span>
+              </div>
+
+              <div className="mt-6 grid grid-cols-1 gap-4 md:grid-cols-3">
+                <select
+                  value={printSettings.defaultFormat}
+                  onChange={(event) => updatePrintSettings({ defaultFormat: event.target.value as PrintFormat })}
+                  className="h-14 rounded-2xl border border-white/10 bg-black/50 px-5 text-sm font-semibold text-white outline-none"
+                >
+                  <option value="a4">Full A4 Invoice</option>
+                  <option value="half-compact">Half A4 Compact</option>
+                  <option value="half-top">Half A4 Top Format</option>
+                  <option value="thermal">Thermal Receipt</option>
+                </select>
+                <select
+                  value={printSettings.thermalWidth}
+                  onChange={(event) => updatePrintSettings({ thermalWidth: event.target.value as PrintSettings["thermalWidth"] })}
+                  className="h-14 rounded-2xl border border-white/10 bg-black/50 px-5 text-sm font-semibold text-white outline-none"
+                >
+                  <option value="auto">Auto Thermal Width</option>
+                  <option value="58mm">58mm Thermal</option>
+                  <option value="80mm">80mm Thermal</option>
+                </select>
+                <select
+                  value={printSettings.fontSize}
+                  onChange={(event) => updatePrintSettings({ fontSize: event.target.value as PrintSettings["fontSize"] })}
+                  className="h-14 rounded-2xl border border-white/10 bg-black/50 px-5 text-sm font-semibold text-white outline-none"
+                >
+                  <option value="small">Small Font</option>
+                  <option value="standard">Standard Font</option>
+                  <option value="large">Large Font</option>
+                </select>
+              </div>
+
+              <div className="mt-5 grid grid-cols-2 gap-3 md:grid-cols-5">
+                {[
+                  ["showLogo", "Logo"],
+                  ["showQr", "QR"],
+                  ["showBarcode", "Barcode"],
+                  ["showHsn", "HSN"],
+                  ["showGstDetails", "GST Details"],
+                  ["showSignature", "Signature"],
+                  ["showWatermark", "Watermark"],
+                  ["blackAndWhite", "Black & White"],
+                  ["pharmaMode", "Pharma Mode"],
+                  ["autoPrintAfterSave", "Auto Print"],
+                ].map(([key, label]) => (
+                  <label key={key} className="flex min-h-12 items-center justify-between gap-3 rounded-2xl border border-white/10 bg-black/35 px-4 text-sm font-bold">
+                    <span>{label}</span>
+                    <input
+                      type="checkbox"
+                      checked={Boolean(printSettings[key as keyof PrintSettings])}
+                      onChange={(event) => updatePrintSettings({ [key]: event.target.checked } as Partial<PrintSettings>)}
+                      className="h-4 w-4 accent-cyan-400"
+                    />
+                  </label>
+                ))}
+              </div>
+            </div>
+
             <div className="rounded-[36px] border border-white/10 bg-white/[0.035] p-7 backdrop-blur-2xl">
               <h2 className="text-3xl font-black">ERP Feature Modules</h2>
               <p className="mt-2 text-sm text-neutral-500">Turn on the capabilities needed for your industry and global workflows.</p>
@@ -396,15 +492,21 @@ export default function SettingsPage() {
               </div>
 
               <div className="mt-6 grid grid-cols-1 gap-4 xl:grid-cols-[1fr,220px,180px]">
+                <input
+                  value={invoiceSearch}
+                  onChange={(event) => setInvoiceSearch(event.target.value)}
+                  placeholder="Search customer name, invoice number, or invoice id"
+                  className="h-14 rounded-2xl border border-white/10 bg-black/50 px-5 text-sm font-semibold text-white outline-none focus:border-red-300/50 xl:col-span-3"
+                />
                 <select
                   value={deletingInvoiceId}
                   onChange={(event) => setDeletingInvoiceId(event.target.value)}
                   className="h-14 rounded-2xl border border-white/10 bg-black/50 px-5 text-sm font-semibold text-white outline-none focus:border-red-300/50"
                 >
                   <option value="">Select invoice to delete</option>
-                  {recentInvoices.map((invoice) => (
+                  {filteredCorrectionInvoices.map((invoice) => (
                     <option key={invoice.id} value={invoice.id}>
-                      {invoice.invoice_number || invoice.id} - {stringFrom(invoice, ["customer_name"]) || "Customer"} - {money(numberFrom(invoice, ["grand_total", "total_amount", "total"]))} - {formatDate(invoice.created_at)}
+                      {stringFrom(invoice, ["customer_name"]) || "Customer"} - {invoice.invoice_number || "Invoice"} - ID {invoice.id} - {money(numberFrom(invoice, ["grand_total", "total_amount", "total"]))}
                     </option>
                   ))}
                 </select>
@@ -424,14 +526,14 @@ export default function SettingsPage() {
               </div>
 
               <div className="mt-5 grid grid-cols-1 gap-3 md:grid-cols-3">
-                {recentInvoices.slice(0, 3).map((invoice) => (
+                {filteredCorrectionInvoices.slice(0, 3).map((invoice) => (
                   <button
                     key={invoice.id}
                     onClick={() => setDeletingInvoiceId(invoice.id)}
                     className="rounded-2xl border border-white/10 bg-black/35 p-4 text-left hover:border-red-300/30"
                   >
-                    <p className="truncate text-sm font-black">{invoice.invoice_number || invoice.id}</p>
-                    <p className="mt-2 text-xs text-neutral-500">{formatDate(invoice.created_at)}</p>
+                    <p className="truncate text-sm font-black">{stringFrom(invoice, ["customer_name"]) || "Customer"}</p>
+                    <p className="mt-2 truncate text-xs text-neutral-500">{invoice.invoice_number || "Invoice"} - ID {invoice.id}</p>
                     <p className="mt-1 text-sm font-bold text-cyan-200">{money(numberFrom(invoice, ["grand_total", "total_amount", "total"]))}</p>
                   </button>
                 ))}

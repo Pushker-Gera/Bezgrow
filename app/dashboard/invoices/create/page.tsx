@@ -4,6 +4,7 @@ import Link from "next/link"
 import type { ReactNode } from "react"
 import { useEffect, useMemo, useState } from "react"
 import { getOrganizationId } from "@/lib/getOrganization"
+import { createWhatsAppInvoiceUrl } from "@/lib/invoice-share"
 import { supabase } from "@/lib/supabase"
 
 type Customer = {
@@ -50,6 +51,9 @@ type ListResponse<T> = {
 type WorkspaceBootstrapResponse = {
   success: boolean
   features?: string[]
+  organization?: {
+    name?: string | null
+  } | null
 }
 
 type InvoiceCreateResponse = {
@@ -116,6 +120,7 @@ export default function CreateInvoicePage() {
   const [scanQuantity, setScanQuantity] = useState(1)
   const [sendSmsMessage, setSendSmsMessage] = useState(true)
   const [smsBillLink, setSmsBillLink] = useState("")
+  const [organizationName, setOrganizationName] = useState("Bezgrow")
   const [loading, setLoading] = useState(false)
   const [notice, setNotice] = useState<Notice>(null)
 
@@ -146,6 +151,7 @@ export default function CreateInvoicePage() {
     })
     const workspace = (await workspaceResponse.json()) as WorkspaceBootstrapResponse
     setFeatures(Array.isArray(workspace.features) ? workspace.features : [])
+    setOrganizationName(workspace.organization?.name || "Bezgrow")
     await Promise.all([fetchCustomers(), fetchProducts()])
   }
 
@@ -359,34 +365,15 @@ export default function CreateInvoicePage() {
     }
   }
 
-  function messagePhone(phone: string | null | undefined) {
-    const digits = String(phone || "").replace(/\D/g, "")
-    if (!digits) return ""
-    if (digits.length === 10) return `91${digits}`
-    return digits
-  }
-
-  function createSmsBillLink(invoiceId: string, invoiceNumber: string) {
-    const phone = messagePhone(selectedCustomerRecord?.phone)
-    if (!phone) {
-      return ""
-    }
-
-    const billUrl = `${window.location.origin}/dashboard/invoices/${invoiceId}/print`
-    const message = [
-      `Hello ${selectedCustomerRecord?.name || "Customer"},`,
-      `Your bill ${invoiceNumber} has been created.`,
-      `Amount: ${money(totals.grandTotal)}.`,
-      `View/print bill: ${billUrl}`,
-      "Thank you for shopping with us.",
-    ].join("\n")
-
-    const separator =
-      typeof navigator !== "undefined" && /iPad|iPhone|iPod/i.test(navigator.userAgent)
-        ? "&"
-        : "?"
-
-    return `sms:${phone}${separator}body=${encodeURIComponent(message)}`
+  function createWhatsAppBillLink(invoiceId: string, invoiceNumber: string) {
+    return createWhatsAppInvoiceUrl({
+      customerName: selectedCustomerRecord?.name || "Customer",
+      customerPhone: selectedCustomerRecord?.phone,
+      enterpriseName: organizationName,
+      invoiceNumber,
+      amount: totals.grandTotal,
+      invoiceUrl: `${window.location.origin}/dashboard/invoices/${invoiceId}/print`,
+    })
   }
 
   async function saveInvoice(printAfterSave = false) {
@@ -471,17 +458,13 @@ export default function CreateInvoicePage() {
 
     await fetchProducts()
 
+    let whatsappPhoneMissing = false
     if (data?.invoice_id && sendSmsMessage) {
-      const link = createSmsBillLink(data.invoice_id, data.invoice_number || "Invoice")
+      const link = createWhatsAppBillLink(data.invoice_id, data.invoice_number || "Invoice")
       if (link) {
         setSmsBillLink(link)
-        window.open(link, "_blank", "noopener,noreferrer")
       } else {
-        setNotice({
-          title: "SMS Not Opened",
-          message: "Customer phone number is missing. Add a phone number to open the bill message in the phone Messages app.",
-          type: "warning",
-        })
+        whatsappPhoneMissing = true
       }
     }
 
@@ -490,7 +473,11 @@ export default function CreateInvoicePage() {
       return
     }
 
-    setNotice({ title: "Invoice Created", message: "Invoice created successfully.", type: "success" })
+    setNotice(
+      whatsappPhoneMissing
+        ? { title: "WhatsApp Not Ready", message: "Customer phone number required.", type: "warning" }
+        : { title: "Invoice Created", message: "Invoice created successfully.", type: "success" }
+    )
     setItems([newItem()])
     setSelectedCustomer("")
     setDueDate("")
@@ -536,8 +523,8 @@ export default function CreateInvoicePage() {
           <div className={`rounded-3xl border px-6 py-4 text-sm ${notice.type === "error" ? "border-red-400/25 bg-red-500/10 text-red-100" : notice.type === "warning" ? "border-amber-400/25 bg-amber-500/10 text-amber-100" : "border-emerald-400/25 bg-emerald-500/10 text-emerald-100"}`}>
             <span className="font-bold">{notice.title}: </span>{notice.message}
             {smsBillLink && (
-              <a href={smsBillLink} className="ml-3 font-black underline decoration-cyan-300/60 underline-offset-4">
-                Open SMS
+              <a href={smsBillLink} target="_blank" rel="noreferrer" className="ml-3 font-black underline decoration-cyan-300/60 underline-offset-4">
+                Send on WhatsApp
               </a>
             )}
           </div>
@@ -617,7 +604,7 @@ export default function CreateInvoicePage() {
                       onChange={(event) => setSendSmsMessage(event.target.checked)}
                       className="h-4 w-4 accent-cyan-400"
                     />
-                    SMS bill after save
+                    Show WhatsApp share after save
                   </label>
                 </FieldLabel>
               </div>

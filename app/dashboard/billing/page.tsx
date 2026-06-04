@@ -326,12 +326,20 @@ export default function BillingPage() {
                   {recentInvoices.map((invoice) => {
                     const status = statusOf(invoice)
                     const amount = numberFrom(invoice, ["grand_total", "total_amount", "total"])
+                    const invoiceNumber = stringFrom(invoice, ["invoice_number"]) || "Invoice"
+                    const linkedCustomer = customers.find((customer) => customer.id === stringFrom(invoice, ["customer_id"]))
+                    const customerName =
+                      stringFrom(invoice, ["customer_name"]) ||
+                      stringFrom(linkedCustomer || {}, ["name", "customer_name", "business_name"]) ||
+                      "Walk-in customer"
 
                     return (
                       <div key={invoice.id} className="grid gap-4 px-6 py-5 transition-colors duration-300 hover:bg-cyan-500/[0.035] md:grid-cols-[1fr,160px,160px,150px] md:items-center">
                         <div>
-                          <p className="font-bold text-white">{stringFrom(invoice, ["invoice_number"]) || "Invoice"}</p>
-                          <p className="mt-1 text-xs text-neutral-500">{formatDate(invoice.created_at)}</p>
+                          <p className="font-bold text-white">{customerName}</p>
+                          <p className="mt-1 text-xs text-neutral-500">
+                            {invoiceNumber} - {formatDate(invoice.created_at)}
+                          </p>
                         </div>
                         <span className={`w-fit rounded-full px-3 py-1 text-xs font-bold capitalize ${readinessClass(status === "paid")}`}>
                           {status}

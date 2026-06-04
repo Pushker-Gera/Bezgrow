@@ -14,10 +14,7 @@ export async function GET(request: Request) {
 
   let query = adminSupabase
     .from("invoices")
-    .select(
-      "id,invoice_number,customer_id,customer_name,payment_status,status,payment_method,grand_total,total_amount,total,tax_amount,tax_total,due_date,created_at,updated_at",
-      { count: "exact" }
-    )
+    .select("*", { count: "exact" })
     .eq("organization_id", workspace.context.organizationId)
     .order("created_at", { ascending: false })
     .range(from, to)

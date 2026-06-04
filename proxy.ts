@@ -1,11 +1,20 @@
 import { createServerClient } from "@supabase/ssr"
 import { NextResponse, type NextRequest } from "next/server"
+import { isConfiguredAdminEmail } from "@/lib/admin-access"
 
 const protectedPrefixes = ["/dashboard", "/profile"]
 const adminPrefixes = ["/admin"]
 
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL?.trim()
 const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY?.trim()
+const supabaseServiceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY?.trim()
+
+type ProfileGate = {
+  role: string | null
+  approved: boolean | null
+  business_created: boolean | null
+  is_suspended: boolean | null
+}
 
 function redirectWithCookies(request: NextRequest, response: NextResponse, pathname: string) {
   const redirectUrl = new URL(pathname, request.url)
@@ -64,21 +73,55 @@ export async function proxy(request: NextRequest) {
     return redirectToLogin(request, response)
   }
 
-  const { data: profile } = await supabase
+  const { data: userProfile } = await supabase
     .from("profiles")
     .select("role, approved, business_created, is_suspended")
     .eq("id", user.id)
     .maybeSingle()
 
+  let profile = userProfile as ProfileGate | null
+
+  if (!profile && supabaseServiceRoleKey) {
+    try {
+      const profileResponse = await fetch(
+        `${supabaseUrl}/rest/v1/profiles?id=eq.${encodeURIComponent(user.id)}&select=role,approved,business_created,is_suspended`,
+        {
+          headers: {
+            apikey: supabaseServiceRoleKey,
+            authorization: `Bearer ${supabaseServiceRoleKey}`,
+          },
+          cache: "no-store",
+        }
+      )
+
+      if (profileResponse.ok) {
+        const rows = (await profileResponse.json()) as ProfileGate[]
+        profile = rows[0] ?? null
+      }
+    } catch {
+      profile = null
+    }
+  }
+
   if (!profile || profile.is_suspended) {
-    return redirectWithCookies(request, response, "/login")
+    if (!isConfiguredAdminEmail(user.email)) {
+      return redirectWithCookies(request, response, "/login")
+    }
   }
 
   if (adminRoute) {
-    if (profile.role !== "admin") {
+    if (profile?.role !== "admin" && !isConfiguredAdminEmail(user.email)) {
       return redirectWithCookies(request, response, "/dashboard")
     }
     return response
+  }
+
+  if (!profile && isConfiguredAdminEmail(user.email)) {
+    return redirectWithCookies(request, response, "/admin")
+  }
+
+  if (!profile) {
+    return redirectWithCookies(request, response, "/login")
   }
 
   if (!profile.approved) {

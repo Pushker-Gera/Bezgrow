@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server"
+import { isConfiguredAdminEmail } from "@/lib/admin-access"
 import { adminSupabase } from "@/lib/supabase/admin"
 import { createServerSupabase } from "@/lib/supabase/server"
 
@@ -14,15 +15,16 @@ function getSafeNextPath(next: string | null) {
   return next?.startsWith("/") && !next.startsWith("//") ? next : "/dashboard"
 }
 
-async function getProfileRedirect(userId: string, requestedNext: string) {
+async function getProfileRedirect(userId: string, userEmail: string | null | undefined, requestedNext: string) {
   const { data: profile } = await adminSupabase
     .from("profiles")
     .select("role, approved, is_suspended")
     .eq("id", userId)
     .maybeSingle()
 
-  if (!profile || profile.is_suspended) return "/login"
-  if (profile.role === "admin") return "/admin"
+  if (profile?.is_suspended) return "/login"
+  if (profile?.role === "admin" || isConfiguredAdminEmail(userEmail)) return "/admin"
+  if (!profile) return "/login"
   if (!profile.approved) return "/pending-approval"
   return requestedNext === "/admin" ? "/dashboard" : requestedNext
 }
@@ -61,7 +63,7 @@ export async function GET(request: Request) {
     return NextResponse.redirect(new URL("/login", siteUrl))
   }
 
-  const redirectPath = await getProfileRedirect(user.id, safeNext)
+  const redirectPath = await getProfileRedirect(user.id, user.email, safeNext)
   return NextResponse.redirect(new URL(redirectPath, siteUrl))
 }
 
@@ -96,6 +98,6 @@ export async function POST(request: Request) {
     return NextResponse.json({ redirectTo: `${siteUrl}/login` }, { status: 401 })
   }
 
-  const redirectPath = await getProfileRedirect(user.id, getSafeNextPath(body.next || null))
+  const redirectPath = await getProfileRedirect(user.id, user.email, getSafeNextPath(body.next || null))
   return NextResponse.json({ redirectTo: new URL(redirectPath, siteUrl).toString() })
 }
