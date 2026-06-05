@@ -1,4 +1,5 @@
 import type { MetadataRoute } from "next"
+import { seoLandingPages } from "@/lib/seo-pages"
 
 const siteUrl = "https://bezgrow.com"
 
@@ -58,10 +59,18 @@ const publicRoutes = [
 export default function sitemap(): MetadataRoute.Sitemap {
   const now = new Date()
 
-  return publicRoutes.map((route) => ({
-    url: `${siteUrl}${route.path}`,
-    lastModified: now,
-    changeFrequency: route.changeFrequency,
-    priority: route.priority,
-  }))
+  return [
+    ...publicRoutes.map((route) => ({
+      url: `${siteUrl}${route.path}`,
+      lastModified: now,
+      changeFrequency: route.changeFrequency,
+      priority: route.priority,
+    })),
+    ...seoLandingPages.map((page) => ({
+      url: `${siteUrl}/${page.slug}`,
+      lastModified: now,
+      changeFrequency: "weekly" as const,
+      priority: 0.92,
+    })),
+  ]
 }

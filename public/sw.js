@@ -7,10 +7,23 @@ const SHELL_URLS = [
   "/login",
   "/signup",
   "/manifest.json",
+  "/favicon.ico",
+  "/favicon-16x16.png",
+  "/favicon-32x32.png",
+  "/apple-touch-icon.png",
+  "/android-chrome-192x192.png",
+  "/android-chrome-512x512.png",
+  "/maskable-icon-512x512.png",
+  "/icons/icon-96.png",
   "/icons/icon-192.png",
   "/icons/icon-512.png",
   "/icons/maskable-512.png",
-  "/icons/apple-touch-icon.png"
+  "/icons/apple-touch-icon.png",
+  "/icons/shortcut-dashboard.png",
+  "/icons/shortcut-products.png",
+  "/icons/shortcut-invoices.png",
+  "/screenshots/desktop-dashboard.png",
+  "/screenshots/mobile-dashboard.png"
 ]
 
 self.addEventListener("install", (event) => {
@@ -31,6 +44,14 @@ function isStaticAsset(requestUrl) {
   return (
     requestUrl.pathname.startsWith("/_next/static/") ||
     requestUrl.pathname.startsWith("/icons/") ||
+    requestUrl.pathname.startsWith("/screenshots/") ||
+    requestUrl.pathname === "/favicon.ico" ||
+    requestUrl.pathname === "/favicon-16x16.png" ||
+    requestUrl.pathname === "/favicon-32x32.png" ||
+    requestUrl.pathname === "/apple-touch-icon.png" ||
+    requestUrl.pathname === "/android-chrome-192x192.png" ||
+    requestUrl.pathname === "/android-chrome-512x512.png" ||
+    requestUrl.pathname === "/maskable-icon-512x512.png" ||
     requestUrl.pathname === "/manifest.json" ||
     requestUrl.pathname === "/robots.txt" ||
     requestUrl.pathname === "/sitemap.xml"
