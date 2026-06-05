@@ -372,7 +372,7 @@ export default function CreateInvoicePage() {
       enterpriseName: organizationName,
       invoiceNumber,
       amount: totals.grandTotal,
-      invoiceUrl: `${window.location.origin}/dashboard/invoices/${invoiceId}/print`,
+      invoiceUrl: `${window.location.origin}/public/invoices/${invoiceId}`,
     })
   }
 

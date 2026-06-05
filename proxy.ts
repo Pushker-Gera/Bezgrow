@@ -84,6 +84,15 @@ function redirectToLogin(request: NextRequest, response: NextResponse) {
 
 export async function proxy(request: NextRequest) {
   const { pathname } = request.nextUrl
+  const isPrefetch =
+    request.headers.get("purpose") === "prefetch" ||
+    request.headers.get("next-router-prefetch") === "1" ||
+    request.headers.has("next-router-prefetch")
+
+  if (isPrefetch) {
+    return NextResponse.next()
+  }
+
   const protectedRoute = protectedPrefixes.some((prefix) => pathname.startsWith(prefix))
   const adminRoute = adminPrefixes.some((prefix) => pathname.startsWith(prefix))
 
@@ -117,7 +126,6 @@ export async function proxy(request: NextRequest) {
   } = await supabase.auth.getUser()
 
   if (!user) {
-    console.info("[auth/proxy] no session user", { pathname })
     return redirectToLogin(request, response)
   }
 
@@ -150,14 +158,6 @@ export async function proxy(request: NextRequest) {
       profile = null
     }
   }
-
-  console.info("[auth/proxy] route guard", {
-    pathname,
-    userId: user.id,
-    role: profile?.role || null,
-    approved: profile?.approved ?? null,
-    adminEmailMatch: isConfiguredAdmin(user.email, null),
-  })
 
   if (!profile && adminRoute && isConfiguredAdmin(user.email, null)) {
     return response

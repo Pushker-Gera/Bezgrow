@@ -9,11 +9,9 @@ export default function EntryCalculatorAnimation() {
 
   useEffect(() => {
     const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches
-    const alreadySeen = sessionStorage.getItem("bezgrow-entry-calculator-seen")
 
-    if (alreadySeen || reducedMotion) return
+    if (reducedMotion) return
 
-    sessionStorage.setItem("bezgrow-entry-calculator-seen", "true")
     const frame = window.requestAnimationFrame(() => setShow(true))
 
     const timer = window.setTimeout(() => setShow(false), 2100)

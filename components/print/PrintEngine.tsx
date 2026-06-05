@@ -1,6 +1,6 @@
 "use client"
 
-import { useEffect, useState } from "react"
+import { useEffect, useMemo, useState } from "react"
 import { createWhatsAppInvoiceUrl } from "@/lib/invoice-share"
 import { defaultPrintSettings, saveStoredPrintSettings } from "@/components/print/settings/defaults"
 import type { PrintFormat, PrintInvoice, PrintSettings } from "@/components/print/types"
@@ -28,7 +28,21 @@ export function PrintEngine({
   const [format, setFormat] = useState<PrintFormat>(initialSettings.defaultFormat)
   const [zoom, setZoom] = useState(1)
   const [notice, setNotice] = useState("")
+  const [termsText, setTermsText] = useState(invoice.terms.join("\n"))
   const [history, setHistory] = useState(() => getReprintHistory().filter((entry) => entry.invoiceId === invoice.id))
+
+  const effectiveInvoice = useMemo<PrintInvoice>(() => {
+    const terms = termsText
+      .split("\n")
+      .map((term) => term.trim())
+      .filter(Boolean)
+
+    return {
+      ...invoice,
+      terms,
+      qrValue: invoice.qrValue,
+    }
+  }, [invoice, termsText])
 
   useEffect(() => {
     document.documentElement.dataset.printFormat = format
@@ -45,17 +59,17 @@ export function PrintEngine({
 
   function printInvoice() {
     document.documentElement.dataset.printFormat = format
-    rememberReprint(invoice, format)
+    rememberReprint(effectiveInvoice, format)
     setHistory(getReprintHistory().filter((entry) => entry.invoiceId === invoice.id))
     requestAnimationFrame(() => window.print())
   }
 
   function sharePdf() {
-    const url = `${window.location.origin}/dashboard/invoices/${invoice.id}/print`
+    const shareUrl = `${window.location.origin}/public/invoices/${invoice.id}`
     if (navigator.share) {
-      void navigator.share({ title: invoice.invoiceNumber, text: "Invoice PDF / print link", url })
+      void navigator.share({ title: invoice.invoiceNumber, text: "Invoice PDF / print link", url: shareUrl })
     } else {
-      void navigator.clipboard?.writeText(url)
+      void navigator.clipboard?.writeText(shareUrl)
       setNotice("Invoice link copied. Use browser print to save as PDF.")
     }
   }
@@ -65,23 +79,31 @@ export function PrintEngine({
     const validRecipient = recipient && recipient !== "-" && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(recipient) ? recipient : ""
 
     const subject = encodeURIComponent(`Invoice ${invoice.invoiceNumber}`)
+    const shareUrl = `${window.location.origin}/public/invoices/${invoice.id}`
     const body = encodeURIComponent(
-      `Hello ${invoice.customer.name},\n\nThank you for purchasing from ${invoice.enterprise.name}.\n\nInvoice Number: ${invoice.invoiceNumber}\nAmount: Rs ${invoice.totals.grandTotal.toLocaleString("en-IN")}\n\nView / print invoice:\n${window.location.origin}/dashboard/invoices/${invoice.id}/print\n\nThank you for your business.`
+      `Hello ${invoice.customer.name},\n\nThank you for purchasing from ${invoice.enterprise.name}.\n\nInvoice Number: ${invoice.invoiceNumber}\nAmount: Rs ${invoice.totals.grandTotal.toLocaleString("en-IN")}\n\nDownload / print invoice:\n${shareUrl}\n\nThank you for your business.`
     )
     if (!validRecipient) {
       setNotice("Customer email missing. Opening email composer without recipient.")
     }
-    window.location.href = `mailto:${encodeURIComponent(validRecipient)}?subject=${subject}&body=${body}`
+    const link = document.createElement("a")
+    link.href = `mailto:${encodeURIComponent(validRecipient)}?subject=${subject}&body=${body}`
+    link.target = "_blank"
+    link.rel = "noopener noreferrer"
+    document.body.appendChild(link)
+    link.click()
+    link.remove()
   }
 
   function whatsappInvoice() {
+    const shareUrl = `${window.location.origin}/public/invoices/${invoice.id}`
     const url = createWhatsAppInvoiceUrl({
       customerName: invoice.customer.name,
       customerPhone: invoice.customer.phone,
       enterpriseName: invoice.enterprise.name,
       invoiceNumber: invoice.invoiceNumber,
       amount: invoice.totals.grandTotal,
-      invoiceUrl: `${window.location.origin}/dashboard/invoices/${invoice.id}/print`,
+      invoiceUrl: shareUrl,
     })
 
     if (!url) {
@@ -93,10 +115,10 @@ export function PrintEngine({
   }
 
   const template = {
-    thermal: <ThermalTemplate invoice={invoice} settings={settings} />,
-    a4: <A4Template invoice={invoice} settings={settings} />,
-    "half-compact": <HalfCompactTemplate invoice={invoice} settings={settings} />,
-    "half-top": <HalfTopTemplate invoice={invoice} settings={settings} />,
+    thermal: <ThermalTemplate invoice={effectiveInvoice} settings={settings} />,
+    a4: <A4Template invoice={effectiveInvoice} settings={settings} />,
+    "half-compact": <HalfCompactTemplate invoice={effectiveInvoice} settings={settings} />,
+    "half-top": <HalfTopTemplate invoice={effectiveInvoice} settings={settings} />,
   }[format]
 
   return (
@@ -166,6 +188,17 @@ export function PrintEngine({
             <input type="range" min="0.55" max="1.25" step="0.05" value={zoom} onChange={(event) => setZoom(Number(event.target.value))} />
           </section>
 
+          <section>
+            <p className="control-label">Terms & Conditions</p>
+            <textarea
+              className="terms-editor"
+              value={termsText}
+              onChange={(event) => setTermsText(event.target.value)}
+              placeholder="Write invoice terms and conditions..."
+              rows={5}
+            />
+          </section>
+
           {notice && <p className="print-notice">{notice}</p>}
 
           <section className="action-grid">
@@ -221,6 +254,8 @@ function PrintEngineStyles() {
       .template-grid, .action-grid { display: grid; gap: 8px; }
       .template-grid button, .action-grid button, .print-control-panel select, .mobile-toolbar select, .mobile-toolbar button { min-height: 42px; border-radius: 12px; border: 1px solid rgba(255,255,255,.12); background: rgba(255,255,255,.06); color: #fff; padding: 0 12px; font-weight: 800; }
       .template-grid button.active, .action-grid button:first-child { background: #fff; color: #020617; }
+      .terms-editor { width: 100%; min-height: 118px; resize: vertical; border-radius: 12px; border: 1px solid rgba(255,255,255,.12); background: rgba(255,255,255,.06); color: #fff; padding: 12px; font: inherit; font-size: 13px; line-height: 1.45; outline: none; }
+      .terms-editor:focus { border-color: rgba(34,211,238,.55); box-shadow: 0 0 0 3px rgba(34,211,238,.12); }
       .toggle-row { display: flex; justify-content: space-between; gap: 14px; align-items: center; min-height: 36px; font-size: 13px; color: #cbd5e1; }
       .print-notice { border: 1px solid rgba(251,191,36,.35); color: #fde68a; background: rgba(251,191,36,.1); border-radius: 12px; padding: 10px; font-size: 13px; }
       .history-list { color: #94a3b8; font-size: 12px; display: grid; gap: 7px; }
@@ -257,7 +292,7 @@ function PrintEngineStyles() {
       .item-table .col-mrp, .item-table .col-rate, .item-table .col-discAmount, .item-table .col-taxable { width: 8%; }
       .item-table .col-disc { width: 6%; }
       .item-table .col-cgst, .item-table .col-sgst, .item-table .col-igst { width: 7%; }
-      .item-table .col-amount { width: 10%; }
+      .item-table .col-amount { width: 9%; }
       .item-table thead { display: table-header-group; }
       .item-table tr { page-break-inside: avoid; break-inside: avoid; }
       .item-table th { position: sticky; top: 0; background: #0f172a; color: #fff; font-size: 6.7px; letter-spacing: .03em; text-transform: uppercase; padding: 4px 3px; text-align: left; overflow-wrap: anywhere; word-break: break-word; }
@@ -360,16 +395,30 @@ function PrintEngineStyles() {
         .preview-scroll { height: calc(100dvh - 66px); padding: 18px; justify-content: flex-start; }
       }
       @media print {
-        html, body { width: auto !important; min-height: 0 !important; margin: 0 !important; padding: 0 !important; overflow: visible !important; background: #fff !important; color: #000 !important; }
+        @page { size: A4 portrait; margin: 8mm; }
+        @page half-compact { size: A4 portrait; margin: 8mm; }
+        @page half-top { size: A4 portrait; margin: 8mm; }
+        @page thermal { size: 80mm 120mm; margin: 0; }
+        html, body { width: 100% !important; min-height: 0 !important; margin: 0 !important; padding: 0 !important; overflow: visible !important; background: #fff !important; color: #000 !important; }
         body * { visibility: hidden !important; }
         .print-document, .print-document *, .invoice-paper, .invoice-paper * { visibility: visible !important; }
         .no-print { display: none !important; }
-        .enterprise-print-shell, .print-preview-stage, .preview-scroll, .print-document { display: block !important; width: auto !important; min-width: 0 !important; height: auto !important; min-height: 0 !important; overflow: visible !important; padding: 0 !important; margin: 0 !important; background: #fff !important; color: #000 !important; transform: none !important; }
-        .print-document { position: fixed !important; inset: 0 auto auto 0 !important; transform: none !important; transition: none !important; }
+        .enterprise-print-shell, .print-preview-stage, .preview-scroll { display: block !important; width: 100% !important; min-width: 0 !important; height: auto !important; min-height: 0 !important; overflow: visible !important; padding: 0 !important; margin: 0 !important; background: #fff !important; color: #000 !important; transform: none !important; }
+        .print-document { position: fixed !important; inset: 0 !important; display: flex !important; width: 100% !important; min-width: 0 !important; height: auto !important; min-height: 0 !important; justify-content: center !important; align-items: flex-start !important; overflow: visible !important; padding: 0 !important; margin: 0 !important; background: #fff !important; color: #000 !important; transform: none !important; transition: none !important; }
         .invoice-paper { box-shadow: none !important; margin: 0 auto !important; overflow: visible !important; background: #fff !important; color: #000 !important; break-inside: auto; page-break-inside: auto; }
-        .print-a4 { page: auto !important; width: 194mm !important; min-height: 281mm !important; padding: 7mm !important; }
-        .print-half-compact { page: half-compact !important; width: 158mm !important; min-height: 281mm !important; padding: 6mm !important; margin: 0 auto !important; }
-        .print-half-top { page: half-top !important; width: 202mm !important; min-height: 140mm !important; padding: 0 !important; margin: 0 !important; }
+        .print-a4 { page: auto !important; width: 186mm !important; max-width: 186mm !important; min-height: 281mm !important; padding: 6mm !important; }
+        .print-a4 .total-grid { grid-template-columns: minmax(0, 1fr) 54mm !important; }
+        .print-a4 .payment-grid { grid-template-columns: repeat(4, minmax(0, 1fr)) !important; }
+        .print-half-compact { page: half-compact !important; width: 128mm !important; max-width: 128mm !important; min-height: 281mm !important; padding: 7mm !important; margin: 0 auto !important; }
+        .print-half-compact .brand-block h1 { font-size: 24px !important; }
+        .print-half-compact .invoice-meta-card h2 { font-size: 16px !important; }
+        .print-half-compact .print-header-block,
+        .print-half-compact .customer-grid,
+        .print-half-compact .total-grid,
+        .print-half-compact .payment-grid { grid-template-columns: 1fr !important; }
+        .print-half-compact .item-table th,
+        .print-half-compact .item-table td { font-size: 7.2px !important; padding: 3px 2px !important; }
+        .print-half-top { page: half-top !important; width: 186mm !important; max-width: 186mm !important; min-height: 140mm !important; padding: 0 !important; margin: 0 auto !important; }
         .top-half-content { min-height: 140mm !important; max-height: 140mm !important; overflow: hidden !important; padding: 4mm !important; background: #fff !important; }
         .manual-notes-space { display: none !important; }
         .print-header-block, .customer-grid, .total-grid, .payment-grid, .footer-row, .codes-block, .signature-grid, .info-card, .invoice-meta-card, .terms-card, .total-card { break-inside: avoid !important; page-break-inside: avoid !important; }
@@ -377,7 +426,7 @@ function PrintEngineStyles() {
         .item-table tr { break-inside: avoid !important; page-break-inside: avoid !important; }
         .item-table th { position: static !important; }
         html[data-print-format="thermal"], html[data-print-format="thermal"] body { width: 80mm !important; max-width: 80mm !important; height: auto !important; min-height: 0 !important; background: #fff !important; }
-        html[data-print-format="thermal"] .invoice-paper { page: thermal !important; width: 80mm !important; min-height: auto !important; margin: 0 !important; padding: 2mm 4mm !important; box-shadow: none !important; background: #fff !important; color: #000 !important; }
+        html[data-print-format="thermal"] .invoice-paper { page: thermal !important; width: 80mm !important; min-height: auto !important; margin: 0 !important; padding: 3mm 4mm !important; box-shadow: none !important; background: #fff !important; color: #000 !important; }
         html[data-print-format="thermal"] .enterprise-print-shell,
         html[data-print-format="thermal"] .print-preview-stage,
         html[data-print-format="thermal"] .preview-scroll,

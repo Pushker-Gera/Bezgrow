@@ -36,7 +36,6 @@ const navItems = [
 export default function DashboardLayout({ children }: { children: ReactNode }) {
     const router = useRouter()
     const pathname = usePathname()
-    const [loading, setLoading] = useState(true)
     const [businessName, setBusinessName] = useState("My Business")
     const [ownerEmail, setOwnerEmail] = useState("")
     const [mobileNavOpen, setMobileNavOpen] = useState(false)
@@ -54,28 +53,14 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
                 })
                 const payload = (await response.json()) as WorkspaceBootstrapResponse
 
-                if (response.status === 401) {
-                    router.replace("/login")
-                    return
-                }
-
-                if (!payload.success || !payload.profile?.approved) {
-                    router.replace("/pending-approval")
-                    return
-                }
-
-                if (payload.profile.role === "admin") {
-                    router.replace("/admin")
-                    return
-                }
-
                 if (payload.organization?.name) setBusinessName(payload.organization.name)
 
                 setOwnerEmail(payload.user?.email || session?.user.email || "owner@bezgrow.com")
-                setLoading(false)
+
+                if (response.status === 401) router.replace("/login")
+                if (payload.success && payload.profile?.role === "admin") router.replace("/admin")
             } catch (error) {
                 console.error("Dashboard access error:", error)
-                setLoading(false)
             }
         })
     }, [router])
@@ -85,19 +70,6 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
     async function handleLogout() {
         await supabase.auth.signOut()
         router.replace("/login")
-    }
-
-    if (loading) {
-        return (
-            <div className="relative flex min-h-dvh items-center justify-center overflow-hidden bg-black px-4 text-white">
-                <div className="inventory-grid-bg absolute inset-0 opacity-40" />
-                <div className="relative flex flex-col items-center">
-                    <div className="h-24 w-24 animate-spin rounded-full border-[6px] border-neutral-800 border-t-cyan-300 shadow-[0_0_55px_rgba(34,211,238,0.2)]" />
-                    <h1 className="mt-8 text-2xl font-black">Loading Workspace</h1>
-                    <p className="mt-2 text-sm text-neutral-500">Preparing global ERP operations.</p>
-                </div>
-            </div>
-        )
     }
 
     return (
@@ -122,6 +94,7 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
                             <Link
                                 key={href}
                                 href={href}
+                                prefetch={false}
                                 className={`flex min-h-12 items-center rounded-2xl border px-4 text-sm font-bold transition-all duration-300 ${active
                                     ? "border-cyan-400/30 bg-cyan-500/10 text-cyan-100 shadow-[0_0_30px_rgba(34,211,238,0.12)]"
                                     : "border-transparent text-neutral-400 hover:border-white/10 hover:bg-white/[0.04] hover:text-white"
@@ -158,7 +131,7 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
                                 Inventory, billing, retail POS, analytics, and launch operations.
                             </p>
                         </div>
-                        <Link href="/profile" className="flex h-11 shrink-0 items-center gap-2 rounded-2xl border border-white/10 bg-white/[0.04] px-2 hover:border-cyan-400/30 sm:h-12 sm:gap-3 sm:px-3">
+                        <Link href="/profile" prefetch={false} className="flex h-11 shrink-0 items-center gap-2 rounded-2xl border border-white/10 bg-white/[0.04] px-2 hover:border-cyan-400/30 sm:h-12 sm:gap-3 sm:px-3">
                             <span className="flex h-9 w-9 items-center justify-center rounded-xl bg-cyan-400 text-sm font-black text-black">
                                 {workspaceInitial}
                             </span>
@@ -173,6 +146,7 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
                                     <Link
                                         key={href}
                                         href={href}
+                                        prefetch={false}
                                         onClick={() => setMobileNavOpen(false)}
                                         className={`flex min-h-11 min-w-[120px] items-center justify-center rounded-xl border px-3 text-center text-xs font-bold sm:min-w-0 ${active ? "border-cyan-300/40 bg-cyan-300/10 text-cyan-100" : "border-white/10 bg-white/[0.03] text-white/65"}`}
                                     >

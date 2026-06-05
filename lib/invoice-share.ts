@@ -25,7 +25,7 @@ export function createInvoiceShareText(input: InvoiceShareInput) {
     `Thank you for purchasing from ${input.enterpriseName || "Bezgrow"}.`,
     `Invoice Number: ${input.invoiceNumber || "Invoice"}`,
     `Amount: \u20b9${Math.round(input.amount).toLocaleString("en-IN")}`,
-    `Download/View Invoice: ${input.invoiceUrl}`,
+    `Download / print invoice PDF: ${input.invoiceUrl}`,
   ].join("\n")
 }
 
