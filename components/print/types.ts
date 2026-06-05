@@ -38,6 +38,7 @@ export type PrintCustomer = {
   name: string
   address: string
   phone: string
+  email: string
   gstin: string
   state: string
   stateCode: string

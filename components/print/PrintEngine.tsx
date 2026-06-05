@@ -1,6 +1,6 @@
 "use client"
 
-import { useState } from "react"
+import { useEffect, useState } from "react"
 import { createWhatsAppInvoiceUrl } from "@/lib/invoice-share"
 import { defaultPrintSettings, saveStoredPrintSettings } from "@/components/print/settings/defaults"
 import type { PrintFormat, PrintInvoice, PrintSettings } from "@/components/print/types"
@@ -30,6 +30,13 @@ export function PrintEngine({
   const [notice, setNotice] = useState("")
   const [history, setHistory] = useState(() => getReprintHistory().filter((entry) => entry.invoiceId === invoice.id))
 
+  useEffect(() => {
+    document.documentElement.dataset.printFormat = format
+    return () => {
+      delete document.documentElement.dataset.printFormat
+    }
+  }, [format])
+
   function updateSettings(next: Partial<PrintSettings>) {
     const updated = { ...settings, ...next }
     setSettings(updated)
@@ -54,9 +61,17 @@ export function PrintEngine({
   }
 
   function emailInvoice() {
+    const recipient = invoice.customer.email?.trim()
+    if (!recipient || recipient === "-" || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(recipient)) {
+      setNotice("Customer email address required.")
+      return
+    }
+
     const subject = encodeURIComponent(`Invoice ${invoice.invoiceNumber}`)
-    const body = encodeURIComponent(`Hello ${invoice.customer.name},\n\nPlease view your invoice here:\n${window.location.origin}/dashboard/invoices/${invoice.id}/print`)
-    window.location.href = `mailto:${invoice.customer.phone ? "" : ""}?subject=${subject}&body=${body}`
+    const body = encodeURIComponent(
+      `Hello ${invoice.customer.name},\n\nThank you for purchasing from ${invoice.enterprise.name}.\n\nInvoice Number: ${invoice.invoiceNumber}\nAmount: Rs ${invoice.totals.grandTotal.toLocaleString("en-IN")}\n\nView / print invoice:\n${window.location.origin}/dashboard/invoices/${invoice.id}/print\n\nThank you for your business.`
+    )
+    window.location.href = `mailto:${encodeURIComponent(recipient)}?subject=${subject}&body=${body}`
   }
 
   function whatsappInvoice() {
@@ -172,7 +187,7 @@ export function PrintEngine({
           </section>
         </aside>
 
-        <main className={`print-preview-stage font-${settings.fontSize} margin-${settings.margins} ${settings.blackAndWhite ? "bw-mode" : ""}`}>
+        <main className={`print-preview-stage print-format-${format} font-${settings.fontSize} margin-${settings.margins} ${settings.blackAndWhite ? "bw-mode" : ""}`}>
           <div className="mobile-toolbar no-print">
             <select value={format} onChange={(event) => setFormat(event.target.value as PrintFormat)}>
               {(Object.keys(formatLabels) as PrintFormat[]).map((key) => <option key={key} value={key}>{formatLabels[key]}</option>)}
@@ -195,8 +210,9 @@ function PrintEngineStyles() {
   return (
     <style jsx global>{`
       @page { size: A4 portrait; margin: 8mm; }
-      @page half-a4 { size: 210mm 148mm; margin: 5mm; }
-      @page thermal { size: 80mm auto; margin: 2mm; }
+      @page half-compact { size: A4 portrait; margin: 8mm; }
+      @page half-top { size: 210mm 148mm; margin: 4mm; }
+      @page thermal { size: 80mm 200mm; margin: 0; }
       html[data-print-format="thermal"] { print-color-adjust: exact; -webkit-print-color-adjust: exact; }
       .enterprise-print-shell { min-height: 100dvh; display: grid; grid-template-columns: 320px 1fr; background: #0a0d12; color: #f8fafc; }
       .print-control-panel { height: 100dvh; overflow-y: auto; border-right: 1px solid rgba(255,255,255,.1); background: #070b12; padding: 22px; display: flex; flex-direction: column; gap: 20px; }
@@ -211,15 +227,16 @@ function PrintEngineStyles() {
       .print-preview-stage { min-width: 0; background: radial-gradient(circle at top left, rgba(34,211,238,.08), transparent 32%), #111827; }
       .mobile-toolbar { display: none; gap: 8px; padding: 12px; position: sticky; top: 0; z-index: 10; background: #070b12; }
       .preview-scroll { height: 100dvh; overflow: auto; padding: 32px; display: flex; justify-content: center; align-items: flex-start; background: #111827; }
+      .print-format-thermal .preview-scroll { background: #111827; }
       .print-document { transform-origin: top center; transition: transform .18s ease; }
       .invoice-paper, .invoice-paper * { box-sizing: border-box; }
       .invoice-paper { position: relative; overflow: visible; background: #fff; color: #111827; font-family: Arial, Helvetica, sans-serif; box-shadow: 0 24px 90px rgba(0,0,0,.35); print-color-adjust: exact; -webkit-print-color-adjust: exact; }
-      .print-a4 { width: 194mm; min-height: 281mm; padding: 7mm; }
-      .print-half-compact { page: half-a4; width: 200mm; min-height: 138mm; padding: 5mm; }
-      .print-half-top { page: half-a4; width: 200mm; min-height: 138mm; padding: 0; }
-      .top-half-content { min-height: 138mm; overflow: visible; border: 1px solid #0f172a; padding: 5mm; background: #fff; }
+      .print-a4 { width: 194mm; min-height: 281mm; padding: 8mm; display: flex; flex-direction: column; }
+      .print-half-compact { page: half-compact; width: 126mm; min-height: 281mm; padding: 6mm; margin: 0 auto; display: flex; flex-direction: column; }
+      .print-half-top { page: half-top; width: 202mm; min-height: 140mm; padding: 0; }
+      .top-half-content { min-height: 140mm; overflow: visible; border: 1px solid #0f172a; padding: 4mm; background: #fff; }
       .manual-notes-space { display: none; }
-      .print-thermal { page: thermal; width: 80mm; min-height: auto; padding: 3mm; font-family: "Courier New", monospace; box-shadow: 0 20px 70px rgba(0,0,0,.28); background: #fff; color: #000; }
+      .print-thermal { page: thermal; width: 80mm; min-height: auto; padding: 3mm 4mm; font-family: "Courier New", monospace; box-shadow: 0 20px 70px rgba(0,0,0,.28); background: #fff; color: #000; }
       .thermal-58 { width: 58mm; padding: 2mm; }
       .thermal-80, .thermal-auto { width: 80mm; }
       .print-header-block { display: grid; grid-template-columns: 1.45fr .75fr; gap: 12px; border-bottom: 2px solid #111827; padding-bottom: 10px; }
@@ -255,6 +272,50 @@ function PrintEngineStyles() {
       .signature-grid div { height: 34px; border-bottom: 1px solid #64748b; display: flex; align-items: flex-end; justify-content: center; color: #64748b; font-size: 9px; }
       .page-number { position: absolute; bottom: 6mm; right: 12mm; color: #64748b; font-size: 9px; }
       .watermark { position: absolute; inset: 0; display: grid; place-items: center; font-size: 64px; font-weight: 900; color: rgba(15,23,42,.05); transform: rotate(-28deg); pointer-events: none; }
+      .print-a4 .print-header-block { gap: 16px; padding-bottom: 12px; }
+      .print-a4 .brand-block h1 { font-size: 31px; }
+      .print-a4 .brand-block p, .print-a4 .invoice-meta-card p, .print-a4 .info-card p, .print-a4 .terms-card p { font-size: 11.5px; }
+      .print-a4 .invoice-meta-card h2 { font-size: 20px; }
+      .print-a4 .info-card h3 { font-size: 15px; }
+      .print-a4 .item-table { margin-top: 12px; }
+      .print-a4 .item-table th { font-size: 7.5px; padding: 5px 4px; }
+      .print-a4 .item-table td { font-size: 8.5px; padding: 5px 4px; }
+      .print-a4 .total-grid { margin-top: 12px; grid-template-columns: 1fr 62mm; }
+      .print-a4 .total-card div { font-size: 11.5px; }
+      .print-a4 .grand-total { font-size: 18px !important; }
+      .print-a4 .payment-grid { margin-top: 12px; }
+      .print-a4 .payment-grid span { font-size: 9.5px; }
+      .print-a4 .payment-grid strong { font-size: 12px; }
+      .print-a4 .terms-card { min-height: 62mm; }
+      .print-half-compact .print-header-block,
+      .print-half-compact .customer-grid,
+      .print-half-compact .total-grid,
+      .print-half-compact .payment-grid { grid-template-columns: 1fr; }
+      .print-half-compact .print-header-block { gap: 8px; }
+      .print-half-compact .brand-block h1 { font-size: 22px; }
+      .print-half-compact .brand-block p,
+      .print-half-compact .invoice-meta-card p,
+      .print-half-compact .info-card p,
+      .print-half-compact .terms-card p { font-size: 9.2px; }
+      .print-half-compact .invoice-meta-card h2 { font-size: 15px; }
+      .print-half-compact .item-table { margin-top: 7px; }
+      .print-half-compact .item-table th,
+      .print-half-compact .item-table td { font-size: 5.8px; padding: 2px; line-height: 1.15; }
+      .print-half-compact .total-card div { font-size: 9.5px; }
+      .print-half-compact .grand-total { font-size: 14px !important; }
+      .print-half-compact .payment-grid { gap: 5px; }
+      .print-half-compact .footer-row { flex-direction: column; align-items: stretch; }
+      .print-half-compact .signature-grid { grid-template-columns: 1fr; }
+      .print-half-top .brand-block h1 { font-size: 20px; }
+      .print-half-top .brand-block p,
+      .print-half-top .invoice-meta-card p,
+      .print-half-top .info-card p,
+      .print-half-top .terms-card p { font-size: 8px; }
+      .print-half-top .invoice-meta-card h2 { font-size: 14px; }
+      .print-half-top .item-table th,
+      .print-half-top .item-table td { font-size: 5.5px; padding: 1.8px; line-height: 1.1; }
+      .print-half-top .total-grid { grid-template-columns: 1fr 50mm; }
+      .print-half-top .payment-grid div { padding: 4px; }
       .font-small .invoice-paper { font-size: 92%; }
       .font-large .invoice-paper { font-size: 108%; }
       .margin-compact .print-a4 { padding: 5mm; }
@@ -285,18 +346,22 @@ function PrintEngineStyles() {
         .enterprise-print-shell, .print-preview-stage, .preview-scroll, .print-document { display: block !important; width: auto !important; min-width: 0 !important; height: auto !important; min-height: 0 !important; overflow: visible !important; padding: 0 !important; margin: 0 !important; background: #fff !important; color: #000 !important; transform: none !important; }
         .print-document { position: static !important; transform: none !important; transition: none !important; }
         .invoice-paper { box-shadow: none !important; margin: 0 auto !important; overflow: visible !important; background: #fff !important; color: #000 !important; break-inside: auto; page-break-inside: auto; }
-        .print-a4 { page: auto !important; width: 194mm !important; min-height: 281mm !important; padding: 6mm !important; }
-        .print-half-compact { page: half-a4 !important; width: 200mm !important; min-height: 138mm !important; padding: 4mm !important; }
-        .print-half-top { page: half-a4 !important; width: 200mm !important; min-height: 138mm !important; padding: 0 !important; }
-        .top-half-content { min-height: 138mm !important; overflow: visible !important; padding: 4mm !important; background: #fff !important; }
+        .print-a4 { page: auto !important; width: 194mm !important; min-height: 281mm !important; padding: 7mm !important; }
+        .print-half-compact { page: half-compact !important; width: 126mm !important; min-height: 281mm !important; padding: 5mm !important; margin: 0 auto !important; }
+        .print-half-top { page: half-top !important; width: 202mm !important; min-height: 140mm !important; padding: 0 !important; margin: 0 !important; }
+        .top-half-content { min-height: 140mm !important; max-height: 140mm !important; overflow: hidden !important; padding: 4mm !important; background: #fff !important; }
         .manual-notes-space { display: none !important; }
         .print-header-block, .customer-grid, .total-grid, .payment-grid, .footer-row, .codes-block, .signature-grid, .info-card, .invoice-meta-card, .terms-card, .total-card { break-inside: avoid !important; page-break-inside: avoid !important; }
         .item-table { width: 100% !important; max-width: 100% !important; table-layout: fixed !important; page-break-inside: auto !important; }
         .item-table tr { break-inside: avoid !important; page-break-inside: avoid !important; }
         .item-table th { position: static !important; }
-        html[data-print-format="thermal"] .invoice-paper { page: thermal !important; width: 76mm !important; min-height: auto !important; margin: 0 !important; padding: 2mm !important; box-shadow: none !important; background: #fff !important; color: #000 !important; }
-        html[data-print-format="thermal"] .enterprise-print-shell, html[data-print-format="thermal"] .print-preview-stage, html[data-print-format="thermal"] .preview-scroll, html[data-print-format="thermal"] .print-document { width: 80mm !important; max-width: 80mm !important; background: #fff !important; }
-        html[data-print-format="thermal"], html[data-print-format="thermal"] body { width: 80mm !important; }
+        html[data-print-format="thermal"], html[data-print-format="thermal"] body { width: 80mm !important; max-width: 80mm !important; height: auto !important; min-height: 0 !important; background: #fff !important; }
+        html[data-print-format="thermal"] .invoice-paper { page: thermal !important; width: 80mm !important; min-height: auto !important; margin: 0 !important; padding: 3mm 4mm !important; box-shadow: none !important; background: #fff !important; color: #000 !important; }
+        html[data-print-format="thermal"] .enterprise-print-shell,
+        html[data-print-format="thermal"] .print-preview-stage,
+        html[data-print-format="thermal"] .preview-scroll,
+        html[data-print-format="thermal"] .print-document { width: 80mm !important; max-width: 80mm !important; height: auto !important; min-height: 0 !important; background: #fff !important; padding: 0 !important; margin: 0 !important; overflow: visible !important; }
+        html[data-print-format="thermal"] .print-document { position: absolute !important; inset: 0 auto auto 0 !important; }
       }
     `}</style>
   )

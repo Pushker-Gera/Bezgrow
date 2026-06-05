@@ -159,6 +159,7 @@ export default function PrintInvoicePage() {
         name: stringFrom(customer, ["name"]) || stringFrom(invoice, ["customer_name"]) || "Walk-in customer",
         address: stringFrom(customer, ["address", "billing_address"]) || "-",
         phone: stringFrom(customer, ["phone"]) || "-",
+        email: stringFrom(customer, ["email"]) || "-",
         gstin: stringFrom(customer, ["gst_number", "gstin", "tax_id"]) || "-",
         state: stringFrom(customer, ["state"]) || "-",
         stateCode: stringFrom(customer, ["state_code"]) || "-",
