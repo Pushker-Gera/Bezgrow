@@ -1,7 +1,9 @@
 "use client"
 
 import { useEffect } from "react"
+import Link from "next/link"
 import { useRouter } from "next/navigation"
+import { HeroScene3D } from "@/components/landing/HeroScene3D"
 
 const capabilityGroups = [
   ["Inventory", "Stock, batches, suppliers, warehouses"],
@@ -68,7 +70,8 @@ export default function HomeClient() {
     <>
       <header className="relative flex min-h-dvh flex-col overflow-hidden">
         <div className="inventory-grid-bg absolute inset-0 opacity-55" />
-        <div className="landing-aurora absolute left-1/2 top-24 h-[420px] w-[820px] -translate-x-1/2 rounded-full bg-cyan-300/10 blur-[90px]" />
+        <HeroScene3D />
+        <div className="hero-scene-readability absolute inset-0" />
         <div className="absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-cyan-200/70 to-transparent" />
 
         <nav className="relative z-10 mx-auto flex w-full max-w-7xl items-center justify-between gap-3 px-3 py-4 sm:px-5 sm:py-5 lg:px-8" aria-label="Primary navigation">
@@ -80,10 +83,10 @@ export default function HomeClient() {
             </span>
           </button>
           <div className="hidden rounded-full border border-white/10 bg-white/[0.035] px-4 py-2 text-sm font-bold text-white/50 md:flex md:gap-5">
-            <a href="#inventory-management">Inventory</a>
-            <a href="#gst-billing">Billing</a>
-            <a href="#retail-pos">POS</a>
-            <a href="#erp-software">ERP</a>
+            <Link href="/inventory" className="hover:text-cyan-100">Inventory</Link>
+            <Link href="/billing" className="hover:text-cyan-100">Billing</Link>
+            <Link href="/pos" className="hover:text-cyan-100">POS</Link>
+            <Link href="/erp" className="hover:text-cyan-100">ERP</Link>
           </div>
           <div className="flex shrink-0 items-center gap-2 sm:gap-3">
             <button onClick={() => router.push("/login")} className="h-10 rounded-2xl border border-white/10 bg-white/[0.035] px-3 text-sm font-bold text-white/75 hover:border-cyan-300/40 sm:h-11 sm:px-5">

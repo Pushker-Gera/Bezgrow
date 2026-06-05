@@ -19,6 +19,26 @@ const publicRoutes = [
     changeFrequency: "monthly" as const,
   },
   {
+    path: "/inventory",
+    priority: 0.9,
+    changeFrequency: "weekly" as const,
+  },
+  {
+    path: "/billing",
+    priority: 0.9,
+    changeFrequency: "weekly" as const,
+  },
+  {
+    path: "/pos",
+    priority: 0.85,
+    changeFrequency: "weekly" as const,
+  },
+  {
+    path: "/erp",
+    priority: 0.85,
+    changeFrequency: "weekly" as const,
+  },
+  {
     path: "/reset-password",
     priority: 0.2,
     changeFrequency: "yearly" as const,

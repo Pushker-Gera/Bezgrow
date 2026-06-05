@@ -97,6 +97,213 @@ video {
 .glow-logo {
   animation: softGlow 4s ease-in-out infinite;
 }
+
+.entry-calculator-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 9999;
+  display: grid;
+  place-items: center;
+  overflow: hidden;
+  background:
+    radial-gradient(circle at 50% 42%, rgba(34, 211, 238, 0.22), transparent 34%),
+    radial-gradient(circle at 32% 72%, rgba(134, 239, 172, 0.14), transparent 26%),
+    rgba(0, 0, 0, 0.82);
+  perspective: 1200px;
+  pointer-events: none;
+  animation: entryOverlayFade 2.1s ease forwards;
+}
+
+.entry-calculator-glow {
+  position: absolute;
+  width: min(560px, 82vw);
+  aspect-ratio: 1;
+  border-radius: 999px;
+  background: rgba(34, 211, 238, 0.18);
+  filter: blur(60px);
+  animation: entryGlowPulse 2s ease-out forwards;
+}
+
+.entry-calculator-scene {
+  position: relative;
+  transform-style: preserve-3d;
+  animation: entrySceneOpen 2s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
+.entry-calculator {
+  position: relative;
+  width: min(380px, 78vw);
+  min-height: 520px;
+  transform-style: preserve-3d;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  border-radius: 34px;
+  background:
+    linear-gradient(145deg, rgba(255, 255, 255, 0.16), rgba(255, 255, 255, 0.04) 34%, rgba(2, 6, 23, 0.94)),
+    #071014;
+  box-shadow:
+    0 44px 110px rgba(0, 0, 0, 0.55),
+    inset 0 1px 0 rgba(255, 255, 255, 0.26),
+    0 0 70px rgba(34, 211, 238, 0.24);
+  padding: 26px;
+}
+
+.entry-calculator-depth {
+  position: absolute;
+  inset: 18px -18px -22px 18px;
+  z-index: -1;
+  border-radius: 34px;
+  background: linear-gradient(135deg, #083344, #020617);
+  transform: translateZ(-34px);
+  filter: brightness(0.72);
+}
+
+.entry-calculator-screen {
+  display: grid;
+  gap: 8px;
+  min-height: 132px;
+  border-radius: 24px;
+  border: 1px solid rgba(125, 211, 252, 0.35);
+  background:
+    linear-gradient(135deg, rgba(14, 116, 144, 0.38), rgba(2, 6, 23, 0.94)),
+    #020617;
+  padding: 18px;
+  box-shadow: inset 0 0 34px rgba(34, 211, 238, 0.18);
+}
+
+.entry-calculator-screen span,
+.entry-calculator-tape span {
+  color: #a5f3fc;
+  font-size: 11px;
+  font-weight: 900;
+  letter-spacing: 0.22em;
+}
+
+.entry-calculator-screen strong {
+  color: #ffffff;
+  font-size: clamp(32px, 8vw, 48px);
+  line-height: 0.95;
+  font-weight: 950;
+}
+
+.entry-calculator-screen small {
+  color: rgba(255, 255, 255, 0.62);
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.entry-calculator-tape {
+  position: absolute;
+  top: -72px;
+  right: 28px;
+  display: grid;
+  gap: 6px;
+  width: 118px;
+  min-height: 112px;
+  border-radius: 16px 16px 4px 4px;
+  background: linear-gradient(180deg, #f8fafc, #dbeafe);
+  padding: 16px 12px;
+  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.28);
+  transform: translateZ(42px) rotateX(8deg);
+}
+
+.entry-calculator-tape span {
+  color: #075985;
+  letter-spacing: 0.12em;
+}
+
+.entry-calculator-keys {
+  margin-top: 22px;
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 10px;
+}
+
+.entry-calculator-keys span {
+  display: grid;
+  min-height: 54px;
+  place-items: center;
+  border-radius: 16px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: linear-gradient(145deg, rgba(255, 255, 255, 0.14), rgba(255, 255, 255, 0.035));
+  color: #f8fafc;
+  font-size: 14px;
+  font-weight: 950;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.18),
+    0 12px 24px rgba(0, 0, 0, 0.18);
+  transform: translateZ(18px);
+}
+
+.entry-calculator-keys span:nth-child(4n),
+.entry-calculator-keys span:nth-last-child(1) {
+  background: linear-gradient(145deg, #67e8f9, #3b82f6);
+  color: #020617;
+}
+
+@keyframes entryOverlayFade {
+  0%, 74% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+    visibility: hidden;
+  }
+}
+
+@keyframes entrySceneOpen {
+  0% {
+    opacity: 0;
+    transform: translateY(44px) rotateX(72deg) rotateZ(-14deg) scale(0.55);
+  }
+  34% {
+    opacity: 1;
+    transform: translateY(0) rotateX(18deg) rotateZ(5deg) scale(1.08);
+  }
+  68% {
+    opacity: 1;
+    transform: translateY(0) rotateX(10deg) rotateZ(-2deg) scale(1);
+  }
+  100% {
+    opacity: 0;
+    transform: translateY(-26px) rotateX(28deg) rotateZ(6deg) scale(0.88);
+  }
+}
+
+@keyframes entryGlowPulse {
+  0% {
+    opacity: 0;
+    transform: scale(0.65);
+  }
+  42% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  100% {
+    opacity: 0;
+    transform: scale(1.18);
+  }
+}
+
+@media (max-width: 640px) {
+  .entry-calculator {
+    min-height: 455px;
+    padding: 20px;
+  }
+
+  .entry-calculator-keys {
+    gap: 8px;
+  }
+
+  .entry-calculator-keys span {
+    min-height: 46px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .entry-calculator-overlay {
+    display: none;
+  }
+}
 /* Smooth Fade Up Animation */
 @keyframes fadeUp {
   from {
@@ -153,6 +360,41 @@ video {
   background: linear-gradient(90deg, transparent, rgba(255,255,255,0.08), transparent);
   animation: inventorySheen 6s ease-in-out infinite;
   pointer-events: none;
+}
+
+.hero-scene-3d {
+  position: absolute;
+  inset: 74px 0 120px;
+  z-index: 1;
+  pointer-events: none;
+  opacity: 0.96;
+}
+
+.hero-scene-3d canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+.hero-scene-readability {
+  z-index: 2;
+  pointer-events: none;
+  background:
+    radial-gradient(ellipse at center, rgba(2, 4, 3, 0.88) 0%, rgba(2, 4, 3, 0.76) 38%, rgba(2, 4, 3, 0.34) 68%, rgba(2, 4, 3, 0.48) 100%),
+    linear-gradient(180deg, rgba(2, 4, 3, 0.12), rgba(2, 4, 3, 0.58) 72%, rgba(2, 4, 3, 0.88));
+}
+
+@media (max-width: 900px) {
+  .hero-scene-3d {
+    inset: 120px -160px 180px;
+    opacity: 0.62;
+  }
+
+  .hero-scene-readability {
+    background:
+      radial-gradient(ellipse at center, rgba(2, 4, 3, 0.9) 0%, rgba(2, 4, 3, 0.74) 58%, rgba(2, 4, 3, 0.52) 100%),
+      linear-gradient(180deg, rgba(2, 4, 3, 0.2), rgba(2, 4, 3, 0.78));
+  }
 }
 
 @keyframes landingFloat {

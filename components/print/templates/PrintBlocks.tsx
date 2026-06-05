@@ -56,8 +56,30 @@ export function CustomerBlock({ invoice }: { invoice: PrintInvoice }) {
 }
 
 export function ItemTable({ invoice, settings, compact = false }: { invoice: PrintInvoice; settings: PrintSettings; compact?: boolean }) {
+  const visibleColumns = [
+    "sr",
+    "item",
+    ...(settings.pharmaMode ? ["batch", "expiry"] : []),
+    ...(settings.showHsn ? ["hsn"] : []),
+    "qty",
+    "free",
+    "unit",
+    "mrp",
+    "rate",
+    "disc",
+    "discAmount",
+    "taxable",
+    ...(settings.showGstDetails ? ["cgst", "sgst", "igst"] : []),
+    "amount",
+  ]
+
   return (
     <table className={`item-table ${compact ? "compact" : ""}`}>
+      <colgroup>
+        {visibleColumns.map((column) => (
+          <col key={column} className={`col-${column}`} />
+        ))}
+      </colgroup>
       <thead>
         <tr>
           <th>Sr</th>

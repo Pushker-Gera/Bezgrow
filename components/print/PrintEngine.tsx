@@ -62,16 +62,16 @@ export function PrintEngine({
 
   function emailInvoice() {
     const recipient = invoice.customer.email?.trim()
-    if (!recipient || recipient === "-" || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(recipient)) {
-      setNotice("Customer email address required.")
-      return
-    }
+    const validRecipient = recipient && recipient !== "-" && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(recipient) ? recipient : ""
 
     const subject = encodeURIComponent(`Invoice ${invoice.invoiceNumber}`)
     const body = encodeURIComponent(
       `Hello ${invoice.customer.name},\n\nThank you for purchasing from ${invoice.enterprise.name}.\n\nInvoice Number: ${invoice.invoiceNumber}\nAmount: Rs ${invoice.totals.grandTotal.toLocaleString("en-IN")}\n\nView / print invoice:\n${window.location.origin}/dashboard/invoices/${invoice.id}/print\n\nThank you for your business.`
     )
-    window.location.href = `mailto:${encodeURIComponent(recipient)}?subject=${subject}&body=${body}`
+    if (!validRecipient) {
+      setNotice("Customer email missing. Opening email composer without recipient.")
+    }
+    window.location.href = `mailto:${encodeURIComponent(validRecipient)}?subject=${subject}&body=${body}`
   }
 
   function whatsappInvoice() {
@@ -212,7 +212,7 @@ function PrintEngineStyles() {
       @page { size: A4 portrait; margin: 8mm; }
       @page half-compact { size: A4 portrait; margin: 8mm; }
       @page half-top { size: 210mm 148mm; margin: 4mm; }
-      @page thermal { size: 80mm 200mm; margin: 0; }
+      @page thermal { size: 80mm 120mm; margin: 0; }
       html[data-print-format="thermal"] { print-color-adjust: exact; -webkit-print-color-adjust: exact; }
       .enterprise-print-shell { min-height: 100dvh; display: grid; grid-template-columns: 320px 1fr; background: #0a0d12; color: #f8fafc; }
       .print-control-panel { height: 100dvh; overflow-y: auto; border-right: 1px solid rgba(255,255,255,.1); background: #070b12; padding: 22px; display: flex; flex-direction: column; gap: 20px; }
@@ -232,7 +232,7 @@ function PrintEngineStyles() {
       .invoice-paper, .invoice-paper * { box-sizing: border-box; }
       .invoice-paper { position: relative; overflow: visible; background: #fff; color: #111827; font-family: Arial, Helvetica, sans-serif; box-shadow: 0 24px 90px rgba(0,0,0,.35); print-color-adjust: exact; -webkit-print-color-adjust: exact; }
       .print-a4 { width: 194mm; min-height: 281mm; padding: 8mm; display: flex; flex-direction: column; }
-      .print-half-compact { page: half-compact; width: 126mm; min-height: 281mm; padding: 6mm; margin: 0 auto; display: flex; flex-direction: column; }
+      .print-half-compact { page: half-compact; width: 158mm; min-height: 281mm; padding: 7mm; margin: 0 auto; display: flex; flex-direction: column; }
       .print-half-top { page: half-top; width: 202mm; min-height: 140mm; padding: 0; }
       .top-half-content { min-height: 140mm; overflow: visible; border: 1px solid #0f172a; padding: 4mm; background: #fff; }
       .manual-notes-space { display: none; }
@@ -250,6 +250,14 @@ function PrintEngineStyles() {
       .customer-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 8px; }
       .info-card h3 { margin: 3px 0; font-size: 13px; }
       .item-table { width: 100%; max-width: 100%; margin-top: 9px; border-collapse: collapse; table-layout: fixed; page-break-inside: auto; }
+      .item-table .col-sr { width: 5%; }
+      .item-table .col-item { width: 17%; }
+      .item-table .col-batch, .item-table .col-expiry, .item-table .col-hsn { width: 7%; }
+      .item-table .col-qty, .item-table .col-free, .item-table .col-unit { width: 6%; }
+      .item-table .col-mrp, .item-table .col-rate, .item-table .col-discAmount, .item-table .col-taxable { width: 8%; }
+      .item-table .col-disc { width: 6%; }
+      .item-table .col-cgst, .item-table .col-sgst, .item-table .col-igst { width: 7%; }
+      .item-table .col-amount { width: 10%; }
       .item-table thead { display: table-header-group; }
       .item-table tr { page-break-inside: avoid; break-inside: avoid; }
       .item-table th { position: sticky; top: 0; background: #0f172a; color: #fff; font-size: 6.7px; letter-spacing: .03em; text-transform: uppercase; padding: 4px 3px; text-align: left; overflow-wrap: anywhere; word-break: break-word; }
@@ -292,18 +300,25 @@ function PrintEngineStyles() {
       .print-half-compact .total-grid,
       .print-half-compact .payment-grid { grid-template-columns: 1fr; }
       .print-half-compact .print-header-block { gap: 8px; }
-      .print-half-compact .brand-block h1 { font-size: 22px; }
+      .print-half-compact .brand-block h1 { font-size: 25px; }
       .print-half-compact .brand-block p,
       .print-half-compact .invoice-meta-card p,
-      .print-half-compact .info-card p,
-      .print-half-compact .terms-card p { font-size: 9.2px; }
-      .print-half-compact .invoice-meta-card h2 { font-size: 15px; }
-      .print-half-compact .item-table { margin-top: 7px; }
+      .print-half-compact .info-card p { font-size: 10.5px; }
+      .print-half-compact .terms-card p { font-size: 10px; }
+      .print-half-compact .info-card h3 { font-size: 14px; }
+      .print-half-compact .invoice-meta-card h2 { font-size: 17px; }
+      .print-half-compact .item-table { margin-top: 8px; }
       .print-half-compact .item-table th,
-      .print-half-compact .item-table td { font-size: 5.8px; padding: 2px; line-height: 1.15; }
-      .print-half-compact .total-card div { font-size: 9.5px; }
-      .print-half-compact .grand-total { font-size: 14px !important; }
-      .print-half-compact .payment-grid { gap: 5px; }
+      .print-half-compact .item-table td { font-size: 7px; padding: 3px 2px; line-height: 1.2; }
+      .print-half-compact .item-table .col-item { width: 22%; }
+      .print-half-compact .item-table .col-sr { width: 5%; }
+      .print-half-compact .item-table .col-amount { width: 12%; }
+      .print-half-compact .total-card div { font-size: 11px; }
+      .print-half-compact .grand-total { font-size: 16px !important; }
+      .print-half-compact .payment-grid { gap: 6px; }
+      .print-half-compact .payment-grid div { padding: 7px; }
+      .print-half-compact .payment-grid span { font-size: 9px; }
+      .print-half-compact .payment-grid strong { font-size: 11px; }
       .print-half-compact .footer-row { flex-direction: column; align-items: stretch; }
       .print-half-compact .signature-grid { grid-template-columns: 1fr; }
       .print-half-top .brand-block h1 { font-size: 20px; }
@@ -314,6 +329,8 @@ function PrintEngineStyles() {
       .print-half-top .invoice-meta-card h2 { font-size: 14px; }
       .print-half-top .item-table th,
       .print-half-top .item-table td { font-size: 5.5px; padding: 1.8px; line-height: 1.1; }
+      .print-half-top .item-table .col-item { width: 18%; }
+      .print-half-top .item-table .col-amount { width: 11%; }
       .print-half-top .total-grid { grid-template-columns: 1fr 50mm; }
       .print-half-top .payment-grid div { padding: 4px; }
       .font-small .invoice-paper { font-size: 92%; }
@@ -329,6 +346,10 @@ function PrintEngineStyles() {
       .thermal-row, .thermal-total { display: flex; justify-content: space-between; gap: 6px; }
       .thermal-row span, .thermal-row strong, .thermal-total span, .thermal-total strong { overflow-wrap: anywhere; }
       .thermal-table { width: 100%; border-collapse: collapse; table-layout: fixed; }
+      .thermal-table th:nth-child(1), .thermal-table td:nth-child(1) { width: 48%; }
+      .thermal-table th:nth-child(2), .thermal-table td:nth-child(2) { width: 13%; }
+      .thermal-table th:nth-child(3), .thermal-table td:nth-child(3) { width: 16%; }
+      .thermal-table th:last-child, .thermal-table td:last-child { width: 23%; text-align: right; }
       .thermal-table th, .thermal-table td { border-bottom: 1px dotted #999; padding: 4px 2px; text-align: left; overflow-wrap: anywhere; word-break: break-word; }
       .thermal-total { border-top: 1px solid #000; margin-top: 6px; padding-top: 6px; font-size: 13px; font-weight: 900; }
       .print-thermal svg { max-width: 100%; height: auto; }
@@ -344,10 +365,10 @@ function PrintEngineStyles() {
         .print-document, .print-document *, .invoice-paper, .invoice-paper * { visibility: visible !important; }
         .no-print { display: none !important; }
         .enterprise-print-shell, .print-preview-stage, .preview-scroll, .print-document { display: block !important; width: auto !important; min-width: 0 !important; height: auto !important; min-height: 0 !important; overflow: visible !important; padding: 0 !important; margin: 0 !important; background: #fff !important; color: #000 !important; transform: none !important; }
-        .print-document { position: static !important; transform: none !important; transition: none !important; }
+        .print-document { position: fixed !important; inset: 0 auto auto 0 !important; transform: none !important; transition: none !important; }
         .invoice-paper { box-shadow: none !important; margin: 0 auto !important; overflow: visible !important; background: #fff !important; color: #000 !important; break-inside: auto; page-break-inside: auto; }
         .print-a4 { page: auto !important; width: 194mm !important; min-height: 281mm !important; padding: 7mm !important; }
-        .print-half-compact { page: half-compact !important; width: 126mm !important; min-height: 281mm !important; padding: 5mm !important; margin: 0 auto !important; }
+        .print-half-compact { page: half-compact !important; width: 158mm !important; min-height: 281mm !important; padding: 6mm !important; margin: 0 auto !important; }
         .print-half-top { page: half-top !important; width: 202mm !important; min-height: 140mm !important; padding: 0 !important; margin: 0 !important; }
         .top-half-content { min-height: 140mm !important; max-height: 140mm !important; overflow: hidden !important; padding: 4mm !important; background: #fff !important; }
         .manual-notes-space { display: none !important; }
@@ -356,12 +377,12 @@ function PrintEngineStyles() {
         .item-table tr { break-inside: avoid !important; page-break-inside: avoid !important; }
         .item-table th { position: static !important; }
         html[data-print-format="thermal"], html[data-print-format="thermal"] body { width: 80mm !important; max-width: 80mm !important; height: auto !important; min-height: 0 !important; background: #fff !important; }
-        html[data-print-format="thermal"] .invoice-paper { page: thermal !important; width: 80mm !important; min-height: auto !important; margin: 0 !important; padding: 3mm 4mm !important; box-shadow: none !important; background: #fff !important; color: #000 !important; }
+        html[data-print-format="thermal"] .invoice-paper { page: thermal !important; width: 80mm !important; min-height: auto !important; margin: 0 !important; padding: 2mm 4mm !important; box-shadow: none !important; background: #fff !important; color: #000 !important; }
         html[data-print-format="thermal"] .enterprise-print-shell,
         html[data-print-format="thermal"] .print-preview-stage,
         html[data-print-format="thermal"] .preview-scroll,
         html[data-print-format="thermal"] .print-document { width: 80mm !important; max-width: 80mm !important; height: auto !important; min-height: 0 !important; background: #fff !important; padding: 0 !important; margin: 0 !important; overflow: visible !important; }
-        html[data-print-format="thermal"] .print-document { position: absolute !important; inset: 0 auto auto 0 !important; }
+        html[data-print-format="thermal"] .print-document { position: fixed !important; inset: 0 auto auto 0 !important; }
       }
     `}</style>
   )

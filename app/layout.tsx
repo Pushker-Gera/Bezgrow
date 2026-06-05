@@ -1,6 +1,7 @@
 import "./globals.css"
 import type { Metadata } from "next"
 import ChunkReloadGuard from "@/components/chunk-reload-guard"
+import EntryCalculatorAnimation from "@/components/EntryCalculatorAnimation"
 
 const siteUrl = "https://bezgrow.com"
 
@@ -74,6 +75,7 @@ export default function RootLayout({
       <body>
 
         <ChunkReloadGuard />
+        <EntryCalculatorAnimation />
 
         {children}
 
