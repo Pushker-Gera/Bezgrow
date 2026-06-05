@@ -104,26 +104,26 @@ export function ItemTable({ invoice, settings, compact = false }: { invoice: Pri
       <tbody>
         {invoice.items.map((item, index) => (
           <tr key={item.id}>
-            <td>{index + 1}</td>
-            <td className="wrap">
+            <td data-label="Sr">{index + 1}</td>
+            <td className="wrap" data-label="Item">
               <strong>{item.name}</strong>
               {settings.pharmaMode && item.scheduleType !== "-" && <span>Schedule: {item.scheduleType}</span>}
             </td>
-            {settings.pharmaMode && <td>{item.batchNumber}</td>}
-            {settings.pharmaMode && <td>{item.expiryDate}</td>}
-            {settings.showHsn && <td>{item.hsnCode}</td>}
-            <td>{item.quantity}</td>
-            <td>{item.freeQuantity}</td>
-            <td>{item.unit}</td>
-            <td>{formatMoney(item.mrp)}</td>
-            <td>{formatMoney(item.rate)}</td>
-            <td>{item.discountPercent}%</td>
-            <td>{formatMoney(item.discountAmount)}</td>
-            <td>{formatMoney(item.taxableValue)}</td>
-            {settings.showGstDetails && <td>{item.cgstPercent}%<br />{formatMoney(item.cgstAmount)}</td>}
-            {settings.showGstDetails && <td>{item.sgstPercent}%<br />{formatMoney(item.sgstAmount)}</td>}
-            {settings.showGstDetails && <td>{item.igstPercent}%<br />{formatMoney(item.igstAmount)}</td>}
-            <td><strong>{formatMoney(item.finalAmount)}</strong></td>
+            {settings.pharmaMode && <td data-label="Batch">{item.batchNumber}</td>}
+            {settings.pharmaMode && <td data-label="Expiry">{item.expiryDate}</td>}
+            {settings.showHsn && <td data-label="HSN/SAC">{item.hsnCode}</td>}
+            <td data-label="Qty">{item.quantity}</td>
+            <td data-label="Free">{item.freeQuantity}</td>
+            <td data-label="Unit">{item.unit}</td>
+            <td data-label="MRP">{formatMoney(item.mrp)}</td>
+            <td data-label="Rate">{formatMoney(item.rate)}</td>
+            <td data-label="Discount %">{item.discountPercent}%</td>
+            <td data-label="Discount">{formatMoney(item.discountAmount)}</td>
+            <td data-label="Taxable">{formatMoney(item.taxableValue)}</td>
+            {settings.showGstDetails && <td data-label="CGST">{item.cgstPercent}%<br />{formatMoney(item.cgstAmount)}</td>}
+            {settings.showGstDetails && <td data-label="SGST">{item.sgstPercent}%<br />{formatMoney(item.sgstAmount)}</td>}
+            {settings.showGstDetails && <td data-label="IGST">{item.igstPercent}%<br />{formatMoney(item.igstAmount)}</td>}
+            <td data-label="Amount"><strong>{formatMoney(item.finalAmount)}</strong></td>
           </tr>
         ))}
       </tbody>

@@ -409,21 +409,69 @@ function PrintEngineStyles() {
         .public-invoice-shell .payment-grid { grid-template-columns: 1fr !important; }
         .public-invoice-shell .brand-block h1 { font-size: 24px; }
         .public-invoice-shell .invoice-meta-card h2 { font-size: 18px; }
-        .public-invoice-shell .item-table { table-layout: auto; }
-        .public-invoice-shell .item-table th,
-        .public-invoice-shell .item-table td { font-size: 9px; padding: 5px 3px; }
-        .public-invoice-shell .item-table th:nth-child(4),
-        .public-invoice-shell .item-table td:nth-child(4),
-        .public-invoice-shell .item-table th:nth-child(5),
-        .public-invoice-shell .item-table td:nth-child(5),
-        .public-invoice-shell .item-table th:nth-child(6),
-        .public-invoice-shell .item-table td:nth-child(6),
-        .public-invoice-shell .item-table th:nth-child(8),
-        .public-invoice-shell .item-table td:nth-child(8),
-        .public-invoice-shell .item-table th:nth-child(9),
-        .public-invoice-shell .item-table td:nth-child(9),
-        .public-invoice-shell .item-table th:nth-child(10),
-        .public-invoice-shell .item-table td:nth-child(10) { display: none; }
+        .public-invoice-shell .item-table,
+        .public-invoice-shell .item-table colgroup,
+        .public-invoice-shell .item-table tbody,
+        .public-invoice-shell .item-table tr,
+        .public-invoice-shell .item-table td { display: block; width: 100%; }
+        .public-invoice-shell .item-table { margin-top: 14px; border-collapse: separate; border-spacing: 0; }
+        .public-invoice-shell .item-table thead { display: none; }
+        .public-invoice-shell .item-table tr {
+          border: 1px solid #dbe3ee;
+          border-radius: 14px;
+          background: #fff;
+          overflow: hidden;
+          box-shadow: 0 8px 22px rgba(15,23,42,.06);
+        }
+        .public-invoice-shell .item-table tr + tr { margin-top: 10px; }
+        .public-invoice-shell .item-table td {
+          min-height: 34px;
+          display: grid;
+          grid-template-columns: minmax(92px, 38%) minmax(0, 1fr);
+          align-items: start;
+          gap: 12px;
+          border: 0;
+          border-bottom: 1px solid #e5edf5;
+          padding: 9px 12px;
+          font-size: 13px;
+          line-height: 1.35;
+          text-align: right;
+          word-break: normal;
+          overflow-wrap: anywhere;
+        }
+        .public-invoice-shell .item-table td:last-child { border-bottom: 0; background: #f8fafc; font-size: 15px; }
+        .public-invoice-shell .item-table td::before {
+          content: attr(data-label);
+          color: #475569;
+          font-size: 11px;
+          font-weight: 900;
+          letter-spacing: .08em;
+          text-align: left;
+          text-transform: uppercase;
+        }
+        .public-invoice-shell .item-table td.wrap {
+          grid-template-columns: 1fr;
+          text-align: left;
+          background: #0f172a;
+          color: #fff;
+          font-size: 15px;
+          font-weight: 900;
+        }
+        .public-invoice-shell .item-table td.wrap::before { color: #bae6fd; }
+        .public-invoice-shell .item-table td.wrap strong { color: #fff; }
+        .public-invoice-shell .item-table td[data-label="Sr"],
+        .public-invoice-shell .item-table td[data-label="Free"],
+        .public-invoice-shell .item-table td[data-label="Unit"],
+        .public-invoice-shell .item-table td[data-label="MRP"],
+        .public-invoice-shell .item-table td[data-label="Discount %"],
+        .public-invoice-shell .item-table td[data-label="Discount"],
+        .public-invoice-shell .item-table td[data-label="Taxable"],
+        .public-invoice-shell .item-table td[data-label="CGST"],
+        .public-invoice-shell .item-table td[data-label="SGST"],
+        .public-invoice-shell .item-table td[data-label="IGST"] { display: none; }
+        .public-invoice-shell .item-table td[data-label="Qty"],
+        .public-invoice-shell .item-table td[data-label="Rate"],
+        .public-invoice-shell .item-table td[data-label="Amount"] { display: grid; }
         .public-invoice-shell .terms-card { min-height: 0; }
         .public-invoice-shell .payment-grid div { padding: 8px; }
       }

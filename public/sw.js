@@ -1,0 +1,88 @@
+const CACHE_VERSION = "bezgrow-pwa-v1"
+const STATIC_CACHE = `${CACHE_VERSION}:static`
+const SHELL_CACHE = `${CACHE_VERSION}:shell`
+
+const SHELL_URLS = [
+  "/",
+  "/login",
+  "/signup",
+  "/manifest.json",
+  "/icons/icon-192.png",
+  "/icons/icon-512.png",
+  "/icons/maskable-512.png",
+  "/icons/apple-touch-icon.png"
+]
+
+self.addEventListener("install", (event) => {
+  event.waitUntil(
+    caches.open(SHELL_CACHE).then((cache) => cache.addAll(SHELL_URLS)).then(() => self.skipWaiting())
+  )
+})
+
+self.addEventListener("activate", (event) => {
+  event.waitUntil(
+    caches.keys()
+      .then((keys) => Promise.all(keys.filter((key) => !key.startsWith(CACHE_VERSION)).map((key) => caches.delete(key))))
+      .then(() => self.clients.claim())
+  )
+})
+
+function isStaticAsset(requestUrl) {
+  return (
+    requestUrl.pathname.startsWith("/_next/static/") ||
+    requestUrl.pathname.startsWith("/icons/") ||
+    requestUrl.pathname === "/manifest.json" ||
+    requestUrl.pathname === "/robots.txt" ||
+    requestUrl.pathname === "/sitemap.xml"
+  )
+}
+
+function isPrivateNavigation(requestUrl) {
+  return (
+    requestUrl.pathname.startsWith("/dashboard") ||
+    requestUrl.pathname.startsWith("/admin") ||
+    requestUrl.pathname.startsWith("/profile") ||
+    requestUrl.pathname.startsWith("/create-business") ||
+    requestUrl.pathname.startsWith("/public/invoices")
+  )
+}
+
+self.addEventListener("fetch", (event) => {
+  const { request } = event
+  if (request.method !== "GET") return
+
+  const requestUrl = new URL(request.url)
+  if (requestUrl.origin !== self.location.origin) return
+
+  if (isStaticAsset(requestUrl)) {
+    event.respondWith(
+      caches.open(STATIC_CACHE).then(async (cache) => {
+        const cached = await cache.match(request)
+        if (cached) return cached
+
+        const response = await fetch(request)
+        if (response.ok) cache.put(request, response.clone())
+        return response
+      })
+    )
+    return
+  }
+
+  if (request.mode === "navigate") {
+    event.respondWith(
+      fetch(request)
+        .then((response) => {
+          if (!isPrivateNavigation(requestUrl) && response.ok) {
+            caches.open(SHELL_CACHE).then((cache) => cache.put(request, response.clone()))
+          }
+          return response
+        })
+        .catch(async () => {
+          if (isPrivateNavigation(requestUrl)) {
+            return caches.match("/login") || Response.error()
+          }
+          return caches.match(request) || caches.match("/") || Response.error()
+        })
+    )
+  }
+})

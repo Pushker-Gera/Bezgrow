@@ -1,7 +1,8 @@
 import "./globals.css"
-import type { Metadata } from "next"
+import type { Metadata, Viewport } from "next"
 import ChunkReloadGuard from "@/components/chunk-reload-guard"
 import EntryCalculatorAnimation from "@/components/EntryCalculatorAnimation"
+import PwaRegistration from "@/components/PwaRegistration"
 
 const siteUrl = "https://bezgrow.com"
 
@@ -10,8 +11,27 @@ export const metadata: Metadata = {
   title: "Bezgrow",
   description: "Cloud Inventory Management, Billing, POS and ERP Software",
   applicationName: "Bezgrow",
+  manifest: "/manifest.json",
   alternates: {
     canonical: "/",
+  },
+  icons: {
+    icon: [
+      { url: "/icons/icon-192.png", sizes: "192x192", type: "image/png" },
+      { url: "/icons/icon-512.png", sizes: "512x512", type: "image/png" },
+    ],
+    apple: [
+      { url: "/icons/apple-touch-icon.png", sizes: "180x180", type: "image/png" },
+    ],
+  },
+  appleWebApp: {
+    capable: true,
+    title: "Bezgrow",
+    statusBarStyle: "black-translucent",
+    startupImage: [],
+  },
+  formatDetection: {
+    telephone: false,
   },
   openGraph: {
     type: "website",
@@ -29,6 +49,26 @@ export const metadata: Metadata = {
     index: true,
     follow: true,
   },
+  other: {
+    "mobile-web-app-capable": "yes",
+    "apple-mobile-web-app-capable": "yes",
+    "apple-mobile-web-app-title": "Bezgrow",
+    "apple-mobile-web-app-status-bar-style": "black-translucent",
+    "msapplication-TileColor": "#020617",
+    "msapplication-tap-highlight": "no",
+  },
+}
+
+export const viewport: Viewport = {
+  width: "device-width",
+  initialScale: 1,
+  maximumScale: 5,
+  viewportFit: "cover",
+  themeColor: [
+    { media: "(prefers-color-scheme: light)", color: "#06b6d4" },
+    { media: "(prefers-color-scheme: dark)", color: "#020617" },
+  ],
+  colorScheme: "dark light",
 }
 
 const structuredData = [
@@ -75,6 +115,7 @@ export default function RootLayout({
       <body>
 
         <ChunkReloadGuard />
+        <PwaRegistration />
         <EntryCalculatorAnimation />
 
         {children}

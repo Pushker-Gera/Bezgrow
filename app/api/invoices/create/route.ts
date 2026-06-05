@@ -37,6 +37,52 @@ function invoiceNumber() {
   return `INV-${new Date().getFullYear()}-${Date.now()}`
 }
 
+type InvoiceInsertPayload = Record<string, string | number | null>
+
+function missingColumnFromError(error: { code?: string; message?: string } | null) {
+  if (!error?.message) return null
+  const message = error.message
+  const quotedColumnMatch =
+    message.match(/Could not find the '([^']+)' column/i) ||
+    message.match(/column "([^"]+)" of relation/i) ||
+    message.match(/column "([^"]+)" does not exist/i)
+
+  return quotedColumnMatch?.[1] || null
+}
+
+async function insertInvoiceWithSchemaFallback(payload: InvoiceInsertPayload) {
+  const retryPayload = { ...payload }
+  const removedColumns: string[] = []
+
+  for (let attempt = 0; attempt < 14; attempt += 1) {
+    const result = await adminSupabase
+      .from("invoices")
+      .insert(retryPayload)
+      .select("id,invoice_number")
+      .single()
+
+    if (!result.error || !missingColumnFromError(result.error)) {
+      return { ...result, removedColumns }
+    }
+
+    const missingColumn = missingColumnFromError(result.error)
+    if (!missingColumn || !(missingColumn in retryPayload)) {
+      return { ...result, removedColumns }
+    }
+
+    delete retryPayload[missingColumn]
+    removedColumns.push(missingColumn)
+  }
+
+  const result = await adminSupabase
+    .from("invoices")
+    .insert(retryPayload)
+    .select("id,invoice_number")
+    .single()
+
+  return { ...result, removedColumns }
+}
+
 export async function POST(request: Request) {
   const workspace = await requireWorkspace(request)
   if (!workspace.ok) return fail(workspace.error, workspace.status)
@@ -76,30 +122,44 @@ export async function POST(request: Request) {
       }
     }
 
-    const { data: invoice, error: invoiceError } = await adminSupabase
-      .from("invoices")
-      .insert({
-        organization_id: workspace.context.organizationId,
-        invoice_number: invoiceNumber(),
-        customer_id: input.customer_id,
-        customer_name: customer.name || "Customer",
-        subtotal: input.subtotal,
-        tax_amount: input.tax_amount,
-        total_amount: input.total_amount,
-        grand_total: input.total_amount,
-        payment_status: input.payment_status,
-        payment_method: input.payment_method,
-        due_date: input.due_date || null,
-        notes: input.notes || null,
-        invoice_type: input.invoice_type,
-        shipping_code: input.shipping_code || null,
-        courier_name: input.courier_name || null,
-        tracking_number: input.tracking_number || null,
-      })
-      .select("id,invoice_number")
-      .single()
+    const { data: invoice, error: invoiceError, removedColumns } = await insertInvoiceWithSchemaFallback({
+      organization_id: workspace.context.organizationId,
+      invoice_number: invoiceNumber(),
+      customer_id: input.customer_id,
+      customer_name: customer.name || "Customer",
+      subtotal: input.subtotal,
+      tax_amount: input.tax_amount,
+      total_amount: input.total_amount,
+      grand_total: input.total_amount,
+      total: input.total_amount,
+      payment_status: input.payment_status,
+      status: input.payment_status,
+      payment_method: input.payment_method,
+      due_date: input.due_date || null,
+      date: new Date().toISOString().slice(0, 10),
+      notes: input.notes || null,
+      invoice_type: input.invoice_type,
+      shipping_code: input.shipping_code || null,
+      courier_name: input.courier_name || null,
+      tracking_number: input.tracking_number || null,
+    })
 
-    if (invoiceError || !invoice) return fail("Invoice could not be created.", 400)
+    if (removedColumns.length > 0) {
+      console.warn("Invoice created with legacy schema fallback", {
+        removedColumns,
+        organizationId: workspace.context.organizationId,
+      })
+    }
+
+    if (invoiceError || !invoice) {
+      console.error("Invoice create insert failed", {
+        code: invoiceError?.code,
+        message: invoiceError?.message,
+        details: invoiceError?.details,
+        organizationId: workspace.context.organizationId,
+      })
+      return fail(invoiceError?.message ? `Invoice could not be created: ${invoiceError.message}` : "Invoice could not be created.", 400)
+    }
 
     const invoiceItems = input.items.map((item) => ({
       organization_id: workspace.context.organizationId,
