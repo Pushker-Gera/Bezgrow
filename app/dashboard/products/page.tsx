@@ -1,7 +1,7 @@
 "use client"
 
 import Link from "next/link"
-import { useEffect, useMemo, useState } from "react"
+import { useEffect, useMemo, useRef, useState } from "react"
 import { useDebounce } from "use-debounce"
 import { getOrganizationFeatures } from "@/lib/get-organization-features"
 import { getOrganizationId } from "@/lib/getOrganization"
@@ -118,20 +118,6 @@ const emptyForm: ProductForm = {
     purchaseDate: "",
 }
 
-const emptyAnalytics: Analytics = {
-    totalProducts: 0,
-    lowStockCount: 0,
-    outOfStockCount: 0,
-    expiredCount: 0,
-    expiringSoonCount: 0,
-    totalInventoryValue: 0,
-    totalCostValue: 0,
-    totalPotentialProfit: 0,
-    categoriesCount: 0,
-    suppliersCount: 0,
-    warehousesCount: 0,
-}
-
 function numberValue(value: string) {
     return value.trim() === "" ? null : Number(value)
 }
@@ -148,6 +134,60 @@ function formatDate(value: string | null) {
 function csvCell(value: string | number | null) {
     const text = String(value ?? "")
     return `"${text.replaceAll("\"", "\"\"")}"`
+}
+
+const productCacheKey = "bezgrow:products:last"
+
+function readCachedProducts() {
+    if (typeof window === "undefined") return []
+    try {
+        const cached = JSON.parse(sessionStorage.getItem(productCacheKey) || "[]") as ProductRow[]
+        return Array.isArray(cached) ? cached : []
+    } catch {
+        sessionStorage.removeItem(productCacheKey)
+        return []
+    }
+}
+
+function writeCachedProducts(rows: ProductRow[]) {
+    if (typeof window === "undefined") return
+    sessionStorage.setItem(productCacheKey, JSON.stringify(rows.slice(0, 50)))
+}
+
+function buildAnalytics(rows: ProductRow[]): Analytics {
+    const categories = new Set(rows.map((row) => row.category).filter(Boolean))
+    const suppliers = new Set(rows.map((row) => row.supplier).filter(Boolean))
+    const warehouses = new Set(rows.map((row) => row.warehouse).filter(Boolean))
+    const lowStockRows = rows.filter(
+        (row) => Number(row.stock || 0) <= Number(row.min_stock ?? 5)
+    )
+    const outOfStockRows = rows.filter((row) => Number(row.stock || 0) <= 0)
+    const expiredRows = rows.filter(isExpired)
+    const expiringSoonRows = rows.filter(isExpiringSoon)
+    const totalInventoryValue = rows.reduce((sum, row) => {
+        const stock = Number(row.stock || 0)
+        const sale = Number(row.sale_rate || row.price || 0)
+        return sum + stock * sale
+    }, 0)
+    const totalCostValue = rows.reduce((sum, row) => {
+        const stock = Number(row.stock || 0)
+        const purchase = Number(row.purchase_rate || 0)
+        return sum + stock * purchase
+    }, 0)
+
+    return {
+        totalProducts: rows.length,
+        lowStockCount: lowStockRows.length,
+        outOfStockCount: outOfStockRows.length,
+        expiredCount: expiredRows.length,
+        expiringSoonCount: expiringSoonRows.length,
+        totalInventoryValue,
+        totalCostValue,
+        totalPotentialProfit: totalInventoryValue - totalCostValue,
+        categoriesCount: categories.size,
+        suppliersCount: suppliers.size,
+        warehousesCount: warehouses.size,
+    }
 }
 
 function formFromProduct(product: ProductRow): ProductForm {
@@ -191,11 +231,10 @@ function isExpiringSoon(product: ProductRow) {
 export default function ProductsPage() {
     const [organizationId, setOrganizationId] = useState<string | null>(null)
     const [features, setFeatures] = useState<string[]>([])
-    const [products, setProducts] = useState<ProductRow[]>([])
-    const [analytics, setAnalytics] = useState<Analytics>(emptyAnalytics)
+    const [products, setProducts] = useState<ProductRow[]>(() => readCachedProducts())
+    const [analytics, setAnalytics] = useState<Analytics>(() => buildAnalytics(readCachedProducts()))
     const [stockMovements, setStockMovements] = useState<StockMovement[]>([])
     const [movementLoading, setMovementLoading] = useState(false)
-    const [loading, setLoading] = useState(true)
     const [saving, setSaving] = useState(false)
     const [notice, setNotice] = useState("")
     const [search, setSearch] = useState("")
@@ -212,6 +251,7 @@ export default function ProductsPage() {
     const [viewProduct, setViewProduct] = useState<ProductRow | null>(null)
     const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null)
     const [form, setForm] = useState<ProductForm>(emptyForm)
+    const skipNextProductsRefresh = useRef(false)
 
     const itemsPerPage = 50
     const hasExpiryTracking = features.includes("expiry_tracking")
@@ -224,7 +264,6 @@ export default function ProductsPage() {
 
     async function initializeProducts() {
         try {
-            setLoading(true)
             const orgId = await getOrganizationId()
 
             if (!orgId) {
@@ -233,26 +272,23 @@ export default function ProductsPage() {
                 return
             }
 
+            skipNextProductsRefresh.current = true
             setOrganizationId(orgId)
-            const orgFeatures = await getOrganizationFeatures(orgId)
-            setFeatures(Array.from(new Set(orgFeatures)))
-            await Promise.all([fetchProducts(orgId), fetchAnalytics(orgId)])
+            void getOrganizationFeatures(orgId).then((orgFeatures) => {
+                setFeatures(Array.from(new Set(orgFeatures)))
+            })
+            await fetchProducts(orgId)
         } catch (error) {
             setNotice(error instanceof Error ? error.message : "Products failed to load.")
-        } finally {
-            setLoading(false)
         }
     }
 
-    async function fetchProducts(orgId = organizationId) {
+    async function fetchProducts(orgId = organizationId, forceFresh = false) {
         if (!orgId) {
             setProducts([])
             return
         }
 
-        const {
-            data: { session },
-        } = await supabase.auth.getSession()
         const params = new URLSearchParams({
             page: String(currentPage),
             limit: String(itemsPerPage),
@@ -261,10 +297,11 @@ export default function ProductsPage() {
         })
 
         if (debouncedSearch.trim()) params.set("search", debouncedSearch.trim())
+        if (forceFresh) params.set("_t", String(Date.now()))
 
         const response = await fetch(`/api/products/list?${params.toString()}`, {
-            headers: session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : undefined,
-            cache: "no-store",
+            credentials: "include",
+            cache: forceFresh ? "no-store" : "default",
         })
         const payload = (await response.json()) as ProductsListResponse
 
@@ -273,65 +310,15 @@ export default function ProductsPage() {
             return
         }
 
-        setProducts(payload.data || [])
-    }
-
-    async function fetchAnalytics(orgId = organizationId) {
-        if (!orgId) return
-
-        const {
-            data: { session },
-        } = await supabase.auth.getSession()
-        const response = await fetch("/api/products/list?limit=100&sort=created_at&direction=desc", {
-            headers: session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : undefined,
-            cache: "no-store",
-        })
-        const payload = (await response.json()) as ProductsListResponse
-
-        if (!response.ok) {
-            setNotice(payload.error || "Unable to load product analytics.")
-            return
-        }
-
         const rows = payload.data || []
-        const categories = new Set(rows.map((row) => row.category).filter(Boolean))
-        const suppliers = new Set(rows.map((row) => row.supplier).filter(Boolean))
-        const warehouses = new Set(rows.map((row) => row.warehouse).filter(Boolean))
-        const lowStockRows = rows.filter(
-            (row) => Number(row.stock || 0) <= Number(row.min_stock ?? 5)
-        )
-        const outOfStockRows = rows.filter((row) => Number(row.stock || 0) <= 0)
-        const expiredRows = rows.filter(isExpired)
-        const expiringSoonRows = rows.filter(isExpiringSoon)
-        const totalInventoryValue = rows.reduce((sum, row) => {
-            const stock = Number(row.stock || 0)
-            const sale = Number(row.sale_rate || row.price || 0)
-            return sum + stock * sale
-        }, 0)
-        const totalCostValue = rows.reduce((sum, row) => {
-            const stock = Number(row.stock || 0)
-            const purchase = Number(row.purchase_rate || 0)
-            return sum + stock * purchase
-        }, 0)
-
-        setAnalytics({
-            totalProducts: rows.length,
-            lowStockCount: lowStockRows.length,
-            outOfStockCount: outOfStockRows.length,
-            expiredCount: expiredRows.length,
-            expiringSoonCount: expiringSoonRows.length,
-            totalInventoryValue,
-            totalCostValue,
-            totalPotentialProfit: totalInventoryValue - totalCostValue,
-            categoriesCount: categories.size,
-            suppliersCount: suppliers.size,
-            warehousesCount: warehouses.size,
-        })
+        setAnalytics(buildAnalytics(rows))
+        writeCachedProducts(rows)
+        setProducts(rows)
     }
 
     async function refreshData() {
         if (!organizationId) return
-        await Promise.all([fetchProducts(organizationId), fetchAnalytics(organizationId)])
+        await fetchProducts(organizationId, true)
     }
 
     async function fetchStockMovements(productId: string) {
@@ -457,11 +444,11 @@ export default function ProductsPage() {
 
         if (!response.ok || !payload.success) {
             setNotice(payload.error || "Product could not be archived.")
-            await fetchProducts()
+            await fetchProducts(undefined, true)
             return
         }
 
-        await fetchAnalytics()
+        await fetchProducts(undefined, true)
         setNotice("Product moved to trash.")
     }
 
@@ -538,8 +525,11 @@ export default function ProductsPage() {
 
     useEffect(() => {
         if (!organizationId) return
+        if (skipNextProductsRefresh.current) {
+            skipNextProductsRefresh.current = false
+            return
+        }
         fetchProducts()
-        fetchAnalytics()
         // Data refresh follows debounced search and pagination state.
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [debouncedSearch, currentPage, organizationId])
@@ -664,26 +654,6 @@ export default function ProductsPage() {
         hasBatchTracking ? "Batch tracking" : "Batch-ready schema",
         hasShippingLabels ? "Shipping label workflow" : "Shipping-ready workflow",
     ]
-
-    if (loading) {
-        return (
-            <div className="inventory-grid-bg flex min-h-dvh items-center justify-center text-white">
-                <div className="relative overflow-hidden rounded-lg border border-white/10 bg-black/70 p-8 shadow-2xl inventory-sheen">
-                    <div className="flex items-center gap-4">
-                        <div className="h-9 w-9 rounded-full border-2 border-sky-400/30 border-t-sky-300 animate-spin" />
-                        <div>
-                            <p className="text-sm uppercase tracking-[0.24em] text-sky-200">
-                                ERP Product Master
-                            </p>
-                            <p className="mt-1 text-neutral-400">
-                                Loading products, pricing, and inventory controls
-                            </p>
-                        </div>
-                    </div>
-                </div>
-            </div>
-        )
-    }
 
     return (
         <div className="inventory-grid-bg min-h-full overflow-x-hidden text-white">

@@ -48,7 +48,7 @@ export default async function PublicInvoicePage({ params }: PageProps) {
     origin: process.env.NEXT_PUBLIC_SITE_URL || "https://bezgrow.com",
   })
 
-  return <PrintEngine invoice={printInvoice} />
+  return <PrintEngine invoice={printInvoice} publicMode />
 }
 
 function PublicInvoiceError({ message }: { message: string }) {

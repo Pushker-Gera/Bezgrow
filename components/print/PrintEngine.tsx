@@ -20,9 +20,11 @@ const formatLabels: Record<PrintFormat, string> = {
 export function PrintEngine({
   invoice,
   initialSettings = defaultPrintSettings,
+  publicMode = false,
 }: {
   invoice: PrintInvoice
   initialSettings?: PrintSettings
+  publicMode?: boolean
 }) {
   const [settings, setSettings] = useState<PrintSettings>(initialSettings)
   const [format, setFormat] = useState<PrintFormat>(initialSettings.defaultFormat)
@@ -124,8 +126,8 @@ export function PrintEngine({
   return (
     <>
       <PrintEngineStyles />
-      <div className="enterprise-print-shell">
-        <aside className="print-control-panel no-print">
+      <div className={`enterprise-print-shell ${publicMode ? "public-invoice-shell" : ""}`}>
+        {!publicMode && <aside className="print-control-panel no-print">
           <div>
             <p className="panel-eyebrow">Enterprise Print Engine</p>
             <h1>{invoice.enterprise.name}</h1>
@@ -218,18 +220,18 @@ export function PrintEngine({
               ))}
             </div>
           </section>
-        </aside>
+        </aside>}
 
         <main className={`print-preview-stage print-format-${format} font-${settings.fontSize} margin-${settings.margins} ${settings.blackAndWhite ? "bw-mode" : ""}`}>
-          <div className="mobile-toolbar no-print">
+          {!publicMode && <div className="mobile-toolbar no-print">
             <select value={format} onChange={(event) => setFormat(event.target.value as PrintFormat)}>
               {(Object.keys(formatLabels) as PrintFormat[]).map((key) => <option key={key} value={key}>{formatLabels[key]}</option>)}
             </select>
             <button onClick={printInvoice}>Print</button>
             <button onClick={whatsappInvoice}>WhatsApp</button>
-          </div>
+          </div>}
           <div className="preview-scroll">
-            <div className="print-document" style={{ transform: `scale(${zoom})` }}>
+            <div className="print-document" style={{ transform: publicMode ? undefined : `scale(${zoom})` }}>
               {template}
             </div>
           </div>
@@ -266,6 +268,11 @@ function PrintEngineStyles() {
       .print-document { transform-origin: top center; transition: transform .18s ease; }
       .invoice-paper, .invoice-paper * { box-sizing: border-box; }
       .invoice-paper { position: relative; overflow: visible; background: #fff; color: #111827; font-family: Arial, Helvetica, sans-serif; box-shadow: 0 24px 90px rgba(0,0,0,.35); print-color-adjust: exact; -webkit-print-color-adjust: exact; }
+      .public-invoice-shell { display: block; min-height: 100dvh; background: #f8fafc; color: #111827; }
+      .public-invoice-shell .print-preview-stage { min-height: 100dvh; background: #f8fafc; }
+      .public-invoice-shell .preview-scroll { height: auto; min-height: 100dvh; overflow: visible; padding: clamp(10px, 3vw, 28px); background: #f8fafc; align-items: flex-start; }
+      .public-invoice-shell .print-document { width: min(100%, 194mm); transform: none !important; transition: none; }
+      .public-invoice-shell .invoice-paper { width: 100%; max-width: 194mm; min-height: auto; margin: 0 auto; box-shadow: 0 14px 40px rgba(15,23,42,.12); }
       .print-a4 { width: 194mm; min-height: 281mm; padding: 8mm; display: flex; flex-direction: column; }
       .print-half-compact { page: half-compact; width: 158mm; min-height: 281mm; padding: 7mm; margin: 0 auto; display: flex; flex-direction: column; }
       .print-half-top { page: half-top; width: 202mm; min-height: 140mm; padding: 0; }
@@ -393,6 +400,32 @@ function PrintEngineStyles() {
         .print-control-panel { display: none; }
         .mobile-toolbar { display: grid; grid-template-columns: 1fr auto auto; }
         .preview-scroll { height: calc(100dvh - 66px); padding: 18px; justify-content: flex-start; }
+        .public-invoice-shell .preview-scroll { height: auto; min-height: 100dvh; padding: 10px; justify-content: center; background: #f8fafc; }
+        .public-invoice-shell .print-document { width: 100%; }
+        .public-invoice-shell .print-a4 { width: 100% !important; min-height: auto; padding: 14px !important; }
+        .public-invoice-shell .print-header-block,
+        .public-invoice-shell .customer-grid,
+        .public-invoice-shell .total-grid,
+        .public-invoice-shell .payment-grid { grid-template-columns: 1fr !important; }
+        .public-invoice-shell .brand-block h1 { font-size: 24px; }
+        .public-invoice-shell .invoice-meta-card h2 { font-size: 18px; }
+        .public-invoice-shell .item-table { table-layout: auto; }
+        .public-invoice-shell .item-table th,
+        .public-invoice-shell .item-table td { font-size: 9px; padding: 5px 3px; }
+        .public-invoice-shell .item-table th:nth-child(4),
+        .public-invoice-shell .item-table td:nth-child(4),
+        .public-invoice-shell .item-table th:nth-child(5),
+        .public-invoice-shell .item-table td:nth-child(5),
+        .public-invoice-shell .item-table th:nth-child(6),
+        .public-invoice-shell .item-table td:nth-child(6),
+        .public-invoice-shell .item-table th:nth-child(8),
+        .public-invoice-shell .item-table td:nth-child(8),
+        .public-invoice-shell .item-table th:nth-child(9),
+        .public-invoice-shell .item-table td:nth-child(9),
+        .public-invoice-shell .item-table th:nth-child(10),
+        .public-invoice-shell .item-table td:nth-child(10) { display: none; }
+        .public-invoice-shell .terms-card { min-height: 0; }
+        .public-invoice-shell .payment-grid div { padding: 8px; }
       }
       @media print {
         @page { size: A4 portrait; margin: 8mm; }

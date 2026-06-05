@@ -79,7 +79,6 @@ export default function AdminLayout({ children }: { children: ReactNode }) {
                             <Link
                                 key={href}
                                 href={href}
-                                prefetch={false}
                                 className={`flex min-h-12 items-center rounded-2xl border px-4 text-sm font-bold transition-all duration-300 ${active
                                     ? "border-cyan-400/30 bg-cyan-500/10 text-cyan-100 shadow-[0_0_30px_rgba(34,211,238,0.12)]"
                                     : "border-transparent text-neutral-400 hover:border-white/10 hover:bg-white/[0.04] hover:text-white"
@@ -125,7 +124,6 @@ export default function AdminLayout({ children }: { children: ReactNode }) {
                                     <Link
                                         key={href}
                                         href={href}
-                                        prefetch={false}
                                         onClick={() => setMobileNavOpen(false)}
                                         className={`flex min-h-11 min-w-[132px] items-center justify-center rounded-xl border px-3 text-center text-xs font-bold sm:min-w-0 ${active ? "border-cyan-300/40 bg-cyan-300/10 text-cyan-100" : "border-white/10 bg-white/[0.03] text-white/65"}`}
                                     >

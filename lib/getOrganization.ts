@@ -1,5 +1,3 @@
-import { supabase } from "./supabase"
-
 type WorkspaceBootstrapResponse = {
     success: boolean
     organization?: {
@@ -20,18 +18,8 @@ export async function getOrganizationId() {
         }
     }
 
-    const {
-        data: { session },
-    } = await supabase.auth.getSession()
-
-    const headers: HeadersInit = session?.access_token
-        ? { Authorization: `Bearer ${session.access_token}` }
-        : {}
-
     try {
         const response = await fetch("/api/workspace/bootstrap", {
-            headers,
-            cache: "no-store",
             credentials: "include",
         })
 
