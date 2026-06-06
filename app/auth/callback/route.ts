@@ -18,7 +18,7 @@ function getSafeNextPath(next: string | null) {
 async function getProfileRedirect(userId: string, email: string | null | undefined, requestedNext: string) {
   const { data: profile, error: profileError } = await adminSupabase
     .from("profiles")
-    .select("role, approved, is_suspended")
+    .select("role, approved, business_created, is_suspended")
     .eq("id", userId)
     .maybeSingle()
 
@@ -40,6 +40,24 @@ async function getProfileRedirect(userId: string, email: string | null | undefin
   } else if (!profile.approved) {
     destination = "/pending-approval"
     reason = "pending_approval"
+  } else if (!profile.business_created) {
+    const [{ data: membership }, { data: ownedOrganization }] = await Promise.all([
+      adminSupabase
+        .from("organization_members")
+        .select("organization_id")
+        .eq("user_id", userId)
+        .limit(1)
+        .maybeSingle(),
+      adminSupabase
+        .from("organizations")
+        .select("id")
+        .eq("owner_id", userId)
+        .limit(1)
+        .maybeSingle(),
+    ])
+    const hasBusiness = Boolean(membership?.organization_id || ownedOrganization?.id)
+    destination = hasBusiness ? (requestedNext === "/admin" ? "/dashboard" : requestedNext) : "/create-business"
+    reason = hasBusiness ? "approved_user_with_workspace" : "approved_user_needs_workspace"
   } else {
     destination = requestedNext === "/admin" ? "/dashboard" : requestedNext
   }
@@ -49,6 +67,7 @@ async function getProfileRedirect(userId: string, email: string | null | undefin
     role: profile?.role || null,
     adminEmailMatch: isConfiguredAdmin(email, null),
     approved: profile?.approved ?? null,
+    businessCreated: profile?.business_created ?? null,
     destination,
     reason,
   })

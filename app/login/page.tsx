@@ -11,7 +11,9 @@ type BootstrapResponse = {
         role?: string | null
         approved?: boolean
         is_suspended?: boolean
+        business_created?: boolean
     }
+    organization?: { id?: string | null } | null
     permissions?: {
         admin?: boolean
     }
@@ -84,11 +86,12 @@ export default function LoginPage() {
                         window.location.replace("/admin")
                         return
                     }
-                    if (payload.profile?.approved) {
-                        window.location.replace("/dashboard")
+                    if (!payload.profile?.approved) {
+                        window.location.replace("/pending-approval")
                         return
                     }
-                    window.location.replace("/pending-approval")
+                    const hasBusiness = Boolean(payload.profile.business_created || payload.organization?.id)
+                    window.location.replace(hasBusiness ? "/dashboard" : "/create-business")
                     return
                 }
             }

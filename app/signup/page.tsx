@@ -72,6 +72,7 @@ export default function SignupPage() {
             setStatusMessage("Application submitted successfully. Please wait for admin approval.")
 
             setTimeout(() => {
+                window.sessionStorage.setItem("bezgrow_pending_signup", "1")
                 router.push("/pending-approval")
             }, 1500)
 

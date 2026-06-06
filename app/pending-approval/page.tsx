@@ -1,38 +1,72 @@
 "use client"
 
-import { useEffect, useState } from "react"
+import { useEffect, useRef, useState } from "react"
 import { useRouter } from "next/navigation"
 import { supabase } from "@/lib/supabase"
 
 export default function PendingApprovalPage() {
   const router = useRouter()
   const [approved, setApproved] = useState(false)
+  const redirectingRef = useRef(false)
 
   useEffect(() => {
+    let cancelled = false
+    let redirectTimer: ReturnType<typeof setTimeout> | undefined
+
     async function checkApproval() {
+      if (redirectingRef.current) return
+
       const { data: userData } = await supabase.auth.getUser()
       const user = userData.user
 
       if (!user) {
+        const hasPendingSubmission = window.sessionStorage.getItem("bezgrow_pending_signup") === "1"
+        if (!hasPendingSubmission) {
+          router.replace("/login")
+        }
+        return
+      }
+
+      const {
+        data: { session },
+      } = await supabase.auth.getSession()
+
+      const response = await fetch("/api/workspace/bootstrap", {
+        headers: session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : undefined,
+        cache: "no-store",
+      })
+
+      if (response.status === 401) {
         router.replace("/login")
         return
       }
 
-      const { data, error } = await supabase
-        .from("pending_users")
-        .select("*")
-        .eq("email", user.email)
-        .maybeSingle()
+      const payload = (await response.json().catch(() => null)) as {
+        success?: boolean
+        profile?: {
+          approved?: boolean
+          business_created?: boolean
+          is_suspended?: boolean
+        }
+        organization?: { id?: string | null } | null
+      } | null
 
-      if (error) {
-        console.error(error)
+      if (!payload?.success) return
+
+      if (payload.profile?.is_suspended) {
+        router.replace("/login?error=account_suspended")
         return
       }
 
-      if (!data || data.status === "approved") {
+      if (payload.profile?.approved) {
+        redirectingRef.current = true
+        window.sessionStorage.removeItem("bezgrow_pending_signup")
         setApproved(true)
-        setTimeout(() => {
-          router.push("/create-business")
+
+        redirectTimer = setTimeout(() => {
+          if (cancelled) return
+          const hasBusiness = Boolean(payload.profile?.business_created || payload.organization?.id)
+          router.replace(hasBusiness ? "/dashboard" : "/create-business")
         }, 1400)
       }
     }
@@ -43,7 +77,11 @@ export default function PendingApprovalPage() {
 
     void checkApproval()
 
-    return () => clearInterval(interval)
+    return () => {
+      cancelled = true
+      clearInterval(interval)
+      if (redirectTimer) clearTimeout(redirectTimer)
+    }
   }, [router])
 
   if (approved) {
