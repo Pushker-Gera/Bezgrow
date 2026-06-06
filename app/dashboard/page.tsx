@@ -2,8 +2,6 @@
 
 import Link from "next/link"
 import { useEffect, useMemo, useState } from "react"
-import { getOrganizationId } from "@/lib/getOrganization"
-import { supabase } from "@/lib/supabase"
 
 type AnyRow = Record<string, unknown>
 
@@ -24,23 +22,67 @@ type DashboardState = {
     organizationName: string
     products: ProductRow[]
     invoices: AnyRow[]
-    orders: AnyRow[]
-    customers: AnyRow[]
-    warehouses: AnyRow[]
     movements: AnyRow[]
+    lowStockProducts: ProductRow[]
+    counts: {
+        products: number
+        customers: number
+        invoices: number
+        warehouses: number
+        orders: number
+    }
+    summaryMetrics: {
+        totalRevenue: number
+        todayRevenue: number
+        paidRevenue: number
+        pendingInvoices: number
+        lowStockCount: number
+        outOfStockCount: number
+        inventoryValue: number
+        costValue: number
+        potentialProfit: number
+        pendingOrders: number
+        fulfillmentRate: number
+        inventoryHealth: number
+        collectionRate: number
+        erpHealth: number
+        weeklyRevenue: Array<{ label: string; value: number }>
+    }
 }
+
+const weekLabels = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
 
 const emptyDashboard: DashboardState = {
     organizationName: "Business",
     products: [],
     invoices: [],
-    orders: [],
-    customers: [],
-    warehouses: [],
     movements: [],
+    lowStockProducts: [],
+    counts: {
+        products: 0,
+        customers: 0,
+        invoices: 0,
+        warehouses: 0,
+        orders: 0,
+    },
+    summaryMetrics: {
+        totalRevenue: 0,
+        todayRevenue: 0,
+        paidRevenue: 0,
+        pendingInvoices: 0,
+        lowStockCount: 0,
+        outOfStockCount: 0,
+        inventoryValue: 0,
+        costValue: 0,
+        potentialProfit: 0,
+        pendingOrders: 0,
+        fulfillmentRate: 0,
+        inventoryHealth: 100,
+        collectionRate: 0,
+        erpHealth: 0,
+        weeklyRevenue: weekLabels.map((label) => ({ label, value: 0 })),
+    },
 }
-
-const weekLabels = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
 
 function numberFrom(row: AnyRow, fields: string[]) {
     for (const field of fields) {
@@ -60,10 +102,6 @@ function stringFrom(row: AnyRow, fields: string[]) {
     }
 
     return ""
-}
-
-function dateKey(date = new Date()) {
-    return date.toISOString().split("T")[0]
 }
 
 function money(value: number) {
@@ -87,107 +125,34 @@ export default function Dashboard() {
     async function loadDashboard() {
         try {
             setLoading(true)
-            const orgId = await getOrganizationId()
+            const response = await fetch("/api/dashboard/summary", {
+                credentials: "include",
+                cache: "no-store",
+            })
+            const payload = await response.json()
 
-            if (!orgId) {
-                setNotice("No organization is connected to this account.")
+            if (!response.ok) {
+                setNotice(payload.error || "Dashboard failed to load.")
                 return
             }
 
-            const organizationQuery = supabase
-                .from("organizations")
-                .select("name")
-                .eq("id", orgId)
-                .maybeSingle()
-
-            const productsQuery = supabase
-                .from("products")
-                .select(`
-                    id,
-                    name,
-                    sku,
-                    category,
-                    stock,
-                    min_stock,
-                    sale_rate,
-                    purchase_rate,
-                    price,
-                    created_at
-                `)
-                .eq("organization_id", orgId)
-                .is("deleted_at", null)
-                .order("created_at", { ascending: false })
-                .limit(500)
-
-            const invoicesQuery = supabase
-                .from("invoices")
-                .select("*")
-                .eq("organization_id", orgId)
-                .order("created_at", { ascending: false })
-                .limit(500)
-
-            const ordersQuery = supabase
-                .from("orders")
-                .select("*")
-                .eq("organization_id", orgId)
-                .order("created_at", { ascending: false })
-                .limit(500)
-
-            const customersQuery = supabase
-                .from("customers")
-                .select("*")
-                .eq("organization_id", orgId)
-                .limit(500)
-
-            const warehousesQuery = supabase
-                .from("warehouses")
-                .select("*")
-                .eq("organization_id", orgId)
-                .limit(200)
-
-            const movementsQuery = supabase
-                .from("stock_movements")
-                .select("*")
-                .eq("organization_id", orgId)
-                .order("created_at", { ascending: false })
-                .limit(12)
-
-            const [
-                organizationResult,
-                productsResult,
-                invoicesResult,
-                ordersResult,
-                customersResult,
-                warehousesResult,
-                movementsResult,
-            ] = await Promise.all([
-                organizationQuery,
-                productsQuery,
-                invoicesQuery,
-                ordersQuery,
-                customersQuery,
-                warehousesQuery,
-                movementsQuery,
-            ])
-
-            const firstError =
-                productsResult.error ||
-                invoicesResult.error ||
-                ordersResult.error ||
-                customersResult.error
-
-            if (firstError) {
-                setNotice(firstError.message)
-            }
-
             setDashboard({
-                organizationName: organizationResult.data?.name || "Business",
-                products: (productsResult.data || []) as unknown as ProductRow[],
-                invoices: (invoicesResult.data || []) as AnyRow[],
-                orders: (ordersResult.data || []) as AnyRow[],
-                customers: (customersResult.data || []) as AnyRow[],
-                warehouses: (warehousesResult.data || []) as AnyRow[],
-                movements: (movementsResult.data || []) as AnyRow[],
+                organizationName: payload.workspace?.organizationName || "Business",
+                products: (payload.recentProducts || []) as ProductRow[],
+                invoices: (payload.recentInvoices || []) as AnyRow[],
+                movements: (payload.recentMovements || []) as AnyRow[],
+                lowStockProducts: (payload.lowStockProducts || []) as ProductRow[],
+                counts: {
+                    products: Number(payload.metrics?.productCount || 0),
+                    customers: Number(payload.metrics?.customerCount || 0),
+                    invoices: Number(payload.metrics?.invoiceCount || 0),
+                    warehouses: Number(payload.metrics?.warehouseCount || 0),
+                    orders: Number(payload.metrics?.orderCount || 0),
+                },
+                summaryMetrics: {
+                    ...emptyDashboard.summaryMetrics,
+                    ...(payload.metrics || {}),
+                },
             })
         } catch (error) {
             setNotice(error instanceof Error ? error.message : "Dashboard failed to load.")
@@ -200,111 +165,10 @@ export default function Dashboard() {
         loadDashboard()
     }, [])
 
-    const metrics = useMemo(() => {
-        const today = dateKey()
-        const totalRevenue = dashboard.invoices.reduce(
-            (sum, invoice) =>
-                sum + numberFrom(invoice, ["grand_total", "total_amount", "total"]),
-            0
-        )
-        const todayRevenue = dashboard.invoices
-            .filter((invoice) => stringFrom(invoice, ["created_at"]).startsWith(today))
-            .reduce(
-                (sum, invoice) =>
-                    sum + numberFrom(invoice, ["grand_total", "total_amount", "total"]),
-                0
-            )
-        const paidRevenue = dashboard.invoices
-            .filter((invoice) =>
-                ["paid", "completed", "success"].includes(
-                    stringFrom(invoice, ["payment_status", "status"]).toLowerCase()
-                )
-            )
-            .reduce(
-                (sum, invoice) =>
-                    sum + numberFrom(invoice, ["grand_total", "total_amount", "total"]),
-                0
-            )
-        const pendingInvoices = dashboard.invoices.filter((invoice) =>
-            ["unpaid", "pending", "overdue"].includes(
-                stringFrom(invoice, ["payment_status", "status"]).toLowerCase()
-            )
-        ).length
-        const lowStockProducts = dashboard.products.filter(
-            (product) => Number(product.stock || 0) <= Number(product.min_stock ?? 5)
-        )
-        const outOfStockProducts = dashboard.products.filter(
-            (product) => Number(product.stock || 0) <= 0
-        )
-        const inventoryValue = dashboard.products.reduce((sum, product) => {
-            const rate = Number(product.sale_rate || product.price || product.purchase_rate || 0)
-            return sum + Number(product.stock || 0) * rate
-        }, 0)
-        const costValue = dashboard.products.reduce((sum, product) => {
-            return sum + Number(product.stock || 0) * Number(product.purchase_rate || 0)
-        }, 0)
-        const pendingOrders = dashboard.orders.filter((order) =>
-            ["pending", "processing", "created"].includes(
-                stringFrom(order, ["order_status", "status"]).toLowerCase()
-            )
-        ).length
-        const completedOrders = dashboard.orders.length - pendingOrders
-        const fulfillmentRate =
-            dashboard.orders.length > 0
-                ? Math.round((completedOrders / dashboard.orders.length) * 100)
-                : 0
-        const inventoryHealth =
-            dashboard.products.length > 0
-                ? Math.round(
-                    ((dashboard.products.length - lowStockProducts.length) /
-                        dashboard.products.length) *
-                    100
-                )
-                : 0
-        const collectionRate =
-            totalRevenue > 0 ? Math.round((paidRevenue / totalRevenue) * 100) : 0
-        const erpHealth = Math.max(
-            0,
-            Math.min(
-                100,
-                Math.round(
-                    inventoryHealth * 0.35 +
-                    fulfillmentRate * 0.25 +
-                    collectionRate * 0.25 +
-                    (pendingInvoices === 0 ? 15 : Math.max(0, 15 - pendingInvoices * 2))
-                )
-            )
-        )
-
-        const weeklyRevenue = weekLabels.map((label) => ({ label, value: 0 }))
-        dashboard.invoices.forEach((invoice) => {
-            const createdAt = stringFrom(invoice, ["created_at"])
-            if (!createdAt) return
-            const amount = numberFrom(invoice, ["grand_total", "total_amount", "total"])
-            const day = new Date(createdAt).getDay()
-            const index = [6, 0, 1, 2, 3, 4, 5][day]
-            weeklyRevenue[index].value += amount
-        })
-
-        return {
-            totalRevenue,
-            todayRevenue,
-            paidRevenue,
-            pendingInvoices,
-            lowStockProducts,
-            outOfStockProducts,
-            inventoryValue,
-            costValue,
-            pendingOrders,
-            completedOrders,
-            fulfillmentRate,
-            inventoryHealth,
-            collectionRate,
-            erpHealth,
-            weeklyRevenue,
-            potentialProfit: inventoryValue - costValue,
-        }
-    }, [dashboard])
+    const metrics = useMemo(
+        () => ({ ...dashboard.summaryMetrics, lowStockProducts: dashboard.lowStockProducts }),
+        [dashboard.lowStockProducts, dashboard.summaryMetrics]
+    )
 
     const maxWeeklyRevenue = Math.max(1, ...metrics.weeklyRevenue.map((item) => item.value))
     const recentProducts = dashboard.products.slice(0, 5)
@@ -330,16 +194,16 @@ export default function Dashboard() {
         },
         {
             label: "Products",
-            value: dashboard.products.length,
-            meta: `${metrics.lowStockProducts.length} low stock`,
+            value: dashboard.counts.products,
+            meta: `${metrics.lowStockCount} low stock`,
             accent: "from-white to-neutral-400",
             valueClass: "text-white",
             href: "/dashboard/products",
         },
         {
             label: "Customers",
-            value: dashboard.customers.length,
-            meta: `${dashboard.invoices.length} invoices`,
+            value: dashboard.counts.customers,
+            meta: `${dashboard.counts.invoices} invoices`,
             accent: "from-cyan-200 to-blue-500",
             valueClass: "text-cyan-200",
             href: "/dashboard/customers",
@@ -422,7 +286,7 @@ export default function Dashboard() {
                         <div className="grid gap-3 sm:grid-cols-3">
                             {[
                                 [`${metrics.erpHealth}%`, "ERP health"],
-                                [`${dashboard.warehouses.length}`, "warehouses"],
+                                [`${dashboard.counts.warehouses}`, "warehouses"],
                                 [`${metrics.pendingInvoices}`, "pending bills"],
                             ].map(([value, label]) => (
                                 <div

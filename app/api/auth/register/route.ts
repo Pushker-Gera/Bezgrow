@@ -79,7 +79,6 @@ export async function POST(request: Request) {
       id: userId,
       email,
       full_name: payload.fullName,
-      phone: payload.phone,
       role: "user",
       approved: false,
       business_created: false,
@@ -88,7 +87,8 @@ export async function POST(request: Request) {
     })
 
     if (profileError) {
-      return serverFail()
+      await adminSupabase.auth.admin.deleteUser(userId)
+      return fail("Account profile could not be created. Please contact support.", 500)
     }
 
     const { error: pendingError } = await adminSupabase.from("pending_users").upsert({
@@ -101,7 +101,8 @@ export async function POST(request: Request) {
     })
 
     if (pendingError) {
-      return serverFail()
+      await adminSupabase.auth.admin.deleteUser(userId)
+      return fail("Approval request could not be created. Please contact support.", 500)
     }
 
     return ok({ status: "pending", message: "Application submitted for admin approval." })

@@ -1,9 +1,4 @@
-type WorkspaceBootstrapResponse = {
-    success: boolean
-    organization?: {
-        id?: string | null
-    } | null
-}
+import { getWorkspaceBootstrap } from "@/lib/workspaceBootstrapClient"
 
 export async function getOrganizationId() {
     const cacheKey = "bezgrow:organization-id"
@@ -19,14 +14,8 @@ export async function getOrganizationId() {
     }
 
     try {
-        const response = await fetch("/api/workspace/bootstrap", {
-            credentials: "include",
-        })
-
-        if (!response.ok) return null
-
-        const payload = (await response.json()) as WorkspaceBootstrapResponse
-        if (!payload.success) return null
+        const payload = await getWorkspaceBootstrap()
+        if (!payload?.success) return null
 
         const organizationId = payload.organization?.id || null
 
