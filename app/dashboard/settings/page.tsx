@@ -188,7 +188,9 @@ export default function SettingsPage() {
 
   useEffect(() => {
     if (!organizationId) return
-    void loadCorrectionInvoices(organizationId, debouncedInvoiceSearch)
+    queueMicrotask(() => {
+      void loadCorrectionInvoices(organizationId, debouncedInvoiceSearch)
+    })
   }, [debouncedInvoiceSearch, organizationId])
 
   function updatePrintSettings(next: Partial<PrintSettings>) {

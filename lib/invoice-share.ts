@@ -25,7 +25,7 @@ export function createInvoiceShareText(input: InvoiceShareInput) {
     `Thank you for purchasing from ${input.enterpriseName || "Bezgrow"}.`,
     `Invoice Number: ${input.invoiceNumber || "Invoice"}`,
     `Amount: \u20b9${Math.round(input.amount).toLocaleString("en-IN")}`,
-    `Download / print invoice PDF: ${input.invoiceUrl}`,
+    `View / download invoice PDF: ${input.invoiceUrl}`,
   ].join("\n")
 }
 
@@ -33,5 +33,5 @@ export function createWhatsAppInvoiceUrl(input: InvoiceShareInput) {
   const phone = normalizeWhatsAppPhone(input.customerPhone)
   if (!phone) return ""
 
-  return `https://api.whatsapp.com/send?phone=${phone}&text=${encodeURIComponent(createInvoiceShareText(input))}`
+  return `https://wa.me/${phone}?text=${encodeURIComponent(createInvoiceShareText(input))}`
 }

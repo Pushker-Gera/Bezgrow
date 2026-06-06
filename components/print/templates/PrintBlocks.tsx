@@ -74,60 +74,83 @@ export function ItemTable({ invoice, settings, compact = false }: { invoice: Pri
   ]
 
   return (
-    <table className={`item-table ${compact ? "compact" : ""}`}>
-      <colgroup>
-        {visibleColumns.map((column) => (
-          <col key={column} className={`col-${column}`} />
-        ))}
-      </colgroup>
-      <thead>
-        <tr>
-          <th>Sr</th>
-          <th>Item Name</th>
-          {settings.pharmaMode && <th>Batch</th>}
-          {settings.pharmaMode && <th>Expiry</th>}
-          {settings.showHsn && <th>HSN/SAC</th>}
-          <th>Qty</th>
-          <th>Free</th>
-          <th>Unit</th>
-          <th>MRP</th>
-          <th>Rate</th>
-          <th>Disc %</th>
-          <th>Disc Amt</th>
-          <th>Taxable</th>
-          {settings.showGstDetails && <th>CGST</th>}
-          {settings.showGstDetails && <th>SGST</th>}
-          {settings.showGstDetails && <th>IGST</th>}
-          <th>Amount</th>
-        </tr>
-      </thead>
-      <tbody>
-        {invoice.items.map((item, index) => (
-          <tr key={item.id}>
-            <td data-label="Sr">{index + 1}</td>
-            <td className="wrap" data-label="Item">
-              <strong>{item.name}</strong>
-              {settings.pharmaMode && item.scheduleType !== "-" && <span>Schedule: {item.scheduleType}</span>}
-            </td>
-            {settings.pharmaMode && <td data-label="Batch">{item.batchNumber}</td>}
-            {settings.pharmaMode && <td data-label="Expiry">{item.expiryDate}</td>}
-            {settings.showHsn && <td data-label="HSN/SAC">{item.hsnCode}</td>}
-            <td data-label="Qty">{item.quantity}</td>
-            <td data-label="Free">{item.freeQuantity}</td>
-            <td data-label="Unit">{item.unit}</td>
-            <td data-label="MRP">{formatMoney(item.mrp)}</td>
-            <td data-label="Rate">{formatMoney(item.rate)}</td>
-            <td data-label="Discount %">{item.discountPercent}%</td>
-            <td data-label="Discount">{formatMoney(item.discountAmount)}</td>
-            <td data-label="Taxable">{formatMoney(item.taxableValue)}</td>
-            {settings.showGstDetails && <td data-label="CGST">{item.cgstPercent}%<br />{formatMoney(item.cgstAmount)}</td>}
-            {settings.showGstDetails && <td data-label="SGST">{item.sgstPercent}%<br />{formatMoney(item.sgstAmount)}</td>}
-            {settings.showGstDetails && <td data-label="IGST">{item.igstPercent}%<br />{formatMoney(item.igstAmount)}</td>}
-            <td data-label="Amount"><strong>{formatMoney(item.finalAmount)}</strong></td>
+    <>
+      <table className={`item-table ${compact ? "compact" : ""}`}>
+        <colgroup>
+          {visibleColumns.map((column) => (
+            <col key={column} className={`col-${column}`} />
+          ))}
+        </colgroup>
+        <thead>
+          <tr>
+            <th>Sr</th>
+            <th>Item Name</th>
+            {settings.pharmaMode && <th>Batch</th>}
+            {settings.pharmaMode && <th>Expiry</th>}
+            {settings.showHsn && <th>HSN/SAC</th>}
+            <th>Qty</th>
+            <th>Free</th>
+            <th>Unit</th>
+            <th>MRP</th>
+            <th>Rate</th>
+            <th>Disc %</th>
+            <th>Disc Amt</th>
+            <th>Taxable</th>
+            {settings.showGstDetails && <th>CGST</th>}
+            {settings.showGstDetails && <th>SGST</th>}
+            {settings.showGstDetails && <th>IGST</th>}
+            <th>Amount</th>
           </tr>
+        </thead>
+        <tbody>
+          {invoice.items.map((item, index) => (
+            <tr key={item.id}>
+              <td data-label="Sr">{index + 1}</td>
+              <td className="wrap" data-label="Item">
+                <strong>{item.name}</strong>
+                {settings.pharmaMode && item.scheduleType !== "-" && <span>Schedule: {item.scheduleType}</span>}
+              </td>
+              {settings.pharmaMode && <td data-label="Batch">{item.batchNumber}</td>}
+              {settings.pharmaMode && <td data-label="Expiry">{item.expiryDate}</td>}
+              {settings.showHsn && <td data-label="HSN/SAC">{item.hsnCode}</td>}
+              <td data-label="Qty">{item.quantity}</td>
+              <td data-label="Free">{item.freeQuantity}</td>
+              <td data-label="Unit">{item.unit}</td>
+              <td data-label="MRP">{formatMoney(item.mrp)}</td>
+              <td data-label="Rate">{formatMoney(item.rate)}</td>
+              <td data-label="Discount %">{item.discountPercent}%</td>
+              <td data-label="Discount">{formatMoney(item.discountAmount)}</td>
+              <td data-label="Taxable">{formatMoney(item.taxableValue)}</td>
+              {settings.showGstDetails && <td data-label="CGST">{item.cgstPercent}%<br />{formatMoney(item.cgstAmount)}</td>}
+              {settings.showGstDetails && <td data-label="SGST">{item.sgstPercent}%<br />{formatMoney(item.sgstAmount)}</td>}
+              {settings.showGstDetails && <td data-label="IGST">{item.igstPercent}%<br />{formatMoney(item.igstAmount)}</td>}
+              <td data-label="Amount"><strong>{formatMoney(item.finalAmount)}</strong></td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+
+      <div className="mobile-item-cards" aria-label="Invoice items">
+        {invoice.items.map((item, index) => (
+          <article className="mobile-item-card" key={`mobile-${item.id}`}>
+            <div className="mobile-item-head">
+              <span>#{index + 1}</span>
+              <strong>{item.name}</strong>
+              <b>{formatMoney(item.finalAmount)}</b>
+            </div>
+            <div className="mobile-item-facts">
+              <div><span>Qty</span><strong>{item.quantity} {item.unit}</strong></div>
+              <div><span>Rate</span><strong>{formatMoney(item.rate)}</strong></div>
+              <div><span>Taxable</span><strong>{formatMoney(item.taxableValue)}</strong></div>
+              <div><span>GST</span><strong>{item.cgstPercent + item.sgstPercent + item.igstPercent}%</strong></div>
+              {settings.showHsn && <div><span>HSN/SAC</span><strong>{item.hsnCode}</strong></div>}
+              {settings.pharmaMode && <div><span>Batch</span><strong>{item.batchNumber}</strong></div>}
+              {settings.pharmaMode && <div><span>Expiry</span><strong>{item.expiryDate}</strong></div>}
+            </div>
+          </article>
         ))}
-      </tbody>
-    </table>
+      </div>
+    </>
   )
 }
 

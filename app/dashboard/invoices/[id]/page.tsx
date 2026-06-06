@@ -75,7 +75,7 @@ export default function InvoiceViewPage() {
   const invoiceNumber = stringFrom(invoice, ["invoice_number"]) || "Invoice"
   const enterpriseName = stringFrom(organization, ["name", "business_name"]) || "Bezgrow"
   const printUrl = invoiceId ? `/dashboard/invoices/${invoiceId}/print` : "/dashboard/invoices"
-  const publicPrintUrl = invoiceId ? `/public/invoices/${invoiceId}` : "/dashboard/invoices"
+  const publicPdfUrl = invoiceId ? `/public/invoices/${invoiceId}/pdf` : "/dashboard/invoices"
 
   const whatsappUrl = useMemo(() => {
     if (!invoiceId || typeof window === "undefined") return ""
@@ -85,9 +85,9 @@ export default function InvoiceViewPage() {
       enterpriseName,
       invoiceNumber,
       amount,
-      invoiceUrl: `${window.location.origin}${publicPrintUrl}`,
+      invoiceUrl: `${window.location.origin}${publicPdfUrl}`,
     })
-  }, [amount, customer, customerName, enterpriseName, invoiceId, invoiceNumber, publicPrintUrl])
+  }, [amount, customer, customerName, enterpriseName, invoiceId, invoiceNumber, publicPdfUrl])
 
   function sendOnWhatsApp() {
     if (!whatsappUrl) {

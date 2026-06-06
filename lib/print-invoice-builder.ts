@@ -89,7 +89,7 @@ export function buildPrintInvoice({
   })
 
   const invoiceNumber = stringFrom(invoice, ["invoice_number"]) || invoice.id
-  const publicInvoiceUrl = `${origin}/public/invoices/${invoice.id}`
+  const publicInvoiceUrl = `${origin}/public/invoices/${invoice.id}/pdf`
 
   return {
     id: invoice.id,
