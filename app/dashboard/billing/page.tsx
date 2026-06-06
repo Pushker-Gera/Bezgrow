@@ -182,6 +182,7 @@ export default function BillingPage() {
   }, [invoices])
 
   const maxWeekValue = Math.max(...weeklyBars.map((bar) => bar.total), 1)
+  const hasWeeklyRevenue = weeklyBars.some((bar) => bar.total > 0)
 
   return (
     <div className="relative min-h-dvh overflow-y-auto overflow-x-hidden bg-black text-white">
@@ -265,18 +266,31 @@ export default function BillingPage() {
                   </p>
                 </div>
 
-                <div className="mt-8 flex h-64 items-end gap-3">
-                  {weeklyBars.map((bar) => (
-                    <div key={bar.label} className="flex flex-1 flex-col items-center gap-3">
-                      <div className="flex h-48 w-full items-end rounded-2xl border border-white/10 bg-black/35 p-2">
-                        <div
-                          className="w-full rounded-xl bg-gradient-to-t from-cyan-500 to-blue-300 shadow-[0_0_35px_rgba(34,211,238,0.18)] transition-all duration-500"
-                          style={{ height: `${Math.max(8, (bar.total / maxWeekValue) * 100)}%` }}
-                        />
-                      </div>
-                      <span className="text-xs font-semibold uppercase tracking-[0.16em] text-neutral-500">{bar.label}</span>
+                <div className="mt-8 h-64">
+                  {hasWeeklyRevenue ? (
+                    <div className="flex h-full items-end gap-3">
+                      {weeklyBars.map((bar) => (
+                        <div key={bar.label} className="flex flex-1 flex-col items-center gap-3">
+                          <div className="flex h-48 w-full items-end rounded-2xl border border-white/10 bg-black/35 p-2">
+                            <div
+                              className="w-full rounded-xl bg-gradient-to-t from-cyan-500 to-blue-300 shadow-[0_0_35px_rgba(34,211,238,0.18)] transition-all duration-500"
+                              style={{ height: `${Math.max(8, (bar.total / maxWeekValue) * 100)}%` }}
+                              title={`${bar.label}: ${money(bar.total)}`}
+                            />
+                          </div>
+                          <span className="text-xs font-semibold uppercase tracking-[0.16em] text-neutral-500">{bar.label}</span>
+                        </div>
+                      ))}
                     </div>
-                  ))}
+                  ) : (
+                    <div className="flex h-full flex-col items-center justify-center rounded-3xl border border-dashed border-white/10 bg-black/35 text-center">
+                      <p className="text-lg font-black text-white">No billing movement yet</p>
+                      <p className="mt-2 max-w-sm text-sm text-neutral-500">Create invoices to activate the 7-day revenue pulse.</p>
+                      <Link href="/dashboard/invoices/create" className="mt-5 rounded-2xl bg-white px-5 py-3 text-sm font-black text-black">
+                        Create invoice
+                      </Link>
+                    </div>
+                  )}
                 </div>
               </div>
 

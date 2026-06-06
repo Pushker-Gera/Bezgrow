@@ -1,5 +1,6 @@
 "use client"
 
+import Link from "next/link"
 import { useEffect, useMemo, useState } from "react"
 import {
     Bar,
@@ -256,6 +257,11 @@ export default function AnalyticsPage() {
         state.orders.length > 0
             ? Math.round(((state.orders.length - analytics.pendingOrders.length) / state.orders.length) * 100)
             : 0
+    const hasWeeklyRevenue = analytics.weeklyRevenue.some((item) => item.revenue > 0)
+    const hasStockPie = analytics.stockPie.some((item) => item.value > 0)
+    const hasCategoryValue = analytics.categories.some((item) => item.value > 0)
+    const hasProductProfit = analytics.productProfit.some((item) => item.profit !== 0)
+    const hasExpiryPie = analytics.expiryPie.some((item) => item.value > 0)
 
     return (
         <div className="inventory-grid-bg min-h-full overflow-x-hidden text-white">
@@ -323,69 +329,79 @@ export default function AnalyticsPage() {
 
                         <section className="grid grid-cols-1 gap-6 2xl:grid-cols-[1.35fr_0.9fr]">
                             <ChartCard title="Weekly Revenue Flow" subtitle="Billing totals from live invoices">
-                                <ResponsiveContainer width="100%" height={320}>
-                                    <BarChart data={analytics.weeklyRevenue}>
-                                        <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.08)" />
-                                        <XAxis dataKey="label" stroke="#737373" />
-                                        <YAxis stroke="#737373" />
-                                        <Tooltip contentStyle={{ background: "#050606", border: "1px solid rgba(255,255,255,0.12)", borderRadius: 8 }} />
-                                        <Bar dataKey="revenue" fill="#38bdf8" radius={[8, 8, 0, 0]} />
-                                    </BarChart>
-                                </ResponsiveContainer>
+                                {hasWeeklyRevenue ? (
+                                    <ResponsiveContainer width="100%" height={320}>
+                                        <BarChart data={analytics.weeklyRevenue}>
+                                            <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.08)" />
+                                            <XAxis dataKey="label" stroke="#737373" />
+                                            <YAxis stroke="#737373" />
+                                            <Tooltip contentStyle={{ background: "#050606", border: "1px solid rgba(255,255,255,0.12)", borderRadius: 8 }} />
+                                            <Bar dataKey="revenue" fill="#38bdf8" radius={[8, 8, 0, 0]} />
+                                        </BarChart>
+                                    </ResponsiveContainer>
+                                ) : <ChartEmpty message="No invoice revenue has been recorded yet." actionHref="/dashboard/invoices/create" actionText="Create invoice" />}
                             </ChartCard>
 
                             <ChartCard title="Stock Health" subtitle="Healthy versus low-stock product mix">
-                                <ResponsiveContainer width="100%" height={320}>
-                                    <PieChart>
-                                        <Pie data={analytics.stockPie} dataKey="value" nameKey="name" innerRadius={70} outerRadius={110}>
-                                            {analytics.stockPie.map((entry, index) => (
-                                                <Cell key={entry.name} fill={chartColors[index % chartColors.length]} />
-                                            ))}
-                                        </Pie>
-                                        <Tooltip contentStyle={{ background: "#050606", border: "1px solid rgba(255,255,255,0.12)", borderRadius: 8 }} />
-                                    </PieChart>
-                                </ResponsiveContainer>
+                                {hasStockPie ? (
+                                    <ResponsiveContainer width="100%" height={320}>
+                                        <PieChart>
+                                            <Pie data={analytics.stockPie} dataKey="value" nameKey="name" innerRadius={70} outerRadius={110}>
+                                                {analytics.stockPie.map((entry, index) => (
+                                                    <Cell key={entry.name} fill={chartColors[index % chartColors.length]} />
+                                                ))}
+                                            </Pie>
+                                            <Tooltip contentStyle={{ background: "#050606", border: "1px solid rgba(255,255,255,0.12)", borderRadius: 8 }} />
+                                        </PieChart>
+                                    </ResponsiveContainer>
+                                ) : <ChartEmpty message="Add products to activate stock health analytics." actionHref="/dashboard/products" actionText="Add product" />}
                             </ChartCard>
                         </section>
 
                         <section className="grid grid-cols-1 gap-6 2xl:grid-cols-2">
                             <ChartCard title="Category Value" subtitle="Inventory value by product category">
-                                <ResponsiveContainer width="100%" height={340}>
-                                    <BarChart data={analytics.categories}>
-                                        <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.08)" />
-                                        <XAxis dataKey="name" stroke="#737373" />
-                                        <YAxis stroke="#737373" />
-                                        <Tooltip contentStyle={{ background: "#050606", border: "1px solid rgba(255,255,255,0.12)", borderRadius: 8 }} />
-                                        <Bar dataKey="value" fill="#34d399" radius={[8, 8, 0, 0]} />
-                                    </BarChart>
-                                </ResponsiveContainer>
+                                {hasCategoryValue ? (
+                                    <ResponsiveContainer width="100%" height={340}>
+                                        <BarChart data={analytics.categories}>
+                                            <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.08)" />
+                                            <XAxis dataKey="name" stroke="#737373" />
+                                            <YAxis stroke="#737373" />
+                                            <Tooltip contentStyle={{ background: "#050606", border: "1px solid rgba(255,255,255,0.12)", borderRadius: 8 }} />
+                                            <Bar dataKey="value" fill="#34d399" radius={[8, 8, 0, 0]} />
+                                        </BarChart>
+                                    </ResponsiveContainer>
+                                ) : <ChartEmpty message="No category inventory value yet." actionHref="/dashboard/products" actionText="Manage products" />}
                             </ChartCard>
 
                             <ChartCard title="Product Margin Leaders" subtitle="Top profit per unit by product">
-                                <ResponsiveContainer width="100%" height={340}>
-                                    <LineChart data={analytics.productProfit}>
-                                        <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.08)" />
-                                        <XAxis dataKey="name" stroke="#737373" />
-                                        <YAxis stroke="#737373" />
-                                        <Tooltip contentStyle={{ background: "#050606", border: "1px solid rgba(255,255,255,0.12)", borderRadius: 8 }} />
-                                        <Line type="monotone" dataKey="profit" stroke="#fbbf24" strokeWidth={3} dot={{ r: 4 }} />
-                                    </LineChart>
-                                </ResponsiveContainer>
+                                {hasProductProfit ? (
+                                    <ResponsiveContainer width="100%" height={340}>
+                                        <LineChart data={analytics.productProfit}>
+                                            <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.08)" />
+                                            <XAxis dataKey="name" stroke="#737373" />
+                                            <YAxis stroke="#737373" />
+                                            <Tooltip contentStyle={{ background: "#050606", border: "1px solid rgba(255,255,255,0.12)", borderRadius: 8 }} />
+                                            <Line type="monotone" dataKey="profit" stroke="#fbbf24" strokeWidth={3} dot={{ r: 4 }} />
+                                        </LineChart>
+                                    </ResponsiveContainer>
+                                ) : <ChartEmpty message="Set purchase and sale rates to see margin leaders." actionHref="/dashboard/products" actionText="Update products" />}
                             </ChartCard>
                         </section>
 
                         <section className="grid grid-cols-1 gap-6 2xl:grid-cols-[0.8fr_1.2fr]">
                             <ChartCard title="Expiry Risk" subtitle="Valid, expiring soon, and expired products">
-                                <ResponsiveContainer width="100%" height={320}>
-                                    <PieChart>
-                                        <Pie data={analytics.expiryPie} dataKey="value" nameKey="name" outerRadius={105}>
-                                            {analytics.expiryPie.map((entry, index) => (
-                                                <Cell key={entry.name} fill={chartColors[index % chartColors.length]} />
-                                            ))}
-                                        </Pie>
-                                        <Tooltip contentStyle={{ background: "#050606", border: "1px solid rgba(255,255,255,0.12)", borderRadius: 8 }} />
-                                    </PieChart>
-                                </ResponsiveContainer>
+                                {hasExpiryPie ? (
+                                    <ResponsiveContainer width="100%" height={320}>
+                                        <PieChart>
+                                            <Pie data={analytics.expiryPie} dataKey="value" nameKey="name" outerRadius={105}>
+                                                {analytics.expiryPie.map((entry, index) => (
+                                                    <Cell key={entry.name} fill={chartColors[index % chartColors.length]} />
+                                                ))}
+                                            </Pie>
+                                            <Tooltip contentStyle={{ background: "#050606", border: "1px solid rgba(255,255,255,0.12)", borderRadius: 8 }} />
+                                        </PieChart>
+                                    </ResponsiveContainer>
+                                ) : <ChartEmpty message="Add products with expiry dates to track expiry risk." actionHref="/dashboard/products" actionText="Manage products" />}
                             </ChartCard>
 
                             <div className="rounded-lg border border-white/10 bg-black/75 p-5 shadow-2xl backdrop-blur-xl">
@@ -430,6 +446,26 @@ function ChartCard({
                 <p className="mt-2 text-sm text-neutral-500">{subtitle}</p>
             </div>
             {children}
+        </div>
+    )
+}
+
+function ChartEmpty({
+    message,
+    actionHref,
+    actionText,
+}: {
+    message: string
+    actionHref: string
+    actionText: string
+}) {
+    return (
+        <div className="flex h-[320px] flex-col items-center justify-center rounded-lg border border-dashed border-white/10 bg-white/[0.03] px-6 text-center">
+            <p className="text-lg font-black text-white">Chart ready</p>
+            <p className="mt-2 max-w-sm text-sm leading-6 text-neutral-500">{message}</p>
+            <Link href={actionHref} className="mt-5 rounded-lg bg-white px-4 py-2 text-sm font-black text-black">
+                {actionText}
+            </Link>
         </div>
     )
 }

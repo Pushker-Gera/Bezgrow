@@ -171,6 +171,7 @@ export default function Dashboard() {
     )
 
     const maxWeeklyRevenue = Math.max(1, ...metrics.weeklyRevenue.map((item) => item.value))
+    const hasWeeklyRevenue = metrics.weeklyRevenue.some((item) => item.value > 0)
     const recentProducts = dashboard.products.slice(0, 5)
     const recentInvoices = dashboard.invoices.slice(0, 5)
     const recentMovements = dashboard.movements.slice(0, 6)
@@ -383,24 +384,36 @@ export default function Dashboard() {
                         </div>
 
                         <div className="mt-6 h-[300px] rounded-lg border border-white/10 bg-white/[0.03] p-5">
-                            <div className="flex h-full items-end gap-3">
-                                {metrics.weeklyRevenue.map((item) => (
-                                    <div key={item.label} className="flex h-full flex-1 flex-col justify-end gap-3">
-                                        <div className="flex flex-1 items-end">
-                                            <div
-                                                className="w-full rounded-t-lg bg-gradient-to-t from-sky-500 via-cyan-300 to-emerald-200 shadow-lg shadow-sky-500/20 transition-all duration-700 hover:opacity-80"
-                                                style={{
-                                                    height: `${Math.max(8, (item.value / maxWeeklyRevenue) * 100)}%`,
-                                                }}
-                                                title={`${item.label}: ${money(item.value)}`}
-                                            />
+                            {hasWeeklyRevenue ? (
+                                <div className="flex h-full items-end gap-3">
+                                    {metrics.weeklyRevenue.map((item) => (
+                                        <div key={item.label} className="flex h-full flex-1 flex-col justify-end gap-3">
+                                            <div className="flex flex-1 items-end">
+                                                <div
+                                                    className="w-full rounded-t-lg bg-gradient-to-t from-sky-500 via-cyan-300 to-emerald-200 shadow-lg shadow-sky-500/20 transition-all duration-700 hover:opacity-80"
+                                                    style={{
+                                                        height: `${Math.max(8, (item.value / maxWeeklyRevenue) * 100)}%`,
+                                                    }}
+                                                    title={`${item.label}: ${money(item.value)}`}
+                                                />
+                                            </div>
+                                            <p className="text-center text-xs uppercase tracking-[0.14em] text-neutral-500">
+                                                {item.label}
+                                            </p>
                                         </div>
-                                        <p className="text-center text-xs uppercase tracking-[0.14em] text-neutral-500">
-                                            {item.label}
-                                        </p>
-                                    </div>
-                                ))}
-                            </div>
+                                    ))}
+                                </div>
+                            ) : (
+                                <div className="flex h-full flex-col items-center justify-center rounded-lg border border-dashed border-white/10 bg-black/25 text-center">
+                                    <p className="text-lg font-black text-white">No weekly billing yet</p>
+                                    <p className="mt-2 max-w-md text-sm text-neutral-500">
+                                        Create paid invoices and this chart will show day-wise revenue movement automatically.
+                                    </p>
+                                    <Link href="/dashboard/invoices/create" className="mt-5 rounded-lg bg-white px-4 py-2 text-sm font-black text-black">
+                                        Create invoice
+                                    </Link>
+                                </div>
+                            )}
                         </div>
                     </div>
 

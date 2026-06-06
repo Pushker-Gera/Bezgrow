@@ -165,6 +165,8 @@ export default function AdminAnalyticsPage() {
     }
   }, [invoices, metric, orders, organizations, products, range])
 
+  const hasMonthTrend = analytics.monthBars.some((bar) => bar.total > 0)
+
   function exportSnapshot() {
     exportCsv(`admin-analytics-${new Date().toISOString().slice(0, 10)}.csv`, [
       {
@@ -239,15 +241,30 @@ export default function AdminAnalyticsPage() {
         <div className="rounded-[36px] border border-white/10 bg-white/[0.035] p-7">
           <h2 className="text-3xl font-black">Six Month Trend</h2>
           <p className="mt-2 text-sm text-neutral-500">Metric changes instantly from the selector above.</p>
-          <div className="mt-8 flex h-72 items-end gap-4">
-            {analytics.monthBars.map((bar, index) => (
-              <div key={`${bar.key}-${index}`} className="flex flex-1 flex-col items-center gap-3">
-                <div className="flex h-56 w-full items-end rounded-2xl border border-white/10 bg-black/40 p-2">
-                  <div className="w-full rounded-xl bg-gradient-to-t from-cyan-500 to-blue-300" style={{ height: `${Math.max(8, (bar.total / analytics.maxMonth) * 100)}%` }} />
-                </div>
-                <p className="text-xs font-bold uppercase tracking-[0.16em] text-neutral-500">{bar.month}</p>
+          <div className="mt-8 h-72">
+            {hasMonthTrend ? (
+              <div className="flex h-full items-end gap-4">
+                {analytics.monthBars.map((bar, index) => (
+                  <div key={`${bar.key}-${index}`} className="flex flex-1 flex-col items-center gap-3">
+                    <div className="flex h-56 w-full items-end rounded-2xl border border-white/10 bg-black/40 p-2">
+                      <div
+                        className="w-full rounded-xl bg-gradient-to-t from-cyan-500 to-blue-300"
+                        style={{ height: `${Math.max(8, (bar.total / analytics.maxMonth) * 100)}%` }}
+                        title={`${bar.month}: ${metric === "invoices" ? bar.total : money(bar.total)}`}
+                      />
+                    </div>
+                    <p className="text-xs font-bold uppercase tracking-[0.16em] text-neutral-500">{bar.month}</p>
+                  </div>
+                ))}
               </div>
-            ))}
+            ) : (
+              <div className="flex h-full flex-col items-center justify-center rounded-3xl border border-dashed border-white/10 bg-black/35 px-6 text-center">
+                <p className="text-lg font-black text-white">No trend data yet</p>
+                <p className="mt-2 max-w-sm text-sm leading-6 text-neutral-500">
+                  Platform billing charts will activate after businesses create invoices.
+                </p>
+              </div>
+            )}
           </div>
         </div>
 
