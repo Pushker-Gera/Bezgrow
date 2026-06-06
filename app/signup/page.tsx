@@ -25,8 +25,19 @@ export default function SignupPage() {
             setStatusMessage("")
             setErrorMessage("")
 
-            if (!fullName || !businessName || !phone || !email || !password) {
+            const cleanFullName = fullName.trim()
+            const cleanBusinessName = businessName.trim()
+            const cleanPhone = phone.trim()
+            const cleanEmail = email.trim()
+
+            if (!cleanFullName || !cleanBusinessName || !cleanPhone || !cleanEmail || !password) {
                 setErrorMessage("Please fill all fields")
+                setLoading(false)
+                return
+            }
+
+            if (password.length < 8 || !/[A-Za-z]/.test(password) || !/[0-9]/.test(password)) {
+                setErrorMessage("Password must be at least 8 characters and include a letter and number.")
                 setLoading(false)
                 return
             }
@@ -41,10 +52,10 @@ export default function SignupPage() {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({
-                    fullName,
-                    businessName,
-                    phone,
-                    email,
+                    fullName: cleanFullName,
+                    businessName: cleanBusinessName,
+                    phone: cleanPhone,
+                    email: cleanEmail,
                     password,
                     termsAccepted,
                 }),
@@ -135,9 +146,12 @@ export default function SignupPage() {
                     type="password"
                     placeholder="Create Password"
                     value={password}
-                    className="mb-6 min-h-12 w-full rounded-lg border border-gray-700 bg-black p-3 outline-none focus:border-cyan-300"
+                    className="mb-2 min-h-12 w-full rounded-lg border border-gray-700 bg-black p-3 outline-none focus:border-cyan-300"
                     onChange={(e) => setPassword(e.target.value)}
                 />
+                <p className="mb-6 text-xs leading-5 text-gray-500">
+                    Use at least 8 characters with one letter and one number.
+                </p>
 
                 <label className="mb-6 flex items-start gap-3 text-sm leading-5 text-gray-400">
                     <input
