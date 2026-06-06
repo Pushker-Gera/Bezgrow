@@ -1,6 +1,7 @@
 "use client"
 
 import { useEffect, useMemo, useState } from "react"
+import { useDebounce } from "use-debounce"
 import { readStoredPrintSettings, saveStoredPrintSettings } from "@/components/print/settings/defaults"
 import type { PrintFormat, PrintSettings } from "@/components/print/types"
 import { getOrganizationId } from "@/lib/getOrganization"
@@ -104,6 +105,7 @@ export default function SettingsPage() {
   const [features, setFeatures] = useState<FeatureRow[]>([])
   const [recentInvoices, setRecentInvoices] = useState<InvoiceCorrectionRow[]>([])
   const [invoiceSearch, setInvoiceSearch] = useState("")
+  const [debouncedInvoiceSearch] = useDebounce(invoiceSearch, 300)
   const [deletingInvoiceId, setDeletingInvoiceId] = useState("")
   const [deleteConfirmText, setDeleteConfirmText] = useState("")
   const [printSettings, setPrintSettings] = useState<PrintSettings>(() => readStoredPrintSettings())
@@ -117,6 +119,30 @@ export default function SettingsPage() {
     businessCategory: "general",
   })
 
+  async function loadCorrectionInvoices(orgId: string, searchTerm = "") {
+    const {
+      data: { session },
+    } = await supabase.auth.getSession()
+    const headers = session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : undefined
+    const invoiceParams = new URLSearchParams({ limit: "100", organization_id: orgId })
+
+    if (searchTerm.trim()) invoiceParams.set("search", searchTerm.trim())
+
+    const invoiceResponse = await fetch(`/api/invoices/list?${invoiceParams.toString()}`, {
+      headers,
+      cache: "no-store",
+    })
+    const invoices = (await invoiceResponse.json()) as ListResponse<InvoiceCorrectionRow>
+
+    if (!invoiceResponse.ok) {
+      setNotice(invoices.error || `Invoices failed to load. HTTP ${invoiceResponse.status}`)
+      setRecentInvoices([])
+      return
+    }
+
+    setRecentInvoices(invoices.data || [])
+  }
+
   async function initializeSettings() {
     const orgId = await getOrganizationId()
     if (!orgId) {
@@ -129,10 +155,9 @@ export default function SettingsPage() {
       data: { session },
     } = await supabase.auth.getSession()
     const headers = session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : undefined
-    const invoiceParams = new URLSearchParams({ limit: "100", organization_id: orgId })
     const [workspaceResponse, invoiceResponse] = await Promise.all([
       fetch("/api/workspace/bootstrap", { headers, cache: "no-store" }),
-      fetch(`/api/invoices/list?${invoiceParams.toString()}`, { headers, cache: "no-store" }),
+      fetch(`/api/invoices/list?${new URLSearchParams({ limit: "100", organization_id: orgId }).toString()}`, { headers, cache: "no-store" }),
     ])
     const workspace = (await workspaceResponse.json()) as WorkspaceResponse
     const invoices = (await invoiceResponse.json()) as ListResponse<InvoiceCorrectionRow>
@@ -160,6 +185,11 @@ export default function SettingsPage() {
       void initializeSettings()
     })
   }, [])
+
+  useEffect(() => {
+    if (!organizationId) return
+    void loadCorrectionInvoices(organizationId, debouncedInvoiceSearch)
+  }, [debouncedInvoiceSearch, organizationId])
 
   function updatePrintSettings(next: Partial<PrintSettings>) {
     const updated = { ...printSettings, ...next }

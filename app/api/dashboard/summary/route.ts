@@ -71,21 +71,18 @@ export async function GET(request: Request) {
       .limit(12),
   ])
 
-  const firstError =
-    productResult.error ||
-    invoiceResult.error ||
-    orderResult.error ||
-    customerResult.error ||
-    warehouseResult.error ||
-    movementResult.error
+  const warnings = [
+    productResult.error ? "products" : "",
+    invoiceResult.error ? "invoices" : "",
+    orderResult.error ? "orders" : "",
+    customerResult.error ? "customers" : "",
+    warehouseResult.error ? "warehouses" : "",
+    movementResult.error ? "stock_movements" : "",
+  ].filter(Boolean)
 
-  if (firstError) {
-    return fail("Dashboard summary failed to load.", 500)
-  }
-
-  const products = productResult.data || []
-  const invoices = invoiceResult.data || []
-  const orders = orderResult.data || []
+  const products = productResult.error ? [] : productResult.data || []
+  const invoices = invoiceResult.error ? [] : invoiceResult.data || []
+  const orders = orderResult.error ? [] : orderResult.data || []
 
   const totalRevenue = sumRows(invoices, ["grand_total", "total_amount", "total"])
   const todayRevenue = sumRows(
@@ -164,27 +161,28 @@ export async function GET(request: Request) {
         todayRevenue,
         paidRevenue,
         pendingInvoices,
-        productCount: productResult.count || products.length,
+        productCount: productResult.error ? 0 : productResult.count || products.length,
         lowStockCount: lowStockProducts.length,
         outOfStockCount: outOfStockProducts.length,
         inventoryValue,
         costValue,
         potentialProfit: inventoryValue - costValue,
-        orderCount: orderResult.count || orders.length,
+        orderCount: orderResult.error ? 0 : orderResult.count || orders.length,
         pendingOrders,
         fulfillmentRate,
         inventoryHealth,
         collectionRate,
         erpHealth,
-        customerCount: customerResult.count || 0,
-        warehouseCount: warehouseResult.count || 0,
-        invoiceCount: invoiceResult.count || invoices.length,
+        customerCount: customerResult.error ? 0 : customerResult.count || 0,
+        warehouseCount: warehouseResult.error ? 0 : warehouseResult.count || 0,
+        invoiceCount: invoiceResult.error ? 0 : invoiceResult.count || invoices.length,
         weeklyRevenue,
       },
       recentProducts: products.slice(0, 5),
       lowStockProducts: lowStockProducts.slice(0, 5),
       recentInvoices: invoices.slice(0, 5),
-      recentMovements: movementResult.data || [],
+      recentMovements: movementResult.error ? [] : movementResult.data || [],
+      warnings,
     },
     { headers: { "Cache-Control": "no-store" } }
   )

@@ -1,4 +1,4 @@
-const CACHE_VERSION = "bezgrow-pwa-v1"
+const CACHE_VERSION = "bezgrow-pwa-v2"
 const STATIC_CACHE = `${CACHE_VERSION}:static`
 const SHELL_CACHE = `${CACHE_VERSION}:shell`
 
@@ -10,6 +10,7 @@ const SHELL_URLS = [
   "/favicon.ico",
   "/favicon-16x16.png",
   "/favicon-32x32.png",
+  "/favicon-48x48.png",
   "/apple-touch-icon.png",
   "/android-chrome-192x192.png",
   "/android-chrome-512x512.png",
@@ -48,6 +49,7 @@ function isStaticAsset(requestUrl) {
     requestUrl.pathname === "/favicon.ico" ||
     requestUrl.pathname === "/favicon-16x16.png" ||
     requestUrl.pathname === "/favicon-32x32.png" ||
+    requestUrl.pathname === "/favicon-48x48.png" ||
     requestUrl.pathname === "/apple-touch-icon.png" ||
     requestUrl.pathname === "/android-chrome-192x192.png" ||
     requestUrl.pathname === "/android-chrome-512x512.png" ||
