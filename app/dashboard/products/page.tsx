@@ -251,6 +251,7 @@ export default function ProductsPage() {
     const [viewProduct, setViewProduct] = useState<ProductRow | null>(null)
     const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null)
     const [form, setForm] = useState<ProductForm>(emptyForm)
+    const [formError, setFormError] = useState("")
     const skipNextProductsRefresh = useRef(false)
 
     const itemsPerPage = 50
@@ -344,82 +345,96 @@ export default function ProductsPage() {
     }
 
     function updateForm<K extends keyof ProductForm>(field: K, value: ProductForm[K]) {
+        setFormError("")
         setForm((current) => ({ ...current, [field]: value }))
     }
 
     function openAddModal() {
         setEditProduct(null)
         setForm(emptyForm)
+        setFormError("")
         setShowFormModal(true)
     }
 
     function openEditModal(product: ProductRow) {
         setEditProduct(product)
         setForm(formFromProduct(product))
+        setFormError("")
         setShowFormModal(true)
     }
 
     async function saveProduct() {
+        if (saving) return
+
         if (!organizationId) {
-            setNotice("Organization not found.")
+            setFormError("Organization not found. Please refresh and try again.")
             return
         }
         if (!form.name.trim()) {
-            setNotice("Product name is required.")
+            setFormError("Product name is required.")
             return
         }
 
         setSaving(true)
         setNotice("")
+        setFormError("")
 
-        const stockValue = Number(form.stock || 0)
-        const payload = {
-            name: form.name.trim(),
-            description: form.description.trim() || null,
-            manufacturer: form.manufacturer.trim() || null,
-            sku: form.sku.trim() || null,
-            barcode: form.barcode.trim() || null,
-            category: form.category.trim() || null,
-            unit: form.unit || "pcs",
-            supplier: form.supplier.trim() || null,
-            warehouse: form.warehouse.trim() || "Main Warehouse",
-            price: numberValue(form.price),
-            stock: stockValue,
-            min_stock: numberValue(form.minStock),
-            batch_no: form.batchNo.trim() || null,
-            mrp: numberValue(form.mrp),
-            purchase_rate: numberValue(form.purchaseRate),
-            sale_rate: numberValue(form.saleRate),
-            gst: numberValue(form.gst),
-            expiry_date: form.expiry || null,
-            purchase_date: form.purchaseDate || null,
-        }
+        try {
+            const stockValue = Number(form.stock || 0)
+            const payload = {
+                name: form.name.trim(),
+                description: form.description.trim() || null,
+                manufacturer: form.manufacturer.trim() || null,
+                sku: form.sku.trim() || null,
+                barcode: form.barcode.trim() || null,
+                category: form.category.trim() || null,
+                unit: form.unit || "pcs",
+                supplier: form.supplier.trim() || null,
+                warehouse: form.warehouse.trim() || "Main Warehouse",
+                price: numberValue(form.price),
+                stock: stockValue,
+                min_stock: numberValue(form.minStock),
+                batch_no: form.batchNo.trim() || null,
+                mrp: numberValue(form.mrp),
+                purchase_rate: numberValue(form.purchaseRate),
+                sale_rate: numberValue(form.saleRate),
+                gst: numberValue(form.gst),
+                expiry_date: form.expiry || null,
+                purchase_date: form.purchaseDate || null,
+            }
 
-        const {
-            data: { session },
-        } = await supabase.auth.getSession()
-        const response = await fetch(editProduct ? "/api/products/update" : "/api/products/create", {
-            method: "POST",
-            headers: {
-                "Content-Type": "application/json",
-                ...(session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : {}),
-            },
-            body: JSON.stringify(editProduct ? { id: editProduct.id, ...payload } : payload),
-        })
-        const result = (await response.json()) as ProductActionResponse
+            const {
+                data: { session },
+            } = await supabase.auth.getSession()
+            const response = await fetch(editProduct ? "/api/products/update" : "/api/products/create", {
+                method: "POST",
+                headers: {
+                    "Content-Type": "application/json",
+                    ...(session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : {}),
+                },
+                body: JSON.stringify(editProduct ? { id: editProduct.id, ...payload } : payload),
+            })
+            const result = (await response.json().catch(() => ({
+                success: false,
+                error: "Product save returned an invalid response.",
+            }))) as ProductActionResponse
 
-        if (!response.ok || !result.success) {
-            setNotice(result.error || "Product could not be saved.")
+            if (!response.ok || !result.success) {
+                setFormError(result.error || "Product could not be saved.")
+                setSaving(false)
+                return
+            }
+
+            setShowFormModal(false)
+            setEditProduct(null)
+            setForm(emptyForm)
+            await refreshData()
             setSaving(false)
-            return
+            setNotice(editProduct ? "Product updated successfully." : "Product created successfully.")
+        } catch {
+            setFormError("Product could not be saved. Please check your connection and try again.")
+            setSaving(false)
         }
-
-        setShowFormModal(false)
-        setEditProduct(null)
-        setForm(emptyForm)
-        await refreshData()
-        setSaving(false)
-        setNotice(editProduct ? "Product updated successfully." : "Product created successfully.")
     }
 
     async function confirmDelete() {
@@ -1076,6 +1091,7 @@ export default function ProductsPage() {
             {showFormModal && (
                 <ProductFormModal
                     form={form}
+                    errorMessage={formError}
                     saving={saving}
                     editMode={Boolean(editProduct)}
                     hasBarcodeScanning={hasBarcodeScanning}
@@ -1090,6 +1106,7 @@ export default function ProductsPage() {
                         setShowFormModal(false)
                         setEditProduct(null)
                         setForm(emptyForm)
+                        setFormError("")
                     }}
                     onSave={saveProduct}
                 />
@@ -1138,6 +1155,7 @@ export default function ProductsPage() {
 
 function ProductFormModal({
     form,
+    errorMessage,
     saving,
     editMode,
     hasBarcodeScanning,
@@ -1152,6 +1170,7 @@ function ProductFormModal({
     onSave,
 }: {
     form: ProductForm
+    errorMessage: string
     saving: boolean
     editMode: boolean
     hasBarcodeScanning: boolean
@@ -1189,6 +1208,12 @@ function ProductFormModal({
                         Back
                     </button>
                 </div>
+
+                {errorMessage && (
+                    <div className="relative z-10 mx-5 mt-5 rounded-lg border border-red-400/40 bg-red-500/10 p-4 text-sm font-semibold text-red-100">
+                        {errorMessage}
+                    </div>
+                )}
 
                 <div className="relative z-10 grid gap-5 p-5 lg:grid-cols-3">
                     <section className="space-y-3">
