@@ -1,5 +1,6 @@
 import { createServerClient } from "@supabase/ssr"
 import { NextResponse, type NextRequest } from "next/server"
+import { authCookieOptions } from "@/lib/supabase/session"
 
 const protectedPrefixes = ["/dashboard", "/profile"]
 const adminPrefixes = ["/admin"]
@@ -107,6 +108,7 @@ export async function proxy(request: NextRequest) {
   let response = NextResponse.next({ request })
 
   const supabase = createServerClient(supabaseUrl, supabaseAnonKey, {
+    cookieOptions: authCookieOptions,
     cookies: {
       getAll() {
         return request.cookies.getAll()

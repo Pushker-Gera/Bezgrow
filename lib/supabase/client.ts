@@ -1,4 +1,5 @@
 import { createBrowserClient } from "@supabase/ssr"
+import { authCookieOptions } from "@/lib/supabase/session"
 
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL?.trim()
 const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY?.trim()
@@ -13,6 +14,7 @@ const publicSupabaseUrl: string = supabaseUrl
 const publicSupabaseAnonKey: string = supabaseAnonKey
 
 export const supabase = createBrowserClient(publicSupabaseUrl, publicSupabaseAnonKey, {
+  cookieOptions: authCookieOptions,
   auth: {
     persistSession: true,
     autoRefreshToken: true,

@@ -2,26 +2,10 @@ import { requireWorkspace } from "@/lib/api/tenant"
 import { fail, ok, serverFail } from "@/lib/api/responses"
 import { writeAdminLog } from "@/lib/api/auth"
 import { adminSupabase } from "@/lib/supabase/admin"
-import { productPayloadSchema } from "@/lib/api/product-schema"
+import { productMutationErrorMessage } from "@/lib/api/product-errors"
+import { productPayloadSchema, productValidationMessage } from "@/lib/api/product-schema"
 
 export const dynamic = "force-dynamic"
-
-function productMutationErrorMessage(message?: string | null, details?: string | null) {
-  const text = `${message || ""} ${details || ""}`.toLowerCase()
-  if (text.includes("idx_products_org_sku_unique") || (text.includes("duplicate") && text.includes("sku"))) {
-    return "A product with this SKU already exists."
-  }
-  if (text.includes("idx_products_org_barcode_unique") || (text.includes("duplicate") && text.includes("barcode"))) {
-    return "A product with this barcode already exists."
-  }
-  if (text.includes("column") && text.includes("does not exist")) {
-    return "Products table is missing required columns. Run the latest Supabase product migration."
-  }
-  if (text.includes("violates check constraint") && text.includes("stock")) {
-    return "Stock cannot be negative."
-  }
-  return "Product could not be created."
-}
 
 export async function POST(request: Request) {
   const workspace = await requireWorkspace(request)
@@ -29,7 +13,7 @@ export async function POST(request: Request) {
 
   try {
     const parsed = productPayloadSchema.safeParse(await request.json())
-    if (!parsed.success) return fail(parsed.error.issues[0]?.message || "Invalid product.", 400)
+    if (!parsed.success) return fail(productValidationMessage(parsed.error), 400)
 
     const stock = Number(parsed.data.stock || 0)
     if (stock < 0) return fail("Stock cannot be negative.", 400)
@@ -50,7 +34,7 @@ export async function POST(request: Request) {
         message: error?.message,
         details: error?.details,
       })
-      return fail(productMutationErrorMessage(error?.message, error?.details), 400)
+      return fail(productMutationErrorMessage("Product could not be created.", error?.message, error?.details, error?.code), 400)
     }
 
     if (stock !== 0) {

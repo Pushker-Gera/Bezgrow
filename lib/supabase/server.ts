@@ -1,6 +1,7 @@
 import "server-only"
 import { createServerClient } from "@supabase/ssr"
 import { cookies } from "next/headers"
+import { authCookieOptions } from "@/lib/supabase/session"
 
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL?.trim()
 const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY?.trim()
@@ -16,6 +17,7 @@ export async function createServerSupabase() {
   const cookieStore = await cookies()
 
   return createServerClient(serverSupabaseUrl, serverSupabaseAnonKey, {
+    cookieOptions: authCookieOptions,
     cookies: {
       getAll() {
         return cookieStore.getAll()

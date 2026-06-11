@@ -2,7 +2,8 @@ import { requireWorkspace } from "@/lib/api/tenant"
 import { fail, ok, serverFail } from "@/lib/api/responses"
 import { writeAdminLog } from "@/lib/api/auth"
 import { adminSupabase } from "@/lib/supabase/admin"
-import { productUpdateSchema } from "@/lib/api/product-schema"
+import { productMutationErrorMessage } from "@/lib/api/product-errors"
+import { productUpdateSchema, productValidationMessage } from "@/lib/api/product-schema"
 
 export const dynamic = "force-dynamic"
 
@@ -12,7 +13,7 @@ export async function POST(request: Request) {
 
   try {
     const parsed = productUpdateSchema.safeParse(await request.json())
-    if (!parsed.success) return fail(parsed.error.issues[0]?.message || "Invalid product.", 400)
+    if (!parsed.success) return fail(productValidationMessage(parsed.error), 400)
 
     const { id, ...payload } = parsed.data
     const stock = Number(payload.stock || 0)
@@ -35,7 +36,14 @@ export async function POST(request: Request) {
       .select("id,name,sku,stock")
       .single()
 
-    if (error || !data) return fail("Product could not be updated.", 400)
+    if (error || !data) {
+      console.error("[products/update] update failed", {
+        code: error?.code,
+        message: error?.message,
+        details: error?.details,
+      })
+      return fail(productMutationErrorMessage("Product could not be updated.", error?.message, error?.details, error?.code), 400)
+    }
 
     const previousStock = Number(previous.stock || 0)
     const stockDifference = stock - previousStock

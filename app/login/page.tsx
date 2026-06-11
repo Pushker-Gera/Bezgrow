@@ -23,7 +23,6 @@ export default function LoginPage() {
 
     const [email, setEmail] = useState("")
     const [password, setPassword] = useState("")
-    const [rememberMe, setRememberMe] = useState(false)
 
     const [loading, setLoading] = useState(false)
     const [googleLoading, setGoogleLoading] = useState(false)
@@ -290,14 +289,7 @@ export default function LoginPage() {
 
                 <div className="mb-6 flex flex-col gap-3 text-sm min-[380px]:flex-row min-[380px]:items-center min-[380px]:justify-between">
 
-                    <label className="flex items-center gap-2 text-gray-400 cursor-pointer">
-                        <input
-                            type="checkbox"
-                            checked={rememberMe}
-                            onChange={(e) => setRememberMe(e.target.checked)}
-                        />
-                        Remember me
-                    </label>
+                    <span className="text-gray-400">You stay signed in until logout</span>
 
                     <button
                         type="button"

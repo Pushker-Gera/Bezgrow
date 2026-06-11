@@ -122,21 +122,39 @@ function numberValue(value: string) {
     return value.trim() === "" ? null : Number(value)
 }
 
+function validateNumberInput(label: string, value: string) {
+    if (value.trim() === "") return null
+    return Number.isFinite(Number(value)) ? null : `${label} must be a valid number.`
+}
+
+function isValidIsoDate(value: string) {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return false
+    const [year, month, day] = value.split("-").map(Number)
+    const date = new Date(Date.UTC(year, month - 1, day))
+    return date.getUTCFullYear() === year && date.getUTCMonth() === month - 1 && date.getUTCDate() === day
+}
+
 function normalizeDateInput(value: string) {
     const trimmed = value.trim()
     if (!trimmed) return null
 
     if (/^\d{4}-\d{2}-\d{2}$/.test(trimmed)) {
-        return trimmed
+        return isValidIsoDate(trimmed) ? trimmed : null
     }
 
     const parts = trimmed.split(/[/-]/).map((part) => part.trim())
-    if (parts.length !== 3) return trimmed
+    if (parts.length !== 3) return null
 
     const [day, month, year] = parts
-    if (!day || !month || !year || year.length !== 4) return trimmed
+    if (!day || !month || !year || year.length !== 4) return null
 
-    return `${year.padStart(4, "0")}-${month.padStart(2, "0")}-${day.padStart(2, "0")}`
+    const normalized = `${year.padStart(4, "0")}-${month.padStart(2, "0")}-${day.padStart(2, "0")}`
+    return isValidIsoDate(normalized) ? normalized : null
+}
+
+function dateInputValue(value: string | null) {
+    if (!value) return ""
+    return normalizeDateInput(value.slice(0, 10)) || ""
 }
 
 function money(value: number) {
@@ -145,7 +163,10 @@ function money(value: number) {
 
 function formatDate(value: string | null) {
     if (!value) return "-"
-    return new Date(value).toLocaleDateString()
+    const normalized = normalizeDateInput(value.slice(0, 10))
+    if (!normalized) return "-"
+    const [year, month, day] = normalized.split("-")
+    return `${day}/${month}/${year}`
 }
 
 function csvCell(value: string | number | null) {
@@ -226,8 +247,8 @@ function formFromProduct(product: ProductRow): ProductForm {
         purchaseRate: product.purchase_rate == null ? "" : String(product.purchase_rate),
         saleRate: product.sale_rate == null ? "" : String(product.sale_rate),
         gst: product.gst == null ? "" : String(product.gst),
-        expiry: product.expiry_date || "",
-        purchaseDate: product.purchase_date || "",
+        expiry: dateInputValue(product.expiry_date),
+        purchaseDate: dateInputValue(product.purchase_date),
     }
 }
 
@@ -392,6 +413,38 @@ export default function ProductsPage() {
             return
         }
 
+        const expiryDate = normalizeDateInput(form.expiry)
+        const purchaseDate = normalizeDateInput(form.purchaseDate)
+        if (form.expiry.trim() && !expiryDate) {
+            setFormError("Expiry date must be a valid date.")
+            return
+        }
+        if (form.purchaseDate.trim() && !purchaseDate) {
+            setFormError("Purchase date must be a valid date.")
+            return
+        }
+        if (expiryDate && purchaseDate && purchaseDate > expiryDate) {
+            setFormError("Purchase date cannot be after expiry date.")
+            return
+        }
+
+        const numberError = [
+            ["Stock", form.stock],
+            ["Minimum stock", form.minStock],
+            ["Purchase rate", form.purchaseRate],
+            ["Sale rate", form.saleRate],
+            ["MRP", form.mrp],
+            ["GST", form.gst],
+            ["Fallback price", form.price],
+        ]
+            .map(([label, value]) => validateNumberInput(label, value))
+            .find(Boolean)
+
+        if (numberError) {
+            setFormError(numberError)
+            return
+        }
+
         setSaving(true)
         setNotice("")
         setFormError("")
@@ -416,8 +469,8 @@ export default function ProductsPage() {
                 purchase_rate: numberValue(form.purchaseRate),
                 sale_rate: numberValue(form.saleRate),
                 gst: numberValue(form.gst),
-                expiry_date: normalizeDateInput(form.expiry),
-                purchase_date: normalizeDateInput(form.purchaseDate),
+                expiry_date: expiryDate,
+                purchase_date: purchaseDate,
             }
 
             const {
@@ -1308,9 +1361,7 @@ function ProductFormModal({
                                     Expiry date
                                     <input
                                         className={`${inputClass} mt-1`}
-                                        type="text"
-                                        inputMode="numeric"
-                                        placeholder="DD/MM/YYYY"
+                                        type="date"
                                         value={form.expiry}
                                         onChange={(event) => onChange("expiry", event.target.value)}
                                     />
@@ -1319,9 +1370,7 @@ function ProductFormModal({
                                     Purchase date
                                     <input
                                         className={`${inputClass} mt-1`}
-                                        type="text"
-                                        inputMode="numeric"
-                                        placeholder="DD/MM/YYYY"
+                                        type="date"
                                         value={form.purchaseDate}
                                         onChange={(event) => onChange("purchaseDate", event.target.value)}
                                     />
