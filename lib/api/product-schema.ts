@@ -4,21 +4,22 @@ const nullableText = z
   .string()
   .trim()
   .max(255)
+  .nullable()
   .optional()
   .transform((value) => (value ? value : null))
 
 const nullableNumber = z
-  .union([z.number(), z.string()])
+  .union([z.number(), z.string(), z.null()])
   .optional()
   .transform((value) => {
-    if (value === undefined || value === "") return null
+    if (value === undefined || value === null || value === "") return null
     const number = Number(value)
     return Number.isFinite(number) ? number : null
   })
 
 export const productPayloadSchema = z.object({
   name: z.string().trim().min(1).max(180),
-  description: z.string().trim().max(2000).optional().transform((value) => value || null),
+  description: z.string().trim().max(2000).nullable().optional().transform((value) => value || null),
   manufacturer: nullableText,
   sku: nullableText,
   barcode: nullableText,

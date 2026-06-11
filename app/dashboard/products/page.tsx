@@ -122,6 +122,23 @@ function numberValue(value: string) {
     return value.trim() === "" ? null : Number(value)
 }
 
+function normalizeDateInput(value: string) {
+    const trimmed = value.trim()
+    if (!trimmed) return null
+
+    if (/^\d{4}-\d{2}-\d{2}$/.test(trimmed)) {
+        return trimmed
+    }
+
+    const parts = trimmed.split(/[/-]/).map((part) => part.trim())
+    if (parts.length !== 3) return trimmed
+
+    const [day, month, year] = parts
+    if (!day || !month || !year || year.length !== 4) return trimmed
+
+    return `${year.padStart(4, "0")}-${month.padStart(2, "0")}-${day.padStart(2, "0")}`
+}
+
 function money(value: number) {
     return `Rs ${Math.round(value).toLocaleString()}`
 }
@@ -399,8 +416,8 @@ export default function ProductsPage() {
                 purchase_rate: numberValue(form.purchaseRate),
                 sale_rate: numberValue(form.saleRate),
                 gst: numberValue(form.gst),
-                expiry_date: form.expiry || null,
-                purchase_date: form.purchaseDate || null,
+                expiry_date: normalizeDateInput(form.expiry),
+                purchase_date: normalizeDateInput(form.purchaseDate),
             }
 
             const {
@@ -1289,11 +1306,25 @@ function ProductFormModal({
                             <div className="grid grid-cols-2 gap-3">
                                 <label className="text-xs text-neutral-400">
                                     Expiry date
-                                    <input className={`${inputClass} mt-1`} type="date" value={form.expiry} onChange={(event) => onChange("expiry", event.target.value)} />
+                                    <input
+                                        className={`${inputClass} mt-1`}
+                                        type="text"
+                                        inputMode="numeric"
+                                        placeholder="DD/MM/YYYY"
+                                        value={form.expiry}
+                                        onChange={(event) => onChange("expiry", event.target.value)}
+                                    />
                                 </label>
                                 <label className="text-xs text-neutral-400">
                                     Purchase date
-                                    <input className={`${inputClass} mt-1`} type="date" value={form.purchaseDate} onChange={(event) => onChange("purchaseDate", event.target.value)} />
+                                    <input
+                                        className={`${inputClass} mt-1`}
+                                        type="text"
+                                        inputMode="numeric"
+                                        placeholder="DD/MM/YYYY"
+                                        value={form.purchaseDate}
+                                        onChange={(event) => onChange("purchaseDate", event.target.value)}
+                                    />
                                 </label>
                             </div>
                         )}

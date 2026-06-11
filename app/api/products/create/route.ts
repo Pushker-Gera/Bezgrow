@@ -8,10 +8,10 @@ export const dynamic = "force-dynamic"
 
 function productMutationErrorMessage(message?: string | null, details?: string | null) {
   const text = `${message || ""} ${details || ""}`.toLowerCase()
-  if (text.includes("idx_products_org_sku_unique") || text.includes("duplicate") && text.includes("sku")) {
+  if (text.includes("idx_products_org_sku_unique") || (text.includes("duplicate") && text.includes("sku"))) {
     return "A product with this SKU already exists."
   }
-  if (text.includes("idx_products_org_barcode_unique") || text.includes("duplicate") && text.includes("barcode")) {
+  if (text.includes("idx_products_org_barcode_unique") || (text.includes("duplicate") && text.includes("barcode"))) {
     return "A product with this barcode already exists."
   }
   if (text.includes("column") && text.includes("does not exist")) {
