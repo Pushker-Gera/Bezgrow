@@ -12,8 +12,9 @@ function safeFilename(value: string) {
   return value.replace(/[^a-z0-9._-]+/gi, "-").replace(/^-+|-+$/g, "") || "invoice"
 }
 
-export async function GET(_request: Request, context: RouteContext) {
+export async function GET(request: Request, context: RouteContext) {
   const { id } = await context.params
+  const download = new URL(request.url).searchParams.get("download") === "1"
 
   const { data: invoiceData, error: invoiceError } = await adminSupabase
     .from("invoices")
@@ -58,7 +59,7 @@ export async function GET(_request: Request, context: RouteContext) {
   return new Response(pdf, {
     headers: {
       "Content-Type": "application/pdf",
-      "Content-Disposition": `inline; filename="${filename}"`,
+      "Content-Disposition": `${download ? "attachment" : "inline"}; filename="${filename}"`,
       "Cache-Control": "public, max-age=300, stale-while-revalidate=86400",
       "X-Content-Type-Options": "nosniff",
     },
