@@ -6,6 +6,48 @@ import { businessTypeFeatures, categoryFeatures } from "@/lib/business-features"
 
 export const dynamic = "force-dynamic"
 
+type OrganizationInsertPayload = Record<string, string | null>
+
+function missingColumnFromError(error: { message?: string | null } | null) {
+  if (!error?.message) return null
+  const match =
+    error.message.match(/Could not find the '([^']+)' column/i) ||
+    error.message.match(/column "([^"]+)" of relation/i) ||
+    error.message.match(/column "([^"]+)" does not exist/i)
+
+  return match?.[1] || null
+}
+
+async function insertOrganizationWithSchemaFallback(payload: OrganizationInsertPayload) {
+  const retryPayload = { ...payload }
+  const removedColumns: string[] = []
+  const requiredColumns = new Set(["name", "owner_id"])
+
+  for (let attempt = 0; attempt < 12; attempt += 1) {
+    const result = await adminSupabase
+      .from("organizations")
+      .insert(retryPayload)
+      .select("id,name")
+      .single()
+
+    const missingColumn = missingColumnFromError(result.error)
+    if (!result.error || !missingColumn || requiredColumns.has(missingColumn)) {
+      return { ...result, removedColumns }
+    }
+
+    if (!(missingColumn in retryPayload)) return { ...result, removedColumns }
+    delete retryPayload[missingColumn]
+    removedColumns.push(missingColumn)
+  }
+
+  const result = await adminSupabase
+    .from("organizations")
+    .insert(retryPayload)
+    .select("id,name")
+    .single()
+  return { ...result, removedColumns }
+}
+
 const createBusinessSchema = z.object({
   name: z.string().trim().min(2).max(160),
   industry: z.string().trim().max(120).optional().default(""),
@@ -60,27 +102,37 @@ export async function POST(request: Request) {
     }
 
     const payload = parsed.data
-    const { data: organization, error: orgError } = await adminSupabase
-      .from("organizations")
-      .insert({
-        name: payload.name,
-        industry: payload.industry,
-        currency: payload.currency,
-        business_type: payload.business_type,
-        business_category: payload.business_category,
-        gst_number: payload.gst_number,
-        phone: payload.phone,
-        email: payload.email,
-        fssai: payload.fssai,
-        website: payload.website,
-        address: payload.address,
-        branch_name: payload.branch_name || "Main Branch",
-        owner_id: user.id,
-      })
-      .select("id,name")
-      .single()
+    const { data: organization, error: orgError, removedColumns } = await insertOrganizationWithSchemaFallback({
+      name: payload.name,
+      industry: payload.industry,
+      currency: payload.currency,
+      business_type: payload.business_type,
+      business_category: payload.business_category,
+      gst_number: payload.gst_number,
+      phone: payload.phone,
+      email: payload.email,
+      fssai: payload.fssai,
+      website: payload.website,
+      address: payload.address,
+      branch_name: payload.branch_name || "Main Branch",
+      owner_id: user.id,
+    })
 
-    if (orgError || !organization) return fail("Business could not be created.", 400)
+    if (removedColumns.length > 0) {
+      console.warn("[workspace/create-business] organizations legacy schema fallback", {
+        removedColumns,
+        userId: user.id,
+      })
+    }
+
+    if (orgError || !organization) {
+      console.error("[workspace/create-business] organization insert failed", {
+        code: orgError?.code,
+        message: orgError?.message,
+        details: orgError?.details,
+      })
+      return fail("Business could not be created.", 400)
+    }
 
     const typeFeatures = businessTypeFeatures[payload.business_type] || []
     const industryFeatures = categoryFeatures[payload.business_category] || []

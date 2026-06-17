@@ -50,7 +50,7 @@ export async function GET(request: Request, context: RouteContext) {
     organization: organizationData as PrintRow | null,
     customer: customerData as PrintRow | null,
     products: (productRows || []) as PrintRow[],
-    origin: process.env.NEXT_PUBLIC_SITE_URL || "https://bezgrow.com",
+    origin: process.env.NEXT_PUBLIC_SITE_URL || "https://www.bezgrow.com",
   })
 
   const pdf = createInvoicePdf(printInvoice)

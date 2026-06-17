@@ -4,7 +4,7 @@ import { FeaturePage } from "@/components/marketing/FeaturePage"
 export const metadata: Metadata = {
   title: "ERP Software for Businesses | Bezgrow",
   description: "Use Bezgrow ERP for inventory, billing, customers, analytics, admin approvals, settings, and business operations.",
-  alternates: { canonical: "https://bezgrow.com/erp" },
+  alternates: { canonical: "https://www.bezgrow.com/erp" },
 }
 
 export default function ErpPage() {

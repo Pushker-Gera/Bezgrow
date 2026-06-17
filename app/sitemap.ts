@@ -1,7 +1,7 @@
 import type { MetadataRoute } from "next"
 import { seoLandingPages } from "@/lib/seo-pages"
 
-const siteUrl = "https://bezgrow.com"
+const siteUrl = "https://www.bezgrow.com"
 
 const publicRoutes = [
   {

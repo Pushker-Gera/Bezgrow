@@ -125,6 +125,8 @@ export async function POST(request: Request) {
       return fail("Order items could not be created.", 500)
     }
 
+    const stockRollbacks: Array<{ productId: string; previousStock: number }> = []
+
     for (const [productId, quantity] of quantityByProductId) {
       const previousStock = productStock.get(productId) || 0
       const nextStock = previousStock - quantity
@@ -134,7 +136,22 @@ export async function POST(request: Request) {
         .eq("id", productId)
         .eq("organization_id", workspace.context.organizationId)
 
-      if (stockError) return fail("Order was created, but product stock could not be updated.", 500)
+      if (stockError) {
+        await Promise.all([
+          ...stockRollbacks.map((rollback) =>
+            adminSupabase
+              .from("products")
+              .update({ stock: rollback.previousStock, updated_at: new Date().toISOString() })
+              .eq("id", rollback.productId)
+              .eq("organization_id", workspace.context.organizationId)
+          ),
+          adminSupabase.from("order_items").delete().eq("order_id", order.id).eq("organization_id", workspace.context.organizationId),
+          adminSupabase.from("orders").delete().eq("id", order.id).eq("organization_id", workspace.context.organizationId),
+        ])
+        return fail("Order could not be completed because stock update failed. No order was saved.", 500)
+      }
+
+      stockRollbacks.push({ productId, previousStock })
 
       await insertStockMovement({
         organization_id: workspace.context.organizationId,

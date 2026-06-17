@@ -53,9 +53,7 @@ export default function LoginPage() {
     }
 
     const getSiteUrl = useCallback(() => {
-        const configuredUrl = process.env.NEXT_PUBLIC_SITE_URL?.trim()
-        if (configuredUrl) return configuredUrl.replace(/\/$/, "")
-        return (window.location.origin || "http://localhost:3000").replace(/\/$/, "")
+        return (window.location.origin || process.env.NEXT_PUBLIC_SITE_URL || "http://localhost:3000").replace(/\/$/, "")
     }, [])
 
     const redirectToCallback = useCallback((accessToken: string, refreshToken: string, nextPath = getSafeNextPath("/dashboard")) => {

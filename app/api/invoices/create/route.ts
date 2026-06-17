@@ -193,6 +193,8 @@ export async function POST(request: Request) {
       return fail("Invoice items could not be created.", 400)
     }
 
+    const stockRollbacks: Array<{ productId: string; previousStock: number }> = []
+
     for (const [productId, quantity] of quantityByProductId) {
       const product = productById.get(productId)
       const previousStock = Number(product?.stock || 0)
@@ -204,7 +206,22 @@ export async function POST(request: Request) {
         .eq("id", productId)
         .eq("organization_id", workspace.context.organizationId)
 
-      if (stockError) return fail("Invoice was created, but stock update failed. Review stock manually.", 500)
+      if (stockError) {
+        await Promise.all([
+          ...stockRollbacks.map((rollback) =>
+            adminSupabase
+              .from("products")
+              .update({ stock: rollback.previousStock, updated_at: new Date().toISOString() })
+              .eq("id", rollback.productId)
+              .eq("organization_id", workspace.context.organizationId)
+          ),
+          adminSupabase.from("invoice_items").delete().eq("invoice_id", invoice.id).eq("organization_id", workspace.context.organizationId),
+          adminSupabase.from("invoices").delete().eq("id", invoice.id).eq("organization_id", workspace.context.organizationId),
+        ])
+        return fail("Invoice could not be completed because stock update failed. No invoice was saved.", 500)
+      }
+
+      stockRollbacks.push({ productId, previousStock })
 
       const { error: movementError, removedColumns } = await insertStockMovement({
         organization_id: workspace.context.organizationId,

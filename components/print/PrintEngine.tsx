@@ -65,11 +65,257 @@ export function PrintEngine({
     saveStoredPrintSettings(updated)
   }
 
+  function escapeHtml(value: string) {
+    return value
+      .replaceAll("&", "&amp;")
+      .replaceAll("<", "&lt;")
+      .replaceAll(">", "&gt;")
+      .replaceAll("\"", "&quot;")
+  }
+
+  function printWindowOverrides() {
+    const thermalPaperWidth = settings.thermalWidth === "58mm" ? "58mm" : "80mm"
+    const pageSize =
+      format === "thermal"
+        ? `${thermalPaperWidth} 160mm`
+        : format === "half-top"
+          ? "210mm 148.5mm"
+          : "A4 portrait"
+    const bodyWidth = format === "thermal" ? thermalPaperWidth : "210mm"
+
+    return `
+      <style>
+        @page { size: ${pageSize}; margin: 0; }
+        @media screen {
+          html, body { margin: 0; padding: 0; background: #e5e7eb; }
+          body { min-height: 100vh; display: flex; justify-content: center; align-items: flex-start; padding: 16px; }
+          .print-document { transform: none !important; transition: none !important; }
+          .invoice-paper { box-shadow: 0 12px 40px rgba(15, 23, 42, .18); }
+          .print-thermal { box-shadow: none !important; }
+        }
+        @media print {
+          html, body {
+            width: ${bodyWidth} !important;
+            max-width: ${bodyWidth} !important;
+            min-height: 0 !important;
+            margin: 0 !important;
+            padding: 0 !important;
+            overflow: visible !important;
+            background: #fff !important;
+            color: #000 !important;
+            print-color-adjust: exact !important;
+            -webkit-print-color-adjust: exact !important;
+          }
+          body * { visibility: visible !important; }
+          .no-print { display: none !important; }
+          .print-document {
+            position: static !important;
+            display: block !important;
+            width: ${bodyWidth} !important;
+            max-width: ${bodyWidth} !important;
+            height: auto !important;
+            min-height: 0 !important;
+            padding: 0 !important;
+            margin: 0 !important;
+            overflow: visible !important;
+            background: #fff !important;
+            print-color-adjust: exact !important;
+            -webkit-print-color-adjust: exact !important;
+            transform: none !important;
+            transition: none !important;
+          }
+          .invoice-paper {
+            box-shadow: none !important;
+            margin: 0 !important;
+            overflow: visible !important;
+            background: #fff !important;
+            color: #000 !important;
+          }
+          .print-a4 {
+            width: 210mm !important;
+            max-width: 210mm !important;
+            min-height: 297mm !important;
+            padding: 8mm !important;
+          }
+          .print-half-compact {
+            width: 210mm !important;
+            max-width: 210mm !important;
+            min-height: 297mm !important;
+            padding: 8mm !important;
+          }
+          .print-half-top {
+            width: 210mm !important;
+            max-width: 210mm !important;
+            min-height: 148.5mm !important;
+            max-height: 148.5mm !important;
+            padding: 0 !important;
+          }
+          .top-half-content {
+            height: 148.5mm !important;
+            min-height: 148.5mm !important;
+            max-height: 148.5mm !important;
+            padding: 5mm !important;
+            overflow: hidden !important;
+          }
+          .print-thermal {
+            width: ${thermalPaperWidth} !important;
+            max-width: ${thermalPaperWidth} !important;
+            min-height: 0 !important;
+            padding: ${settings.thermalWidth === "58mm" ? "2mm" : "3mm 4mm"} !important;
+            font-size: 11px !important;
+          }
+        }
+      </style>
+    `
+  }
+
+  function printableHtml(printDocumentHtml: string) {
+    const styleMarkup = Array.from(document.querySelectorAll('style, link[rel="stylesheet"]'))
+      .map((node) => node.outerHTML)
+      .join("\n")
+    const title = `${invoice.invoiceNumber || "Invoice"} - ${formatLabels[format]}`
+    const thermalPaperWidth = settings.thermalWidth === "58mm" ? "58mm" : "80mm"
+
+    return `<!doctype html>
+      <html data-print-format="${format}" data-thermal-width="${thermalPaperWidth}">
+        <head>
+          <meta charset="utf-8" />
+          <meta name="viewport" content="width=device-width, initial-scale=1" />
+          <title>${escapeHtml(title)}</title>
+          ${styleMarkup}
+          ${printWindowOverrides()}
+        </head>
+        <body>
+          <div class="print-document">${printDocumentHtml}</div>
+          <script>
+            (function () {
+              function waitForImages() {
+                var images = Array.prototype.slice.call(document.images || []);
+                return Promise.all(images.map(function (image) {
+                  if (image.complete) return Promise.resolve();
+                  return new Promise(function (resolve) {
+                    image.addEventListener("load", resolve, { once: true });
+                    image.addEventListener("error", resolve, { once: true });
+                  });
+                }));
+              }
+
+              function printWhenReady() {
+                var fontsReady = document.fonts && document.fonts.ready ? document.fonts.ready.catch(function () {}) : Promise.resolve();
+                Promise.all([waitForImages(), fontsReady]).then(function () {
+                  requestAnimationFrame(function () {
+                    requestAnimationFrame(function () {
+                      updateThermalPageSize();
+                      setTimeout(function () {
+                        window.focus();
+                        window.print();
+                      }, 250);
+                    });
+                  });
+                });
+              }
+
+              function updateThermalPageSize() {
+                if (document.documentElement.dataset.printFormat !== "thermal") return;
+
+                var paperWidth = document.documentElement.dataset.thermalWidth || "80mm";
+                var paper = document.querySelector(".invoice-paper") || document.querySelector(".print-document");
+                if (!paper) return;
+
+                var probe = document.createElement("div");
+                probe.style.position = "absolute";
+                probe.style.visibility = "hidden";
+                probe.style.pointerEvents = "none";
+                probe.style.width = "100mm";
+                probe.style.height = "0";
+                document.body.appendChild(probe);
+                var pxPerMm = probe.getBoundingClientRect().width / 100 || 96 / 25.4;
+                probe.remove();
+
+                var rect = paper.getBoundingClientRect();
+                var contentHeightPx = Math.max(paper.scrollHeight, rect.height);
+                var minHeightMm = paperWidth === "58mm" ? 45 : 55;
+                var pageHeightMm = Math.max(minHeightMm, Math.ceil(contentHeightPx / pxPerMm) + 4);
+                var style = document.getElementById("dynamic-thermal-page-size");
+
+                if (!style) {
+                  style = document.createElement("style");
+                  style.id = "dynamic-thermal-page-size";
+                  document.head.appendChild(style);
+                }
+
+                style.textContent =
+                  "@page { size: " + paperWidth + " " + pageHeightMm + "mm; margin: 0; }" +
+                  "@page thermal { size: " + paperWidth + " " + pageHeightMm + "mm; margin: 0; }" +
+                  "html, body, .print-document { height: auto !important; min-height: 0 !important; }" +
+                  ".print-thermal { min-height: 0 !important; }";
+              }
+
+              if (document.readyState === "complete") {
+                printWhenReady();
+              } else {
+                window.addEventListener("load", printWhenReady, { once: true });
+              }
+            })();
+          </script>
+        </body>
+      </html>`
+  }
+
+  function printFromHiddenFrame(html: string) {
+    const frame = document.createElement("iframe")
+    frame.setAttribute("title", "Invoice print")
+    frame.style.position = "fixed"
+    frame.style.right = "0"
+    frame.style.bottom = "0"
+    frame.style.width = "0"
+    frame.style.height = "0"
+    frame.style.border = "0"
+    frame.style.opacity = "0"
+    frame.style.pointerEvents = "none"
+
+    document.body.appendChild(frame)
+    const frameDocument = frame.contentDocument || frame.contentWindow?.document
+
+    if (!frameDocument) {
+      frame.remove()
+      return false
+    }
+
+    frame.contentWindow?.addEventListener("afterprint", () => frame.remove(), { once: true })
+    window.setTimeout(() => {
+      if (frame.parentNode) frame.remove()
+    }, 60000)
+
+    frameDocument.open()
+    frameDocument.write(html)
+    frameDocument.close()
+    return true
+  }
+
   function printInvoice() {
     document.documentElement.dataset.printFormat = format
     rememberReprint(effectiveInvoice, format)
     setHistory(getReprintHistory().filter((entry) => entry.invoiceId === invoice.id))
-    requestAnimationFrame(() => window.print())
+
+    const printDocument = document.querySelector(".print-preview-stage .print-document")
+
+    if (!printDocument) {
+      requestAnimationFrame(() => window.print())
+      return
+    }
+
+    const html = printableHtml(printDocument.innerHTML)
+    const printWindow = window.open("", "_blank", "popup,width=960,height=900")
+
+    if (!printWindow) {
+      if (!printFromHiddenFrame(html)) requestAnimationFrame(() => window.print())
+      return
+    }
+
+    printWindow.document.open()
+    printWindow.document.write(html)
+    printWindow.document.close()
   }
 
   function publicPdfUrl() {
@@ -262,7 +508,7 @@ function PrintEngineStyles({ format, thermalWidth }: { format: PrintFormat; ther
   const thermalPaperWidth = thermalWidth === "58mm" ? "58mm" : "80mm"
   const printPageSize =
     format === "thermal"
-      ? `${thermalPaperWidth} 297mm`
+      ? `${thermalPaperWidth} 160mm`
       : format === "half-top"
         ? "210mm 148.5mm"
         : "A4 portrait"
@@ -274,7 +520,7 @@ function PrintEngineStyles({ format, thermalWidth }: { format: PrintFormat; ther
       @page { size: A4 portrait; margin: 0; }
       @page half-compact { size: A4 portrait; margin: 0; }
       @page half-top { size: 210mm 148.5mm; margin: 0; }
-      @page thermal { size: 80mm 297mm; margin: 0; }
+      @page thermal { size: ${thermalPaperWidth} 160mm; margin: 0; }
       html[data-print-format="thermal"] { print-color-adjust: exact; -webkit-print-color-adjust: exact; }
       .enterprise-print-shell { min-height: 100dvh; display: grid; grid-template-columns: 320px 1fr; background: #0a0d12; color: #f8fafc; }
       .print-control-panel { height: 100dvh; overflow-y: auto; border-right: 1px solid rgba(255,255,255,.1); background: #070b12; padding: 22px; display: flex; flex-direction: column; gap: 20px; }

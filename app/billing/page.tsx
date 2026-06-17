@@ -4,7 +4,7 @@ import { FeaturePage } from "@/components/marketing/FeaturePage"
 export const metadata: Metadata = {
   title: "GST Billing Software | Bezgrow",
   description: "Create GST invoices, A4 bills, thermal receipts, payment records, and professional billing workflows with Bezgrow.",
-  alternates: { canonical: "https://bezgrow.com/billing" },
+  alternates: { canonical: "https://www.bezgrow.com/billing" },
 }
 
 export default function BillingPage() {

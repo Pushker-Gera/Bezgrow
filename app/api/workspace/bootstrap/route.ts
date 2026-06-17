@@ -27,6 +27,74 @@ type FeaturePayload = {
   feature_key: string
 }
 
+const organizationColumns = [
+  "id",
+  "name",
+  "industry",
+  "currency",
+  "timezone",
+  "locale",
+  "business_type",
+  "business_category",
+  "gst_number",
+  "phone",
+  "email",
+  "fssai",
+  "website",
+  "address",
+  "branch_name",
+]
+
+function missingColumnFromError(error: { message?: string | null } | null) {
+  if (!error?.message) return null
+  const match =
+    error.message.match(/Could not find the '([^']+)' column/i) ||
+    error.message.match(/column "([^"]+)" of relation/i) ||
+    error.message.match(/column "([^"]+)" does not exist/i) ||
+    error.message.match(/column ([\w.]+) does not exist/i)
+
+  return match?.[1]?.split(".").pop() || null
+}
+
+async function fetchOrganizationWithSchemaFallback(filters: { id?: string; ownerId?: string }) {
+  const requiredColumns = new Set(["id", "name"])
+  let activeColumns = [...organizationColumns]
+
+  for (let attempt = 0; attempt < organizationColumns.length; attempt += 1) {
+    let query = adminSupabase
+      .from("organizations")
+      .select(activeColumns.join(","))
+
+    if (filters.id) {
+      query = query.eq("id", filters.id)
+    }
+
+    if (filters.ownerId) {
+      query = query.eq("owner_id", filters.ownerId).order("created_at", { ascending: true }).limit(1)
+    }
+
+    const result = await query.maybeSingle()
+    if (!result.error) {
+      return result.data as OrganizationPayload | null
+    }
+
+    const missingColumn = missingColumnFromError(result.error)
+    if (!missingColumn || requiredColumns.has(missingColumn) || !activeColumns.includes(missingColumn)) {
+      console.error("[workspace/bootstrap] organization lookup failed", {
+        code: result.error.code,
+        message: result.error.message,
+        details: result.error.details,
+        activeColumns,
+      })
+      return null
+    }
+
+    activeColumns = activeColumns.filter((column) => column !== missingColumn)
+  }
+
+  return null
+}
+
 export async function GET(request: Request) {
   try {
     const user = await getAuthenticatedUser(request)
@@ -53,31 +121,30 @@ export async function GET(request: Request) {
     let membershipRole = membershipRow?.role || null
 
     if (membershipRow?.organization_id) {
-      const { data } = await adminSupabase
-        .from("organizations")
-        .select("id, name, industry, currency, timezone, locale, business_type, business_category, gst_number, phone, email, fssai, website, address, branch_name")
-        .eq("id", membershipRow.organization_id)
-        .maybeSingle()
-
-      organization = data as OrganizationPayload | null
+      organization = await fetchOrganizationWithSchemaFallback({ id: membershipRow.organization_id })
     }
 
     if (!organization) {
-      const { data } = await adminSupabase
-        .from("organizations")
-        .select("id, name, industry, currency, timezone, locale, business_type, business_category, gst_number, phone, email, fssai, website, address, branch_name")
-        .eq("owner_id", user.id)
-        .order("created_at", { ascending: true })
-        .limit(1)
-        .maybeSingle()
-
-      organization = data as OrganizationPayload | null
+      organization = await fetchOrganizationWithSchemaFallback({ ownerId: user.id })
       if (organization) membershipRole ||= "owner"
     }
 
     const isAdmin = isConfiguredAdmin(user.email ?? profile?.email, profile?.role)
     const organizationId = organization?.id || null
     const hasCompletedBusiness = isAdmin || Boolean(profile?.business_created || organizationId)
+
+    if (organizationId && !membershipRow?.organization_id) {
+      await adminSupabase
+        .from("organization_members")
+        .upsert(
+          {
+            user_id: user.id,
+            organization_id: organizationId,
+            role: membershipRole || "owner",
+          },
+          { onConflict: "user_id,organization_id", ignoreDuplicates: true }
+        )
+    }
 
     if (organizationId && profile && profile.business_created === false) {
       await adminSupabase

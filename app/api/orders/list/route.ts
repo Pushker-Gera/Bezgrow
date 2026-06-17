@@ -14,9 +14,10 @@ function missingColumnFromError(error: { message?: string | null } | null) {
   const match =
     error.message.match(/Could not find the '([^']+)' column/i) ||
     error.message.match(/column "([^"]+)" of relation/i) ||
-    error.message.match(/column "([^"]+)" does not exist/i)
+    error.message.match(/column "([^"]+)" does not exist/i) ||
+    error.message.match(/column ([\w.]+) does not exist/i)
 
-  return match?.[1] || null
+  return match?.[1]?.split(".").pop() || null
 }
 
 function buildOrdersQuery(
@@ -25,21 +26,19 @@ function buildOrdersQuery(
   pagination: ReturnType<typeof parsePagination>,
   from: number,
   to: number,
-  courierField: "courier_name" | "courier"
+  columns: string[]
 ) {
+  const searchableColumns = ["order_number", "customer_name", "tracking_number", "courier_name", "courier"].filter((column) => columns.includes(column))
   let query = adminSupabase
     .from("orders")
-    .select(
-      `id,order_number,customer_id,customer_name,customer_phone,customer_address,total_amount,grand_total,total,order_status,status,payment_status,tracking_number,${courierField},created_at,updated_at`,
-      { count: "exact" }
-    )
+    .select(columns.join(","), { count: "exact" })
     .eq("organization_id", organizationId)
     .order("created_at", { ascending: false })
     .range(from, to)
 
-  if (pagination.search) {
+  if (pagination.search && searchableColumns.length) {
     const term = pagination.search.replaceAll(",", " ")
-    query = query.or(`order_number.ilike.%${term}%,customer_name.ilike.%${term}%,tracking_number.ilike.%${term}%,${courierField}.ilike.%${term}%`)
+    query = query.or(searchableColumns.map((column) => `${column}.ilike.%${term}%`).join(","))
   }
 
   return query
@@ -52,16 +51,50 @@ export async function GET(request: Request) {
   const pagination = parsePagination(request)
   const { from, to } = paginationRange(pagination)
   const { adminSupabase } = await import("@/lib/supabase/admin")
+  const requiredColumns = new Set(["id", "order_number", "customer_name", "total_amount", "created_at"])
+  const columns = [
+    "id",
+    "order_number",
+    "customer_id",
+    "customer_name",
+    "customer_phone",
+    "customer_address",
+    "total_amount",
+    "grand_total",
+    "total",
+    "order_status",
+    "status",
+    "payment_status",
+    "tracking_number",
+    "courier_name",
+    "courier",
+    "created_at",
+    "updated_at",
+  ]
 
-  let result = await buildOrdersQuery(adminSupabase, workspace.context.organizationId, pagination, from, to, "courier_name")
-  if (missingColumnFromError(result.error) === "courier_name") {
-    result = await buildOrdersQuery(adminSupabase, workspace.context.organizationId, pagination, from, to, "courier")
+  let activeColumns = [...columns]
+  let result = await buildOrdersQuery(adminSupabase, workspace.context.organizationId, pagination, from, to, activeColumns)
+
+  for (let attempt = 0; attempt < columns.length; attempt += 1) {
+    const missingColumn = missingColumnFromError(result.error)
+    if (!missingColumn || requiredColumns.has(missingColumn) || !activeColumns.includes(missingColumn)) break
+
+    activeColumns = activeColumns.filter((column) => column !== missingColumn)
+    result = await buildOrdersQuery(adminSupabase, workspace.context.organizationId, pagination, from, to, activeColumns)
   }
 
   const { data, error, count } = result
-  if (error) return fail("Orders failed to load.", 500)
+  if (error) {
+    console.error("[orders/list] query failed", {
+      code: error.code,
+      message: error.message,
+      details: error.details,
+      activeColumns,
+    })
+    return fail("Orders failed to load.", 500)
+  }
 
-  const rows = ((data || []) as OrderListRow[]).map((order) => ({
+  const rows = ((data || []) as unknown as OrderListRow[]).map((order) => ({
     ...order,
     courier_name: order.courier_name || order.courier || null,
   }))

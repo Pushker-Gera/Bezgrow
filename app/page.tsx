@@ -1,7 +1,7 @@
 import type { Metadata } from "next"
 import HomeClient from "./home-client"
 
-const siteUrl = "https://bezgrow.com"
+const siteUrl = "https://www.bezgrow.com"
 const title = "Bezgrow | Inventory Management, GST Billing & ERP Software"
 const description =
   "Bezgrow is a cloud-based inventory management, GST billing, retail POS and ERP software platform designed for retail, wholesale and service businesses."

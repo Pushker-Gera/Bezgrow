@@ -77,10 +77,6 @@ export async function requireWorkspace(request: Request): Promise<
     return { ok: false, status: 403, error: "Account approval is pending." }
   }
 
-  if (profile.business_created === false && profile.role !== "admin") {
-    return { ok: false, status: 403, error: "Business setup is required." }
-  }
-
   let membershipQuery = adminSupabase
     .from("organization_members")
     .select("organization_id, role")
@@ -92,14 +88,63 @@ export async function requireWorkspace(request: Request): Promise<
 
   const { data: membership, error: membershipError } = await membershipQuery.limit(1).maybeSingle()
 
-  if (membershipError || !membership?.organization_id) {
+  let workspaceOrganizationId = membership?.organization_id || null
+  let workspaceRole = membership?.role || "member"
+
+  if (membershipError) {
+    return { ok: false, status: 403, error: "No workspace is connected to this account." }
+  }
+
+  if (!workspaceOrganizationId) {
+    let ownedOrganizationQuery = adminSupabase
+      .from("organizations")
+      .select("id")
+      .eq("owner_id", userId)
+      .order("created_at", { ascending: true })
+      .limit(1)
+
+    if (requestedOrganizationId) {
+      ownedOrganizationQuery = ownedOrganizationQuery.eq("id", requestedOrganizationId)
+    }
+
+    const { data: ownedOrganization } = await ownedOrganizationQuery.maybeSingle()
+
+    if (ownedOrganization?.id) {
+      workspaceOrganizationId = ownedOrganization.id
+      workspaceRole = "owner"
+
+      await adminSupabase
+        .from("organization_members")
+        .upsert(
+          {
+            user_id: userId,
+            organization_id: workspaceOrganizationId,
+            role: "owner",
+          },
+          { onConflict: "user_id,organization_id", ignoreDuplicates: true }
+        )
+
+      if (profile.business_created === false) {
+        await adminSupabase
+          .from("profiles")
+          .update({ business_created: true, updated_at: new Date().toISOString() })
+          .eq("id", userId)
+      }
+    }
+  }
+
+  if (!workspaceOrganizationId) {
+    if (profile.business_created === false && profile.role !== "admin") {
+      return { ok: false, status: 403, error: "Business setup is required." }
+    }
+
     return { ok: false, status: 403, error: "No workspace is connected to this account." }
   }
 
   const { data: organization, error: organizationError } = await adminSupabase
     .from("organizations")
     .select("id, name, currency, timezone, locale")
-    .eq("id", membership.organization_id)
+    .eq("id", workspaceOrganizationId)
     .maybeSingle()
 
   if (organizationError || !organization) {
@@ -109,7 +154,7 @@ export async function requireWorkspace(request: Request): Promise<
   const { data: featureRows } = await adminSupabase
     .from("organization_features")
     .select("feature_key")
-    .eq("organization_id", membership.organization_id)
+    .eq("organization_id", workspaceOrganizationId)
     .eq("is_enabled", true)
 
   return {
@@ -117,9 +162,9 @@ export async function requireWorkspace(request: Request): Promise<
     context: {
       userId,
       email: user.email ?? null,
-      organizationId: membership.organization_id,
+      organizationId: workspaceOrganizationId,
       organizationName: organization.name || "Business",
-      memberRole: membership.role || "member",
+      memberRole: workspaceRole,
       profileRole: profile.role || "user",
       currency: organization.currency || "INR",
       timezone: organization.timezone || "Asia/Kolkata",

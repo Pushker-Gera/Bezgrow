@@ -60,7 +60,7 @@ export default function PrintInvoicePage() {
   const printInvoice = useMemo<PrintInvoice | null>(() => {
     if (!invoice) return null
 
-    const origin = typeof window === "undefined" ? "https://bezgrow.com" : window.location.origin
+    const origin = typeof window === "undefined" ? "https://www.bezgrow.com" : window.location.origin
 
     return buildPrintInvoice({ invoice, items, organization, customer, products, origin })
   }, [customer, invoice, items, organization, products])

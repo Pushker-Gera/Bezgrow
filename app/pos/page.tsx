@@ -4,7 +4,7 @@ import { FeaturePage } from "@/components/marketing/FeaturePage"
 export const metadata: Metadata = {
   title: "Retail POS Software | Bezgrow",
   description: "Fast retail POS billing with barcode scanning, customer management, payment tracking, and thermal receipt printing.",
-  alternates: { canonical: "https://bezgrow.com/pos" },
+  alternates: { canonical: "https://www.bezgrow.com/pos" },
 }
 
 export default function PosPage() {

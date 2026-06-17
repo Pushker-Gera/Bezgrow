@@ -7,19 +7,24 @@ export async function getOrganizationId() {
     if (typeof window !== "undefined") {
         try {
             const cached = JSON.parse(sessionStorage.getItem(cacheKey) || "null") as { value?: string | null; expiresAt?: number } | null
-            if (cached?.expiresAt && cached.expiresAt > now) return cached.value || null
+            if (cached?.expiresAt && cached.expiresAt > now && cached.value) return cached.value
         } catch {
             sessionStorage.removeItem(cacheKey)
         }
     }
 
     try {
-        const payload = await getWorkspaceBootstrap()
+        let payload = await getWorkspaceBootstrap()
         if (!payload?.success) return null
 
-        const organizationId = payload.organization?.id || null
+        let organizationId = payload.organization?.id || payload.membership?.organization_id || null
 
-        if (typeof window !== "undefined") {
+        if (!organizationId) {
+            payload = await getWorkspaceBootstrap({ forceFresh: true })
+            organizationId = payload?.organization?.id || payload?.membership?.organization_id || null
+        }
+
+        if (organizationId && typeof window !== "undefined") {
             sessionStorage.setItem(cacheKey, JSON.stringify({ value: organizationId, expiresAt: now + 120000 }))
         }
 

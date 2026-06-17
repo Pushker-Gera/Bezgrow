@@ -4,6 +4,7 @@ import { writeAdminLog } from "@/lib/api/auth"
 import { adminSupabase } from "@/lib/supabase/admin"
 import { productMutationErrorMessage } from "@/lib/api/product-errors"
 import { productUpdateSchema, productValidationMessage } from "@/lib/api/product-schema"
+import { insertStockMovement } from "@/lib/api/stock-movements"
 
 export const dynamic = "force-dynamic"
 
@@ -15,7 +16,12 @@ export async function POST(request: Request) {
     const parsed = productUpdateSchema.safeParse(await request.json())
     if (!parsed.success) return fail(productValidationMessage(parsed.error), 400)
 
-    const { id, ...payload } = parsed.data
+    const { id, ...inputPayload } = parsed.data
+    const payload = {
+      ...inputPayload,
+      description: inputPayload.description || "",
+      price: inputPayload.price ?? inputPayload.sale_rate ?? inputPayload.mrp ?? inputPayload.purchase_rate ?? 0,
+    }
     const stock = Number(payload.stock || 0)
     if (stock < 0) return fail("Stock cannot be negative.", 400)
 
@@ -49,7 +55,7 @@ export async function POST(request: Request) {
     const stockDifference = stock - previousStock
 
     if (stockDifference !== 0) {
-      await adminSupabase.from("stock_movements").insert({
+      const { error: movementError } = await insertStockMovement({
         organization_id: workspace.context.organizationId,
         product_id: id,
         type: "adjustment",
@@ -58,6 +64,13 @@ export async function POST(request: Request) {
         new_stock: stock,
         reason: "Product master stock adjustment",
       })
+      if (movementError) {
+        console.warn("[products/update] product updated but stock movement could not be recorded", {
+          productId: id,
+          code: movementError.code,
+          message: movementError.message,
+        })
+      }
     }
 
     await writeAdminLog({

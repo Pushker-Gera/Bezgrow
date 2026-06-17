@@ -4,7 +4,7 @@ import ChunkReloadGuard from "@/components/chunk-reload-guard"
 import EntryCalculatorAnimation from "@/components/EntryCalculatorAnimation"
 import PwaRegistration from "@/components/PwaRegistration"
 
-const siteUrl = "https://bezgrow.com"
+const siteUrl = "https://www.bezgrow.com"
 
 export const metadata: Metadata = {
   metadataBase: new URL(siteUrl),

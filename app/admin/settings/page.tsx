@@ -30,6 +30,13 @@ type AdminMetricsResponse = {
   logs?: LogRow[]
 }
 
+type AdminSettingsResponse = {
+  success: boolean
+  error?: string
+  message?: string
+  settings?: Partial<PlatformSettings> | null
+}
+
 const defaultSettings: PlatformSettings = {
   platform_name: "Bezgrow ERP",
   support_email: "support@bezgrow.com",
@@ -97,19 +104,23 @@ export default function AdminSettingsPage() {
         setNotice("Admin session could not be checked. Retrying with secure cookies.")
       }
 
-      const [settingsResult, metricsResponse] = await Promise.all([
-        supabase.from("platform_settings").select("*").maybeSingle(),
+      const [settingsResponse, metricsResponse] = await Promise.all([
+        fetch("/api/admin/settings", {
+          headers: session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : undefined,
+          cache: "no-store",
+        }),
         fetch("/api/admin/metrics", {
           headers: session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : undefined,
           cache: "no-store",
         }),
       ])
 
-      if (settingsResult.error) {
-        setNotice(settingsResult.error.message)
-      }
-
+      const settingsPayload = (await settingsResponse.json()) as AdminSettingsResponse
       const metrics = (await metricsResponse.json()) as AdminMetricsResponse
+
+      if (!settingsResponse.ok || !settingsPayload.success) {
+        setNotice(settingsPayload.error || "Platform settings failed to load.")
+      }
 
       if (!metricsResponse.ok || !metrics.success) {
         setNotice(metrics.error || "Admin settings metrics failed to load.")
@@ -117,10 +128,10 @@ export default function AdminSettingsPage() {
 
       const pendingProfiles = (metrics.profiles || []).filter((profile) => profile.approved === false)
 
-      if (settingsResult.data) {
+      if (settingsPayload.settings) {
         setSettings({
           ...defaultSettings,
-          ...(settingsResult.data as Partial<PlatformSettings>),
+          ...settingsPayload.settings,
         })
       }
 
@@ -184,13 +195,25 @@ export default function AdminSettingsPage() {
         support_email: supportEmail,
       }
 
-      const { error } = await supabase.from("platform_settings").upsert(payload)
-      if (error) {
-        setNotice(error.message)
+      const {
+        data: { session },
+      } = await supabase.auth.getSession()
+
+      const response = await fetch("/api/admin/settings", {
+        method: "PATCH",
+        headers: {
+          "Content-Type": "application/json",
+          ...(session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : {}),
+        },
+        body: JSON.stringify(payload),
+      })
+      const result = (await response.json()) as AdminSettingsResponse
+
+      if (!response.ok || !result.success) {
+        setNotice(result.error || "Platform settings could not be saved.")
         return
       }
 
-      await writeSystemLog("SETTINGS_UPDATED", "Platform settings updated from admin control center.", false)
       setNotice("Platform settings saved successfully.")
       await fetchSettings()
     } catch {
@@ -202,9 +225,21 @@ export default function AdminSettingsPage() {
 
   async function writeSystemLog(action: string, description: string, showNotice = true) {
     try {
-      const { error } = await supabase.from("admin_logs").insert({ action, description })
-      if (showNotice) setNotice(error ? error.message : description)
-      if (!error) await fetchSettings()
+      const {
+        data: { session },
+      } = await supabase.auth.getSession()
+      const response = await fetch("/api/admin/settings", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          ...(session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : {}),
+        },
+        body: JSON.stringify({ action, description }),
+      })
+      const result = (await response.json()) as AdminSettingsResponse
+
+      if (showNotice) setNotice(response.ok && result.success ? description : result.error || "System action could not be recorded.")
+      if (response.ok && result.success) await fetchSettings()
     } catch {
       if (showNotice) setNotice("System action could not be recorded.")
     }

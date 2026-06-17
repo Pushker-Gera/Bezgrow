@@ -3,7 +3,7 @@ import Link from "next/link"
 import { notFound } from "next/navigation"
 import { getSeoLandingPage, seoLandingPages } from "@/lib/seo-pages"
 
-const siteUrl = "https://bezgrow.com"
+const siteUrl = "https://www.bezgrow.com"
 
 type SeoPageProps = {
   params: Promise<{ slug: string }>

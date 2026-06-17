@@ -4,7 +4,7 @@ import { FeaturePage } from "@/components/marketing/FeaturePage"
 export const metadata: Metadata = {
   title: "Inventory Management Software | Bezgrow",
   description: "Manage stock, batches, suppliers, warehouses, expiry tracking, low stock alerts, and inventory movement with Bezgrow.",
-  alternates: { canonical: "https://bezgrow.com/inventory" },
+  alternates: { canonical: "https://www.bezgrow.com/inventory" },
 }
 
 export default function InventoryPage() {

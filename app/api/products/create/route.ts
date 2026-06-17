@@ -4,6 +4,7 @@ import { writeAdminLog } from "@/lib/api/auth"
 import { adminSupabase } from "@/lib/supabase/admin"
 import { productMutationErrorMessage } from "@/lib/api/product-errors"
 import { productPayloadSchema, productValidationMessage } from "@/lib/api/product-schema"
+import { insertStockMovement } from "@/lib/api/stock-movements"
 
 export const dynamic = "force-dynamic"
 
@@ -17,11 +18,16 @@ export async function POST(request: Request) {
 
     const stock = Number(parsed.data.stock || 0)
     if (stock < 0) return fail("Stock cannot be negative.", 400)
+    const payload = {
+      ...parsed.data,
+      description: parsed.data.description || "",
+      price: parsed.data.price ?? parsed.data.sale_rate ?? parsed.data.mrp ?? parsed.data.purchase_rate ?? 0,
+    }
 
     const { data, error } = await adminSupabase
       .from("products")
       .insert({
-        ...parsed.data,
+        ...payload,
         organization_id: workspace.context.organizationId,
         stock,
       })
@@ -38,7 +44,7 @@ export async function POST(request: Request) {
     }
 
     if (stock !== 0) {
-      await adminSupabase.from("stock_movements").insert({
+      const { error: movementError } = await insertStockMovement({
         organization_id: workspace.context.organizationId,
         product_id: data.id,
         type: "opening_stock",
@@ -47,6 +53,13 @@ export async function POST(request: Request) {
         new_stock: stock,
         reason: "Initial product master stock",
       })
+      if (movementError) {
+        console.warn("[products/create] product created but opening stock movement could not be recorded", {
+          productId: data.id,
+          code: movementError.code,
+          message: movementError.message,
+        })
+      }
     }
 
     await writeAdminLog({

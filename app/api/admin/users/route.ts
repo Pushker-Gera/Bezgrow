@@ -30,12 +30,18 @@ export async function GET(request: Request) {
   const profileRows = data || []
   const userIds = profileRows.map((profile) => profile.id)
 
-  const [memberResult, statusResult] = await Promise.all([
+  const [memberResult, ownedOrganizationResult, statusResult] = await Promise.all([
     userIds.length
       ? adminSupabase
           .from("organization_members")
           .select("user_id,organization_id,role")
           .in("user_id", userIds)
+      : Promise.resolve({ data: [], error: null }),
+    userIds.length
+      ? adminSupabase
+          .from("organizations")
+          .select("id,owner_id")
+          .in("owner_id", userIds)
       : Promise.resolve({ data: [], error: null }),
     adminSupabase
       .from("profiles")
@@ -43,7 +49,7 @@ export async function GET(request: Request) {
       .limit(10000),
   ])
 
-  if (memberResult.error || statusResult.error) {
+  if (memberResult.error || ownedOrganizationResult.error || statusResult.error) {
     return fail("User metrics failed to load.", 500)
   }
 
@@ -53,6 +59,15 @@ export async function GET(request: Request) {
       memberByUser.set(member.user_id, {
         organization_id: member.organization_id,
         role: member.role,
+      })
+    }
+  })
+
+  ;(ownedOrganizationResult.data || []).forEach((organization) => {
+    if (organization.owner_id && organization.id && !memberByUser.has(organization.owner_id)) {
+      memberByUser.set(organization.owner_id, {
+        organization_id: organization.id,
+        role: "owner",
       })
     }
   })

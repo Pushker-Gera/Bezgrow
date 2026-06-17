@@ -3,6 +3,7 @@ import { requireWorkspace } from "@/lib/api/tenant"
 import { fail, ok, serverFail } from "@/lib/api/responses"
 import { writeAdminLog } from "@/lib/api/auth"
 import { adminSupabase } from "@/lib/supabase/admin"
+import { insertStockMovement } from "@/lib/api/stock-movements"
 
 export const dynamic = "force-dynamic"
 
@@ -43,7 +44,7 @@ export async function POST(request: Request) {
 
     if (updateError) return fail("Stock could not be adjusted.", 400)
 
-    const { error: movementError } = await adminSupabase.from("stock_movements").insert({
+    const { error: movementError } = await insertStockMovement({
       organization_id: workspace.context.organizationId,
       product_id: product.id,
       type: parsed.data.type,

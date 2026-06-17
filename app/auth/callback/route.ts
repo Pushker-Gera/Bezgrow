@@ -7,8 +7,7 @@ export const dynamic = "force-dynamic"
 
 function getSiteUrl(origin: string) {
   const configuredUrl = process.env.NEXT_PUBLIC_SITE_URL?.trim()
-  if (configuredUrl) return configuredUrl.replace(/\/$/, "")
-  return (process.env.NODE_ENV === "production" ? "https://bezgrow.com" : origin).replace(/\/$/, "")
+  return (origin || configuredUrl || "https://www.bezgrow.com").replace(/\/$/, "")
 }
 
 function getSafeNextPath(next: string | null) {

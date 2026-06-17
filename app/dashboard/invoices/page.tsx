@@ -312,14 +312,21 @@ export default function InvoicesPage() {
     setSavingId(invoiceId)
     setNotice("")
 
-    const { error } = await supabase
-      .from("invoices")
-      .update({ payment_status: status })
-      .eq("id", invoiceId)
-      .eq("organization_id", organizationId)
+    const {
+      data: { session },
+    } = await supabase.auth.getSession()
+    const response = await fetch("/api/invoices/update-status", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        ...(session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : {}),
+      },
+      body: JSON.stringify({ invoice_id: invoiceId, payment_status: status }),
+    })
+    const result = (await response.json().catch(() => null)) as { success?: boolean; error?: string } | null
 
-    if (error) {
-      setNotice(error.message)
+    if (!response.ok || !result?.success) {
+      setNotice(result?.error || "Invoice status could not be updated.")
       setSavingId(null)
       return
     }

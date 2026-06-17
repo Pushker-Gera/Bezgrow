@@ -5,6 +5,16 @@ import { parsePagination, paginationRange } from "@/lib/api/tenant"
 
 export const dynamic = "force-dynamic"
 
+function missingColumnFromError(error: { message?: string | null } | null) {
+  if (!error?.message) return null
+  const match =
+    error.message.match(/Could not find the '([^']+)' column/i) ||
+    error.message.match(/column "([^"]+)" of relation/i) ||
+    error.message.match(/column "([^"]+)" does not exist/i)
+
+  return match?.[1] || null
+}
+
 export async function GET(request: Request) {
   const admin = await requireAdmin(request)
   if (!admin.ok) return fail(admin.error, admin.status)
@@ -13,18 +23,42 @@ export async function GET(request: Request) {
   const { from, to } = paginationRange(pagination)
   const { adminSupabase } = await import("@/lib/supabase/admin")
 
+  const selectColumns = "id,name,industry,business_type,business_category,currency,timezone,locale,created_at,updated_at"
+  const legacySelectColumns = "id,name,industry,business_type,category,currency,timezone,locale,created_at,updated_at"
+
   let query = adminSupabase
     .from("organizations")
-    .select("id,name,business_type,category,currency,timezone,locale,created_at,updated_at", { count: "exact" })
+    .select(selectColumns, { count: "exact" })
     .order("created_at", { ascending: false })
     .range(from, to)
 
   if (pagination.search) {
     const term = pagination.search.replaceAll(",", " ")
-    query = query.or(`name.ilike.%${term}%,business_type.ilike.%${term}%,category.ilike.%${term}%,currency.ilike.%${term}%`)
+    query = query.or(`name.ilike.%${term}%,industry.ilike.%${term}%,business_type.ilike.%${term}%,business_category.ilike.%${term}%,currency.ilike.%${term}%`)
   }
 
-  const { data: organizations, error, count } = await query
+  let { data: organizations, error, count } = await query
+  if (missingColumnFromError(error) === "business_category") {
+    let legacyQuery = adminSupabase
+      .from("organizations")
+      .select(legacySelectColumns, { count: "exact" })
+      .order("created_at", { ascending: false })
+      .range(from, to)
+
+    if (pagination.search) {
+      const term = pagination.search.replaceAll(",", " ")
+      legacyQuery = legacyQuery.or(`name.ilike.%${term}%,industry.ilike.%${term}%,business_type.ilike.%${term}%,category.ilike.%${term}%,currency.ilike.%${term}%`)
+    }
+
+    const legacyResult = await legacyQuery
+    organizations = (legacyResult.data || []).map((organization) => ({
+      ...organization,
+      business_category: organization.category || null,
+    }))
+    error = legacyResult.error
+    count = legacyResult.count
+  }
+
   if (error) return fail("Businesses failed to load.", 500)
 
   const organizationIds = (organizations || []).map((org) => org.id)
