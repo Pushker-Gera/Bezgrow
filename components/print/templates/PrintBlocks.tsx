@@ -6,7 +6,21 @@ import { QRCodeSVG } from "qrcode.react"
 import type { PrintInvoice, PrintSettings } from "@/components/print/types"
 import { formatDate, formatMoney } from "@/components/print/utils"
 
+function joinFilled(parts: string[]) {
+  return parts.filter((part) => part.trim() && !part.endsWith(": -")).join(" | ")
+}
+
 export function HeaderBlock({ invoice, settings, compact = false }: { invoice: PrintInvoice; settings: PrintSettings; compact?: boolean }) {
+  const primaryDetails = joinFilled([
+    `GST: ${invoice.enterprise.gstNumber}`,
+    `Phone: ${invoice.enterprise.phone}`,
+    `Email: ${invoice.enterprise.email}`,
+  ])
+  const secondaryDetails = joinFilled([
+    `FSSAI: ${invoice.enterprise.fssai}`,
+    `Website: ${invoice.enterprise.website}`,
+  ])
+
   return (
     <header className="print-header-block">
       <div className="brand-block">
@@ -18,9 +32,9 @@ export function HeaderBlock({ invoice, settings, compact = false }: { invoice: P
         <div>
           <p className="print-eyebrow">{invoice.enterprise.businessType}</p>
           <h1>{invoice.enterprise.name}</h1>
-          <p>{invoice.enterprise.address}</p>
-          <p>GST: {invoice.enterprise.gstNumber} | Phone: {invoice.enterprise.phone} | Email: {invoice.enterprise.email}</p>
-          {!compact && <p>Drug Lic: {invoice.enterprise.drugLicense} | FSSAI: {invoice.enterprise.fssai} | Website: {invoice.enterprise.website}</p>}
+          {invoice.enterprise.address !== "-" && <p>{invoice.enterprise.address}</p>}
+          {primaryDetails && <p>{primaryDetails}</p>}
+          {!compact && secondaryDetails && <p>{secondaryDetails}</p>}
         </div>
       </div>
       <div className="invoice-meta-card">

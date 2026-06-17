@@ -3,6 +3,7 @@ import { fail, ok, serverFail } from "@/lib/api/responses"
 import { writeAdminLog } from "@/lib/api/auth"
 import { requireWorkspace } from "@/lib/api/tenant"
 import { adminSupabase } from "@/lib/supabase/admin"
+import { insertStockMovement } from "@/lib/api/stock-movements"
 
 export const dynamic = "force-dynamic"
 
@@ -54,9 +55,9 @@ export async function POST(request: Request) {
       .eq("id", product.id)
       .eq("organization_id", workspace.context.organizationId)
 
-    if (updateError) return fail("Product stock could not be updated.", 500)
+    if (updateError) return fail(`Product stock could not be updated: ${updateError.message}`, 500)
 
-    const { error: movementError } = await adminSupabase.from("stock_movements").insert({
+    const { error: movementError, removedColumns } = await insertStockMovement({
       organization_id: workspace.context.organizationId,
       product_id: product.id,
       quantity: parsed.data.mode === "transfer" ? -quantity : quantity,
@@ -68,7 +69,28 @@ export async function POST(request: Request) {
       reason: parsed.data.mode === "transfer" ? "Inventory moved to selected warehouse" : "Manual stock addition",
     })
 
-    if (movementError) return fail("Stock movement could not be recorded.", 500)
+    if (removedColumns.length > 0) {
+      console.warn("[inventory/simple-movement] stock_movements legacy schema fallback", {
+        removedColumns,
+        organizationId: workspace.context.organizationId,
+      })
+    }
+
+    if (movementError) {
+      console.error("[inventory/simple-movement] movement insert failed after stock update", {
+        code: movementError.code,
+        message: movementError.message,
+        details: movementError.details,
+        organizationId: workspace.context.organizationId,
+        productId: product.id,
+      })
+      return ok({
+        productId: product.id,
+        previousStock,
+        newStock: nextStock,
+        warning: `Stock was updated, but movement history could not be recorded: ${movementError.message}`,
+      })
+    }
 
     await writeAdminLog({
       action: parsed.data.mode === "transfer" ? "inventory.transferred" : "inventory.stock_added",

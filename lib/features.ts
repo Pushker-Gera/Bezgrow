@@ -14,6 +14,21 @@ export type FeatureKey =
   | "expiry_tracking"
   | "batch_tracking"
   | "quotation_system"
+  | "size_variants"
+  | "color_variants"
+  | "serial_numbers"
+  | "warranty_tracking"
+  | "prescription_required"
+  | "prescription_upload"
+  | "kot_printing"
+  | "table_management"
+  | "raw_materials"
+  | "recipe_tracking"
+  | "production_batches"
+  | "service_invoices"
+  | "weight_inventory"
+  | "weight_tracking"
+  | "purity_tracking"
   | "credit_notes"
   | "debit_notes"
   | "payment_receipts"
@@ -146,6 +161,114 @@ export const featureRegistry: Record<FeatureKey, FeatureDefinition> = {
     description: "Estimate and quotation foundation for pre-sales workflows.",
     category: "billing",
     requiresPlan: "growth",
+  },
+  size_variants: {
+    key: "size_variants",
+    label: "Variants",
+    description: "Size and variant-ready inventory structures.",
+    category: "inventory",
+    requiresPlan: "growth",
+  },
+  color_variants: {
+    key: "color_variants",
+    label: "Color variants",
+    description: "Color-level product variants for catalog-heavy inventory.",
+    category: "inventory",
+    requiresPlan: "growth",
+  },
+  serial_numbers: {
+    key: "serial_numbers",
+    label: "Serial numbers",
+    description: "Serialized stock control for devices, electronics, and warranty sales.",
+    category: "inventory",
+    requiresPlan: "growth",
+  },
+  warranty_tracking: {
+    key: "warranty_tracking",
+    label: "Warranty tracking",
+    description: "Capture warranty-ready sales and service details.",
+    category: "inventory",
+    requiresPlan: "growth",
+  },
+  prescription_required: {
+    key: "prescription_required",
+    label: "Prescription required",
+    description: "Medicine sale controls for prescription-only products.",
+    category: "billing",
+    requiresPlan: "growth",
+  },
+  prescription_upload: {
+    key: "prescription_upload",
+    label: "Prescription upload",
+    description: "Attach prescription evidence to pharmacy billing.",
+    category: "billing",
+    requiresPlan: "growth",
+    dependencies: ["prescription_required"],
+  },
+  kot_printing: {
+    key: "kot_printing",
+    label: "KOT printing",
+    description: "Kitchen order ticket workflows for restaurant and cafe operations.",
+    category: "orders",
+    requiresPlan: "growth",
+  },
+  table_management: {
+    key: "table_management",
+    label: "Table management",
+    description: "Table-aware ordering and billing for dine-in businesses.",
+    category: "orders",
+    requiresPlan: "growth",
+  },
+  raw_materials: {
+    key: "raw_materials",
+    label: "Raw materials",
+    description: "Track input stock used for manufacturing, food, or assembled products.",
+    category: "inventory",
+    requiresPlan: "growth",
+  },
+  recipe_tracking: {
+    key: "recipe_tracking",
+    label: "Recipe tracking",
+    description: "Connect recipes or bills of materials to stock consumption.",
+    category: "inventory",
+    requiresPlan: "growth",
+    dependencies: ["raw_materials"],
+  },
+  production_batches: {
+    key: "production_batches",
+    label: "Production batches",
+    description: "Batch manufactured goods with cost, quantity, and traceability.",
+    category: "inventory",
+    requiresPlan: "growth",
+  },
+  service_invoices: {
+    key: "service_invoices",
+    label: "Service invoices",
+    description: "Service-led billing for consultants, repairs, agencies, and support teams.",
+    category: "billing",
+    requiresPlan: "starter",
+  },
+  weight_inventory: {
+    key: "weight_inventory",
+    label: "Weight inventory",
+    description: "Weight-based stock for loose goods, grocery, jewellery, and bulk products.",
+    category: "inventory",
+    requiresPlan: "growth",
+  },
+  weight_tracking: {
+    key: "weight_tracking",
+    label: "Weight tracking",
+    description: "Track sold and remaining quantity by weight units.",
+    category: "inventory",
+    requiresPlan: "growth",
+    dependencies: ["weight_inventory"],
+  },
+  purity_tracking: {
+    key: "purity_tracking",
+    label: "Purity tracking",
+    description: "Jewellery purity and material-grade tracking for high-value inventory.",
+    category: "inventory",
+    requiresPlan: "enterprise",
   },
   credit_notes: {
     key: "credit_notes",

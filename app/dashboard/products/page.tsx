@@ -412,6 +412,10 @@ export default function ProductsPage() {
             setFormError("Product name is required.")
             return
         }
+        if (!form.saleRate.trim()) {
+            setFormError("Sale rate is required.")
+            return
+        }
 
         const expiryDate = normalizeDateInput(form.expiry)
         const purchaseDate = normalizeDateInput(form.purchaseDate)
@@ -442,6 +446,10 @@ export default function ProductsPage() {
 
         if (numberError) {
             setFormError(numberError)
+            return
+        }
+        if (Number(form.saleRate) <= 0) {
+            setFormError("Sale rate must be greater than 0.")
             return
         }
 
@@ -1166,7 +1174,6 @@ export default function ProductsPage() {
                     editMode={Boolean(editProduct)}
                     hasBarcodeScanning={hasBarcodeScanning}
                     hasBatchTracking={hasBatchTracking}
-                    hasExpiryTracking={hasExpiryTracking}
                     hasShippingLabels={hasShippingLabels}
                     hasSerialNumbers={hasSerialNumbers}
                     hasVariants={hasVariants}
@@ -1230,7 +1237,6 @@ function ProductFormModal({
     editMode,
     hasBarcodeScanning,
     hasBatchTracking,
-    hasExpiryTracking,
     hasShippingLabels,
     hasSerialNumbers,
     hasVariants,
@@ -1245,7 +1251,6 @@ function ProductFormModal({
     editMode: boolean
     hasBarcodeScanning: boolean
     hasBatchTracking: boolean
-    hasExpiryTracking: boolean
     hasShippingLabels: boolean
     hasSerialNumbers: boolean
     hasVariants: boolean
@@ -1355,28 +1360,26 @@ function ProductFormModal({
                         {hasBatchTracking && (
                             <input className={inputClass} placeholder="Batch number" value={form.batchNo} onChange={(event) => onChange("batchNo", event.target.value)} />
                         )}
-                        {hasExpiryTracking && (
-                            <div className="grid grid-cols-2 gap-3">
-                                <label className="text-xs text-neutral-400">
-                                    Expiry date
-                                    <input
-                                        className={`${inputClass} mt-1`}
-                                        type="date"
-                                        value={form.expiry}
-                                        onChange={(event) => onChange("expiry", event.target.value)}
-                                    />
-                                </label>
-                                <label className="text-xs text-neutral-400">
-                                    Purchase date
-                                    <input
-                                        className={`${inputClass} mt-1`}
-                                        type="date"
-                                        value={form.purchaseDate}
-                                        onChange={(event) => onChange("purchaseDate", event.target.value)}
-                                    />
-                                </label>
-                            </div>
-                        )}
+                        <div className="grid grid-cols-2 gap-3">
+                            <label className="text-xs text-neutral-400">
+                                Expiry date
+                                <input
+                                    className={`${inputClass} mt-1`}
+                                    type="date"
+                                    value={form.expiry}
+                                    onChange={(event) => onChange("expiry", event.target.value)}
+                                />
+                            </label>
+                            <label className="text-xs text-neutral-400">
+                                Purchase date
+                                <input
+                                    className={`${inputClass} mt-1`}
+                                    type="date"
+                                    value={form.purchaseDate}
+                                    onChange={(event) => onChange("purchaseDate", event.target.value)}
+                                />
+                            </label>
+                        </div>
                     </section>
                 </div>
 

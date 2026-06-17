@@ -102,7 +102,12 @@ function drawHeader(page: PdfPage, invoice: PrintInvoice) {
   addText(page, 36, 42, invoice.enterprise.businessType, 8, true, BLUE)
   addText(page, 36, 61, invoice.enterprise.name, 24, true)
   addText(page, 36, 78, invoice.enterprise.address, 9, false, MUTED)
-  addText(page, 36, 93, `GST: ${invoice.enterprise.gstNumber} | Phone: ${invoice.enterprise.phone} | Email: ${invoice.enterprise.email}`, 9, false, MUTED)
+  const businessDetails = [
+    invoice.enterprise.gstNumber !== "-" ? `GST: ${invoice.enterprise.gstNumber}` : "",
+    invoice.enterprise.phone !== "-" ? `Phone: ${invoice.enterprise.phone}` : "",
+    invoice.enterprise.email !== "-" ? `Email: ${invoice.enterprise.email}` : "",
+  ].filter(Boolean).join(" | ")
+  if (businessDetails) addText(page, 36, 93, businessDetails, 9, false, MUTED)
 
   addBox(page, 388, 39, 171, 82, SOFT)
   addText(page, 404, 58, invoice.invoiceTitle, 8, true, MUTED)
@@ -265,4 +270,3 @@ export function createInvoicePdf(invoice: PrintInvoice) {
   pages.forEach((pdfPage, index) => addText(pdfPage, 510, 812, `Page ${index + 1} of ${pages.length}`, 8, false, MUTED))
   return buildPdfDocument(pages)
 }
-

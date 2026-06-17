@@ -3,8 +3,46 @@ import { fail, ok, serverFail } from "@/lib/api/responses"
 import { writeAdminLog } from "@/lib/api/auth"
 import { requireWorkspace } from "@/lib/api/tenant"
 import { adminSupabase } from "@/lib/supabase/admin"
+import { insertStockMovement } from "@/lib/api/stock-movements"
 
 export const dynamic = "force-dynamic"
+
+type OrderInsertPayload = Record<string, string | number | null>
+
+function missingColumnFromError(error: { message?: string | null } | null) {
+  if (!error?.message) return null
+  const match =
+    error.message.match(/Could not find the '([^']+)' column/i) ||
+    error.message.match(/column "([^"]+)" of relation/i) ||
+    error.message.match(/column "([^"]+)" does not exist/i)
+
+  return match?.[1] || null
+}
+
+async function insertOrderWithSchemaFallback(payload: OrderInsertPayload) {
+  const retryPayload = { ...payload }
+  const requiredColumns = new Set(["organization_id", "customer_name", "order_number", "total_amount"])
+
+  for (let attempt = 0; attempt < 10; attempt += 1) {
+    const result = await adminSupabase.from("orders").insert(retryPayload).select("id, order_number").single()
+    const missingColumn = missingColumnFromError(result.error)
+
+    if (!result.error || !missingColumn || requiredColumns.has(missingColumn)) {
+      return result
+    }
+
+    if (missingColumn === "courier_name" && "courier_name" in retryPayload) {
+      retryPayload.courier = retryPayload.courier_name
+      delete retryPayload.courier_name
+      continue
+    }
+
+    if (!(missingColumn in retryPayload)) return result
+    delete retryPayload[missingColumn]
+  }
+
+  return adminSupabase.from("orders").insert(retryPayload).select("id, order_number").single()
+}
 
 const orderItemSchema = z.object({
   product_id: z.string().uuid(),
@@ -32,7 +70,13 @@ export async function POST(request: Request) {
   if (!parsed.success) return fail(parsed.error.issues[0]?.message || "Invalid order.", 422)
 
   try {
-    const productIds = parsed.data.items.map((item) => item.product_id)
+    const productIds = Array.from(new Set(parsed.data.items.map((item) => item.product_id)))
+    const quantityByProductId = new Map<string, number>()
+
+    for (const item of parsed.data.items) {
+      quantityByProductId.set(item.product_id, (quantityByProductId.get(item.product_id) || 0) + item.quantity)
+    }
+
     const { data: products, error: productsError } = await adminSupabase
       .from("products")
       .select("id, stock")
@@ -42,30 +86,26 @@ export async function POST(request: Request) {
     if (productsError) return fail("Products could not be verified.", 500)
 
     const productStock = new Map((products || []).map((product) => [product.id, Number(product.stock || 0)]))
-    for (const item of parsed.data.items) {
-      if (!productStock.has(item.product_id)) return fail("One or more products were not found.", 404)
-      if ((productStock.get(item.product_id) || 0) < item.quantity) return fail("Order quantity exceeds available stock.", 409)
+    for (const [productId, quantity] of quantityByProductId) {
+      if (!productStock.has(productId)) return fail("One or more products were not found.", 404)
+      if ((productStock.get(productId) || 0) < quantity) return fail("Order quantity exceeds available stock.", 409)
     }
 
     const orderNumber = `ORD-${new Date().getFullYear()}-${Date.now()}`
     const totalAmount = parsed.data.items.reduce((sum, item) => sum + Number(item.total || 0), 0)
 
-    const { data: order, error: orderError } = await adminSupabase
-      .from("orders")
-      .insert({
-        organization_id: workspace.context.organizationId,
-        customer_name: parsed.data.customer_name,
-        customer_phone: parsed.data.customer_phone || null,
-        customer_address: parsed.data.customer_address || null,
-        order_number: orderNumber,
-        total_amount: totalAmount,
-        courier_name: parsed.data.courier_name || null,
-        tracking_number: parsed.data.tracking_number || null,
-        payment_mode: parsed.data.payment_mode,
-        sales_channel: parsed.data.sales_channel,
-      })
-      .select("id, order_number")
-      .single()
+    const { data: order, error: orderError } = await insertOrderWithSchemaFallback({
+      organization_id: workspace.context.organizationId,
+      customer_name: parsed.data.customer_name,
+      customer_phone: parsed.data.customer_phone || null,
+      customer_address: parsed.data.customer_address || null,
+      order_number: orderNumber,
+      total_amount: totalAmount,
+      courier_name: parsed.data.courier_name || null,
+      tracking_number: parsed.data.tracking_number || null,
+      payment_mode: parsed.data.payment_mode,
+      sales_channel: parsed.data.sales_channel,
+    })
 
     if (orderError || !order) return fail("Order could not be created.", 500)
 
@@ -80,24 +120,27 @@ export async function POST(request: Request) {
       }))
     )
 
-    if (itemError) return fail("Order items could not be created.", 500)
+    if (itemError) {
+      await adminSupabase.from("orders").delete().eq("id", order.id).eq("organization_id", workspace.context.organizationId)
+      return fail("Order items could not be created.", 500)
+    }
 
-    for (const item of parsed.data.items) {
-      const previousStock = productStock.get(item.product_id) || 0
-      const nextStock = previousStock - item.quantity
+    for (const [productId, quantity] of quantityByProductId) {
+      const previousStock = productStock.get(productId) || 0
+      const nextStock = previousStock - quantity
       const { error: stockError } = await adminSupabase
         .from("products")
         .update({ stock: nextStock, updated_at: new Date().toISOString() })
-        .eq("id", item.product_id)
+        .eq("id", productId)
         .eq("organization_id", workspace.context.organizationId)
 
       if (stockError) return fail("Order was created, but product stock could not be updated.", 500)
 
-      await adminSupabase.from("stock_movements").insert({
+      await insertStockMovement({
         organization_id: workspace.context.organizationId,
-        product_id: item.product_id,
+        product_id: productId,
         type: "sale",
-        quantity: -item.quantity,
+        quantity: -quantity,
         previous_stock: previousStock,
         new_stock: nextStock,
         reason: `Order ${order.order_number || orderNumber}`,

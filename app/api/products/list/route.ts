@@ -41,7 +41,8 @@ export async function GET(request: Request) {
   let query = adminSupabase
     .from("products")
     .select(
-      "id,organization_id,name,description,sku,barcode,category,unit,supplier,warehouse,manufacturer,price,stock,batch_no,mrp,purchase_rate,sale_rate,gst,expiry_date,purchase_date,min_stock,created_at,deleted_at"
+      "id,organization_id,name,description,sku,barcode,category,unit,supplier,warehouse,manufacturer,price,stock,batch_no,mrp,purchase_rate,sale_rate,gst,expiry_date,purchase_date,min_stock,created_at,deleted_at",
+      { count: "exact" }
     )
     .eq("organization_id", membership.organization_id)
     .is("deleted_at", null)
@@ -53,11 +54,11 @@ export async function GET(request: Request) {
     query = query.or(`name.ilike.%${term}%,sku.ilike.%${term}%,category.ilike.%${term}%,supplier.ilike.%${term}%,barcode.ilike.%${term}%`)
   }
 
-  const { data, error } = await query
+  const { data, error, count } = await query
   if (error) return fail("Products failed to load.", 500)
 
   return NextResponse.json(
-    { data: data || [], pagination: { ...pagination, total: data?.length || 0 } },
+    { data: data || [], pagination: { ...pagination, total: count || 0 } },
     { headers: { "Cache-Control": "private, max-age=20, stale-while-revalidate=60" } }
   )
 }

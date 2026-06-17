@@ -12,6 +12,13 @@ const createBusinessSchema = z.object({
   currency: z.enum(["INR", "USD", "EUR", "GBP", "AED"]).default("INR"),
   business_type: z.string().trim().max(80).optional().default("retail"),
   business_category: z.string().trim().max(80).optional().default("general"),
+  gst_number: z.string().trim().max(32).optional().default(""),
+  phone: z.string().trim().max(32).optional().default(""),
+  email: z.string().trim().email().or(z.literal("")).optional().default(""),
+  fssai: z.string().trim().max(32).optional().default(""),
+  website: z.string().trim().max(120).optional().default(""),
+  address: z.string().trim().max(500).optional().default(""),
+  branch_name: z.string().trim().max(120).optional().default("Main Branch"),
 })
 
 export async function POST(request: Request) {
@@ -61,6 +68,13 @@ export async function POST(request: Request) {
         currency: payload.currency,
         business_type: payload.business_type,
         business_category: payload.business_category,
+        gst_number: payload.gst_number,
+        phone: payload.phone,
+        email: payload.email,
+        fssai: payload.fssai,
+        website: payload.website,
+        address: payload.address,
+        branch_name: payload.branch_name || "Main Branch",
         owner_id: user.id,
       })
       .select("id,name")

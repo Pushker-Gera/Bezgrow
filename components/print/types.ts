@@ -23,7 +23,6 @@ export type PrintEnterprise = {
   name: string
   businessType: string
   gstNumber: string
-  drugLicense: string
   fssai: string
   phone: string
   email: string

@@ -12,6 +12,8 @@ const eslintConfig = defineConfig([
     ".next.generated-stale-*/**",
     "out/**",
     "build/**",
+    "dist/**",
+    "pushker-dashboard/dist/**",
     "next-env.d.ts",
   ]),
 ]);

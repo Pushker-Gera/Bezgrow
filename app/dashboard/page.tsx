@@ -165,6 +165,20 @@ export default function Dashboard() {
         loadDashboard()
     }, [])
 
+    useEffect(() => {
+        const refreshOnFocus = () => {
+            void loadDashboard()
+        }
+
+        window.addEventListener("focus", refreshOnFocus)
+        document.addEventListener("visibilitychange", refreshOnFocus)
+
+        return () => {
+            window.removeEventListener("focus", refreshOnFocus)
+            document.removeEventListener("visibilitychange", refreshOnFocus)
+        }
+    }, [])
+
     const metrics = useMemo(
         () => ({ ...dashboard.summaryMetrics, lowStockProducts: dashboard.lowStockProducts }),
         [dashboard.lowStockProducts, dashboard.summaryMetrics]
@@ -407,7 +421,7 @@ export default function Dashboard() {
                                 <div className="flex h-full flex-col items-center justify-center rounded-lg border border-dashed border-white/10 bg-black/25 text-center">
                                     <p className="text-lg font-black text-white">No weekly billing yet</p>
                                     <p className="mt-2 max-w-md text-sm text-neutral-500">
-                                        Create paid invoices and this chart will show day-wise revenue movement automatically.
+                                        Create invoices and this chart will show day-wise billing movement automatically.
                                     </p>
                                     <Link href="/dashboard/invoices/create" className="mt-5 rounded-lg bg-white px-4 py-2 text-sm font-black text-black">
                                         Create invoice

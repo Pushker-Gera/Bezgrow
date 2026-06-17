@@ -14,6 +14,13 @@ type Organization = Record<string, unknown> & {
   currency?: string | null
   business_type?: string | null
   business_category?: string | null
+  gst_number?: string | null
+  phone?: string | null
+  email?: string | null
+  fssai?: string | null
+  website?: string | null
+  address?: string | null
+  branch_name?: string | null
 }
 
 type FeatureRow = {
@@ -33,7 +40,7 @@ type InvoiceCorrectionRow = Record<string, unknown> & {
 type ListResponse<T> = { data?: T[]; error?: string }
 type WorkspaceResponse = {
   organization?: Organization
-  features?: FeatureRow[]
+  features?: FeatureRow[] | string[]
   error?: string
 }
 
@@ -99,6 +106,22 @@ function money(value: number) {
   return `Rs ${Math.round(value).toLocaleString()}`
 }
 
+function normalizeFeatures(features: WorkspaceResponse["features"], organizationId: string) {
+  if (!Array.isArray(features)) return []
+
+  return features.map((feature) => {
+    if (typeof feature === "string") {
+      return {
+        organization_id: organizationId,
+        feature_key: feature,
+        is_enabled: true,
+      }
+    }
+
+    return feature
+  })
+}
+
 export default function SettingsPage() {
   const [organizationId, setOrganizationId] = useState("")
   const [organization, setOrganization] = useState<Organization | null>(null)
@@ -117,6 +140,13 @@ export default function SettingsPage() {
     currency: "INR",
     businessType: "retail",
     businessCategory: "general",
+    gstNumber: "",
+    phone: "",
+    email: "",
+    fssai: "",
+    website: "",
+    address: "",
+    branchName: "Main Branch",
   })
 
   async function loadCorrectionInvoices(orgId: string, searchTerm = "") {
@@ -174,9 +204,16 @@ export default function SettingsPage() {
         currency: valueText(org.currency) || "INR",
         businessType: valueText(org.business_type) || "retail",
         businessCategory: valueText(org.business_category) || "general",
+        gstNumber: valueText(org.gst_number),
+        phone: valueText(org.phone),
+        email: valueText(org.email),
+        fssai: valueText(org.fssai),
+        website: valueText(org.website),
+        address: valueText(org.address),
+        branchName: valueText(org.branch_name) || "Main Branch",
       })
     }
-    if (workspace.features) setFeatures(workspace.features)
+    setFeatures(normalizeFeatures(workspace.features, orgId))
     setRecentInvoices(invoices.data || [])
   }
 
@@ -253,6 +290,13 @@ export default function SettingsPage() {
         currency: form.currency,
         business_type: form.businessType,
         business_category: form.businessCategory,
+        gst_number: form.gstNumber.trim(),
+        phone: form.phone.trim(),
+        email: form.email.trim(),
+        fssai: form.fssai.trim(),
+        website: form.website.trim(),
+        address: form.address.trim(),
+        branch_name: form.branchName.trim() || "Main Branch",
       }),
     })
     const result = (await response.json()) as { error?: string }
@@ -411,6 +455,13 @@ export default function SettingsPage() {
                   <option value="grocery">Grocery / FMCG</option>
                   <option value="cosmetics">Cosmetics</option>
                 </select>
+                <input value={form.gstNumber} onChange={(e) => setForm((current) => ({ ...current, gstNumber: e.target.value }))} placeholder="GST number" className="h-14 rounded-2xl border border-white/10 bg-black/50 px-5 outline-none focus:border-cyan-400/40" />
+                <input value={form.phone} onChange={(e) => setForm((current) => ({ ...current, phone: e.target.value }))} placeholder="Business phone" className="h-14 rounded-2xl border border-white/10 bg-black/50 px-5 outline-none focus:border-cyan-400/40" />
+                <input value={form.email} onChange={(e) => setForm((current) => ({ ...current, email: e.target.value }))} placeholder="Business email" type="email" className="h-14 rounded-2xl border border-white/10 bg-black/50 px-5 outline-none focus:border-cyan-400/40" />
+                <input value={form.fssai} onChange={(e) => setForm((current) => ({ ...current, fssai: e.target.value }))} placeholder="FSSAI number" className="h-14 rounded-2xl border border-white/10 bg-black/50 px-5 outline-none focus:border-cyan-400/40" />
+                <input value={form.website} onChange={(e) => setForm((current) => ({ ...current, website: e.target.value }))} placeholder="Website" className="h-14 rounded-2xl border border-white/10 bg-black/50 px-5 outline-none focus:border-cyan-400/40" />
+                <input value={form.branchName} onChange={(e) => setForm((current) => ({ ...current, branchName: e.target.value }))} placeholder="Branch name" className="h-14 rounded-2xl border border-white/10 bg-black/50 px-5 outline-none focus:border-cyan-400/40" />
+                <textarea value={form.address} onChange={(e) => setForm((current) => ({ ...current, address: e.target.value }))} placeholder="Business address" className="min-h-28 rounded-2xl border border-white/10 bg-black/50 px-5 py-4 outline-none focus:border-cyan-400/40 md:col-span-2" />
               </div>
               <button onClick={saveOrganization} disabled={saving} className="mt-6 h-14 rounded-2xl bg-white px-7 font-black text-black disabled:opacity-50">
                 {saving ? "Saving..." : "Save Organization"}

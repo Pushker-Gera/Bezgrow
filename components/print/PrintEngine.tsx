@@ -129,7 +129,7 @@ export function PrintEngine({
 
   return (
     <>
-      <PrintEngineStyles />
+      <PrintEngineStyles format={format} thermalWidth={settings.thermalWidth} />
       <div className={`enterprise-print-shell ${publicMode ? "public-invoice-shell" : ""}`}>
         {!publicMode && <aside className="print-control-panel no-print">
           <div>
@@ -245,7 +245,13 @@ export function PrintEngine({
   )
 }
 
-function PrintEngineStyles() {
+function PrintEngineStyles({ format, thermalWidth }: { format: PrintFormat; thermalWidth: PrintSettings["thermalWidth"] }) {
+  const printPageSize =
+    format === "thermal"
+      ? `${thermalWidth === "58mm" ? "58mm" : "80mm"} auto`
+      : "A4 portrait"
+  const printPageMargin = format === "thermal" ? "0" : "8mm"
+
   return (
     <style jsx global>{`
       @page { size: A4 portrait; margin: 8mm; }
@@ -268,7 +274,7 @@ function PrintEngineStyles() {
       .print-preview-stage { min-width: 0; background: radial-gradient(circle at top left, rgba(34,211,238,.08), transparent 32%), #111827; }
       .mobile-toolbar { display: none; gap: 8px; padding: 12px; position: sticky; top: 0; z-index: 10; background: #070b12; }
       .preview-scroll { height: 100dvh; overflow: auto; padding: 32px; display: flex; justify-content: center; align-items: flex-start; background: #111827; }
-      .print-format-thermal .preview-scroll { background: #111827; justify-content: flex-start; }
+      .print-format-thermal .preview-scroll { background: #111827; justify-content: center; }
       .print-document { transform-origin: top center; transition: transform .18s ease; }
       .invoice-paper, .invoice-paper * { box-sizing: border-box; }
       .invoice-paper { position: relative; overflow: visible; background: #fff; color: #111827; font-family: Arial, Helvetica, sans-serif; box-shadow: 0 24px 90px rgba(0,0,0,.35); print-color-adjust: exact; -webkit-print-color-adjust: exact; }
@@ -502,16 +508,16 @@ function PrintEngineStyles() {
         .public-invoice-shell .payment-grid div { padding: 8px; }
       }
       @media print {
-        @page { size: A4 portrait; margin: 8mm; }
+        @page { size: ${printPageSize}; margin: ${printPageMargin}; }
         @page half-compact { size: A4 portrait; margin: 8mm; }
         @page half-top { size: A4 portrait; margin: 8mm; }
-        @page thermal { size: 80mm auto; margin: 0; }
+        @page thermal { size: ${printPageSize}; margin: 0; }
         html, body { width: 100% !important; min-height: 0 !important; margin: 0 !important; padding: 0 !important; overflow: visible !important; background: #fff !important; color: #000 !important; }
         body * { visibility: hidden !important; }
         .print-document, .print-document *, .invoice-paper, .invoice-paper * { visibility: visible !important; }
         .no-print { display: none !important; }
         .enterprise-print-shell, .print-preview-stage, .preview-scroll { display: block !important; width: 100% !important; min-width: 0 !important; height: auto !important; min-height: 0 !important; overflow: visible !important; padding: 0 !important; margin: 0 !important; background: #fff !important; color: #000 !important; transform: none !important; }
-        .print-document { position: fixed !important; inset: 0 !important; display: flex !important; width: 100% !important; min-width: 0 !important; height: auto !important; min-height: 0 !important; justify-content: center !important; align-items: flex-start !important; overflow: visible !important; padding: 0 !important; margin: 0 !important; background: #fff !important; color: #000 !important; transform: none !important; transition: none !important; }
+        .print-document { position: static !important; display: flex !important; width: 100% !important; min-width: 0 !important; height: auto !important; min-height: 0 !important; justify-content: center !important; align-items: flex-start !important; overflow: visible !important; padding: 0 !important; margin: 0 auto !important; background: #fff !important; color: #000 !important; transform: none !important; transition: none !important; }
         .invoice-paper { box-shadow: none !important; margin: 0 auto !important; overflow: visible !important; background: #fff !important; color: #000 !important; break-inside: auto; page-break-inside: auto; }
         .print-a4 { page: auto !important; width: 194mm !important; max-width: 194mm !important; min-height: 281mm !important; padding: 5mm !important; }
         .print-a4 .total-grid { grid-template-columns: minmax(0, 1fr) 58mm !important; }
@@ -533,13 +539,13 @@ function PrintEngineStyles() {
         .mobile-item-cards { display: none !important; }
         .item-table tr { break-inside: avoid !important; page-break-inside: avoid !important; }
         .item-table th { position: static !important; }
-        html[data-print-format="thermal"], html[data-print-format="thermal"] body { width: 80mm !important; max-width: 80mm !important; height: auto !important; min-height: 0 !important; background: #fff !important; }
-        html[data-print-format="thermal"] .invoice-paper { page: thermal !important; width: 80mm !important; min-height: auto !important; margin: 0 !important; padding: 3mm 4mm !important; box-shadow: none !important; background: #fff !important; color: #000 !important; }
+        html[data-print-format="thermal"], html[data-print-format="thermal"] body { width: ${thermalWidth === "58mm" ? "58mm" : "80mm"} !important; max-width: ${thermalWidth === "58mm" ? "58mm" : "80mm"} !important; height: auto !important; min-height: 0 !important; background: #fff !important; }
+        html[data-print-format="thermal"] .invoice-paper { page: thermal !important; width: ${thermalWidth === "58mm" ? "58mm" : "80mm"} !important; min-height: auto !important; margin: 0 auto !important; padding: ${thermalWidth === "58mm" ? "2mm" : "3mm 4mm"} !important; box-shadow: none !important; background: #fff !important; color: #000 !important; }
         html[data-print-format="thermal"] .enterprise-print-shell,
         html[data-print-format="thermal"] .print-preview-stage,
         html[data-print-format="thermal"] .preview-scroll,
-        html[data-print-format="thermal"] .print-document { width: 80mm !important; max-width: 80mm !important; height: auto !important; min-height: 0 !important; background: #fff !important; padding: 0 !important; margin: 0 !important; overflow: visible !important; }
-        html[data-print-format="thermal"] .print-document { position: fixed !important; inset: 0 auto auto 0 !important; }
+        html[data-print-format="thermal"] .print-document { width: ${thermalWidth === "58mm" ? "58mm" : "80mm"} !important; max-width: ${thermalWidth === "58mm" ? "58mm" : "80mm"} !important; height: auto !important; min-height: 0 !important; background: #fff !important; padding: 0 !important; margin: 0 auto !important; overflow: visible !important; justify-content: center !important; }
+        html[data-print-format="thermal"] .print-document { position: static !important; }
       }
     `}</style>
   )

@@ -3,6 +3,7 @@ import { adminSupabase } from "@/lib/supabase/admin"
 import { writeAdminLog } from "@/lib/api/auth"
 import { requireWorkspace } from "@/lib/api/tenant"
 import { fail, ok, serverFail } from "@/lib/api/responses"
+import { insertStockMovement } from "@/lib/api/stock-movements"
 
 export const dynamic = "force-dynamic"
 
@@ -20,6 +21,9 @@ const invoiceItemSchema = z.object({
 const createInvoiceSchema = z.object({
   customer_id: z.string().uuid(),
   subtotal: z.coerce.number().min(0),
+  discount_amount: z.coerce.number().min(0).optional().default(0),
+  discount_total: z.coerce.number().min(0).optional().default(0),
+  taxable_amount: z.coerce.number().min(0).optional(),
   tax_amount: z.coerce.number().min(0),
   total_amount: z.coerce.number().min(0),
   payment_status: z.enum(["unpaid", "partial", "paid", "overdue", "cancelled"]).default("unpaid"),
@@ -53,6 +57,7 @@ function missingColumnFromError(error: { code?: string; message?: string } | nul
 async function insertInvoiceWithSchemaFallback(payload: InvoiceInsertPayload) {
   const retryPayload = { ...payload }
   const removedColumns: string[] = []
+  const requiredColumns = new Set(["organization_id", "invoice_number", "customer_id", "total_amount", "grand_total"])
 
   for (let attempt = 0; attempt < 14; attempt += 1) {
     const result = await adminSupabase
@@ -66,7 +71,7 @@ async function insertInvoiceWithSchemaFallback(payload: InvoiceInsertPayload) {
     }
 
     const missingColumn = missingColumnFromError(result.error)
-    if (!missingColumn || !(missingColumn in retryPayload)) {
+    if (!missingColumn || requiredColumns.has(missingColumn) || !(missingColumn in retryPayload)) {
       return { ...result, removedColumns }
     }
 
@@ -95,6 +100,11 @@ export async function POST(request: Request) {
   try {
     const input = parsed.data
     const productIds = Array.from(new Set(input.items.map((item) => item.product_id)))
+    const quantityByProductId = new Map<string, number>()
+
+    for (const item of input.items) {
+      quantityByProductId.set(item.product_id, (quantityByProductId.get(item.product_id) || 0) + item.quantity)
+    }
 
     const [{ data: customer }, { data: products, error: productError }] = await Promise.all([
       adminSupabase
@@ -114,10 +124,10 @@ export async function POST(request: Request) {
     if (productError) return fail("Products could not be loaded.", 500)
 
     const productById = new Map((products || []).map((product) => [product.id, product]))
-    for (const item of input.items) {
-      const product = productById.get(item.product_id)
+    for (const [productId, requestedQuantity] of quantityByProductId) {
+      const product = productById.get(productId)
       if (!product) return fail("One or more products were not found.", 404)
-      if (Number(product.stock || 0) < item.quantity) {
+      if (Number(product.stock || 0) < requestedQuantity) {
         return fail(`${product.name} has only ${Number(product.stock || 0)} in stock.`, 409)
       }
     }
@@ -128,6 +138,9 @@ export async function POST(request: Request) {
       customer_id: input.customer_id,
       customer_name: customer.name || "Customer",
       subtotal: input.subtotal,
+      discount_amount: input.discount_amount || input.discount_total || 0,
+      discount_total: input.discount_total || input.discount_amount || 0,
+      taxable_amount: input.taxable_amount ?? Math.max(0, input.subtotal - (input.discount_amount || input.discount_total || 0)),
       tax_amount: input.tax_amount,
       total_amount: input.total_amount,
       grand_total: input.total_amount,
@@ -180,29 +193,47 @@ export async function POST(request: Request) {
       return fail("Invoice items could not be created.", 400)
     }
 
-    for (const item of input.items) {
-      const product = productById.get(item.product_id)
+    for (const [productId, quantity] of quantityByProductId) {
+      const product = productById.get(productId)
       const previousStock = Number(product?.stock || 0)
-      const newStock = previousStock - item.quantity
+      const newStock = previousStock - quantity
 
       const { error: stockError } = await adminSupabase
         .from("products")
         .update({ stock: newStock, updated_at: new Date().toISOString() })
-        .eq("id", item.product_id)
+        .eq("id", productId)
         .eq("organization_id", workspace.context.organizationId)
 
       if (stockError) return fail("Invoice was created, but stock update failed. Review stock manually.", 500)
 
-      await adminSupabase.from("stock_movements").insert({
+      const { error: movementError, removedColumns } = await insertStockMovement({
         organization_id: workspace.context.organizationId,
-        product_id: item.product_id,
+        product_id: productId,
         type: "sale",
-        quantity: -item.quantity,
+        quantity: -quantity,
         previous_stock: previousStock,
         new_stock: newStock,
         reason: `Invoice ${invoice.invoice_number}`,
         reference_no: invoice.invoice_number,
       })
+
+      if (removedColumns.length > 0) {
+        console.warn("[invoices/create] stock_movements legacy schema fallback", {
+          removedColumns,
+          organizationId: workspace.context.organizationId,
+          invoiceId: invoice.id,
+        })
+      }
+
+      if (movementError) {
+        console.error("[invoices/create] movement insert failed after invoice/stock update", {
+          code: movementError.code,
+          message: movementError.message,
+          details: movementError.details,
+          organizationId: workspace.context.organizationId,
+          invoiceId: invoice.id,
+        })
+      }
     }
 
     await writeAdminLog({

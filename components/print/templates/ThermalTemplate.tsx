@@ -5,14 +5,22 @@ import { QRCodeSVG } from "qrcode.react"
 import type { PrintInvoice, PrintSettings } from "@/components/print/types"
 import { formatDate, formatMoney } from "@/components/print/utils"
 
+function joinFilled(parts: string[]) {
+  return parts.filter((part) => part.trim() && !part.endsWith(": -")).join(" | ")
+}
+
 export function ThermalTemplate({ invoice, settings }: { invoice: PrintInvoice; settings: PrintSettings }) {
+  const businessDetails = joinFilled([
+    `GST: ${invoice.enterprise.gstNumber}`,
+    `Phone: ${invoice.enterprise.phone}`,
+  ])
+
   return (
     <article className={`invoice-paper print-thermal thermal-${settings.thermalWidth.replace("mm", "")}`}>
       <header className="thermal-center">
         <h1>{invoice.enterprise.name}</h1>
-        <p>{invoice.enterprise.address}</p>
-        <p>GST: {invoice.enterprise.gstNumber}</p>
-        <p>Phone: {invoice.enterprise.phone}</p>
+        {invoice.enterprise.address !== "-" && <p>{invoice.enterprise.address}</p>}
+        {businessDetails && <p>{businessDetails}</p>}
       </header>
 
       <div className="thermal-rule" />

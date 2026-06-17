@@ -31,7 +31,7 @@ export async function GET(request: Request) {
           .limit(1000),
         adminSupabase
           .from("products")
-          .select("id,organization_id,stock,min_stock,purchase_rate")
+          .select("id,organization_id,stock,min_stock,purchase_rate,sale_rate,price")
           .limit(5000),
         adminSupabase
           .from("invoices")

@@ -100,6 +100,10 @@ export const productPayloadSchema = z
     message: "Purchase date cannot be after expiry date.",
     path: ["purchase_date"],
   })
+  .refine((product) => product.sale_rate !== null && product.sale_rate > 0, {
+    message: "Sale rate is required and must be greater than 0.",
+    path: ["sale_rate"],
+  })
 
 export const productUpdateSchema = productPayloadSchema.extend({
   id: z.string().uuid(),

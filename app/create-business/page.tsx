@@ -12,6 +12,13 @@ export default function CreateBusiness() {
     const [name, setName] = useState("")
     const [industry, setIndustry] = useState("")
     const [currency, setCurrency] = useState("INR")
+    const [gstNumber, setGstNumber] = useState("")
+    const [phone, setPhone] = useState("")
+    const [email, setEmail] = useState("")
+    const [fssai, setFssai] = useState("")
+    const [website, setWebsite] = useState("")
+    const [address, setAddress] = useState("")
+    const [branchName, setBranchName] = useState("Main Branch")
     const [businessType, setBusinessType] =
         useState("retail")
 
@@ -103,6 +110,13 @@ export default function CreateBusiness() {
                 name: name.trim(),
                 industry: industry.trim(),
                 currency,
+                gst_number: gstNumber.trim(),
+                phone: phone.trim(),
+                email: email.trim(),
+                fssai: fssai.trim(),
+                website: website.trim(),
+                address: address.trim(),
+                branch_name: branchName.trim() || "Main Branch",
                 business_type: businessType,
                 business_category: businessCategory,
             }),
@@ -197,6 +211,52 @@ export default function CreateBusiness() {
                         <option value="GBP">British Pound (GBP)</option>
                     </select>
 
+                </div>
+
+                <div className="mb-6 grid grid-cols-1 gap-4 sm:grid-cols-2">
+                    <input
+                        placeholder="GST number"
+                        value={gstNumber}
+                        onChange={(e) => setGstNumber(e.target.value)}
+                        className="min-h-12 rounded border border-gray-700 bg-gray-800 p-3"
+                    />
+                    <input
+                        placeholder="Business phone"
+                        value={phone}
+                        onChange={(e) => setPhone(e.target.value)}
+                        className="min-h-12 rounded border border-gray-700 bg-gray-800 p-3"
+                    />
+                    <input
+                        placeholder="Business email"
+                        type="email"
+                        value={email}
+                        onChange={(e) => setEmail(e.target.value)}
+                        className="min-h-12 rounded border border-gray-700 bg-gray-800 p-3"
+                    />
+                    <input
+                        placeholder="FSSAI number"
+                        value={fssai}
+                        onChange={(e) => setFssai(e.target.value)}
+                        className="min-h-12 rounded border border-gray-700 bg-gray-800 p-3"
+                    />
+                    <input
+                        placeholder="Website"
+                        value={website}
+                        onChange={(e) => setWebsite(e.target.value)}
+                        className="min-h-12 rounded border border-gray-700 bg-gray-800 p-3"
+                    />
+                    <input
+                        placeholder="Branch name"
+                        value={branchName}
+                        onChange={(e) => setBranchName(e.target.value)}
+                        className="min-h-12 rounded border border-gray-700 bg-gray-800 p-3"
+                    />
+                    <textarea
+                        placeholder="Business address"
+                        value={address}
+                        onChange={(e) => setAddress(e.target.value)}
+                        className="min-h-24 rounded border border-gray-700 bg-gray-800 p-3 sm:col-span-2"
+                    />
                 </div>
 
                 <div className="mb-4">

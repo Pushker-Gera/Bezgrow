@@ -14,6 +14,13 @@ const organizationSchema = z.object({
   locale: z.string().trim().min(2).max(20).optional().default("en-IN"),
   business_type: z.string().trim().max(80).optional().default("retail"),
   business_category: z.string().trim().max(80).optional().default("general"),
+  gst_number: z.string().trim().max(32).optional().default(""),
+  phone: z.string().trim().max(32).optional().default(""),
+  email: z.string().trim().email().or(z.literal("")).optional().default(""),
+  fssai: z.string().trim().max(32).optional().default(""),
+  website: z.string().trim().max(120).optional().default(""),
+  address: z.string().trim().max(500).optional().default(""),
+  branch_name: z.string().trim().max(120).optional().default("Main Branch"),
 })
 
 export async function POST(request: Request) {

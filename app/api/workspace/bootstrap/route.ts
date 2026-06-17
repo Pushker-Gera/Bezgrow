@@ -8,11 +8,19 @@ export const dynamic = "force-dynamic"
 type OrganizationPayload = {
   id: string
   name: string | null
+  industry: string | null
   currency: string | null
   timezone: string | null
   locale: string | null
   business_type: string | null
   business_category: string | null
+  gst_number: string | null
+  phone: string | null
+  email: string | null
+  fssai: string | null
+  website: string | null
+  address: string | null
+  branch_name: string | null
 }
 
 type FeaturePayload = {
@@ -47,7 +55,7 @@ export async function GET(request: Request) {
     if (membershipRow?.organization_id) {
       const { data } = await adminSupabase
         .from("organizations")
-        .select("id, name, currency, timezone, locale, business_type, business_category")
+        .select("id, name, industry, currency, timezone, locale, business_type, business_category, gst_number, phone, email, fssai, website, address, branch_name")
         .eq("id", membershipRow.organization_id)
         .maybeSingle()
 
@@ -57,7 +65,7 @@ export async function GET(request: Request) {
     if (!organization) {
       const { data } = await adminSupabase
         .from("organizations")
-        .select("id, name, currency, timezone, locale, business_type, business_category")
+        .select("id, name, industry, currency, timezone, locale, business_type, business_category, gst_number, phone, email, fssai, website, address, branch_name")
         .eq("owner_id", user.id)
         .order("created_at", { ascending: true })
         .limit(1)

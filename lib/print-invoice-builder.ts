@@ -43,12 +43,19 @@ export function buildPrintInvoice({
   const productMap = new Map(products.map((product) => [product.id, product]))
   const taxTotal = numberFrom(invoice, ["tax_amount", "tax_total"])
   const grandTotal = numberFrom(invoice, ["grand_total", "total_amount", "total"])
-  const subtotal = numberFrom(invoice, ["subtotal", "sub_total"]) || items.reduce((sum, item) => {
-    return sum + (numberFrom(item, ["line_total"]) || numberFrom(item, ["quantity"]) * numberFrom(item, ["unit_price"]))
+  const itemBaseSubtotal = items.reduce((sum, item) => {
+    return sum + numberFrom(item, ["quantity"]) * numberFrom(item, ["unit_price", "rate"])
   }, 0)
-  const discount = numberFrom(invoice, ["discount_amount", "discount_total"])
+  const itemDiscount = items.reduce((sum, item) => {
+    const base = numberFrom(item, ["quantity"]) * numberFrom(item, ["unit_price", "rate"])
+    return sum + (base * numberFrom(item, ["discount_percent"])) / 100
+  }, 0)
+  const discount = numberFrom(invoice, ["discount_amount", "discount_total"]) || itemDiscount
+  const subtotal = numberFrom(invoice, ["subtotal", "sub_total"]) || itemBaseSubtotal
+  const taxableAmount = numberFrom(invoice, ["taxable_amount"]) || Math.max(0, subtotal - discount)
   const gstSplit = taxTotal / 2
   const paid = stringFrom(invoice, ["payment_status", "status"]).toLowerCase() === "paid" ? grandTotal : 0
+  const dueAmount = Math.max(0, grandTotal - paid)
 
   const mappedItems: PrintInvoiceItem[] = items.map((item, index) => {
     const product = productMap.get(stringFrom(item, ["product_id"])) || null
@@ -102,7 +109,6 @@ export function buildPrintInvoice({
       name: stringFrom(organization, ["name", "business_name"]) || "Bezgrow ERP",
       businessType: stringFrom(organization, ["business_type", "industry", "business_category"]) || "Enterprise",
       gstNumber: stringFrom(organization, ["gst_number", "gstin", "tax_id"]) || "-",
-      drugLicense: stringFrom(organization, ["drug_license", "drug_license_number"]) || "-",
       fssai: stringFrom(organization, ["fssai", "fssai_number"]) || "-",
       phone: stringFrom(organization, ["phone", "contact_phone"]) || "-",
       email: stringFrom(organization, ["email", "support_email"]) || "-",
@@ -125,14 +131,14 @@ export function buildPrintInvoice({
     payment: {
       mode: stringFrom(invoice, ["payment_method"]) || "Cash",
       paidAmount: paid,
-      dueAmount: Math.max(0, grandTotal - paid),
-      balanceAmount: Math.max(0, paid - grandTotal),
+      dueAmount,
+      balanceAmount: dueAmount,
       cashReceived: paid,
     },
     totals: {
       subtotal,
       discount,
-      taxableAmount: subtotal - discount,
+      taxableAmount,
       cgst: gstSplit,
       sgst: gstSplit,
       igst: 0,

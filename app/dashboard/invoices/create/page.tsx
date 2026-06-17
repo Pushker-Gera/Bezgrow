@@ -2,7 +2,7 @@
 
 import Link from "next/link"
 import type { ReactNode } from "react"
-import { useEffect, useMemo, useState } from "react"
+import { useCallback, useEffect, useMemo, useState } from "react"
 import { getOrganizationId } from "@/lib/getOrganization"
 import { createWhatsAppInvoiceUrl } from "@/lib/invoice-share"
 import { supabase } from "@/lib/supabase"
@@ -215,12 +215,14 @@ export default function CreateInvoicePage() {
       const discountedBase = lineBase - discountAmount
       const lineTax = invoiceMode === "no_gst" ? 0 : (discountedBase * item.tax_percent) / 100
 
-      subtotal += discountedBase
+      subtotal += lineBase
       discount += discountAmount
       tax += lineTax
     })
 
-    return { subtotal, discount, tax, grandTotal: subtotal + tax }
+    const taxableAmount = Math.max(0, subtotal - discount)
+
+    return { subtotal, discount, taxableAmount, tax, grandTotal: taxableAmount + tax }
   }, [invoiceMode, items])
 
   const totalItems = items.reduce((acc, item) => acc + item.quantity, 0)
@@ -294,6 +296,23 @@ export default function CreateInvoicePage() {
   function removeItem(id: string) {
     setItems((current) => (current.length === 1 ? [newItem()] : current.filter((item) => item.id !== id)))
   }
+
+  const resetInvoiceForm = useCallback(() => {
+    setSelectedCustomer("")
+    setInvoiceMode("gst")
+    setInvoiceType("standard")
+    setPaymentStatus("unpaid")
+    setPaymentMethod("cash")
+    setDueDate("")
+    setInvoiceNotes("")
+    setShippingCode("")
+    setCourierName("")
+    setTrackingNumber("")
+    setItems([newItem()])
+    setBarcodeInput("")
+    setScanQuantity(1)
+    setSmsBillLink("")
+  }, [])
 
   function updateItem<K extends keyof InvoiceItem>(id: string, field: K, value: InvoiceItem[K]) {
     setItems((current) => current.map((item) => (item.id === id ? { ...item, [field]: value } : item)))
@@ -404,6 +423,9 @@ export default function CreateInvoicePage() {
     const invoicePayload = {
       customer_id: selectedCustomer,
       subtotal: totals.subtotal,
+      discount_amount: totals.discount,
+      discount_total: totals.discount,
+      taxable_amount: totals.taxableAmount,
       tax_amount: totals.tax,
       total_amount: totals.grandTotal,
       payment_status: paymentStatus,
@@ -469,6 +491,8 @@ export default function CreateInvoicePage() {
     }
 
     if (printAfterSave && data?.invoice_id) {
+      resetInvoiceForm()
+      setLoading(false)
       window.location.href = `/dashboard/invoices/${data.invoice_id}/print`
       return
     }
@@ -478,12 +502,23 @@ export default function CreateInvoicePage() {
         ? { title: "WhatsApp Not Ready", message: "Customer phone number required.", type: "warning" }
         : { title: "Invoice Created", message: "Invoice created successfully.", type: "success" }
     )
-    setItems([newItem()])
-    setSelectedCustomer("")
-    setDueDate("")
-    setInvoiceNotes("")
+    resetInvoiceForm()
     setLoading(false)
   }
+
+  useEffect(() => {
+    function resetReturnedPage(event: PageTransitionEvent) {
+      const navigationEntry = performance.getEntriesByType("navigation")[0] as PerformanceNavigationTiming | undefined
+      if (event.persisted || navigationEntry?.type === "back_forward") {
+        resetInvoiceForm()
+        setNotice(null)
+      }
+      setLoading(false)
+    }
+
+    window.addEventListener("pageshow", resetReturnedPage)
+    return () => window.removeEventListener("pageshow", resetReturnedPage)
+  }, [resetInvoiceForm])
 
   return (
     <div className="relative min-h-dvh overflow-y-auto overflow-x-hidden bg-black text-white">
@@ -742,6 +777,7 @@ export default function CreateInvoicePage() {
                 <div className="flex justify-between"><span className="text-neutral-400">Quantity</span><span>{totalItems}</span></div>
                 <div className="flex justify-between"><span className="text-neutral-400">Subtotal</span><span>{money(totals.subtotal)}</span></div>
                 <div className="flex justify-between"><span className="text-neutral-400">Discount</span><span>{money(totals.discount)}</span></div>
+                <div className="flex justify-between"><span className="text-neutral-400">Taxable Amount</span><span>{money(totals.taxableAmount)}</span></div>
                 <div className="flex justify-between"><span className="text-neutral-400">GST</span><span>{money(totals.tax)}</span></div>
                 <div className="border-t border-white/10 pt-5">
                   <div className="flex items-center justify-between text-2xl font-black">

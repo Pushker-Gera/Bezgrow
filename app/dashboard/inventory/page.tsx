@@ -161,7 +161,6 @@ export default function InventoryPage() {
     const [barcode, setBarcode] = useState("")
     const [shippingQr, setShippingQr] = useState("")
 
-    const hasExpiryTracking = features.includes("expiry_tracking")
     const hasBatchTracking = features.includes("batch_tracking")
     const hasBarcodeScanning = features.includes("barcode_scanning")
     const hasShippingLabels = features.includes("shipping_labels")
@@ -431,20 +430,20 @@ export default function InventoryPage() {
                     quantity: qty,
                     mode,
                     warehouse_id: warehouseId || null,
-                    expiry_date: mode === "add" && hasExpiryTracking ? expiryDate || product.expiry_date || null : null,
+                    expiry_date: mode === "add" ? expiryDate || null : null,
                     batch_no: mode === "add" && hasBatchTracking ? batchNo || product.batch_no || null : null,
                     barcode: mode === "add" && hasBarcodeScanning ? barcode || product.barcode || null : null,
                     shipping_qr: hasShippingLabels ? shippingQr || null : null,
                 }),
             })
-            const result = (await response.json()) as { error?: string }
+            const result = (await response.json()) as { error?: string; warning?: string }
             if (!response.ok) throw new Error(result.error || "Stock update failed.")
 
             await fetchInventoryData(organizationId)
             resetActionForm()
             setShowAddStockModal(false)
             setShowTransferModal(false)
-            setNotice(mode === "add" ? "Stock added successfully." : "Inventory transferred successfully.")
+            setNotice(result.warning || (mode === "add" ? "Stock added successfully." : "Inventory transferred successfully."))
         } catch (error) {
             setNotice(error instanceof Error ? error.message : "Stock update failed.")
         } finally {
@@ -1103,13 +1102,16 @@ export default function InventoryPage() {
                                 ))}
                             </select>
 
-                            {showAddStockModal && hasExpiryTracking && (
-                                <input
-                                    type="date"
-                                    value={expiryDate}
-                                    onChange={(event) => setExpiryDate(event.target.value)}
-                                    className="w-full rounded-lg border border-white/10 bg-black px-4 py-3 outline-none transition-all focus:border-emerald-300"
-                                />
+                            {showAddStockModal && (
+                                <label className="block text-xs font-semibold uppercase tracking-[0.16em] text-neutral-400">
+                                    Expiry date
+                                    <input
+                                        type="date"
+                                        value={expiryDate}
+                                        onChange={(event) => setExpiryDate(event.target.value)}
+                                        className="mt-2 w-full rounded-lg border border-white/10 bg-black px-4 py-3 text-base normal-case tracking-normal text-white outline-none transition-all focus:border-emerald-300"
+                                    />
+                                </label>
                             )}
 
                             {showAddStockModal && hasBatchTracking && (

@@ -3,8 +3,17 @@
 import type { PrintInvoice, PrintSettings } from "@/components/print/types"
 import { formatDate, formatMoney } from "@/components/print/utils"
 
+function joinFilled(parts: string[]) {
+  return parts.filter((part) => part.trim() && !part.endsWith(": -")).join(" | ")
+}
+
 export function HalfTopTemplate({ invoice, settings }: { invoice: PrintInvoice; settings: PrintSettings }) {
   const gstTotal = invoice.totals.cgst + invoice.totals.sgst + invoice.totals.igst
+  const businessDetails = joinFilled([
+    `GST: ${invoice.enterprise.gstNumber}`,
+    `Phone: ${invoice.enterprise.phone}`,
+    `Email: ${invoice.enterprise.email}`,
+  ])
 
   return (
     <article className="invoice-paper print-half-top">
@@ -14,8 +23,8 @@ export function HalfTopTemplate({ invoice, settings }: { invoice: PrintInvoice; 
           <div>
             <p className="print-eyebrow">{invoice.enterprise.businessType}</p>
             <h1>{invoice.enterprise.name}</h1>
-            <p>{invoice.enterprise.address}</p>
-            <p>GST: {invoice.enterprise.gstNumber} | Phone: {invoice.enterprise.phone}</p>
+            {invoice.enterprise.address !== "-" && <p>{invoice.enterprise.address}</p>}
+            {businessDetails && <p>{businessDetails}</p>}
           </div>
           <div className="half-top-meta">
             <p className="print-eyebrow">{invoice.invoiceTitle}</p>
