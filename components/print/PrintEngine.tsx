@@ -75,17 +75,19 @@ export function PrintEngine({
 
   function printWindowOverrides() {
     const thermalPaperWidth = settings.thermalWidth === "58mm" ? "58mm" : "80mm"
+    const printSafeMargin = format === "thermal" ? "0" : "7mm"
     const pageSize =
       format === "thermal"
         ? `${thermalPaperWidth} 160mm`
         : format === "half-top"
           ? "210mm 148.5mm"
           : "A4 portrait"
-    const bodyWidth = format === "thermal" ? thermalPaperWidth : "210mm"
+    const bodyWidth = format === "thermal" ? thermalPaperWidth : "196mm"
+    const bodyHeight = format === "half-top" ? "134.5mm" : format === "thermal" ? "auto" : "283mm"
 
     return `
       <style>
-        @page { size: ${pageSize}; margin: 0; }
+        @page { size: ${pageSize}; margin: ${printSafeMargin}; }
         @media screen {
           html, body { margin: 0; padding: 0; background: #e5e7eb; }
           body { min-height: 100vh; display: flex; justify-content: center; align-items: flex-start; padding: 16px; }
@@ -97,7 +99,7 @@ export function PrintEngine({
           html, body {
             width: ${bodyWidth} !important;
             max-width: ${bodyWidth} !important;
-            min-height: 0 !important;
+            min-height: ${bodyHeight} !important;
             margin: 0 !important;
             padding: 0 !important;
             overflow: visible !important;
@@ -114,7 +116,7 @@ export function PrintEngine({
             width: ${bodyWidth} !important;
             max-width: ${bodyWidth} !important;
             height: auto !important;
-            min-height: 0 !important;
+            min-height: ${bodyHeight} !important;
             padding: 0 !important;
             margin: 0 !important;
             overflow: visible !important;
@@ -132,29 +134,29 @@ export function PrintEngine({
             color: #000 !important;
           }
           .print-a4 {
-            width: 210mm !important;
-            max-width: 210mm !important;
-            min-height: 297mm !important;
-            padding: 8mm !important;
+            width: ${bodyWidth} !important;
+            max-width: ${bodyWidth} !important;
+            min-height: 283mm !important;
+            padding: 6mm !important;
           }
           .print-half-compact {
-            width: 210mm !important;
-            max-width: 210mm !important;
-            min-height: 297mm !important;
-            padding: 8mm !important;
+            width: ${bodyWidth} !important;
+            max-width: ${bodyWidth} !important;
+            min-height: 283mm !important;
+            padding: 6mm !important;
           }
           .print-half-top {
-            width: 210mm !important;
-            max-width: 210mm !important;
-            min-height: 148.5mm !important;
-            max-height: 148.5mm !important;
+            width: ${bodyWidth} !important;
+            max-width: ${bodyWidth} !important;
+            min-height: 134.5mm !important;
+            max-height: 134.5mm !important;
             padding: 0 !important;
           }
           .top-half-content {
-            height: 148.5mm !important;
-            min-height: 148.5mm !important;
-            max-height: 148.5mm !important;
-            padding: 5mm !important;
+            height: 134.5mm !important;
+            min-height: 134.5mm !important;
+            max-height: 134.5mm !important;
+            padding: 4mm !important;
             overflow: hidden !important;
           }
           .print-thermal {
@@ -512,14 +514,15 @@ function PrintEngineStyles({ format, thermalWidth }: { format: PrintFormat; ther
       : format === "half-top"
         ? "210mm 148.5mm"
         : "A4 portrait"
-  const printPaperWidth = format === "thermal" ? thermalPaperWidth : "210mm"
-  const printPaperHeight = format === "half-top" ? "148.5mm" : format === "thermal" ? "auto" : "297mm"
+  const printSafeMargin = format === "thermal" ? "0" : "7mm"
+  const printPaperWidth = format === "thermal" ? thermalPaperWidth : "196mm"
+  const printPaperHeight = format === "half-top" ? "134.5mm" : format === "thermal" ? "auto" : "283mm"
 
   return (
     <style jsx global>{`
-      @page { size: A4 portrait; margin: 0; }
-      @page half-compact { size: A4 portrait; margin: 0; }
-      @page half-top { size: 210mm 148.5mm; margin: 0; }
+      @page { size: A4 portrait; margin: 7mm; }
+      @page half-compact { size: A4 portrait; margin: 7mm; }
+      @page half-top { size: 210mm 148.5mm; margin: 7mm; }
       @page thermal { size: ${thermalPaperWidth} 160mm; margin: 0; }
       html[data-print-format="thermal"] { print-color-adjust: exact; -webkit-print-color-adjust: exact; }
       .enterprise-print-shell { min-height: 100dvh; display: grid; grid-template-columns: 320px 1fr; background: #0a0d12; color: #f8fafc; }
@@ -771,9 +774,9 @@ function PrintEngineStyles({ format, thermalWidth }: { format: PrintFormat; ther
         .public-invoice-shell .payment-grid div { padding: 8px; }
       }
       @media print {
-        @page { size: ${printPageSize}; margin: 0; }
-        @page half-compact { size: A4 portrait; margin: 0; }
-        @page half-top { size: 210mm 148.5mm; margin: 0; }
+        @page { size: ${printPageSize}; margin: ${printSafeMargin}; }
+        @page half-compact { size: A4 portrait; margin: 7mm; }
+        @page half-top { size: 210mm 148.5mm; margin: 7mm; }
         @page thermal { size: ${printPageSize}; margin: 0; }
         html, body { width: ${printPaperWidth} !important; max-width: ${printPaperWidth} !important; min-height: 0 !important; margin: 0 !important; padding: 0 !important; overflow: visible !important; background: #fff !important; color: #000 !important; }
         body * { visibility: hidden !important; }
@@ -782,10 +785,10 @@ function PrintEngineStyles({ format, thermalWidth }: { format: PrintFormat; ther
         .enterprise-print-shell, .print-preview-stage, .preview-scroll { position: static !important; display: block !important; width: ${printPaperWidth} !important; max-width: ${printPaperWidth} !important; min-width: 0 !important; height: auto !important; min-height: 0 !important; overflow: visible !important; padding: 0 !important; margin: 0 !important; background: #fff !important; color: #000 !important; transform: none !important; }
         .print-document { position: absolute !important; top: 0 !important; left: 0 !important; display: block !important; width: ${printPaperWidth} !important; max-width: ${printPaperWidth} !important; min-width: 0 !important; height: ${printPaperHeight} !important; min-height: 0 !important; overflow: visible !important; padding: 0 !important; margin: 0 !important; background: #fff !important; color: #000 !important; transform: none !important; transition: none !important; }
         .invoice-paper { box-shadow: none !important; margin: 0 !important; overflow: visible !important; background: #fff !important; color: #000 !important; break-inside: auto; page-break-inside: auto; }
-        .print-a4 { page: auto !important; width: 210mm !important; max-width: 210mm !important; min-height: 297mm !important; padding: 8mm !important; }
+        .print-a4 { page: auto !important; width: 196mm !important; max-width: 196mm !important; min-height: 283mm !important; padding: 6mm !important; }
         .print-a4 .total-grid { grid-template-columns: minmax(0, 1fr) 62mm !important; }
         .print-a4 .payment-grid { grid-template-columns: repeat(4, minmax(0, 1fr)) !important; }
-        .print-half-compact { page: half-compact !important; width: 210mm !important; max-width: 210mm !important; min-height: 297mm !important; padding: 8mm !important; margin: 0 !important; }
+        .print-half-compact { page: half-compact !important; width: 196mm !important; max-width: 196mm !important; min-height: 283mm !important; padding: 6mm !important; margin: 0 !important; }
         .print-half-compact .brand-block h1 { font-size: 24px !important; }
         .print-half-compact .invoice-meta-card h2 { font-size: 16px !important; }
         .print-half-compact .print-header-block,
@@ -794,8 +797,8 @@ function PrintEngineStyles({ format, thermalWidth }: { format: PrintFormat; ther
         .print-half-compact .payment-grid { grid-template-columns: 1fr !important; }
         .print-half-compact .item-table th,
         .print-half-compact .item-table td { font-size: 7.8px !important; padding: 3px 2px !important; }
-        .print-half-top { page: half-top !important; width: 210mm !important; max-width: 210mm !important; min-height: 148.5mm !important; max-height: 148.5mm !important; padding: 0 !important; margin: 0 !important; }
-        .top-half-content { height: 148.5mm !important; min-height: 148.5mm !important; max-height: 148.5mm !important; overflow: hidden !important; padding: 5mm !important; background: #fff !important; }
+        .print-half-top { page: half-top !important; width: 196mm !important; max-width: 196mm !important; min-height: 134.5mm !important; max-height: 134.5mm !important; padding: 0 !important; margin: 0 !important; }
+        .top-half-content { height: 134.5mm !important; min-height: 134.5mm !important; max-height: 134.5mm !important; overflow: hidden !important; padding: 4mm !important; background: #fff !important; }
         .manual-notes-space { display: none !important; }
         .print-header-block, .customer-grid, .total-grid, .payment-grid, .footer-row, .codes-block, .signature-grid, .info-card, .invoice-meta-card, .terms-card, .total-card { break-inside: avoid !important; page-break-inside: avoid !important; }
         .item-table { width: 100% !important; max-width: 100% !important; table-layout: fixed !important; page-break-inside: auto !important; }

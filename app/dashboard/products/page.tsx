@@ -803,8 +803,8 @@ export default function ProductsPage() {
                         </div>
                     </div>
 
-                    <div className="relative z-10 mt-7 grid gap-4 border-t border-white/10 pt-5 2xl:grid-cols-[1fr_auto] 2xl:items-center">
-                        <div className="grid w-full gap-3 lg:grid-cols-[minmax(360px,1.6fr)_minmax(220px,1fr)_minmax(220px,1fr)_minmax(180px,0.8fr)]">
+                    <div className="relative z-10 mt-7 grid min-w-0 grid-cols-1 gap-4 border-t border-white/10 pt-5">
+                        <div className="grid w-full min-w-0 gap-3 md:grid-cols-2 xl:grid-cols-[minmax(0,1.45fr)_minmax(0,0.85fr)_minmax(0,0.85fr)_minmax(0,0.7fr)]">
                             <input
                                 value={search}
                                 onChange={(event) => setSearch(event.target.value)}
@@ -855,22 +855,22 @@ export default function ProductsPage() {
                             </div>
                         </div>
 
-                        <div className="grid gap-3 sm:grid-cols-3 2xl:flex 2xl:flex-wrap 2xl:justify-end">
+                        <div className="grid w-full max-w-full min-w-0 grid-cols-1 gap-3 md:grid-cols-3">
                             <button
                                 onClick={openAddModal}
-                                className="h-14 min-w-[180px] rounded-lg bg-gradient-to-r from-sky-300 to-emerald-300 px-6 text-base font-black text-black shadow-xl shadow-sky-500/20 transition-all duration-300 hover:-translate-y-1 hover:shadow-emerald-500/20"
+                                className="h-14 w-full min-w-0 rounded-lg bg-gradient-to-r from-sky-300 to-emerald-300 px-6 text-base font-black text-black shadow-xl shadow-sky-500/20 transition-all duration-300 hover:-translate-y-1 hover:shadow-emerald-500/20"
                             >
                                 Add Product
                             </button>
                             <button
                                 onClick={exportProductsCSV}
-                                className="h-14 min-w-[160px] rounded-lg border border-white/10 bg-white/[0.05] px-5 text-base font-bold transition-all duration-300 hover:-translate-y-1 hover:border-emerald-300/40 hover:bg-white/[0.08]"
+                                className="h-14 w-full min-w-0 rounded-lg border border-white/10 bg-white/[0.05] px-5 text-base font-bold transition-all duration-300 hover:-translate-y-1 hover:border-emerald-300/40 hover:bg-white/[0.08]"
                             >
                                 Export CSV
                             </button>
                             <Link
                                 href="/dashboard/inventory"
-                                className="flex h-14 min-w-[160px] items-center justify-center rounded-lg border border-white/10 bg-white/[0.05] px-5 text-base font-bold transition-all duration-300 hover:-translate-y-1 hover:border-white/25 hover:bg-white/[0.08]"
+                                className="flex h-14 w-full min-w-0 items-center justify-center rounded-lg border border-white/10 bg-white/[0.05] px-5 text-base font-bold transition-all duration-300 hover:-translate-y-1 hover:border-white/25 hover:bg-white/[0.08]"
                             >
                                 Inventory
                             </Link>
