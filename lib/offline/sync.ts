@@ -5,6 +5,7 @@ import {
   getOfflineData,
   listOfflineActions,
   putOfflineData,
+  setOfflineMeta,
   updateOfflineAction,
   type OfflineAction,
 } from "@/lib/offline/db"
@@ -13,6 +14,7 @@ type ProductRow = Record<string, unknown> & { id: string; stock?: number | null;
 type CustomerRow = Record<string, unknown> & { id: string; name?: string | null }
 type InvoiceRow = Record<string, unknown> & { id: string; invoice_number?: string | null; sync_status?: string | null }
 type InvoiceItemRow = Record<string, unknown> & { id: string; invoice_id?: string | null; product_id?: string | null; quantity?: number | null }
+type SyncableRow = Record<string, unknown> & { id: string; sync_status?: string | null; offline_local_id?: string | null }
 
 export type SyncProgress = {
   total: number
@@ -50,6 +52,35 @@ async function fetchOnlineProducts(headers: Record<string, string>) {
   return payload?.data || []
 }
 
+function actionSortRank(action: OfflineAction) {
+  const rank: Record<OfflineAction["type"], number> = {
+    save_customer: 1,
+    save_product: 2,
+    archive_product: 2,
+    stock_movement: 3,
+    create_invoice: 4,
+    create_order: 6,
+    save_settings: 7,
+  }
+
+  return rank[action.type] || 99
+}
+
+async function postJson<T>(url: string, headers: Record<string, string>, body: Record<string, unknown>) {
+  const response = await fetch(url, {
+    method: "POST",
+    headers,
+    body: JSON.stringify(body),
+  })
+  const result = (await response.json().catch(() => null)) as T & { error?: string; success?: boolean }
+
+  if (!response.ok) {
+    throw new Error(result?.error || `${url} failed.`)
+  }
+
+  return result
+}
+
 async function syncCustomer(action: OfflineAction, headers: Record<string, string>) {
   const payload = action.payload as {
     localCustomerId: string
@@ -71,6 +102,120 @@ async function syncCustomer(action: OfflineAction, headers: Record<string, strin
       customer.id === payload.localCustomerId
         ? { ...customer, id: result.id, offline_local_id: payload.localCustomerId, sync_status: "synced", updated_at: new Date().toISOString() }
         : customer
+    )
+  )
+}
+
+async function syncProduct(action: OfflineAction, headers: Record<string, string>) {
+  const payload = action.payload as {
+    localProductId: string
+    product: Record<string, unknown>
+    serverProductId?: string | null
+  }
+  const serverProductId = payload.serverProductId || (typeof payload.product.id === "string" && !payload.product.id.startsWith("offline-") ? payload.product.id : null)
+  const result = await postJson<{ product?: { id?: string }; success?: boolean }>(
+    serverProductId ? "/api/products/update" : "/api/products/create",
+    headers,
+    serverProductId ? { id: serverProductId, ...payload.product } : payload.product
+  )
+  const serverId = result.product?.id || serverProductId
+  if (!serverId) throw new Error("Product sync failed.")
+
+  const products = await getOfflineData<SyncableRow[]>(action.organizationId, "products", [])
+  await putOfflineData(
+    action.organizationId,
+    "products",
+    products.map((product) =>
+      product.id === payload.localProductId
+        ? {
+            ...product,
+            id: serverId,
+            server_id: serverId,
+            local_id: payload.localProductId,
+            offline_local_id: payload.localProductId,
+            sync_status: "synced",
+            updated_at: new Date().toISOString(),
+          }
+        : product
+    )
+  )
+}
+
+async function syncArchiveProduct(action: OfflineAction, headers: Record<string, string>) {
+  const payload = action.payload as { productId: string; localProductId?: string }
+  const productId = payload.productId
+  if (productId.startsWith("offline-")) {
+    const products = await getOfflineData<SyncableRow[]>(action.organizationId, "products", [])
+    await putOfflineData(
+      action.organizationId,
+      "products",
+      products.filter((product) => product.id !== productId)
+    )
+    return
+  }
+
+  await postJson<{ success?: boolean }>("/api/products/archive", headers, { id: productId })
+  const products = await getOfflineData<SyncableRow[]>(action.organizationId, "products", [])
+  await putOfflineData(
+    action.organizationId,
+    "products",
+    products.map((product) =>
+      product.id === productId ? { ...product, sync_status: "synced", deleted_at: new Date().toISOString() } : product
+    )
+  )
+}
+
+async function syncStockMovement(action: OfflineAction, headers: Record<string, string>) {
+  const payload = action.payload as {
+    localMovementId: string
+    movement: Record<string, unknown> & { product_id?: string; quantity?: number; mode?: string }
+  }
+  await postJson<{ success?: boolean; warning?: string }>("/api/inventory/simple-movement", headers, payload.movement)
+
+  const movements = await getOfflineData<SyncableRow[]>(action.organizationId, "stock_movements", [])
+  await putOfflineData(
+    action.organizationId,
+    "stock_movements",
+    movements.map((movement) =>
+      movement.id === payload.localMovementId ? { ...movement, sync_status: "synced", last_synced_at: new Date().toISOString() } : movement
+    )
+  )
+  const refreshedProducts = await fetchOnlineProducts(headers)
+  await putOfflineData(action.organizationId, "products", refreshedProducts)
+  await putOfflineData(action.organizationId, "inventory_items", refreshedProducts)
+}
+
+async function syncSettings(action: OfflineAction, headers: Record<string, string>) {
+  const payload = action.payload as {
+    kind: "organization" | "feature"
+    data: Record<string, unknown>
+  }
+
+  if (payload.kind === "feature") {
+    await postJson<{ success?: boolean }>("/api/settings/toggle-feature", headers, payload.data)
+    return
+  }
+
+  await postJson<{ success?: boolean }>("/api/settings/update-organization", headers, payload.data)
+}
+
+async function syncOrder(action: OfflineAction, headers: Record<string, string>) {
+  const payload = action.payload as {
+    localOrderId: string
+    order: Record<string, unknown>
+    items?: Record<string, unknown>[]
+  }
+
+  const result = await postJson<{ order_id?: string; id?: string; success?: boolean }>("/api/orders/create", headers, payload)
+  const serverId = result.order_id || result.id
+  const orders = await getOfflineData<SyncableRow[]>(action.organizationId, "orders", [])
+  await putOfflineData(
+    action.organizationId,
+    "orders",
+    orders.map((order) =>
+      order.id === payload.localOrderId
+        ? { ...order, id: serverId || order.id, server_id: serverId || null, local_id: payload.localOrderId, sync_status: "synced" }
+        : order
     )
   )
 }
@@ -167,7 +312,7 @@ async function syncInvoice(action: OfflineAction, headers: Record<string, string
 export async function syncOfflineQueue(onProgress?: (progress: SyncProgress) => void) {
   if (!navigator.onLine) throw new Error("You are offline. Sync will run when internet returns.")
 
-  const actions = await listOfflineActions(["pending", "error", "conflict"])
+  const actions = (await listOfflineActions(["pending", "error", "conflict"])).sort((a, b) => actionSortRank(a) - actionSortRank(b))
   const headers = await authHeaders()
   let completed = 0
 
@@ -179,7 +324,12 @@ export async function syncOfflineQueue(onProgress?: (progress: SyncProgress) => 
 
     try {
       if (action.type === "save_customer") await syncCustomer(action, headers)
+      if (action.type === "save_product") await syncProduct(action, headers)
+      if (action.type === "archive_product") await syncArchiveProduct(action, headers)
+      if (action.type === "stock_movement") await syncStockMovement(action, headers)
       if (action.type === "create_invoice") await syncInvoice(action, headers)
+      if (action.type === "create_order") await syncOrder(action, headers)
+      if (action.type === "save_settings") await syncSettings(action, headers)
       await updateOfflineAction(action.id, { status: "synced", error: undefined })
       completed += 1
     } catch (error) {
@@ -192,6 +342,10 @@ export async function syncOfflineQueue(onProgress?: (progress: SyncProgress) => 
   }
 
   const unresolved = await listOfflineActions(["pending", "error", "conflict"])
+  if (completed > 0) {
+    const organizationId = actions.find((action) => action.organizationId)?.organizationId
+    if (organizationId) await setOfflineMeta("last_synced_at", new Date().toISOString(), organizationId)
+  }
   onProgress?.({
     total: actions.length,
     completed,

@@ -5,6 +5,7 @@ import type { ReactNode } from "react"
 import { useCallback, useEffect, useMemo, useState } from "react"
 import { useDebounce } from "use-debounce"
 import { getOrganizationId } from "@/lib/getOrganization"
+import { getOfflineData, putOfflineData } from "@/lib/offline/db"
 import { supabase } from "@/lib/supabase"
 
 type InvoiceRow = Record<string, unknown> & {
@@ -149,36 +150,56 @@ export default function InvoicesPage() {
   const fetchBillingData = useCallback(async (orgId = organizationId) => {
     if (!orgId) return
 
-    const [invoiceResult, customerResult, itemResult] = await Promise.all([
-      supabase
-        .from("invoices")
-        .select("*")
-        .eq("organization_id", orgId)
-        .order("created_at", { ascending: false })
-        .limit(1500),
-      supabase
-        .from("customers")
-        .select("id,name,phone,email")
-        .eq("organization_id", orgId)
-        .is("deleted_at", null)
-        .limit(1000),
-      supabase
-        .from("invoice_items")
-        .select("invoice_id,quantity,line_total,gst_amount")
-        .eq("organization_id", orgId)
-        .limit(5000),
-    ])
+    try {
+      const [invoiceResult, customerResult, itemResult] = await Promise.all([
+        supabase
+          .from("invoices")
+          .select("*")
+          .eq("organization_id", orgId)
+          .order("created_at", { ascending: false })
+          .limit(1500),
+        supabase
+          .from("customers")
+          .select("id,name,phone,email")
+          .eq("organization_id", orgId)
+          .is("deleted_at", null)
+          .limit(1000),
+        supabase
+          .from("invoice_items")
+          .select("invoice_id,quantity,line_total,gst_amount")
+          .eq("organization_id", orgId)
+          .limit(5000),
+      ])
 
-    if (invoiceResult.error) {
-      setNotice(invoiceResult.error.message)
-      return
+      if (invoiceResult.error) throw new Error(invoiceResult.error.message)
+      if (customerResult.error) setNotice(customerResult.error.message)
+      if (itemResult.error) setNotice(itemResult.error.message)
+
+      const nextInvoices = (invoiceResult.data || []) as InvoiceRow[]
+      const nextCustomers = (customerResult.data || []) as CustomerRow[]
+      const nextItems = (itemResult.data || []) as InvoiceItemRow[]
+
+      await putOfflineData(orgId, "invoices", nextInvoices)
+      await putOfflineData(orgId, "customers", nextCustomers)
+      await putOfflineData(orgId, "invoice_items", nextItems)
+      setInvoices(nextInvoices)
+      setCustomers(nextCustomers)
+      setItems(nextItems)
+    } catch (error) {
+      const [cachedInvoices, cachedCustomers, cachedItems] = await Promise.all([
+        getOfflineData<InvoiceRow[]>(orgId, "invoices", []),
+        getOfflineData<CustomerRow[]>(orgId, "customers", []),
+        getOfflineData<InvoiceItemRow[]>(orgId, "invoice_items", []),
+      ])
+      setInvoices(cachedInvoices)
+      setCustomers(cachedCustomers)
+      setItems(cachedItems)
+      setNotice(
+        typeof navigator !== "undefined" && !navigator.onLine
+          ? "Offline mode: showing cached invoices."
+          : error instanceof Error ? error.message : "Invoices failed to load."
+      )
     }
-    if (customerResult.error) setNotice(customerResult.error.message)
-    if (itemResult.error) setNotice(itemResult.error.message)
-
-    setInvoices((invoiceResult.data || []) as InvoiceRow[])
-    setCustomers((customerResult.data || []) as CustomerRow[])
-    setItems((itemResult.data || []) as InvoiceItemRow[])
   }, [organizationId])
 
   const initializeInvoices = useCallback(async () => {
@@ -580,6 +601,11 @@ export default function InvoicesPage() {
                         <td className="px-6 py-5">
                           <p className="font-bold text-white">{stringFrom(invoice, ["invoice_number"]) || "Invoice"}</p>
                           <p className="mt-1 text-xs text-neutral-500">{formatDate(invoice.created_at)}</p>
+                          {stringFrom(invoice, ["sync_status"]) && stringFrom(invoice, ["sync_status"]) !== "synced" ? (
+                            <p className="mt-2 inline-flex rounded-full border border-amber-400/30 bg-amber-500/10 px-2.5 py-1 text-[11px] font-black uppercase tracking-[0.12em] text-amber-100">
+                              Pending Sync
+                            </p>
+                          ) : null}
                         </td>
                         <td className="px-6 py-5">
                           <p className="font-semibold text-white">{invoice.customerName}</p>

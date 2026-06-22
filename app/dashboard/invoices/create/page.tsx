@@ -124,6 +124,12 @@ function money(value: number) {
   return `Rs ${Math.round(value).toLocaleString()}`
 }
 
+function offlineInvoiceNumber(date = new Date()) {
+  const pad = (value: number) => String(value).padStart(2, "0")
+  const stamp = `${date.getFullYear()}${pad(date.getMonth() + 1)}${pad(date.getDate())}-${pad(date.getHours())}${pad(date.getMinutes())}${pad(date.getSeconds())}`
+  return `OFFLINE-${stamp}`
+}
+
 function inputClass(extra = "") {
   return `h-14 w-full rounded-2xl border border-white/10 bg-black/50 px-5 text-sm font-semibold text-white outline-none transition-all duration-300 placeholder:text-neutral-600 focus:border-cyan-300/60 focus:ring-2 focus:ring-cyan-500/10 ${extra}`
 }
@@ -465,7 +471,7 @@ export default function CreateInvoicePage() {
     const now = new Date().toISOString()
     const offlineClientId = createOfflineId("invoice-client")
     const localInvoiceId = createOfflineId("invoice")
-    const invoiceNumber = `OFFLINE-${Date.now()}`
+    const invoiceNumber = offlineInvoiceNumber()
     const currentProducts = await getOfflineData<Product[]>(organizationId, "products", products)
     const quantityByProductId = new Map<string, number>()
 
@@ -477,6 +483,7 @@ export default function CreateInvoicePage() {
       const quantity = quantityByProductId.get(product.id) || 0
       return quantity > 0 ? { ...product, stock: Number(product.stock || 0) - quantity } : product
     })
+    const productBeforeById = new Map(currentProducts.map((product) => [product.id, product]))
 
     const invoiceRecord: OfflineInvoiceRow = {
       id: localInvoiceId,
@@ -502,7 +509,7 @@ export default function CreateInvoicePage() {
       shipping_code: invoicePayload.shipping_code,
       courier_name: invoicePayload.courier_name,
       tracking_number: invoicePayload.tracking_number,
-      sync_status: "pending_sync",
+      sync_status: "pending_create",
       offline_client_id: offlineClientId,
       created_at: now,
       updated_at: now,
@@ -520,12 +527,33 @@ export default function CreateInvoicePage() {
       discount_percent: item.discount_percent,
       line_total: item.line_total,
       gst_amount: item.gst_amount,
-      sync_status: "pending_sync",
+      sync_status: "pending_create",
       created_at: now,
     }))
 
     const cachedInvoices = await getOfflineData<OfflineInvoiceRow[]>(organizationId, "invoices", [])
     const cachedItems = await getOfflineData<OfflineInvoiceItemRow[]>(organizationId, "invoice_items", [])
+    const cachedMovements = await getOfflineData<Record<string, unknown>[]>(organizationId, "stock_movements", [])
+    const movementRecords = Array.from(quantityByProductId.entries()).map(([productId, quantity]) => {
+      const product = productBeforeById.get(productId)
+      const previousStock = Number(product?.stock || 0)
+
+      return {
+        id: createOfflineId("stock-movement"),
+        organization_id: organizationId,
+        product_id: productId,
+        product_name: product?.name || "",
+        type: "sale",
+        quantity: -quantity,
+        previous_stock: previousStock,
+        new_stock: previousStock - quantity,
+        reason: `Invoice ${invoiceNumber}`,
+        reference_no: invoiceNumber,
+        sync_status: "pending_create",
+        created_at: now,
+        updated_at: now,
+      }
+    })
     const queuedItems = invoiceItems.map((item) => ({
       ...item,
       stock_at_queue: Number(productsMap.get(item.product_id)?.stock ?? 0),
@@ -536,6 +564,7 @@ export default function CreateInvoicePage() {
       putOfflineData(organizationId, "inventory_items", nextProducts),
       putOfflineData(organizationId, "invoices", [invoiceRecord, ...cachedInvoices]),
       putOfflineData(organizationId, "invoice_items", [...itemRecords, ...cachedItems]),
+      putOfflineData(organizationId, "stock_movements", [...movementRecords, ...cachedMovements]),
       queueOfflineAction({
         id: offlineClientId,
         type: "create_invoice",

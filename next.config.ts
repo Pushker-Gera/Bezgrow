@@ -1,6 +1,9 @@
 import type { NextConfig } from "next";
 
+const isDesktopBuild = process.env.BEZGROW_DESKTOP_BUILD === "1";
+
 const nextConfig: NextConfig = {
+  ...(isDesktopBuild ? { output: "standalone" as const } : {}),
   outputFileTracingRoot: process.cwd(),
   turbopack: {
     root: process.cwd(),

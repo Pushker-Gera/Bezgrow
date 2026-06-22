@@ -1,0 +1,1 @@
+{"default":{"identifier":"default","description":"Desktop permissions for Bezgrow ERP","local":true,"windows":["main"],"permissions":["core:default","sql:default","sql:allow-execute"]}}

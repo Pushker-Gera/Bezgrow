@@ -237,7 +237,7 @@ export default function CustomersPage() {
       total_sales: editCustomer?.total_sales ?? 0,
       last_purchase_at: editCustomer?.last_purchase_at ?? null,
       deleted_at: editCustomer?.deleted_at ?? null,
-      sync_status: "pending_sync",
+      sync_status: editCustomer ? "pending_update" : "pending_create",
       offline_local_id: localCustomerId,
     }
     const cachedCustomers = await getOfflineData<Customer[]>(organizationId, "customers", [])

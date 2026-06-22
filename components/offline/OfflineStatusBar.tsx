@@ -1,17 +1,25 @@
 "use client"
 
 import { useCallback, useEffect, useState } from "react"
-import { exportOfflineBackup, pendingOfflineCount } from "@/lib/offline/db"
+import { exportOfflineBackup, getCachedWorkspaceBootstrap, getOfflineMeta, listOfflineActions, pendingOfflineCount } from "@/lib/offline/db"
 import { syncOfflineQueue } from "@/lib/offline/sync"
 
 export default function OfflineStatusBar() {
   const [online, setOnline] = useState(() => (typeof navigator === "undefined" ? true : navigator.onLine))
   const [pending, setPending] = useState(0)
+  const [needsReview, setNeedsReview] = useState(0)
+  const [lastSyncedAt, setLastSyncedAt] = useState("")
   const [syncing, setSyncing] = useState(false)
   const [message, setMessage] = useState("")
 
   const refreshCount = useCallback(async () => {
     setPending(await pendingOfflineCount())
+    setNeedsReview((await listOfflineActions(["error", "conflict"])).length)
+    const cached = getCachedWorkspaceBootstrap()
+    const organizationId = cached?.organization?.id || cached?.membership?.organization_id
+    if (organizationId) {
+      setLastSyncedAt(await getOfflineMeta("last_synced_at", "", organizationId))
+    }
   }, [])
 
   const runSync = useCallback(async () => {
@@ -49,6 +57,7 @@ export default function OfflineStatusBar() {
   useEffect(() => {
     const handleOnline = () => {
       setOnline(true)
+      setMessage("Back online.")
       void refreshCount()
       void runSync()
     }
@@ -73,14 +82,16 @@ export default function OfflineStatusBar() {
     }
   }, [refreshCount, runSync])
 
-  if (online && pending === 0 && !message) return null
+  if (online && pending === 0 && !message && !lastSyncedAt) return null
 
   return (
     <div className={`border-b px-3 py-2 text-sm ${online ? "border-amber-400/20 bg-amber-500/10 text-amber-100" : "border-cyan-400/20 bg-cyan-500/10 text-cyan-100"}`}>
       <div className="mx-auto flex max-w-[1800px] flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
         <div className="font-semibold">
           {online ? "Online" : "Offline"} {pending > 0 ? `- ${pending} pending sync` : ""}
+          {needsReview > 0 ? <span className="ml-2 text-red-100">{needsReview} need review</span> : null}
           {message ? <span className="ml-2 font-normal opacity-80">{message}</span> : null}
+          {lastSyncedAt ? <span className="ml-2 font-normal opacity-70">Last synced {new Date(lastSyncedAt).toLocaleString()}</span> : null}
         </div>
         <div className="flex flex-wrap gap-2">
           <button

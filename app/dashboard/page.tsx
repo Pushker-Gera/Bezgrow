@@ -2,6 +2,7 @@
 
 import Link from "next/link"
 import { useEffect, useMemo, useState } from "react"
+import { getCachedWorkspaceBootstrap, getOfflineData } from "@/lib/offline/db"
 
 type AnyRow = Record<string, unknown>
 
@@ -117,6 +118,14 @@ function statusText(value: unknown) {
     return typeof value === "string" && value ? value.replaceAll("_", " ") : "active"
 }
 
+function startOfWeek(date: Date) {
+    const start = new Date(date)
+    const day = start.getDay() || 7
+    start.setDate(start.getDate() - day + 1)
+    start.setHours(0, 0, 0, 0)
+    return start
+}
+
 export default function Dashboard() {
     const [dashboard, setDashboard] = useState<DashboardState>(emptyDashboard)
     const [loading, setLoading] = useState(true)
@@ -155,7 +164,87 @@ export default function Dashboard() {
                 },
             })
         } catch (error) {
-            setNotice(error instanceof Error ? error.message : "Dashboard failed to load.")
+            const cached = getCachedWorkspaceBootstrap()
+            const organizationId = cached?.organization?.id || cached?.membership?.organization_id || null
+
+            if (!organizationId) {
+                setNotice(error instanceof Error ? error.message : "Dashboard failed to load.")
+                return
+            }
+
+            const [products, customers, invoices, orders, movements] = await Promise.all([
+                getOfflineData<ProductRow[]>(organizationId, "products", []),
+                getOfflineData<AnyRow[]>(organizationId, "customers", []),
+                getOfflineData<AnyRow[]>(organizationId, "invoices", []),
+                getOfflineData<AnyRow[]>(organizationId, "orders", []),
+                getOfflineData<AnyRow[]>(organizationId, "stock_movements", []),
+            ])
+            const today = new Date()
+            const weekStart = startOfWeek(today)
+            const lowStockProducts = products.filter((product) => Number(product.stock || 0) <= Number(product.min_stock ?? 5))
+            const outOfStockProducts = products.filter((product) => Number(product.stock || 0) <= 0)
+            const totalRevenue = invoices.reduce((sum, invoice) => sum + numberFrom(invoice, ["grand_total", "total_amount", "total"]), 0)
+            const todayRevenue = invoices
+                .filter((invoice) => stringFrom(invoice, ["created_at", "date"]).slice(0, 10) === today.toISOString().slice(0, 10))
+                .reduce((sum, invoice) => sum + numberFrom(invoice, ["grand_total", "total_amount", "total"]), 0)
+            const paidRevenue = invoices
+                .filter((invoice) => stringFrom(invoice, ["payment_status", "status"]).toLowerCase() === "paid")
+                .reduce((sum, invoice) => sum + numberFrom(invoice, ["grand_total", "total_amount", "total"]), 0)
+            const inventoryValue = products.reduce((sum, product) => sum + Number(product.stock || 0) * Number(product.sale_rate || product.price || 0), 0)
+            const costValue = products.reduce((sum, product) => sum + Number(product.stock || 0) * Number(product.purchase_rate || 0), 0)
+            const weeklyRevenue = weekLabels.map((label, index) => {
+                const day = new Date(weekStart)
+                day.setDate(weekStart.getDate() + index)
+                const dayKey = day.toISOString().slice(0, 10)
+                const value = invoices
+                    .filter((invoice) => stringFrom(invoice, ["created_at", "date"]).slice(0, 10) === dayKey)
+                    .reduce((sum, invoice) => sum + numberFrom(invoice, ["grand_total", "total_amount", "total"]), 0)
+                return { label, value }
+            })
+            const pendingInvoices = invoices.filter((invoice) => {
+                const status = stringFrom(invoice, ["payment_status", "status"]).toLowerCase()
+                return status && status !== "paid" && status !== "cancelled"
+            }).length
+            const inventoryHealth = products.length ? Math.round(((products.length - lowStockProducts.length) / products.length) * 100) : 100
+            const collectionRate = totalRevenue ? Math.round((paidRevenue / totalRevenue) * 100) : 0
+
+            setDashboard({
+                organizationName: cached?.organization?.name || "Business",
+                products: products.slice(0, 5),
+                invoices: invoices.slice(0, 5),
+                movements: movements.slice(0, 6),
+                lowStockProducts,
+                counts: {
+                    products: products.length,
+                    customers: customers.length,
+                    invoices: invoices.length,
+                    warehouses: 0,
+                    orders: orders.length,
+                },
+                summaryMetrics: {
+                    ...emptyDashboard.summaryMetrics,
+                    totalRevenue,
+                    todayRevenue,
+                    paidRevenue,
+                    pendingInvoices,
+                    lowStockCount: lowStockProducts.length,
+                    outOfStockCount: outOfStockProducts.length,
+                    inventoryValue,
+                    costValue,
+                    potentialProfit: inventoryValue - costValue,
+                    pendingOrders: orders.filter((order) => stringFrom(order, ["status"]).toLowerCase() === "pending").length,
+                    fulfillmentRate: 0,
+                    inventoryHealth,
+                    collectionRate,
+                    erpHealth: Math.round((inventoryHealth + collectionRate) / 2),
+                    weeklyRevenue,
+                },
+            })
+            setNotice(
+                typeof navigator !== "undefined" && !navigator.onLine
+                    ? "Offline mode: dashboard loaded from local data."
+                    : error instanceof Error ? error.message : "Dashboard loaded from local cache."
+            )
         } finally {
             setLoading(false)
         }

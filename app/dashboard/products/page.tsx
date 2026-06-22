@@ -5,6 +5,7 @@ import { useEffect, useMemo, useRef, useState } from "react"
 import { useDebounce } from "use-debounce"
 import { getOrganizationFeatures } from "@/lib/get-organization-features"
 import { getOrganizationId } from "@/lib/getOrganization"
+import { createOfflineId, getOfflineData, putOfflineData, queueOfflineAction } from "@/lib/offline/db"
 import { supabase } from "@/lib/supabase"
 
 type ProductRow = {
@@ -31,6 +32,11 @@ type ProductRow = {
     min_stock: number | null
     created_at: string | null
     deleted_at?: string | null
+    updated_at?: string | null
+    sync_status?: string | null
+    offline_local_id?: string | null
+    local_id?: string | null
+    server_id?: string | null
 }
 
 type StockMovement = {
@@ -338,21 +344,34 @@ export default function ProductsPage() {
         if (debouncedSearch.trim()) params.set("search", debouncedSearch.trim())
         if (forceFresh) params.set("_t", String(Date.now()))
 
-        const response = await fetch(`/api/products/list?${params.toString()}`, {
-            credentials: "include",
-            cache: forceFresh ? "no-store" : "default",
-        })
-        const payload = (await response.json()) as ProductsListResponse
+        try {
+            const response = await fetch(`/api/products/list?${params.toString()}`, {
+                credentials: "include",
+                cache: forceFresh ? "no-store" : "default",
+            })
+            const payload = (await response.json()) as ProductsListResponse
 
-        if (!response.ok) {
-            setNotice(payload.error || "Products failed to load.")
-            return
+            if (!response.ok) {
+                throw new Error(payload.error || "Products failed to load.")
+            }
+
+            const rows = payload.data || []
+            await putOfflineData(orgId, "products", rows)
+            await putOfflineData(orgId, "inventory_items", rows)
+            setAnalytics(buildAnalytics(rows))
+            writeCachedProducts(rows)
+            setProducts(rows)
+        } catch (error) {
+            const cachedProducts = await getOfflineData<ProductRow[]>(orgId, "products", [])
+            setAnalytics(buildAnalytics(cachedProducts))
+            setProducts(cachedProducts)
+            writeCachedProducts(cachedProducts)
+            setNotice(
+                typeof navigator !== "undefined" && !navigator.onLine
+                    ? "Offline mode: showing cached products."
+                    : error instanceof Error ? error.message : "Products failed to load."
+            )
         }
-
-        const rows = payload.data || []
-        setAnalytics(buildAnalytics(rows))
-        writeCachedProducts(rows)
-        setProducts(rows)
     }
 
     async function refreshData() {
@@ -457,30 +476,30 @@ export default function ProductsPage() {
         setNotice("")
         setFormError("")
 
-        try {
-            const stockValue = Number(form.stock || 0)
-            const payload = {
-                name: form.name.trim(),
-                description: form.description.trim() || null,
-                manufacturer: form.manufacturer.trim() || null,
-                sku: form.sku.trim() || null,
-                barcode: form.barcode.trim() || null,
-                category: form.category.trim() || null,
-                unit: form.unit || "pcs",
-                supplier: form.supplier.trim() || null,
-                warehouse: form.warehouse.trim() || "Main Warehouse",
-                price: numberValue(form.price),
-                stock: stockValue,
-                min_stock: numberValue(form.minStock),
-                batch_no: form.batchNo.trim() || null,
-                mrp: numberValue(form.mrp),
-                purchase_rate: numberValue(form.purchaseRate),
-                sale_rate: numberValue(form.saleRate),
-                gst: numberValue(form.gst),
-                expiry_date: expiryDate,
-                purchase_date: purchaseDate,
-            }
+        const stockValue = Number(form.stock || 0)
+        const payload = {
+            name: form.name.trim(),
+            description: form.description.trim() || null,
+            manufacturer: form.manufacturer.trim() || null,
+            sku: form.sku.trim() || null,
+            barcode: form.barcode.trim() || null,
+            category: form.category.trim() || null,
+            unit: form.unit || "pcs",
+            supplier: form.supplier.trim() || null,
+            warehouse: form.warehouse.trim() || "Main Warehouse",
+            price: numberValue(form.price),
+            stock: stockValue,
+            min_stock: numberValue(form.minStock),
+            batch_no: form.batchNo.trim() || null,
+            mrp: numberValue(form.mrp),
+            purchase_rate: numberValue(form.purchaseRate),
+            sale_rate: numberValue(form.saleRate),
+            gst: numberValue(form.gst),
+            expiry_date: expiryDate,
+            purchase_date: purchaseDate,
+        }
 
+        try {
             const {
                 data: { session },
             } = await supabase.auth.getSession()
@@ -509,40 +528,115 @@ export default function ProductsPage() {
             await refreshData()
             setSaving(false)
             setNotice(editProduct ? "Product updated successfully." : "Product created successfully.")
-        } catch {
-            setFormError("Product could not be saved. Please check your connection and try again.")
+        } catch (error) {
+            if (typeof navigator !== "undefined" && !navigator.onLine) {
+                await saveProductOffline(payload)
+                setSaving(false)
+                return
+            }
+
+            setFormError(error instanceof Error ? error.message : "Product could not be saved. Please check your connection and try again.")
             setSaving(false)
         }
+    }
+
+    async function saveProductOffline(payload: Omit<ProductRow, "id" | "organization_id" | "created_at">) {
+        if (!organizationId) return
+        const now = new Date().toISOString()
+        const localProductId = editProduct?.id || createOfflineId("product")
+        const nextProduct: ProductRow = {
+            ...(editProduct || {}),
+            ...payload,
+            id: localProductId,
+            organization_id: organizationId,
+            created_at: editProduct?.created_at || now,
+            deleted_at: null,
+            sync_status: editProduct ? "pending_update" : "pending_create",
+            offline_local_id: localProductId,
+            updated_at: now,
+        } as ProductRow
+        const cachedProducts = await getOfflineData<ProductRow[]>(organizationId, "products", products)
+        const exists = cachedProducts.some((product) => product.id === localProductId)
+        const nextProducts = exists
+            ? cachedProducts.map((product) => (product.id === localProductId ? nextProduct : product))
+            : [nextProduct, ...cachedProducts]
+
+        await putOfflineData(organizationId, "products", nextProducts)
+        await putOfflineData(organizationId, "inventory_items", nextProducts)
+        await queueOfflineAction({
+            id: createOfflineId("product-action"),
+            type: "save_product",
+            organizationId,
+            payload: {
+                localProductId,
+                serverProductId: editProduct && !editProduct.id.startsWith("offline-") ? editProduct.id : null,
+                product: payload,
+            },
+        })
+
+        setProducts(nextProducts)
+        setAnalytics(buildAnalytics(nextProducts))
+        writeCachedProducts(nextProducts)
+        setShowFormModal(false)
+        setEditProduct(null)
+        setForm(emptyForm)
+        setNotice(editProduct ? "Product updated offline. Pending sync." : "Product created offline. Pending sync.")
     }
 
     async function confirmDelete() {
         if (!confirmDeleteId || !organizationId) return
 
         const idToDelete = confirmDeleteId
+        const now = new Date().toISOString()
         setConfirmDeleteId(null)
-        setProducts((current) => current.filter((product) => product.id !== idToDelete))
 
-        const {
-            data: { session },
-        } = await supabase.auth.getSession()
-        const response = await fetch("/api/products/archive", {
-            method: "POST",
-            headers: {
-                "Content-Type": "application/json",
-                ...(session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : {}),
-            },
-            body: JSON.stringify({ id: idToDelete }),
-        })
-        const payload = (await response.json()) as ProductActionResponse
-
-        if (!response.ok || !payload.success) {
-            setNotice(payload.error || "Product could not be archived.")
-            await fetchProducts(undefined, true)
+        if (typeof navigator !== "undefined" && !navigator.onLine) {
+            const cachedProducts = await getOfflineData<ProductRow[]>(organizationId, "products", products)
+            const nextProducts = cachedProducts.map((product) =>
+                product.id === idToDelete ? { ...product, sync_status: "pending_delete", deleted_at: now, updated_at: now } : product
+            )
+            await putOfflineData(organizationId, "products", nextProducts)
+            await putOfflineData(organizationId, "inventory_items", nextProducts)
+            await queueOfflineAction({
+                id: createOfflineId("product-archive"),
+                type: "archive_product",
+                organizationId,
+                payload: { productId: idToDelete },
+            })
+            setProducts(nextProducts.filter((product) => product.id !== idToDelete))
+            setAnalytics(buildAnalytics(nextProducts.filter((product) => product.id !== idToDelete)))
+            setNotice("Product archived offline. Pending sync.")
             return
         }
 
-        await fetchProducts(undefined, true)
-        setNotice("Product moved to trash.")
+        setProducts((current) => current.filter((product) => product.id !== idToDelete))
+
+        try {
+            const {
+                data: { session },
+            } = await supabase.auth.getSession()
+            const response = await fetch("/api/products/archive", {
+                method: "POST",
+                headers: {
+                    "Content-Type": "application/json",
+                    ...(session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : {}),
+                },
+                body: JSON.stringify({ id: idToDelete }),
+            })
+            const payload = (await response.json()) as ProductActionResponse
+
+            if (!response.ok || !payload.success) {
+                setNotice(payload.error || "Product could not be archived.")
+                await fetchProducts(undefined, true)
+                return
+            }
+
+            await fetchProducts(undefined, true)
+            setNotice("Product moved to trash.")
+        } catch (error) {
+            setNotice(error instanceof Error ? error.message : "Product could not be archived.")
+            await fetchProducts(undefined, true)
+        }
     }
 
     function exportProductsCSV() {

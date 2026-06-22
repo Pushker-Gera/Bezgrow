@@ -5,6 +5,9 @@ import { usePathname, useRouter } from "next/navigation"
 import type { ReactNode } from "react"
 import { useEffect, useMemo, useState } from "react"
 import OfflineStatusBar from "@/components/offline/OfflineStatusBar"
+import { clearDesktopSession } from "@/lib/desktop/session"
+import { clearOfflineData } from "@/lib/offline/db"
+import { prepareOfflineWorkspace } from "@/lib/offline/bootstrap"
 import { supabase } from "@/lib/supabase"
 import { clearWorkspaceBootstrapCache, getWorkspaceBootstrap } from "@/lib/workspaceBootstrapClient"
 
@@ -26,6 +29,7 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
     const [businessName, setBusinessName] = useState("My Business")
     const [ownerEmail, setOwnerEmail] = useState("")
     const [mobileNavOpen, setMobileNavOpen] = useState(false)
+    const [offlinePrepMessage, setOfflinePrepMessage] = useState("")
 
     useEffect(() => {
         queueMicrotask(async () => {
@@ -42,6 +46,20 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
                 setOwnerEmail(payload.user?.email || "owner@bezgrow.com")
 
                 if (payload.profile?.role === "admin") router.replace("/admin")
+
+                void prepareOfflineWorkspace(payload, {
+                    onProgress: (progress) => {
+                        setOfflinePrepMessage(progress.message)
+                        if (progress.completed >= progress.total) {
+                            globalThis.setTimeout(() => setOfflinePrepMessage(""), 4000)
+                        }
+                    },
+                }).catch((error) => {
+                    if (typeof navigator !== "undefined" && navigator.onLine) {
+                        setOfflinePrepMessage(error instanceof Error ? error.message : "Offline workspace preparation failed.")
+                        globalThis.setTimeout(() => setOfflinePrepMessage(""), 6000)
+                    }
+                })
             } catch (error) {
                 console.error("Dashboard access error:", error)
             }
@@ -66,6 +84,8 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
 
     async function handleLogout() {
         clearWorkspaceBootstrapCache()
+        await clearDesktopSession()
+        await clearOfflineData()
         await supabase.auth.signOut()
         router.replace("/login")
     }
@@ -160,6 +180,11 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
 
                 <main className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden bg-black pb-4">
                     <OfflineStatusBar />
+                    {offlinePrepMessage && (
+                        <div className="border-b border-emerald-400/20 bg-emerald-500/10 px-3 py-2 text-sm font-semibold text-emerald-100">
+                            <div className="mx-auto max-w-[1800px]">{offlinePrepMessage}</div>
+                        </div>
+                    )}
                     {children}
                 </main>
             </div>

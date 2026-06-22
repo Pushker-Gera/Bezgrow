@@ -5,6 +5,7 @@ import { useDebounce } from "use-debounce"
 import { readStoredPrintSettings, saveStoredPrintSettings } from "@/components/print/settings/defaults"
 import type { PrintFormat, PrintSettings } from "@/components/print/types"
 import { getOrganizationId } from "@/lib/getOrganization"
+import { createOfflineId, getOfflineData, putOfflineData, queueOfflineAction } from "@/lib/offline/db"
 import { supabase } from "@/lib/supabase"
 
 type Organization = Record<string, unknown> & {
@@ -185,36 +186,79 @@ export default function SettingsPage() {
       data: { session },
     } = await supabase.auth.getSession()
     const headers = session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : undefined
-    const [workspaceResponse, invoiceResponse] = await Promise.all([
-      fetch("/api/workspace/bootstrap", { headers, cache: "no-store" }),
-      fetch(`/api/invoices/list?${new URLSearchParams({ limit: "100", organization_id: orgId }).toString()}`, { headers, cache: "no-store" }),
-    ])
-    const workspace = (await workspaceResponse.json()) as WorkspaceResponse
-    const invoices = (await invoiceResponse.json()) as ListResponse<InvoiceCorrectionRow>
+    try {
+      const [workspaceResponse, invoiceResponse] = await Promise.all([
+        fetch("/api/workspace/bootstrap", { headers, cache: "no-store" }),
+        fetch(`/api/invoices/list?${new URLSearchParams({ limit: "100", organization_id: orgId }).toString()}`, { headers, cache: "no-store" }),
+      ])
+      const workspace = (await workspaceResponse.json()) as WorkspaceResponse
+      const invoices = (await invoiceResponse.json()) as ListResponse<InvoiceCorrectionRow>
 
-    if (!workspaceResponse.ok) setNotice(workspace.error || "Workspace settings failed to load.")
-    if (!invoiceResponse.ok) setNotice(invoices.error || `Invoices failed to load. HTTP ${invoiceResponse.status}`)
+      if (!workspaceResponse.ok) setNotice(workspace.error || "Workspace settings failed to load.")
+      if (!invoiceResponse.ok) setNotice(invoices.error || `Invoices failed to load. HTTP ${invoiceResponse.status}`)
 
-    if (workspace.organization) {
-      const org = workspace.organization
-      setOrganization(org)
-      setForm({
-        name: valueText(org.name || org.business_name),
-        industry: valueText(org.industry),
-        currency: valueText(org.currency) || "INR",
-        businessType: valueText(org.business_type) || "retail",
-        businessCategory: valueText(org.business_category) || "general",
-        gstNumber: valueText(org.gst_number),
-        phone: valueText(org.phone),
-        email: valueText(org.email),
-        fssai: valueText(org.fssai),
-        website: valueText(org.website),
-        address: valueText(org.address),
-        branchName: valueText(org.branch_name) || "Main Branch",
+      if (workspace.organization) {
+        const org = workspace.organization
+        setOrganization(org)
+        setForm({
+          name: valueText(org.name || org.business_name),
+          industry: valueText(org.industry),
+          currency: valueText(org.currency) || "INR",
+          businessType: valueText(org.business_type) || "retail",
+          businessCategory: valueText(org.business_category) || "general",
+          gstNumber: valueText(org.gst_number),
+          phone: valueText(org.phone),
+          email: valueText(org.email),
+          fssai: valueText(org.fssai),
+          website: valueText(org.website),
+          address: valueText(org.address),
+          branchName: valueText(org.branch_name) || "Main Branch",
+        })
+      }
+      const nextFeatures = normalizeFeatures(workspace.features, orgId)
+      setFeatures(nextFeatures)
+      setRecentInvoices(invoices.data || [])
+      await putOfflineData(orgId, "settings", {
+        id: `settings:${orgId}`,
+        organization_id: orgId,
+        organization: workspace.organization || null,
+        features: nextFeatures,
+        updated_at: new Date().toISOString(),
       })
+      await putOfflineData(orgId, "invoices", invoices.data || [])
+    } catch (error) {
+      const [cachedSettings, cachedInvoices] = await Promise.all([
+        getOfflineData<Record<string, unknown>>(orgId, "settings", {}),
+        getOfflineData<InvoiceCorrectionRow[]>(orgId, "invoices", []),
+      ])
+      const org = (cachedSettings.organization || null) as Organization | null
+      const cachedFeatures = normalizeFeatures(cachedSettings.features as WorkspaceResponse["features"], orgId)
+
+      if (org) {
+        setOrganization(org)
+        setForm({
+          name: valueText(org.name || org.business_name),
+          industry: valueText(org.industry),
+          currency: valueText(org.currency) || "INR",
+          businessType: valueText(org.business_type) || "retail",
+          businessCategory: valueText(org.business_category) || "general",
+          gstNumber: valueText(org.gst_number),
+          phone: valueText(org.phone),
+          email: valueText(org.email),
+          fssai: valueText(org.fssai),
+          website: valueText(org.website),
+          address: valueText(org.address),
+          branchName: valueText(org.branch_name) || "Main Branch",
+        })
+      }
+      setFeatures(cachedFeatures)
+      setRecentInvoices(cachedInvoices)
+      setNotice(
+        typeof navigator !== "undefined" && !navigator.onLine
+          ? "Offline mode: showing cached settings."
+          : error instanceof Error ? error.message : "Settings failed to load."
+      )
     }
-    setFeatures(normalizeFeatures(workspace.features, orgId))
-    setRecentInvoices(invoices.data || [])
   }
 
   useEffect(() => {
@@ -275,34 +319,62 @@ export default function SettingsPage() {
     }
 
     setSaving(true)
+    const settingsPayload = {
+      name: form.name.trim(),
+      industry: form.industry.trim(),
+      currency: form.currency,
+      business_type: form.businessType,
+      business_category: form.businessCategory,
+      gst_number: form.gstNumber.trim(),
+      phone: form.phone.trim(),
+      email: form.email.trim(),
+      fssai: form.fssai.trim(),
+      website: form.website.trim(),
+      address: form.address.trim(),
+      branch_name: form.branchName.trim() || "Main Branch",
+    }
     const {
       data: { session },
     } = await supabase.auth.getSession()
-    const response = await fetch("/api/settings/update-organization", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        ...(session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : {}),
-      },
-      body: JSON.stringify({
-        name: form.name.trim(),
-        industry: form.industry.trim(),
-        currency: form.currency,
-        business_type: form.businessType,
-        business_category: form.businessCategory,
-        gst_number: form.gstNumber.trim(),
-        phone: form.phone.trim(),
-        email: form.email.trim(),
-        fssai: form.fssai.trim(),
-        website: form.website.trim(),
-        address: form.address.trim(),
-        branch_name: form.branchName.trim() || "Main Branch",
-      }),
-    })
-    const result = (await response.json()) as { error?: string }
+    try {
+      const response = await fetch("/api/settings/update-organization", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          ...(session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : {}),
+        },
+        body: JSON.stringify(settingsPayload),
+      })
+      const result = (await response.json()) as { error?: string }
 
-    if (!response.ok) {
-      setNotice(result.error || "Settings could not be saved.")
+      if (!response.ok) {
+        setNotice(result.error || "Settings could not be saved.")
+        setSaving(false)
+        return
+      }
+    } catch (error) {
+      if (typeof navigator !== "undefined" && !navigator.onLine) {
+        const nextOrganization = { ...(organization || { id: organizationId }), ...settingsPayload, updated_at: new Date().toISOString() }
+        await putOfflineData(organizationId, "settings", {
+          id: `settings:${organizationId}`,
+          organization_id: organizationId,
+          organization: nextOrganization,
+          features,
+          updated_at: new Date().toISOString(),
+        })
+        await queueOfflineAction({
+          id: createOfflineId("settings-action"),
+          type: "save_settings",
+          organizationId,
+          payload: { kind: "organization", data: settingsPayload },
+        })
+        setOrganization(nextOrganization as Organization)
+        setNotice("Settings saved offline. Pending sync.")
+        setSaving(false)
+        return
+      }
+
+      setNotice(error instanceof Error ? error.message : "Settings could not be saved.")
       setSaving(false)
       return
     }
@@ -337,18 +409,47 @@ export default function SettingsPage() {
     const {
       data: { session },
     } = await supabase.auth.getSession()
-    const response = await fetch("/api/settings/toggle-feature", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        ...(session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : {}),
-      },
-      body: JSON.stringify({ feature_key: featureKey, is_enabled: nextEnabled }),
-    })
-    const result = (await response.json()) as { error?: string }
+    try {
+      const response = await fetch("/api/settings/toggle-feature", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          ...(session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : {}),
+        },
+        body: JSON.stringify({ feature_key: featureKey, is_enabled: nextEnabled }),
+      })
+      const result = (await response.json()) as { error?: string }
 
-    if (!response.ok) {
-      setNotice(result.error || "Feature could not be updated.")
+      if (!response.ok) {
+        setNotice(result.error || "Feature could not be updated.")
+        await initializeSettings()
+      }
+    } catch (error) {
+      if (typeof navigator !== "undefined" && !navigator.onLine) {
+        const nextFeatures = existing
+          ? features.map((feature) => feature.feature_key === featureKey ? { ...feature, is_enabled: nextEnabled } : feature)
+          : [...features, { organization_id: organizationId, feature_key: featureKey, is_enabled: nextEnabled }]
+        await putOfflineData(organizationId, "settings", {
+          id: `settings:${organizationId}`,
+          organization_id: organizationId,
+          organization,
+          features: nextFeatures,
+          updated_at: new Date().toISOString(),
+        })
+        await queueOfflineAction({
+          id: createOfflineId("feature-action"),
+          type: "save_settings",
+          organizationId,
+          payload: {
+            kind: "feature",
+            data: { feature_key: featureKey, is_enabled: nextEnabled },
+          },
+        })
+        setNotice("Feature setting saved offline. Pending sync.")
+        return
+      }
+
+      setNotice(error instanceof Error ? error.message : "Feature could not be updated.")
       await initializeSettings()
     }
   }

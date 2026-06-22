@@ -21,6 +21,11 @@
 # production
 /build
 
+# tauri / rust
+/src-tauri/target/
+/desktop-runtime/next-server/*
+!/desktop-runtime/next-server/.gitkeep
+
 # misc
 .DS_Store
 *.pem

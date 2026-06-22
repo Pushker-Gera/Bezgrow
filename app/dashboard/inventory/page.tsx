@@ -4,10 +4,12 @@ import Link from "next/link"
 import { useEffect, useMemo, useState } from "react"
 import { getOrganizationFeatures } from "@/lib/get-organization-features"
 import { getOrganizationId } from "@/lib/getOrganization"
+import { createOfflineId, getOfflineData, putOfflineData, queueOfflineAction } from "@/lib/offline/db"
 import { supabase } from "@/lib/supabase"
 
 type ProductRow = {
     id: string
+    organization_id?: string | null
     name: string
     sku: string | null
     stock: number | null
@@ -21,6 +23,8 @@ type ProductRow = {
     barcode: string | null
     expiry_date: string | null
     created_at: string | null
+    updated_at?: string | null
+    sync_status?: string | null
 }
 
 type InventoryProduct = ProductRow & {
@@ -236,11 +240,7 @@ export default function InventoryPage() {
                 movementsQuery,
             ])
 
-        if (productsResult.error) {
-            setNotice(productsResult.error.message)
-            setLoading(false)
-            return
-        }
+        if (productsResult.error) throw new Error(productsResult.error.message)
 
         const productRows = (productsResult.data || []) as ProductRow[]
         const invoiceRows = (invoicesResult.data || []) as InvoiceRow[]
@@ -367,12 +367,80 @@ export default function InventoryPage() {
                 createdAt: movement.created_at,
             }))
         )
+        await putOfflineData(orgId, "products", productRows)
+        await putOfflineData(orgId, "inventory_items", productRows)
+        await putOfflineData(orgId, "invoices", invoiceRows)
+        await putOfflineData(orgId, "stock_movements", movementRows)
+        setLoading(false)
+    }
+
+    async function loadCachedInventory(orgId: string) {
+        const [cachedProducts, cachedInvoices, cachedMovements] = await Promise.all([
+            getOfflineData<ProductRow[]>(orgId, "products", []),
+            getOfflineData<InvoiceRow[]>(orgId, "invoices", []),
+            getOfflineData<StockMovementRow[]>(orgId, "stock_movements", []),
+        ])
+        const invoiceItems = cachedInvoices.flatMap((invoice) => invoice.invoice_items || [])
+        const normalizedProducts = cachedProducts.map((product) => {
+            const soldQuantity = invoiceItems
+                .filter((item) => item.product_id === product.id)
+                .reduce((sum, item) => sum + Number(item.quantity || 0), 0)
+            const currentStock = Number(product.stock || 0)
+            const unitValue = Number(product.sale_rate || product.price || product.purchase_rate || 0)
+
+            return {
+                ...product,
+                currentStock,
+                soldQuantity,
+                inventoryValue: currentStock * unitValue,
+                warehouseName: "Cached Warehouse",
+            }
+        })
+        const lowStockProducts = normalizedProducts.filter((product) => product.currentStock <= Number(product.min_stock ?? 5))
+        const outOfStockProducts = normalizedProducts.filter((product) => product.currentStock <= 0)
+        const inventoryValue = normalizedProducts.reduce((sum, product) => sum + product.inventoryValue, 0)
+        const invoiceRevenue = cachedInvoices.reduce((sum, invoice) => sum + Number(invoice.grand_total || 0), 0)
+        const soldUnits = invoiceItems.reduce((sum, item) => sum + Number(item.quantity || 0), 0)
+
+        setProducts(normalizedProducts)
+        setWarehouses([])
+        setWarehouseStats([])
+        setCategoryStats(
+            Array.from(
+                normalizedProducts.reduce((map, product) => {
+                    const category = product.category || "General"
+                    map.set(category, (map.get(category) || 0) + product.currentStock)
+                    return map
+                }, new Map<string, number>())
+            ).map(([name, stock]) => ({ name, stock }))
+        )
+        setStats({
+            totalSkus: normalizedProducts.length,
+            lowStock: lowStockProducts.length,
+            outOfStock: outOfStockProducts.length,
+            soldUnits,
+            totalInvoices: cachedInvoices.length,
+            invoiceRevenue,
+            inventoryValue,
+        })
+        setMovements(
+            cachedMovements.map((movement) => ({
+                id: movement.id,
+                product: relationName(movement.products) || "Cached product",
+                type: movementLabels[movement.type || ""] || movement.type || "Movement",
+                quantity: Number(movement.quantity || 0),
+                warehouse: "Cached Warehouse",
+                createdAt: movement.created_at,
+            }))
+        )
+        setNotice("Offline mode: showing cached inventory.")
         setLoading(false)
     }
 
     async function initializeInventory() {
+        let orgId = ""
         try {
-            const orgId = await getOrganizationId()
+            orgId = (await getOrganizationId()) || ""
 
             if (!orgId) {
                 setNotice("No organization is connected to this account.")
@@ -385,6 +453,10 @@ export default function InventoryPage() {
             setFeatures(orgFeatures)
             await fetchInventoryData(orgId)
         } catch (error) {
+            if (orgId) {
+                await loadCachedInventory(orgId)
+                return
+            }
             setNotice(error instanceof Error ? error.message : "Inventory failed to load.")
             setLoading(false)
         }
@@ -414,6 +486,16 @@ export default function InventoryPage() {
         }
 
         setActionLoading(true)
+        const movementPayload = {
+            product_id: product.id,
+            quantity: qty,
+            mode,
+            warehouse_id: warehouseId || null,
+            expiry_date: mode === "add" ? expiryDate || null : null,
+            batch_no: mode === "add" && hasBatchTracking ? batchNo || product.batch_no || null : null,
+            barcode: mode === "add" && hasBarcodeScanning ? barcode || product.barcode || null : null,
+            shipping_qr: hasShippingLabels ? shippingQr || null : null,
+        }
 
         try {
             const {
@@ -425,16 +507,7 @@ export default function InventoryPage() {
                     "Content-Type": "application/json",
                     ...(session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : {}),
                 },
-                body: JSON.stringify({
-                    product_id: product.id,
-                    quantity: qty,
-                    mode,
-                    warehouse_id: warehouseId || null,
-                    expiry_date: mode === "add" ? expiryDate || null : null,
-                    batch_no: mode === "add" && hasBatchTracking ? batchNo || product.batch_no || null : null,
-                    barcode: mode === "add" && hasBarcodeScanning ? barcode || product.barcode || null : null,
-                    shipping_qr: hasShippingLabels ? shippingQr || null : null,
-                }),
+                body: JSON.stringify(movementPayload),
             })
             const result = (await response.json()) as { error?: string; warning?: string }
             if (!response.ok) throw new Error(result.error || "Stock update failed.")
@@ -445,6 +518,60 @@ export default function InventoryPage() {
             setShowTransferModal(false)
             setNotice(result.warning || (mode === "add" ? "Stock added successfully." : "Inventory transferred successfully."))
         } catch (error) {
+            if (typeof navigator !== "undefined" && !navigator.onLine) {
+                const now = new Date().toISOString()
+                const localMovementId = createOfflineId("stock-movement")
+                const cachedProducts = await getOfflineData<ProductRow[]>(organizationId, "products", products)
+                const nextProducts = cachedProducts.map((item) =>
+                    item.id === product.id
+                        ? {
+                            ...item,
+                            stock: nextStock,
+                            batch_no: mode === "add" && hasBatchTracking ? batchNo || item.batch_no : item.batch_no,
+                            barcode: mode === "add" && hasBarcodeScanning ? barcode || item.barcode : item.barcode,
+                            expiry_date: mode === "add" ? expiryDate || item.expiry_date : item.expiry_date,
+                            sync_status: "pending_update",
+                            updated_at: now,
+                        }
+                        : item
+                )
+                const cachedMovements = await getOfflineData<Record<string, unknown>[]>(organizationId, "stock_movements", [])
+                const localMovement = {
+                    id: localMovementId,
+                    organization_id: organizationId,
+                    product_id: product.id,
+                    product_name: product.name,
+                    quantity: mode === "transfer" ? -qty : qty,
+                    type: mode === "transfer" ? "transfer" : "stock_in",
+                    previous_stock: product.currentStock,
+                    new_stock: nextStock,
+                    warehouse_id: warehouseId || null,
+                    reason: mode === "transfer" ? "Offline inventory transfer" : "Offline stock addition",
+                    sync_status: "pending_create",
+                    created_at: now,
+                    updated_at: now,
+                }
+
+                await putOfflineData(organizationId, "products", nextProducts)
+                await putOfflineData(organizationId, "inventory_items", nextProducts)
+                await putOfflineData(organizationId, "stock_movements", [localMovement, ...cachedMovements])
+                await queueOfflineAction({
+                    id: createOfflineId("stock-action"),
+                    type: "stock_movement",
+                    organizationId,
+                    payload: {
+                        localMovementId,
+                        movement: movementPayload,
+                    },
+                })
+                resetActionForm()
+                setShowAddStockModal(false)
+                setShowTransferModal(false)
+                await loadCachedInventory(organizationId)
+                setNotice("Stock updated offline. Pending sync.")
+                return
+            }
+
             setNotice(error instanceof Error ? error.message : "Stock update failed.")
         } finally {
             setActionLoading(false)

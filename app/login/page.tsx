@@ -2,6 +2,8 @@
 
 import type { FormEvent } from "react"
 import { useCallback, useEffect, useState } from "react"
+import { hasCachedDesktopSession, persistDesktopSession } from "@/lib/desktop/session"
+import { getCachedWorkspaceBootstrap } from "@/lib/offline/db"
 import { supabase } from "@/lib/supabase"
 
 type BootstrapResponse = {
@@ -16,6 +18,7 @@ type BootstrapResponse = {
     organization?: { id?: string | null } | null
     permissions?: {
         admin?: boolean
+        canAccessDashboard?: boolean
     }
 }
 
@@ -73,6 +76,21 @@ export default function LoginPage() {
                 setErrorMessage("Your login succeeded, but no profile was found for this account. Contact support to repair the admin profile.")
             } else if (urlError === "account_suspended") {
                 setErrorMessage("This account is suspended.")
+            }
+
+            if (!navigator.onLine) {
+                const [hasSession, cachedWorkspace] = await Promise.all([
+                    hasCachedDesktopSession(),
+                    Promise.resolve(getCachedWorkspaceBootstrap()),
+                ])
+
+                if (hasSession && cachedWorkspace?.success && cachedWorkspace.permissions?.canAccessDashboard) {
+                    window.location.replace("/dashboard")
+                    return
+                }
+
+                setErrorMessage("Internet required for first login. Reconnect once, then Bezgrow can open offline.")
+                return
             }
 
             const bootstrapResponse = await fetch("/api/workspace/bootstrap", { cache: "no-store" })
@@ -158,6 +176,7 @@ export default function LoginPage() {
             setSuccessMessage("Login successful")
 
             if (data.session?.access_token && data.session.refresh_token) {
+                await persistDesktopSession(data.session)
                 redirectToCallback(data.session.access_token, data.session.refresh_token)
             }
 
@@ -176,6 +195,11 @@ export default function LoginPage() {
     async function loginWithGoogle() {
 
         try {
+            if (!navigator.onLine) {
+                setErrorMessage("Internet required for this action.")
+                return
+            }
+
             setGoogleLoading(true)
             setErrorMessage("")
             setSuccessMessage("")
@@ -211,6 +235,10 @@ export default function LoginPage() {
     async function forgotPassword() {
 
         try {
+            if (!navigator.onLine) {
+                setErrorMessage("Internet required for this action.")
+                return
+            }
 
             setErrorMessage("")
             setSuccessMessage("")

@@ -1,22 +1,45 @@
 "use client"
 
 import type { WorkspaceBootstrapPayload } from "@/lib/workspaceBootstrapClient"
+import {
+  clearSqliteOfflineData,
+  exportSqliteBackup,
+  getSqliteCollection,
+  getSqliteMeta,
+  listSqliteActions,
+  putSqliteCollection,
+  queueSqliteAction,
+  setSqliteMeta,
+  updateSqliteAction,
+} from "@/lib/offline/sqlite"
 
 export type OfflineCollection =
+  | "workspace"
+  | "profiles"
   | "organization"
+  | "organization_members"
   | "products"
   | "inventory_items"
   | "customers"
   | "invoices"
   | "invoice_items"
   | "orders"
+  | "order_items"
   | "settings"
+  | "stock_movements"
 
 export type OfflineActionStatus = "pending" | "syncing" | "synced" | "error" | "conflict"
 
 export type OfflineAction = {
   id: string
-  type: "create_invoice" | "save_customer"
+  type:
+    | "create_invoice"
+    | "save_customer"
+    | "save_product"
+    | "archive_product"
+    | "stock_movement"
+    | "save_settings"
+    | "create_order"
   organizationId: string
   status: OfflineActionStatus
   createdAt: string
@@ -101,6 +124,12 @@ export function createOfflineId(prefix: string) {
 
 export async function putOfflineData<T>(organizationId: string, collection: OfflineCollection, value: T) {
   if (!organizationId || !isBrowser()) return
+  const sqliteHandled = await putSqliteCollection(organizationId, collection, value)
+  if (sqliteHandled) {
+    window.dispatchEvent(new Event("bezgrow:offline-data-changed"))
+    return
+  }
+
   const { store, transaction } = await storeTransaction("data", "readwrite")
   const record: OfflineDataRecord<T> = {
     key: dataKey(organizationId, collection),
@@ -111,10 +140,14 @@ export async function putOfflineData<T>(organizationId: string, collection: Offl
   }
   store.put(record)
   await waitForTransaction(transaction)
+  window.dispatchEvent(new Event("bezgrow:offline-data-changed"))
 }
 
 export async function getOfflineData<T>(organizationId: string, collection: OfflineCollection, fallback: T): Promise<T> {
   if (!organizationId || !isBrowser()) return fallback
+  const sqliteResult = await getSqliteCollection(organizationId, collection, fallback)
+  if (sqliteResult.hit) return sqliteResult.value
+
   const { store } = await storeTransaction("data", "readonly")
   const record = await requestToPromise<OfflineDataRecord<T> | undefined>(store.get(dataKey(organizationId, collection)))
   return record?.value ?? fallback
@@ -123,8 +156,34 @@ export async function getOfflineData<T>(organizationId: string, collection: Offl
 export async function cacheWorkspaceBootstrap(payload: WorkspaceBootstrapPayload) {
   const organizationId = payload.organization?.id || payload.membership?.organization_id
   if (!organizationId) return
+  const now = new Date().toISOString()
+
+  await putOfflineData(organizationId, "workspace", {
+    id: `workspace:${organizationId}`,
+    organization_id: organizationId,
+    payload,
+    updated_at: now,
+  })
+  await putOfflineData(organizationId, "profiles", payload.profile ? [{ ...payload.profile, id: payload.profile.id || payload.user?.id, organization_id: organizationId }] : [])
   await putOfflineData(organizationId, "organization", payload.organization || null)
+  await putOfflineData(
+    organizationId,
+    "organization_members",
+    payload.membership
+      ? [
+          {
+            id: `${payload.user?.id || "user"}:${organizationId}`,
+            user_id: payload.user?.id || null,
+            organization_id: organizationId,
+            role: payload.membership.role || null,
+            updated_at: now,
+          },
+        ]
+      : []
+  )
   await putOfflineData(organizationId, "settings", {
+    id: `settings:${organizationId}`,
+    organization_id: organizationId,
     features: payload.features || [],
     currency: payload.currency,
     timezone: payload.timezone,
@@ -156,6 +215,12 @@ export async function queueOfflineAction(action: Omit<OfflineAction, "status" | 
     updatedAt: now,
     attempts: 0,
   }
+  const sqliteHandled = await queueSqliteAction(record)
+  if (sqliteHandled) {
+    window.dispatchEvent(new Event("bezgrow:offline-actions-changed"))
+    return record
+  }
+
   const { store, transaction } = await storeTransaction("actions", "readwrite")
   store.put(record)
   await waitForTransaction(transaction)
@@ -165,12 +230,21 @@ export async function queueOfflineAction(action: Omit<OfflineAction, "status" | 
 
 export async function listOfflineActions(statuses?: OfflineActionStatus[]) {
   if (!isBrowser()) return []
+  const sqliteActions = await listSqliteActions(statuses)
+  if (sqliteActions) return sqliteActions
+
   const { store } = await storeTransaction("actions", "readonly")
   const actions = await requestToPromise<OfflineAction[]>(store.getAll())
   return statuses?.length ? actions.filter((action) => statuses.includes(action.status)) : actions
 }
 
 export async function updateOfflineAction(id: string, patch: Partial<OfflineAction>) {
+  const sqliteAction = await updateSqliteAction(id, patch)
+  if (sqliteAction) {
+    window.dispatchEvent(new Event("bezgrow:offline-actions-changed"))
+    return sqliteAction
+  }
+
   const { store: readStore } = await storeTransaction("actions", "readonly")
   const current = await requestToPromise<OfflineAction | undefined>(readStore.get(id))
   if (!current) return null
@@ -187,8 +261,49 @@ export async function pendingOfflineCount() {
   return actions.length
 }
 
+export async function setOfflineMeta(key: string, value: unknown, organizationId?: string) {
+  const sqliteHandled = await setSqliteMeta(key, value, organizationId)
+  if (sqliteHandled) return
+  if (!isBrowser()) return
+
+  const { store, transaction } = await storeTransaction("meta", "readwrite")
+  store.put({ key: organizationId ? `${organizationId}:${key}` : key, value, updatedAt: new Date().toISOString() })
+  await waitForTransaction(transaction)
+}
+
+export async function getOfflineMeta<T>(key: string, fallback: T, organizationId?: string) {
+  const sqliteValue = await getSqliteMeta(key, fallback, organizationId)
+  if (sqliteValue !== fallback) return sqliteValue
+  if (!isBrowser()) return fallback
+
+  const { store } = await storeTransaction("meta", "readonly")
+  const record = await requestToPromise<{ value?: T } | undefined>(store.get(organizationId ? `${organizationId}:${key}` : key))
+  return record?.value ?? fallback
+}
+
+export async function clearOfflineData() {
+  if (!isBrowser()) return
+  await clearSqliteOfflineData()
+
+  const db = await openDb()
+  const transaction = db.transaction(["data", "actions", "meta"], "readwrite")
+  transaction.objectStore("data").clear()
+  transaction.objectStore("actions").clear()
+  transaction.objectStore("meta").clear()
+  await waitForTransaction(transaction)
+
+  localStorage.removeItem("bezgrow:offline-workspace")
+  sessionStorage.removeItem("bezgrow:workspace-bootstrap")
+  sessionStorage.removeItem("bezgrow:organization-id")
+  window.dispatchEvent(new Event("bezgrow:offline-actions-changed"))
+  window.dispatchEvent(new Event("bezgrow:offline-data-changed"))
+}
+
 export async function exportOfflineBackup() {
   if (!isBrowser()) return null
+  const sqliteBackup = await exportSqliteBackup()
+  if (sqliteBackup) return sqliteBackup
+
   const [data, actions] = await Promise.all([
     getAllFromStore<OfflineDataRecord<unknown>>("data"),
     getAllFromStore<OfflineAction>("actions"),

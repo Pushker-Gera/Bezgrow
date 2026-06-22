@@ -1,4 +1,5 @@
 import { createClient } from "@supabase/supabase-js"
+import { desktopSupabaseStorage } from "@/lib/desktop/session"
 
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL?.trim()
 const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY?.trim()
@@ -13,5 +14,6 @@ export const supabase = createClient(supabaseUrl, supabaseAnonKey, {
         persistSession: true,
         autoRefreshToken: true,
         detectSessionInUrl: false,
+        storage: desktopSupabaseStorage,
     },
 })

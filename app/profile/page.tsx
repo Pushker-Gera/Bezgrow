@@ -2,6 +2,8 @@
 
 import { useCallback, useEffect, useState } from "react"
 import Link from "next/link"
+import { clearDesktopSession } from "@/lib/desktop/session"
+import { clearOfflineData } from "@/lib/offline/db"
 import { supabase } from "@/lib/supabase"
 import { useRouter } from "next/navigation"
 import type { User } from "@supabase/supabase-js"
@@ -58,6 +60,8 @@ export default function ProfilePage() {
   }, [checkUser])
 
   async function logout() {
+    await clearDesktopSession()
+    await clearOfflineData()
     await supabase.auth.signOut()
     router.push("/login")
   }
