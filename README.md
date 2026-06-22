@@ -20,6 +20,8 @@ NEXT_PUBLIC_SITE_URL=https://bezgrow.com
 NEXT_PUBLIC_SUPABASE_URL=https://your-project.supabase.co
 NEXT_PUBLIC_SUPABASE_ANON_KEY=your-anon-key
 SUPABASE_SERVICE_ROLE_KEY=your-service-role-key
+# Optional for desktop builds. Defaults to NEXT_PUBLIC_SITE_URL.
+NEXT_PUBLIC_DESKTOP_API_ORIGIN=https://www.bezgrow.com
 ```
 
 Payments are not enabled for the current launch. Access is approval-based through admin approval, suspension, business creation, and organization membership checks.
@@ -93,7 +95,7 @@ npm run desktop:build:mac
 npm run desktop:build:windows
 ```
 
-`desktop:prepare` runs a desktop-only Next standalone build and copies the runtime into `desktop-runtime/next-server` for Tauri bundling. Production desktop startup launches that bundled Next server on `127.0.0.1` inside the native window.
+`desktop:prepare` runs a desktop-only Next standalone build, copies the runtime into `desktop-runtime/next-server`, and copies the current platform's Node executable into `desktop-runtime/node` for Tauri bundling. Production desktop startup launches that bundled Next server on `127.0.0.1` inside the native window.
 
 Generated desktop artifacts are written under:
 
@@ -101,7 +103,7 @@ Generated desktop artifacts are written under:
 src-tauri/target/release/bundle/
 ```
 
-Packaging note: the current desktop bundle includes the Bezgrow standalone server resources, but it starts them with the system `node` executable. A fully self-contained public installer should add a signed, per-platform Node sidecar before distribution to machines that may not have Node installed.
+Packaging note: desktop installers include a Node runtime generated on the build machine, so installed users are not asked to install Node manually. Build macOS installers on macOS and Windows installers on Windows so the bundled runtime matches the target platform.
 
 ### Offline-first desktop behavior
 

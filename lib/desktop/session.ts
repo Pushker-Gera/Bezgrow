@@ -5,6 +5,7 @@ import { invokeTauri, isTauriRuntime } from "@/lib/desktop/tauri"
 
 const SESSION_SECRET_KEY = "supabase-session"
 const SESSION_FALLBACK_KEY = "bezgrow:desktop-session-fallback"
+const SESSION_STORAGE_KEYS_KEY = "bezgrow:desktop-session-storage-keys"
 
 type StoredSession = Pick<
   Session,
@@ -71,6 +72,35 @@ async function deleteDesktopSecret(key: string) {
   }
 }
 
+function readTrackedStorageKeys() {
+  if (!storageAvailable()) return []
+
+  try {
+    const keys = JSON.parse(localStorage.getItem(SESSION_STORAGE_KEYS_KEY) || "[]")
+    return Array.isArray(keys) ? keys.filter((key): key is string => typeof key === "string" && key.length > 0) : []
+  } catch {
+    localStorage.removeItem(SESSION_STORAGE_KEYS_KEY)
+    return []
+  }
+}
+
+function trackStorageKey(key: string) {
+  if (!storageAvailable()) return
+  const keys = new Set(readTrackedStorageKeys())
+  keys.add(key)
+  localStorage.setItem(SESSION_STORAGE_KEYS_KEY, JSON.stringify(Array.from(keys)))
+}
+
+function untrackStorageKey(key: string) {
+  if (!storageAvailable()) return
+  const keys = readTrackedStorageKeys().filter((trackedKey) => trackedKey !== key)
+  if (keys.length) {
+    localStorage.setItem(SESSION_STORAGE_KEYS_KEY, JSON.stringify(keys))
+  } else {
+    localStorage.removeItem(SESSION_STORAGE_KEYS_KEY)
+  }
+}
+
 export async function persistDesktopSession(session: Session | null) {
   if (!storageAvailable()) return
 
@@ -127,6 +157,10 @@ export async function restoreDesktopSession(supabase: SupabaseClient) {
 export async function clearDesktopSession() {
   if (!storageAvailable()) return
 
+  const trackedKeys = readTrackedStorageKeys()
+  await Promise.all(trackedKeys.map((key) => deleteDesktopSecret(key)))
+  trackedKeys.forEach((key) => localStorage.removeItem(key))
+  localStorage.removeItem(SESSION_STORAGE_KEYS_KEY)
   localStorage.removeItem(SESSION_FALLBACK_KEY)
   await deleteDesktopSecret(SESSION_SECRET_KEY)
 }
@@ -164,11 +198,13 @@ export const desktopSupabaseStorage = {
       return
     }
 
+    trackStorageKey(key)
     const storedSecurely = await writeDesktopSecret(key, value)
     if (!storedSecurely && storageAvailable()) localStorage.setItem(key, value)
   },
   async removeItem(key: string) {
     if (storageAvailable()) localStorage.removeItem(key)
     await deleteDesktopSecret(key)
+    untrackStorageKey(key)
   },
 }

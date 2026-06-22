@@ -12,6 +12,11 @@ type BootstrapProgress = {
 
 type ListResponse<T> = {
   data?: T[]
+  pagination?: {
+    page?: number
+    limit?: number
+    total?: number
+  }
   error?: string
 }
 
@@ -34,6 +39,27 @@ async function fetchList<T>(url: string, headers?: HeadersInit) {
   const payload = (await response.json().catch(() => null)) as ListResponse<T> | null
   if (!response.ok) throw new Error(payload?.error || `${url} failed to load.`)
   return payload?.data || []
+}
+
+async function fetchPagedList<T>(path: string, headers?: HeadersInit, params: Record<string, string> = {}) {
+  const pageSize = 100
+  const rows: T[] = []
+
+  for (let page = 1; page <= 1000; page += 1) {
+    const searchParams = new URLSearchParams({ ...params, page: String(page), limit: String(pageSize) })
+    const response = await fetch(`${path}?${searchParams.toString()}`, { headers, cache: "no-store" })
+    const payload = (await response.json().catch(() => null)) as ListResponse<T> | null
+    if (!response.ok) throw new Error(payload?.error || `${path} failed to load.`)
+
+    const batch = payload?.data || []
+    rows.push(...batch)
+
+    const total = payload?.pagination?.total
+    if (typeof total === "number" && rows.length >= total) break
+    if (batch.length < pageSize) break
+  }
+
+  return rows
 }
 
 async function readSupabaseTable<T>(table: string, organizationId: string, columns = "*", limit = 5000) {
@@ -84,18 +110,21 @@ export async function prepareOfflineWorkspace(
   const headers = await authHeaders()
 
   progress("Downloading products and inventory...")
-  const products = await fetchList<Record<string, unknown>>("/api/products/list?limit=1000&sort=name&direction=asc", headers)
+  const products = await fetchPagedList<Record<string, unknown>>("/api/products/list", headers, {
+    sort: "name",
+    direction: "asc",
+  })
   await putOfflineData(organizationId, "products", products)
   await putOfflineData(organizationId, "inventory_items", products)
   completed += 1
 
   progress("Downloading customers...")
-  const customers = await fetchList<Record<string, unknown>>("/api/customers/list?limit=1000", headers)
+  const customers = await fetchPagedList<Record<string, unknown>>("/api/customers/list", headers)
   await putOfflineData(organizationId, "customers", customers)
   completed += 1
 
   progress("Downloading invoices...")
-  const invoices = await fetchList<Record<string, unknown>>("/api/invoices/list?limit=1000", headers)
+  const invoices = await fetchPagedList<Record<string, unknown>>("/api/invoices/list", headers)
   await putOfflineData(organizationId, "invoices", invoices)
   completed += 1
 

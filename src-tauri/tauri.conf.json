@@ -28,6 +28,7 @@
     "shortDescription": "Bezgrow ERP",
     "longDescription": "Offline-first Bezgrow inventory, billing, invoice, customer, and ERP desktop app.",
     "resources": {
+      "../desktop-runtime/node/": "node",
       "../desktop-runtime/next-server/": "next-server"
     }
   },

@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { cpSync, existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, copyFileSync, cpSync, existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -22,6 +22,7 @@ if (build.status !== 0) {
 
 const standaloneDir = join(root, ".next", "standalone");
 const desktopServerDir = join(root, "desktop-runtime", "next-server");
+const desktopNodeDir = join(root, "desktop-runtime", "node");
 const staticSource = join(root, ".next", "static");
 const staticTarget = join(standaloneDir, ".next", "static");
 const publicSource = join(root, "public");
@@ -44,3 +45,12 @@ rmSync(desktopServerDir, { recursive: true, force: true });
 mkdirSync(desktopServerDir, { recursive: true });
 cpSync(standaloneDir, desktopServerDir, { recursive: true });
 writeFileSync(join(desktopServerDir, ".gitkeep"), "");
+
+rmSync(desktopNodeDir, { recursive: true, force: true });
+mkdirSync(desktopNodeDir, { recursive: true });
+
+const nodeExecutableName = process.platform === "win32" ? "node.exe" : "node";
+const nodeTarget = join(desktopNodeDir, nodeExecutableName);
+copyFileSync(process.execPath, nodeTarget);
+chmodSync(nodeTarget, 0o755);
+writeFileSync(join(desktopNodeDir, ".gitkeep"), "");

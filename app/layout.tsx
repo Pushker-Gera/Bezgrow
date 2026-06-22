@@ -1,6 +1,7 @@
 import "./globals.css"
 import type { Metadata, Viewport } from "next"
 import ChunkReloadGuard from "@/components/chunk-reload-guard"
+import DesktopApiBridge from "@/components/desktop/DesktopApiBridge"
 import DesktopAuthBridge from "@/components/desktop/DesktopAuthBridge"
 import EntryCalculatorAnimation from "@/components/EntryCalculatorAnimation"
 import PwaRegistration from "@/components/PwaRegistration"
@@ -120,6 +121,7 @@ export default function RootLayout({
       <body>
 
         <ChunkReloadGuard />
+        <DesktopApiBridge />
         <DesktopAuthBridge />
         <PwaRegistration />
         <EntryCalculatorAnimation />

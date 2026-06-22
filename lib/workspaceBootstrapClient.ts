@@ -77,6 +77,11 @@ export function clearWorkspaceBootstrapCache() {
 }
 
 export async function getWorkspaceBootstrap(options: { forceFresh?: boolean } = {}) {
+  if (typeof navigator !== "undefined" && !navigator.onLine) {
+    const offlineCached = getCachedWorkspaceBootstrap()
+    if (offlineCached) return offlineCached
+  }
+
   if (!options.forceFresh) {
     const cached = readCache()
     if (cached) return cached
@@ -92,6 +97,9 @@ export async function getWorkspaceBootstrap(options: { forceFresh?: boolean } = 
       if (response.ok && payload.success) {
         writeCache(payload)
         await cacheWorkspaceBootstrap(payload)
+      }
+      if (!response.ok && typeof navigator !== "undefined" && !navigator.onLine) {
+        return getCachedWorkspaceBootstrap()
       }
       return payload
     })

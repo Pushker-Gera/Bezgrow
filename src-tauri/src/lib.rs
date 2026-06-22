@@ -3,6 +3,7 @@ use std::{process::Child, sync::Mutex};
 #[cfg(not(debug_assertions))]
 use std::{
     net::{TcpListener, TcpStream},
+    path::PathBuf,
     process::{Command, Stdio},
     thread,
     time::Duration,
@@ -64,6 +65,26 @@ fn reserve_local_port() -> Result<u16, Box<dyn std::error::Error>> {
     Ok(port)
 }
 
+#[cfg(not(debug_assertions))]
+fn bundled_node_path(app: &tauri::App) -> Result<PathBuf, Box<dyn std::error::Error>> {
+    let executable_name = if cfg!(windows) { "node.exe" } else { "node" };
+    let node_path = app
+        .path()
+        .resource_dir()?
+        .join("node")
+        .join(executable_name);
+
+    if !node_path.exists() {
+        return Err(format!(
+            "Bundled Node runtime was not found at {}",
+            node_path.display()
+        )
+        .into());
+    }
+
+    Ok(node_path)
+}
+
 #[cfg(debug_assertions)]
 fn start_next_server(_app: &mut tauri::App) -> Result<u16, Box<dyn std::error::Error>> {
     Ok(3000)
@@ -74,6 +95,7 @@ fn start_next_server(app: &mut tauri::App) -> Result<u16, Box<dyn std::error::Er
     let port = reserve_local_port()?;
     let server_dir = app.path().resource_dir()?.join("next-server");
     let server_entry = server_dir.join("server.js");
+    let node_path = bundled_node_path(app)?;
 
     if !server_entry.exists() {
         return Err(format!(
@@ -83,7 +105,7 @@ fn start_next_server(app: &mut tauri::App) -> Result<u16, Box<dyn std::error::Er
         .into());
     }
 
-    let child = Command::new("node")
+    let child = Command::new(&node_path)
         .arg(&server_entry)
         .current_dir(&server_dir)
         .env("HOSTNAME", "127.0.0.1")
@@ -94,7 +116,12 @@ fn start_next_server(app: &mut tauri::App) -> Result<u16, Box<dyn std::error::Er
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .spawn()
-        .map_err(|error| format!("Unable to start bundled Bezgrow server with Node.js: {error}"))?;
+        .map_err(|error| {
+            format!(
+                "Unable to start bundled Bezgrow server with {}: {error}",
+                node_path.display()
+            )
+        })?;
 
     let state = app.state::<NextServerState>();
     *state.0.lock().expect("next server state poisoned") = Some(child);

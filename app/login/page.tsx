@@ -3,6 +3,7 @@
 import type { FormEvent } from "react"
 import { useCallback, useEffect, useState } from "react"
 import { hasCachedDesktopSession, persistDesktopSession } from "@/lib/desktop/session"
+import { isTauriRuntime } from "@/lib/desktop/tauri"
 import { getCachedWorkspaceBootstrap } from "@/lib/offline/db"
 import { supabase } from "@/lib/supabase"
 
@@ -60,6 +61,11 @@ export default function LoginPage() {
     }, [])
 
     const redirectToCallback = useCallback((accessToken: string, refreshToken: string, nextPath = getSafeNextPath("/dashboard")) => {
+        if (isTauriRuntime()) {
+            window.location.assign(nextPath)
+            return
+        }
+
         const params = new URLSearchParams({
             access_token: accessToken,
             refresh_token: refreshToken,
