@@ -5,6 +5,9 @@ const isDesktopBuild = process.env.BEZGROW_DESKTOP_BUILD === "1";
 const nextConfig: NextConfig = {
   allowedDevOrigins: ["127.0.0.1"],
   ...(isDesktopBuild ? { output: "standalone" as const } : {}),
+  images: {
+    unoptimized: isDesktopBuild,
+  },
   outputFileTracingRoot: process.cwd(),
   turbopack: {
     root: process.cwd(),

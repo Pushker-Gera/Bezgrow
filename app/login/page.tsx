@@ -2,6 +2,7 @@
 
 import type { FormEvent } from "react"
 import { useCallback, useEffect, useState } from "react"
+import { BezgrowLogoMark } from "@/components/brand/BezgrowLogoMark"
 import { hasCachedDesktopSession, persistDesktopSession } from "@/lib/desktop/session"
 import { isTauriRuntime } from "@/lib/desktop/tauri"
 import { getCachedWorkspaceBootstrap } from "@/lib/offline/db"
@@ -282,6 +283,11 @@ export default function LoginPage() {
         <div className="inventory-grid-bg flex min-h-dvh items-center justify-center px-3 py-5 text-white sm:px-5 sm:py-8">
 
             <form onSubmit={login} className="w-full max-w-md rounded-[22px] border border-white/10 bg-neutral-950/85 p-5 shadow-[0_28px_120px_rgba(0,0,0,0.45)] backdrop-blur-xl sm:rounded-[28px] sm:p-8">
+
+                <div className="mb-5 flex items-center gap-3">
+                    <BezgrowLogoMark className="h-10 w-10" size={40} priority />
+                    <span className="text-base font-black">Bezgrow</span>
+                </div>
 
                 <h1 className="mb-2 text-2xl font-bold sm:text-3xl">
                     Welcome Back

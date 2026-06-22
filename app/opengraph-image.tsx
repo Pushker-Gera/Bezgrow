@@ -1,4 +1,6 @@
 import { ImageResponse } from "next/og"
+import { readFile } from "node:fs/promises"
+import { join } from "node:path"
 
 export const alt = "Bezgrow cloud inventory management, GST billing, POS and ERP software"
 export const size = {
@@ -6,8 +8,12 @@ export const size = {
   height: 630,
 }
 export const contentType = "image/png"
+export const runtime = "nodejs"
 
-export default function Image() {
+export default async function Image() {
+  const logo = await readFile(join(process.cwd(), "public", "icon-512.png"))
+  const logoUrl = `data:image/png;base64,${logo.toString("base64")}`
+
   return new ImageResponse(
     (
       <div
@@ -31,22 +37,17 @@ export default function Image() {
             marginBottom: "48px",
           }}
         >
-          <div
+          <img
+            src={logoUrl}
+            alt=""
+            width="88"
+            height="88"
             style={{
               width: "88px",
               height: "88px",
               borderRadius: "28px",
-              background: "linear-gradient(135deg, #a5f3fc, #2563eb)",
-              color: "#020403",
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "center",
-              fontSize: "46px",
-              fontWeight: 900,
             }}
-          >
-            B
-          </div>
+          />
           <div style={{ display: "flex", flexDirection: "column" }}>
             <div style={{ fontSize: "54px", fontWeight: 900 }}>Bezgrow</div>
             <div style={{ fontSize: "22px", color: "#a5f3fc", letterSpacing: "0.18em" }}>BUSINESS CLOUD</div>

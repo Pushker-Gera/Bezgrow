@@ -552,7 +552,7 @@ function PrintEngineStyles({ format, thermalWidth }: { format: PrintFormat; ther
       .print-a4 { width: 210mm; min-height: 297mm; padding: 10mm; display: flex; flex-direction: column; }
       .print-half-compact { page: half-compact; width: 156mm; min-height: 297mm; padding: 8mm; margin: 0 auto; display: flex; flex-direction: column; }
       .print-half-top { page: half-top; width: 210mm; min-height: 148.5mm; padding: 0; }
-      .top-half-content { height: 148.5mm; overflow: hidden; border: 1px solid #0f172a; padding: 5mm; background: #fff; }
+      .top-half-content { height: 148.5mm; overflow: hidden; border: 1px solid #0f172a; padding: 5mm; background: #fff; display: flex; flex-direction: column; }
       .manual-notes-space { display: none; }
       .print-thermal { page: thermal; width: 80mm; min-height: auto; padding: 3mm 4mm; font-family: "Courier New", monospace; box-shadow: 0 20px 70px rgba(0,0,0,.28); background: #fff; color: #000; }
       .thermal-58 { width: 58mm; padding: 2mm; }
@@ -602,6 +602,8 @@ function PrintEngineStyles({ format, thermalWidth }: { format: PrintFormat; ther
       .payment-grid span { display: block; color: #64748b; font-size: 8px; }
       .payment-grid strong { font-size: 10px; }
       .footer-row { display: flex; justify-content: space-between; gap: 12px; align-items: flex-end; margin-top: 9px; break-inside: avoid; page-break-inside: avoid; }
+      .generated-by-footer { margin-top: auto; border-top: 1px dashed #cbd5e1; padding-top: 7px; text-align: center; color: #64748b; font-size: 8.5px; font-weight: 800; letter-spacing: .04em; break-inside: avoid; page-break-inside: avoid; }
+      .generated-by-footer.compact { padding-top: 6px; font-size: 8px; }
       .codes-block { display: flex; gap: 10px; align-items: center; max-width: 100%; overflow: visible; }
       .codes-block svg { max-width: 100%; height: auto; }
       .signature-grid { flex: 1; display: grid; grid-template-columns: 1fr 1fr; gap: 18px; }
@@ -671,6 +673,7 @@ function PrintEngineStyles({ format, thermalWidth }: { format: PrintFormat; ther
       .half-top-totals p { display: flex; justify-content: space-between; gap: 4mm; margin: 0; color: #334155; font-size: 10px; line-height: 1.55; }
       .half-top-totals strong { color: #0f172a; }
       .half-top-grand { margin-top: 1mm !important; border-top: 1px solid #cbd5e1; padding-top: 1.8mm; color: #1d4ed8 !important; font-size: 15px !important; font-weight: 900; }
+      .half-top-generated-footer { margin-top: auto; padding-top: 2mm; font-size: 8px; }
       .font-small .invoice-paper { font-size: 92%; }
       .font-large .invoice-paper { font-size: 108%; }
       .margin-compact .print-a4 { padding: 5mm; }
@@ -690,6 +693,7 @@ function PrintEngineStyles({ format, thermalWidth }: { format: PrintFormat; ther
       .thermal-table th:last-child, .thermal-table td:last-child { width: 23%; text-align: right; }
       .thermal-table th, .thermal-table td { border-bottom: 1px dotted #999; padding: 4px 2px; text-align: left; overflow-wrap: anywhere; word-break: break-word; }
       .thermal-total { border-top: 1px solid #000; margin-top: 6px; padding-top: 6px; font-size: 13px; font-weight: 900; }
+      .thermal-generated-footer { margin-top: 7px; border-top: 1px dashed #000; border-bottom: 1px dashed #000; padding: 5px 0; text-align: center; color: #475569; font-size: 9px; font-weight: 800; letter-spacing: .02em; }
       .print-thermal svg { max-width: 100%; height: auto; }
       @media (max-width: 900px) {
         .enterprise-print-shell { grid-template-columns: 1fr; }
@@ -798,9 +802,9 @@ function PrintEngineStyles({ format, thermalWidth }: { format: PrintFormat; ther
         .print-half-compact .item-table th,
         .print-half-compact .item-table td { font-size: 7.8px !important; padding: 3px 2px !important; }
         .print-half-top { page: half-top !important; width: 196mm !important; max-width: 196mm !important; min-height: 134.5mm !important; max-height: 134.5mm !important; padding: 0 !important; margin: 0 !important; }
-        .top-half-content { height: 134.5mm !important; min-height: 134.5mm !important; max-height: 134.5mm !important; overflow: hidden !important; padding: 4mm !important; background: #fff !important; }
+        .top-half-content { height: 134.5mm !important; min-height: 134.5mm !important; max-height: 134.5mm !important; overflow: hidden !important; padding: 4mm !important; background: #fff !important; display: flex !important; flex-direction: column !important; }
         .manual-notes-space { display: none !important; }
-        .print-header-block, .customer-grid, .total-grid, .payment-grid, .footer-row, .codes-block, .signature-grid, .info-card, .invoice-meta-card, .terms-card, .total-card { break-inside: avoid !important; page-break-inside: avoid !important; }
+        .print-header-block, .customer-grid, .total-grid, .payment-grid, .footer-row, .generated-by-footer, .thermal-generated-footer, .codes-block, .signature-grid, .info-card, .invoice-meta-card, .terms-card, .total-card { break-inside: avoid !important; page-break-inside: avoid !important; }
         .item-table { width: 100% !important; max-width: 100% !important; table-layout: fixed !important; page-break-inside: auto !important; }
         .mobile-item-cards { display: none !important; }
         .item-table tr { break-inside: avoid !important; page-break-inside: avoid !important; }

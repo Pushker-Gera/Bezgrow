@@ -1,4 +1,5 @@
 import Link from "next/link"
+import { BezgrowLogoMark } from "@/components/brand/BezgrowLogoMark"
 
 type FeaturePageProps = {
   eyebrow: string
@@ -16,7 +17,7 @@ export function FeaturePage({ eyebrow, title, description, highlights, workflows
       <div className="relative z-10">
         <nav className="mx-auto flex w-full max-w-7xl items-center justify-between gap-3 px-4 py-5 lg:px-8" aria-label="Primary navigation">
           <Link href="/" className="flex items-center gap-3">
-            <span className="flex h-11 w-11 items-center justify-center rounded-2xl bg-gradient-to-br from-cyan-200 to-blue-400 text-lg font-black text-black">B</span>
+            <BezgrowLogoMark className="h-11 w-11" size={44} />
             <span>
               <span className="block text-lg font-black">Bezgrow</span>
               <span className="block text-xs uppercase tracking-[0.18em] text-white/45">Business Cloud</span>

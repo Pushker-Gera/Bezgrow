@@ -4,6 +4,7 @@ import Link from "next/link"
 import { usePathname, useRouter } from "next/navigation"
 import type { ReactNode } from "react"
 import { useEffect, useMemo, useState } from "react"
+import { BezgrowLogoMark } from "@/components/brand/BezgrowLogoMark"
 import OfflineStatusBar from "@/components/offline/OfflineStatusBar"
 import { clearDesktopSession } from "@/lib/desktop/session"
 import { clearOfflineData } from "@/lib/offline/db"
@@ -80,7 +81,7 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
         return () => globalThis.clearTimeout(timeout)
     }, [router])
 
-    const workspaceInitial = useMemo(() => businessName.charAt(0).toUpperCase() || "B", [businessName])
+    const workspaceInitial = useMemo(() => businessName.charAt(0).toUpperCase() || "?", [businessName])
 
     async function handleLogout() {
         clearWorkspaceBootstrapCache()
@@ -95,9 +96,7 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
             <aside className="hidden w-[292px] shrink-0 border-r border-white/10 bg-[#060909] p-5 lg:flex lg:flex-col">
                 <div className="inventory-sheen rounded-[30px] border border-white/10 bg-white/[0.035] p-5">
                     <div className="flex items-center gap-4">
-                        <div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-gradient-to-br from-cyan-400 to-blue-600 text-xl font-black text-black">
-                            {workspaceInitial}
-                        </div>
+                        <BezgrowLogoMark className="h-14 w-14" size={56} />
                         <div className="min-w-0">
                             <p className="truncate text-lg font-black">Bezgrow</p>
                             <p className="truncate text-xs uppercase tracking-[0.18em] text-neutral-500">{businessName}</p>

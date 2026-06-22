@@ -4,6 +4,7 @@ import Link from "next/link"
 import { usePathname, useRouter } from "next/navigation"
 import type { ReactNode } from "react"
 import { useEffect, useState } from "react"
+import { BezgrowLogoMark } from "@/components/brand/BezgrowLogoMark"
 import { supabase } from "@/lib/supabase"
 
 type BootstrapResponse = {
@@ -67,6 +68,7 @@ export default function AdminLayout({ children }: { children: ReactNode }) {
         <div className="responsive-shell flex h-dvh max-h-dvh overflow-hidden bg-black text-white">
             <aside className="hidden w-[292px] shrink-0 border-r border-white/10 bg-[#060909] p-5 lg:flex lg:flex-col">
                 <div className="inventory-sheen rounded-[30px] border border-white/10 bg-white/[0.035] p-5">
+                    <BezgrowLogoMark className="mb-3 h-12 w-12" size={48} />
                     <p className="text-xs font-bold uppercase tracking-[0.22em] text-cyan-200">Platform Admin</p>
                     <h1 className="mt-3 text-3xl font-black">Bezgrow</h1>
                     <p className="mt-2 text-sm text-neutral-500">Global SaaS control plane</p>

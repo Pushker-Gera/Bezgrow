@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react"
 import Link from "next/link"
+import { BezgrowLogoMark } from "@/components/brand/BezgrowLogoMark"
 import { clearDesktopSession } from "@/lib/desktop/session"
 import { clearOfflineData } from "@/lib/offline/db"
 import { supabase } from "@/lib/supabase"
@@ -101,9 +102,13 @@ export default function ProfilePage() {
 
               <div className="mb-6 flex min-w-0 items-center gap-3 sm:gap-4 lg:mb-10">
 
-                <div className="flex h-14 w-14 shrink-0 items-center justify-center rounded-[20px] bg-gradient-to-br from-cyan-400 via-blue-500 to-blue-700 text-2xl font-black shadow-[0_0_50px_rgba(34,211,238,0.3)] sm:h-20 sm:w-20 sm:rounded-[28px] sm:text-4xl">
-                  {organization?.business_name?.charAt(0) || "B"}
-                </div>
+                {organization?.business_name ? (
+                  <div className="flex h-14 w-14 shrink-0 items-center justify-center rounded-[20px] bg-gradient-to-br from-cyan-400 via-blue-500 to-blue-700 text-2xl font-black shadow-[0_0_50px_rgba(34,211,238,0.3)] sm:h-20 sm:w-20 sm:rounded-[28px] sm:text-4xl">
+                    {organization.business_name.charAt(0)}
+                  </div>
+                ) : (
+                  <BezgrowLogoMark className="h-14 w-14 rounded-[20px] sm:h-20 sm:w-20 sm:rounded-[28px]" size={80} />
+                )}
 
                 <div className="min-w-0">
                   <h2 className="truncate text-xl font-black leading-tight sm:text-2xl">

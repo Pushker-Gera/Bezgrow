@@ -1,12 +1,14 @@
-import { existsSync } from "node:fs"
+import { existsSync, statSync } from "node:fs"
 import { join } from "node:path"
 import Link from "next/link"
 import type { Metadata } from "next"
 import type { ReactNode } from "react"
+import { BezgrowLogoMark } from "@/components/brand/BezgrowLogoMark"
 import packageJson from "@/package.json"
 
 const macInstallerPath = "/downloads/Bezgrow-mac.dmg"
 const windowsInstallerPath = "/downloads/Bezgrow-windows.exe"
+const isDesktopBuild = process.env.BEZGROW_DESKTOP_BUILD === "1"
 
 export const metadata: Metadata = {
   title: "Download Bezgrow Desktop App",
@@ -16,8 +18,39 @@ export const metadata: Metadata = {
   },
 }
 
-function installerExists(path: string) {
-  return existsSync(join(process.cwd(), "public", path.replace(/^\/+/, "")))
+type InstallerInfo = {
+  available: boolean
+  sizeLabel: string | null
+}
+
+function formatFileSize(bytes: number) {
+  const units = ["B", "KB", "MB", "GB"]
+  let size = bytes
+  let unitIndex = 0
+
+  while (size >= 1024 && unitIndex < units.length - 1) {
+    size /= 1024
+    unitIndex += 1
+  }
+
+  return `${size >= 10 || unitIndex === 0 ? size.toFixed(0) : size.toFixed(1)} ${units[unitIndex]}`
+}
+
+function getInstallerInfo(path: string): InstallerInfo {
+  if (isDesktopBuild) {
+    return { available: false, sizeLabel: null }
+  }
+
+  const fullPath = join(process.cwd(), "public", path.replace(/^\/+/, ""))
+
+  if (!existsSync(fullPath)) {
+    return { available: false, sizeLabel: null }
+  }
+
+  return {
+    available: true,
+    sizeLabel: formatFileSize(statSync(fullPath).size),
+  }
 }
 
 function DownloadButton({
@@ -41,22 +74,43 @@ function DownloadButton({
   }
 
   return (
-    <a href={href} className={`${className} bg-cyan-300 text-black shadow-[0_0_44px_rgba(34,211,238,0.22)] hover:bg-cyan-200`}>
+    <a href={href} download className={`${className} bg-cyan-300 text-black shadow-[0_0_44px_rgba(34,211,238,0.22)] hover:bg-cyan-200`}>
       {children}
     </a>
   )
 }
 
+function InstallerCard({
+  href,
+  info,
+  label,
+}: {
+  href: string
+  info: InstallerInfo
+  label: string
+}) {
+  return (
+    <div>
+      <DownloadButton href={href} available={info.available}>
+        {label}
+      </DownloadButton>
+      <p className="mt-2 text-center text-xs font-bold text-white/45">
+        {info.available ? `Version ${packageJson.version} | ${info.sizeLabel}` : "Coming soon"}
+      </p>
+    </div>
+  )
+}
+
 export default function DownloadPage() {
-  const macAvailable = installerExists(macInstallerPath)
-  const windowsAvailable = installerExists(windowsInstallerPath)
-  const installersReady = macAvailable || windowsAvailable
+  const macInstaller = getInstallerInfo(macInstallerPath)
+  const windowsInstaller = getInstallerInfo(windowsInstallerPath)
+  const installersReady = macInstaller.available || windowsInstaller.available
 
   return (
     <main className="min-h-dvh bg-[#020403] px-5 py-8 text-white sm:py-10 lg:px-8">
       <section className="mx-auto flex min-h-[calc(100dvh-80px)] max-w-5xl flex-col justify-center">
         <Link href="/" className="mb-10 inline-flex w-fit items-center gap-3 text-sm font-black text-cyan-100 hover:text-white">
-          <span className="flex h-10 w-10 items-center justify-center rounded-2xl bg-gradient-to-br from-cyan-200 to-blue-400 text-lg text-black">B</span>
+          <BezgrowLogoMark className="h-10 w-10" size={40} />
           Bezgrow
         </Link>
 
@@ -78,12 +132,8 @@ export default function DownloadPage() {
           )}
 
           <div className="mt-7 grid gap-3 sm:grid-cols-2">
-            <DownloadButton href={macInstallerPath} available={macAvailable}>
-              Download for Mac
-            </DownloadButton>
-            <DownloadButton href={windowsInstallerPath} available={windowsAvailable}>
-              Download for Windows
-            </DownloadButton>
+            <InstallerCard href={macInstallerPath} info={macInstaller} label="Download for Mac" />
+            <InstallerCard href={windowsInstallerPath} info={windowsInstaller} label="Download for Windows" />
           </div>
 
           <div className="mt-8 grid gap-4 text-sm leading-7 text-white/58 md:grid-cols-3">

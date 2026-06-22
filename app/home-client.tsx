@@ -3,6 +3,7 @@
 import { useEffect } from "react"
 import Link from "next/link"
 import { useRouter } from "next/navigation"
+import { BezgrowLogoMark } from "@/components/brand/BezgrowLogoMark"
 import { HeroScene3D } from "@/components/landing/HeroScene3D"
 
 const capabilityGroups = [
@@ -76,7 +77,7 @@ export default function HomeClient() {
 
         <nav className="relative z-10 mx-auto flex w-full max-w-7xl items-center justify-between gap-3 px-3 py-4 sm:px-5 sm:py-5 lg:px-8" aria-label="Primary navigation">
           <button onClick={() => router.push("/")} className="flex min-w-0 items-center gap-2 sm:gap-3">
-            <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl bg-gradient-to-br from-cyan-200 to-blue-400 text-lg font-black text-black shadow-[0_0_34px_rgba(34,211,238,0.3)] sm:h-11 sm:w-11">B</span>
+            <BezgrowLogoMark className="h-10 w-10 sm:h-11 sm:w-11" size={44} priority />
             <span className="text-left">
               <span className="block text-base font-black sm:text-lg">Bezgrow</span>
               <span className="hidden text-xs uppercase tracking-[0.18em] text-white/45 sm:block">Business Cloud</span>

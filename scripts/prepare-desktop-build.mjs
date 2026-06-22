@@ -1,6 +1,6 @@
 import { spawnSync } from "node:child_process";
 import { chmodSync, copyFileSync, cpSync, existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { dirname, join, relative, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const root = dirname(dirname(fileURLToPath(import.meta.url)));
@@ -28,6 +28,11 @@ const staticTarget = join(standaloneDir, ".next", "static");
 const publicSource = join(root, "public");
 const publicTarget = join(standaloneDir, "public");
 
+function shouldCopyPublicAsset(source) {
+  const relativePath = relative(publicSource, source);
+  return relativePath !== "downloads" && !relativePath.startsWith(`downloads${sep}`);
+}
+
 if (!existsSync(join(standaloneDir, "server.js"))) {
   throw new Error("Next standalone server was not generated. Check BEZGROW_DESKTOP_BUILD output mode.");
 }
@@ -38,7 +43,7 @@ cpSync(staticSource, staticTarget, { recursive: true });
 
 rmSync(publicTarget, { recursive: true, force: true });
 if (existsSync(publicSource)) {
-  cpSync(publicSource, publicTarget, { recursive: true });
+  cpSync(publicSource, publicTarget, { recursive: true, filter: shouldCopyPublicAsset });
 }
 
 rmSync(desktopServerDir, { recursive: true, force: true });

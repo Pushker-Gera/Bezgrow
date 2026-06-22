@@ -13,9 +13,12 @@ const SHELL_URLS = [
   "/favicon-32x32.png",
   "/favicon-48x48.png",
   "/apple-touch-icon.png",
+  "/icon-192.png",
+  "/icon-512.png",
   "/android-chrome-192x192.png",
   "/android-chrome-512x512.png",
   "/maskable-icon-512x512.png",
+  "/brand/bezgrow-growth-logo.png",
   "/icons/icon-96.png",
   "/icons/icon-192.png",
   "/icons/icon-512.png",
@@ -52,9 +55,12 @@ function isStaticAsset(requestUrl) {
     requestUrl.pathname === "/favicon-32x32.png" ||
     requestUrl.pathname === "/favicon-48x48.png" ||
     requestUrl.pathname === "/apple-touch-icon.png" ||
+    requestUrl.pathname === "/icon-192.png" ||
+    requestUrl.pathname === "/icon-512.png" ||
     requestUrl.pathname === "/android-chrome-192x192.png" ||
     requestUrl.pathname === "/android-chrome-512x512.png" ||
     requestUrl.pathname === "/maskable-icon-512x512.png" ||
+    requestUrl.pathname === "/brand/bezgrow-growth-logo.png" ||
     requestUrl.pathname === "/manifest.json" ||
     requestUrl.pathname === "/robots.txt" ||
     requestUrl.pathname === "/sitemap.xml"
