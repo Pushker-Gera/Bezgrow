@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from "react"
 import { useDebounce } from "use-debounce"
 import * as XLSX from "xlsx"
 import { getOrganizationId } from "@/lib/getOrganization"
+import { createOfflineId, getOfflineData, putOfflineData, queueOfflineAction } from "@/lib/offline/db"
 import { supabase } from "@/lib/supabase"
 
 type Customer = {
@@ -14,12 +15,15 @@ type Customer = {
   address: string | null
   gst_number: string | null
   created_at: string
+  updated_at?: string | null
   is_active: boolean
   organization_id: string
   total_sales: number | null
   last_purchase_at: string | null
   deleted_at: string | null
   customer_type: string | null
+  sync_status?: string | null
+  offline_local_id?: string | null
 }
 
 type InvoiceRow = Record<string, unknown>
@@ -35,6 +39,15 @@ type CustomerForm = {
   address: string
   gstNumber: string
   customerType: string
+}
+
+type CustomerSavePayload = {
+  name: string
+  phone: string | null
+  email: string | null
+  address: string | null
+  gst_number: string | null
+  customer_type: string
 }
 
 type CustomerWithLedger = Customer & {
@@ -154,27 +167,38 @@ export default function CustomersPage() {
     })
     const invoiceParams = new URLSearchParams({ limit: "100", organization_id: orgId })
 
-    const [customersResponse, invoicesResponse] = await Promise.all([
-      fetch(`/api/customers/list?${customerParams.toString()}`, { headers, cache: "no-store" }),
-      fetch(`/api/invoices/list?${invoiceParams.toString()}`, { headers, cache: "no-store" }),
-    ])
+    try {
+      const [customersResponse, invoicesResponse] = await Promise.all([
+        fetch(`/api/customers/list?${customerParams.toString()}`, { headers, cache: "no-store" }),
+        fetch(`/api/invoices/list?${invoiceParams.toString()}`, { headers, cache: "no-store" }),
+      ])
 
-    const customersResult = (await customersResponse.json()) as ListResponse<Customer>
-    const invoicesResult = (await invoicesResponse.json()) as ListResponse<InvoiceRow>
+      const customersResult = (await customersResponse.json()) as ListResponse<Customer>
+      const invoicesResult = (await invoicesResponse.json()) as ListResponse<InvoiceRow>
 
-    if (!customersResponse.ok) {
-      setNotice(customersResult.error || "Customers failed to load.")
-      return
+      if (!customersResponse.ok) throw new Error(customersResult.error || "Customers failed to load.")
+      if (!invoicesResponse.ok) setNotice(invoicesResult.error || "Invoices failed to load.")
+
+      let nextCustomers = customersResult.data || []
+      await putOfflineData(orgId, "customers", nextCustomers)
+      await putOfflineData(orgId, "invoices", invoicesResult.data || [])
+      if (statusFilter === "active") nextCustomers = nextCustomers.filter((customer) => customer.is_active)
+      if (statusFilter === "inactive") nextCustomers = nextCustomers.filter((customer) => !customer.is_active)
+      setCustomers(nextCustomers)
+      setInvoices(invoicesResult.data || [])
+    } catch (error) {
+      let cachedCustomers = await getOfflineData<Customer[]>(orgId, "customers", [])
+      const cachedInvoices = await getOfflineData<InvoiceRow[]>(orgId, "invoices", [])
+      if (statusFilter === "active") cachedCustomers = cachedCustomers.filter((customer) => customer.is_active)
+      if (statusFilter === "inactive") cachedCustomers = cachedCustomers.filter((customer) => !customer.is_active)
+      setCustomers(cachedCustomers)
+      setInvoices(cachedInvoices)
+      setNotice(
+        navigator.onLine
+          ? error instanceof Error ? error.message : "Customers failed to load."
+          : "Offline mode: showing cached customers."
+      )
     }
-    if (!invoicesResponse.ok) {
-      setNotice(invoicesResult.error || "Invoices failed to load.")
-    }
-
-    let nextCustomers = customersResult.data || []
-    if (statusFilter === "active") nextCustomers = nextCustomers.filter((customer) => customer.is_active)
-    if (statusFilter === "inactive") nextCustomers = nextCustomers.filter((customer) => !customer.is_active)
-    setCustomers(nextCustomers)
-    setInvoices(invoicesResult.data || [])
   }
 
   function updateForm<K extends keyof CustomerForm>(field: K, value: CustomerForm[K]) {
@@ -191,6 +215,53 @@ export default function CustomersPage() {
     setEditCustomer(customer)
     setForm(formFromCustomer(customer))
     setShowFormModal(true)
+  }
+
+  async function saveCustomerOffline(payload: CustomerSavePayload) {
+    if (!organizationId) return
+    const now = new Date().toISOString()
+    const localCustomerId = editCustomer?.id || createOfflineId("customer")
+    const nextCustomer: Customer = {
+      ...(editCustomer || {}),
+      id: localCustomerId,
+      name: payload.name,
+      phone: payload.phone || null,
+      email: payload.email || null,
+      address: payload.address || null,
+      gst_number: payload.gst_number,
+      customer_type: payload.customer_type || "retail",
+      organization_id: organizationId,
+      is_active: editCustomer?.is_active ?? true,
+      created_at: editCustomer?.created_at || now,
+      updated_at: now,
+      total_sales: editCustomer?.total_sales ?? 0,
+      last_purchase_at: editCustomer?.last_purchase_at ?? null,
+      deleted_at: editCustomer?.deleted_at ?? null,
+      sync_status: "pending_sync",
+      offline_local_id: localCustomerId,
+    }
+    const cachedCustomers = await getOfflineData<Customer[]>(organizationId, "customers", [])
+    const alreadyExists = cachedCustomers.some((customer) => customer.id === localCustomerId)
+    const nextCustomers = alreadyExists
+      ? cachedCustomers.map((customer) => (customer.id === localCustomerId ? nextCustomer : customer))
+      : [nextCustomer, ...cachedCustomers]
+
+    await putOfflineData(organizationId, "customers", nextCustomers)
+    await queueOfflineAction({
+      id: createOfflineId("customer-action"),
+      type: "save_customer",
+      organizationId,
+      payload: {
+        localCustomerId,
+        customer: editCustomer && !editCustomer.id.startsWith("offline-") ? { id: editCustomer.id, ...payload } : payload,
+      },
+    })
+
+    setCustomers(nextCustomers)
+    setShowFormModal(false)
+    setEditCustomer(null)
+    setForm(emptyForm)
+    setNotice("Customer saved offline. Pending sync.")
   }
 
   async function saveCustomer() {
@@ -212,24 +283,36 @@ export default function CustomersPage() {
       customer_type: form.customerType || "retail",
     }
 
-    const {
-      data: { session },
-    } = await supabase.auth.getSession()
-    const response = await fetch("/api/customers/save", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        ...(session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : {}),
-      },
-      body: JSON.stringify({
-        id: editCustomer?.id,
-        ...payload,
-      }),
-    })
-    const result = (await response.json()) as { error?: string }
+    try {
+      const {
+        data: { session },
+      } = await supabase.auth.getSession()
+      const response = await fetch("/api/customers/save", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          ...(session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : {}),
+        },
+        body: JSON.stringify({
+          id: editCustomer?.id,
+          ...payload,
+        }),
+      })
+      const result = (await response.json()) as { error?: string }
 
-    if (!response.ok) {
-      setNotice(result.error || "Customer could not be saved.")
+      if (!response.ok) {
+        setNotice(result.error || "Customer could not be saved.")
+        setSaving(false)
+        return
+      }
+    } catch (error) {
+      if (navigator.onLine) {
+        setNotice(error instanceof Error ? error.message : "Customer could not be saved.")
+        setSaving(false)
+        return
+      }
+
+      await saveCustomerOffline(payload)
       setSaving(false)
       return
     }

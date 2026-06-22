@@ -4,6 +4,7 @@ import Link from "next/link"
 import { usePathname, useRouter } from "next/navigation"
 import type { ReactNode } from "react"
 import { useEffect, useMemo, useState } from "react"
+import OfflineStatusBar from "@/components/offline/OfflineStatusBar"
 import { supabase } from "@/lib/supabase"
 import { clearWorkspaceBootstrapCache, getWorkspaceBootstrap } from "@/lib/workspaceBootstrapClient"
 
@@ -158,6 +159,7 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
                 </header>
 
                 <main className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden bg-black pb-4">
+                    <OfflineStatusBar />
                     {children}
                 </main>
             </div>

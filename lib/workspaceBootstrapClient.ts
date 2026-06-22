@@ -1,5 +1,7 @@
 "use client"
 
+import { cacheWorkspaceBootstrap, getCachedWorkspaceBootstrap } from "@/lib/offline/db"
+
 export type WorkspaceBootstrapPayload = {
   success: boolean
   error?: string
@@ -87,10 +89,17 @@ export async function getWorkspaceBootstrap(options: { forceFresh?: boolean } = 
   })
     .then(async (response) => {
       const payload = (await response.json()) as WorkspaceBootstrapPayload
-      if (response.ok && payload.success) writeCache(payload)
+      if (response.ok && payload.success) {
+        writeCache(payload)
+        await cacheWorkspaceBootstrap(payload)
+      }
       return payload
     })
-    .catch(() => null)
+    .catch(() => {
+      const cached = getCachedWorkspaceBootstrap()
+      if (cached && typeof navigator !== "undefined" && !navigator.onLine) return cached
+      return null
+    })
     .finally(() => {
       inFlight = null
     })

@@ -4,6 +4,7 @@ import Link from "next/link"
 import { useEffect, useMemo, useState } from "react"
 import { useDebounce } from "use-debounce"
 import { getOrganizationId } from "@/lib/getOrganization"
+import { getOfflineData, putOfflineData } from "@/lib/offline/db"
 import { supabase } from "@/lib/supabase"
 
 type Product = {
@@ -96,18 +97,21 @@ export default function OrdersPage() {
     const {
       data: { session },
     } = await supabase.auth.getSession()
-    const response = await fetch("/api/products/list?limit=100", {
-      headers: session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : undefined,
-      cache: "no-store",
-    })
-    const result = (await response.json()) as ListResponse<Product>
+    try {
+      const response = await fetch("/api/products/list?limit=100", {
+        headers: session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : undefined,
+        cache: "no-store",
+      })
+      const result = (await response.json()) as ListResponse<Product>
 
-    if (!response.ok) {
-      setNotice(result.error || "Products failed to load.")
-      return
+      if (!response.ok) throw new Error(result.error || "Products failed to load.")
+      setProducts(result.data || [])
+      await putOfflineData(orgId, "products", result.data || [])
+      await putOfflineData(orgId, "inventory_items", result.data || [])
+    } catch (error) {
+      setProducts(await getOfflineData<Product[]>(orgId, "products", []))
+      setNotice(navigator.onLine ? error instanceof Error ? error.message : "Products failed to load." : "Offline mode: showing cached products.")
     }
-
-    setProducts(result.data || [])
   }
 
   async function fetchOrders(orgId = organizationId) {
@@ -115,18 +119,20 @@ export default function OrdersPage() {
     const {
       data: { session },
     } = await supabase.auth.getSession()
-    const response = await fetch("/api/orders/list?limit=100", {
-      headers: session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : undefined,
-      cache: "no-store",
-    })
-    const result = (await response.json()) as ListResponse<OrderRow>
+    try {
+      const response = await fetch("/api/orders/list?limit=100", {
+        headers: session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : undefined,
+        cache: "no-store",
+      })
+      const result = (await response.json()) as ListResponse<OrderRow>
 
-    if (!response.ok) {
-      setNotice(result.error || "Orders failed to load.")
-      return
+      if (!response.ok) throw new Error(result.error || "Orders failed to load.")
+      setOrders(result.data || [])
+      await putOfflineData(orgId, "orders", result.data || [])
+    } catch (error) {
+      setOrders(await getOfflineData<OrderRow[]>(orgId, "orders", []))
+      setNotice(navigator.onLine ? error instanceof Error ? error.message : "Orders failed to load." : "Offline mode: showing cached orders.")
     }
-
-    setOrders(result.data || [])
   }
 
   useEffect(() => {

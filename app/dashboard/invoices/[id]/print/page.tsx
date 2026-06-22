@@ -5,6 +5,7 @@ import { useParams } from "next/navigation"
 import { PrintEngine } from "@/components/print/PrintEngine"
 import { readStoredPrintSettings } from "@/components/print/settings/defaults"
 import type { PrintInvoice } from "@/components/print/types"
+import { getCachedWorkspaceBootstrap, getOfflineData } from "@/lib/offline/db"
 import { buildPrintInvoice, stringFrom, type PrintRow } from "@/lib/print-invoice-builder"
 import { supabase } from "@/lib/supabase"
 
@@ -18,14 +19,54 @@ export default function PrintInvoicePage() {
   const [products, setProducts] = useState<PrintRow[]>([])
   const [loading, setLoading] = useState(true)
 
+  const loadOfflineInvoice = useCallback(async () => {
+    if (!invoiceId) return false
+    const cachedWorkspace = getCachedWorkspaceBootstrap()
+    const organizationId = cachedWorkspace?.organization?.id || cachedWorkspace?.membership?.organization_id || ""
+    if (!organizationId) return false
+
+    const cachedInvoices = await getOfflineData<PrintRow[]>(organizationId, "invoices", [])
+    const offlineInvoice = cachedInvoices.find((row) => stringFrom(row, ["id"]) === invoiceId)
+    if (!offlineInvoice) return false
+
+    const [cachedItems, cachedOrganization, cachedCustomers, cachedProducts] = await Promise.all([
+      getOfflineData<PrintRow[]>(organizationId, "invoice_items", []),
+      getOfflineData<PrintRow | null>(organizationId, "organization", null),
+      getOfflineData<PrintRow[]>(organizationId, "customers", []),
+      getOfflineData<PrintRow[]>(organizationId, "products", []),
+    ])
+    const offlineItems = cachedItems.filter((row) => stringFrom(row, ["invoice_id"]) === invoiceId)
+    const customerId = stringFrom(offlineInvoice, ["customer_id"])
+
+    setInvoice(offlineInvoice)
+    setItems(offlineItems)
+    setOrganization(cachedOrganization)
+    setCustomer(
+      cachedCustomers.find((row) => stringFrom(row, ["id"]) === customerId || stringFrom(row, ["offline_local_id"]) === customerId) || null
+    )
+    setProducts(cachedProducts)
+    return true
+  }, [invoiceId])
+
   const fetchInvoice = useCallback(async () => {
     if (!invoiceId) {
       setLoading(false)
       return
     }
 
-    const { data: invoiceData } = await supabase.from("invoices").select("*").eq("id", invoiceId).single()
-    const typedInvoice = invoiceData as PrintRow | null
+    let typedInvoice: PrintRow | null = null
+    try {
+      const { data: invoiceData } = await supabase.from("invoices").select("*").eq("id", invoiceId).single()
+      typedInvoice = invoiceData as PrintRow | null
+    } catch {
+      typedInvoice = null
+    }
+
+    if (!typedInvoice) {
+      const loadedOffline = await loadOfflineInvoice()
+      setLoading(false)
+      return loadedOffline
+    }
     setInvoice(typedInvoice)
 
     const { data: itemRows } = await supabase.from("invoice_items").select("*").eq("invoice_id", invoiceId)
@@ -49,7 +90,8 @@ export default function PrintInvoicePage() {
     }
 
     setLoading(false)
-  }, [invoiceId])
+    return true
+  }, [invoiceId, loadOfflineInvoice])
 
   useEffect(() => {
     queueMicrotask(() => {

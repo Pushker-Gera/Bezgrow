@@ -1,4 +1,4 @@
-const CACHE_VERSION = "bezgrow-pwa-v2"
+const CACHE_VERSION = "bezgrow-pwa-v3"
 const STATIC_CACHE = `${CACHE_VERSION}:static`
 const SHELL_CACHE = `${CACHE_VERSION}:shell`
 
@@ -6,6 +6,7 @@ const SHELL_URLS = [
   "/",
   "/login",
   "/signup",
+  "/offline",
   "/manifest.json",
   "/favicon.ico",
   "/favicon-16x16.png",
@@ -95,16 +96,16 @@ self.addEventListener("fetch", (event) => {
     event.respondWith(
       fetch(request)
         .then((response) => {
-          if (!isPrivateNavigation(requestUrl) && response.ok) {
+          if (response.ok) {
             caches.open(SHELL_CACHE).then((cache) => cache.put(request, response.clone()))
           }
           return response
         })
         .catch(async () => {
           if (isPrivateNavigation(requestUrl)) {
-            return caches.match("/login") || Response.error()
+            return caches.match(request) || caches.match("/dashboard") || caches.match("/offline") || Response.error()
           }
-          return caches.match(request) || caches.match("/") || Response.error()
+          return caches.match(request) || caches.match("/") || caches.match("/offline") || Response.error()
         })
     )
   }

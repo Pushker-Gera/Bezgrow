@@ -5,13 +5,29 @@ import type { ReactNode } from "react"
 import { useCallback, useEffect, useMemo, useState } from "react"
 import { getOrganizationId } from "@/lib/getOrganization"
 import { createWhatsAppInvoiceUrl } from "@/lib/invoice-share"
+import { createOfflineId, getOfflineData, putOfflineData, queueOfflineAction } from "@/lib/offline/db"
 import { supabase } from "@/lib/supabase"
+import { getWorkspaceBootstrap } from "@/lib/workspaceBootstrapClient"
 
 type Customer = {
   id: string
   name: string
   phone?: string | null
   gst_number?: string | null
+}
+
+type OfflineInvoiceRow = Record<string, unknown> & {
+  id: string
+  invoice_number: string
+  customer_id: string
+  organization_id: string
+  sync_status: string
+}
+
+type OfflineInvoiceItemRow = Record<string, unknown> & {
+  id: string
+  invoice_id: string
+  product_id: string
 }
 
 type Product = {
@@ -48,19 +64,41 @@ type ListResponse<T> = {
   error?: string
 }
 
-type WorkspaceBootstrapResponse = {
-  success: boolean
-  features?: string[]
-  organization?: {
-    name?: string | null
-  } | null
-}
-
 type InvoiceCreateResponse = {
   success: boolean
   error?: string
   invoice_id?: string
   invoice_number?: string
+}
+
+type InvoicePayload = {
+  customer_id: string
+  subtotal: number
+  discount_amount: number
+  discount_total: number
+  taxable_amount: number
+  tax_amount: number
+  total_amount: number
+  payment_status: string
+  payment_method: string
+  due_date: string | null
+  notes: string | null
+  invoice_type: string
+  shipping_code: string | null
+  courier_name: string | null
+  tracking_number: string | null
+}
+
+type InvoiceItemPayload = {
+  product_id: string
+  quantity: number
+  unit_price: number
+  tax_percent: number
+  discount_percent: number
+  line_total: number
+  gst_amount: number
+  product_name: string
+  stock_at_queue?: number
 }
 
 function createClientId() {
@@ -120,6 +158,7 @@ export default function CreateInvoicePage() {
   const [scanQuantity, setScanQuantity] = useState(1)
   const [sendSmsMessage, setSendSmsMessage] = useState(true)
   const [smsBillLink, setSmsBillLink] = useState("")
+  const [organizationId, setOrganizationId] = useState("")
   const [organizationName, setOrganizationName] = useState("Bezgrow")
   const [loading, setLoading] = useState(false)
   const [notice, setNotice] = useState<Notice>(null)
@@ -142,45 +181,70 @@ export default function CreateInvoicePage() {
       return
     }
 
-    const {
-      data: { session },
-    } = await supabase.auth.getSession()
-    const workspaceResponse = await fetch("/api/workspace/bootstrap", {
-      headers: session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : undefined,
-      cache: "no-store",
-    })
-    const workspace = (await workspaceResponse.json()) as WorkspaceBootstrapResponse
+    setOrganizationId(orgId)
+    const workspace = await getWorkspaceBootstrap()
+    if (!workspace?.success) {
+      throw new Error(workspace?.error || "Internet required to refresh login.")
+    }
     setFeatures(Array.isArray(workspace.features) ? workspace.features : [])
     setOrganizationName(workspace.organization?.name || "Bezgrow")
-    await Promise.all([fetchCustomers(), fetchProducts()])
+    await Promise.all([fetchCustomers(orgId), fetchProducts(orgId)])
   }
 
-  async function fetchCustomers() {
+  async function fetchCustomers(orgId = organizationId) {
+    if (!orgId) return
     const {
       data: { session },
     } = await supabase.auth.getSession()
-    const response = await fetch("/api/customers/list?limit=100", {
-      headers: session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : undefined,
-      cache: "no-store",
-    })
-    const payload = (await response.json()) as ListResponse<Customer>
 
-    if (!response.ok) setNotice({ title: "Customers failed", message: payload.error || "Customers failed to load.", type: "error" })
-    if (payload.data) setCustomers(payload.data.filter((customer) => customer.name))
+    try {
+      const response = await fetch("/api/customers/list?limit=100", {
+        headers: session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : undefined,
+        cache: "no-store",
+      })
+      const payload = (await response.json()) as ListResponse<Customer>
+
+      if (!response.ok) throw new Error(payload.error || "Customers failed to load.")
+      const nextCustomers = (payload.data || []).filter((customer) => customer.name)
+      setCustomers(nextCustomers)
+      await putOfflineData(orgId, "customers", nextCustomers)
+    } catch (error) {
+      const cachedCustomers = await getOfflineData<Customer[]>(orgId, "customers", [])
+      setCustomers(cachedCustomers.filter((customer) => customer.name))
+      if (!navigator.onLine) {
+        setNotice({ title: "Offline Customers", message: "Showing locally cached customers.", type: "warning" })
+      } else {
+        setNotice({ title: "Customers failed", message: error instanceof Error ? error.message : "Customers failed to load.", type: "error" })
+      }
+    }
   }
 
-  async function fetchProducts() {
+  async function fetchProducts(orgId = organizationId) {
+    if (!orgId) return
     const {
       data: { session },
     } = await supabase.auth.getSession()
-    const response = await fetch("/api/products/list?limit=100&sort=name&direction=asc", {
-      headers: session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : undefined,
-      cache: "no-store",
-    })
-    const payload = (await response.json()) as ListResponse<Product>
 
-    if (!response.ok) setNotice({ title: "Products failed", message: payload.error || "Products failed to load.", type: "error" })
-    if (payload.data) setProducts(payload.data)
+    try {
+      const response = await fetch("/api/products/list?limit=100&sort=name&direction=asc", {
+        headers: session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : undefined,
+        cache: "no-store",
+      })
+      const payload = (await response.json()) as ListResponse<Product>
+
+      if (!response.ok) throw new Error(payload.error || "Products failed to load.")
+      setProducts(payload.data || [])
+      await putOfflineData(orgId, "products", payload.data || [])
+      await putOfflineData(orgId, "inventory_items", payload.data || [])
+    } catch (error) {
+      const cachedProducts = await getOfflineData<Product[]>(orgId, "products", [])
+      setProducts(cachedProducts)
+      if (!navigator.onLine) {
+        setNotice({ title: "Offline Products", message: "Showing locally cached products and stock.", type: "warning" })
+      } else {
+        setNotice({ title: "Products failed", message: error instanceof Error ? error.message : "Products failed to load.", type: "error" })
+      }
+    }
   }
 
   useEffect(() => {
@@ -395,6 +459,113 @@ export default function CreateInvoicePage() {
     })
   }
 
+  async function saveInvoiceOffline(invoicePayload: InvoicePayload, invoiceItems: InvoiceItemPayload[], printAfterSave: boolean) {
+    if (!organizationId) throw new Error("No cached organization is available for offline billing.")
+
+    const now = new Date().toISOString()
+    const offlineClientId = createOfflineId("invoice-client")
+    const localInvoiceId = createOfflineId("invoice")
+    const invoiceNumber = `OFFLINE-${Date.now()}`
+    const currentProducts = await getOfflineData<Product[]>(organizationId, "products", products)
+    const quantityByProductId = new Map<string, number>()
+
+    invoiceItems.forEach((item) => {
+      quantityByProductId.set(item.product_id, (quantityByProductId.get(item.product_id) || 0) + item.quantity)
+    })
+
+    const nextProducts = currentProducts.map((product) => {
+      const quantity = quantityByProductId.get(product.id) || 0
+      return quantity > 0 ? { ...product, stock: Number(product.stock || 0) - quantity } : product
+    })
+
+    const invoiceRecord: OfflineInvoiceRow = {
+      id: localInvoiceId,
+      organization_id: organizationId,
+      invoice_number: invoiceNumber,
+      customer_id: invoicePayload.customer_id,
+      customer_name: selectedCustomerRecord?.name || "Customer",
+      subtotal: invoicePayload.subtotal,
+      discount_amount: invoicePayload.discount_amount,
+      discount_total: invoicePayload.discount_total,
+      taxable_amount: invoicePayload.taxable_amount,
+      tax_amount: invoicePayload.tax_amount,
+      total_amount: invoicePayload.total_amount,
+      grand_total: invoicePayload.total_amount,
+      total: invoicePayload.total_amount,
+      payment_status: invoicePayload.payment_status,
+      status: invoicePayload.payment_status,
+      payment_method: invoicePayload.payment_method,
+      due_date: invoicePayload.due_date,
+      date: now.slice(0, 10),
+      notes: invoicePayload.notes,
+      invoice_type: invoicePayload.invoice_type,
+      shipping_code: invoicePayload.shipping_code,
+      courier_name: invoicePayload.courier_name,
+      tracking_number: invoicePayload.tracking_number,
+      sync_status: "pending_sync",
+      offline_client_id: offlineClientId,
+      created_at: now,
+      updated_at: now,
+    }
+
+    const itemRecords: OfflineInvoiceItemRow[] = invoiceItems.map((item) => ({
+      id: createOfflineId("invoice-item"),
+      organization_id: organizationId,
+      invoice_id: localInvoiceId,
+      product_id: item.product_id,
+      product_name: item.product_name,
+      quantity: item.quantity,
+      unit_price: item.unit_price,
+      tax_percent: item.tax_percent,
+      discount_percent: item.discount_percent,
+      line_total: item.line_total,
+      gst_amount: item.gst_amount,
+      sync_status: "pending_sync",
+      created_at: now,
+    }))
+
+    const cachedInvoices = await getOfflineData<OfflineInvoiceRow[]>(organizationId, "invoices", [])
+    const cachedItems = await getOfflineData<OfflineInvoiceItemRow[]>(organizationId, "invoice_items", [])
+    const queuedItems = invoiceItems.map((item) => ({
+      ...item,
+      stock_at_queue: Number(productsMap.get(item.product_id)?.stock ?? 0),
+    }))
+
+    await Promise.all([
+      putOfflineData(organizationId, "products", nextProducts),
+      putOfflineData(organizationId, "inventory_items", nextProducts),
+      putOfflineData(organizationId, "invoices", [invoiceRecord, ...cachedInvoices]),
+      putOfflineData(organizationId, "invoice_items", [...itemRecords, ...cachedItems]),
+      queueOfflineAction({
+        id: offlineClientId,
+        type: "create_invoice",
+        organizationId,
+        payload: {
+          offlineClientId,
+          localInvoiceId,
+          invoice: invoicePayload,
+          items: queuedItems,
+        },
+      }),
+    ])
+
+    setProducts(nextProducts)
+    resetInvoiceForm()
+
+    if (printAfterSave) {
+      setLoading(false)
+      window.location.href = `/dashboard/invoices/${localInvoiceId}/print`
+      return
+    }
+
+    setNotice({
+      title: "Invoice Saved Offline",
+      message: `${invoiceNumber} is pending sync. Local stock was reduced.`,
+      type: "warning",
+    })
+    setLoading(false)
+  }
+
   async function saveInvoice(printAfterSave = false) {
     if (loading) return
     if (!selectedCustomer || items.length === 0) {
@@ -420,7 +591,7 @@ export default function CreateInvoicePage() {
     setNotice(null)
     setSmsBillLink("")
 
-    const invoicePayload = {
+    const invoicePayload: InvoicePayload = {
       customer_id: selectedCustomer,
       subtotal: totals.subtotal,
       discount_amount: totals.discount,
@@ -438,7 +609,7 @@ export default function CreateInvoicePage() {
       tracking_number: hasShippingLabels ? trackingNumber || null : null,
     }
 
-    const invoiceItems = items.map((item) => {
+    const invoiceItems: InvoiceItemPayload[] = items.map((item) => {
       const lineBase = item.quantity * item.unit_price
       const discountAmount = (lineBase * item.discount_percent) / 100
       const discountedBase = lineBase - discountAmount
@@ -456,23 +627,42 @@ export default function CreateInvoicePage() {
       }
     })
 
-    const {
-      data: { session },
-    } = await supabase.auth.getSession()
-    const response = await fetch("/api/invoices/create", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        ...(session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : {}),
-      },
-      body: JSON.stringify({
-        ...invoicePayload,
-        items: invoiceItems,
-      }),
-    })
-    const data = (await response.json()) as InvoiceCreateResponse
+    let data: InvoiceCreateResponse
 
-    if (!response.ok || !data.success) {
+    try {
+      const {
+        data: { session },
+      } = await supabase.auth.getSession()
+      const response = await fetch("/api/invoices/create", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          ...(session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : {}),
+        },
+        body: JSON.stringify({
+          ...invoicePayload,
+          items: invoiceItems,
+        }),
+      })
+      data = (await response.json()) as InvoiceCreateResponse
+
+      if (!response.ok || !data.success) {
+        setNotice({ title: "Transaction Failed", message: data.error || "Invoice transaction failed.", type: "error" })
+        setLoading(false)
+        return
+      }
+    } catch (error) {
+      if (navigator.onLine) {
+        setNotice({ title: "Transaction Failed", message: error instanceof Error ? error.message : "Invoice transaction failed.", type: "error" })
+        setLoading(false)
+        return
+      }
+
+      await saveInvoiceOffline(invoicePayload, invoiceItems, printAfterSave)
+      return
+    }
+
+    if (!data.success) {
       setNotice({ title: "Transaction Failed", message: data.error || "Invoice transaction failed.", type: "error" })
       setLoading(false)
       return

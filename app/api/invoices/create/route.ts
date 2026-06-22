@@ -34,11 +34,19 @@ const createInvoiceSchema = z.object({
   shipping_code: z.string().trim().max(120).nullable().optional(),
   courier_name: z.string().trim().max(120).nullable().optional(),
   tracking_number: z.string().trim().max(120).nullable().optional(),
+  offline_client_id: z.string().trim().max(120).optional(),
   items: z.array(invoiceItemSchema).min(1).max(100),
 })
 
 function invoiceNumber() {
   return `INV-${new Date().getFullYear()}-${Date.now()}`
+}
+
+function withOfflineMarker(notes: string | null | undefined, offlineClientId?: string) {
+  if (!offlineClientId) return notes || null
+  const marker = `[offline:${offlineClientId}]`
+  const cleanNotes = (notes || "").trim()
+  return cleanNotes ? `${cleanNotes}\n${marker}` : marker
 }
 
 type InvoiceInsertPayload = Record<string, string | number | null>
@@ -99,6 +107,23 @@ export async function POST(request: Request) {
 
   try {
     const input = parsed.data
+    if (input.offline_client_id) {
+      const { data: existingInvoice, error: existingError } = await adminSupabase
+        .from("invoices")
+        .select("id,invoice_number")
+        .eq("organization_id", workspace.context.organizationId)
+        .ilike("notes", `%[offline:${input.offline_client_id}]%`)
+        .maybeSingle()
+
+      if (!existingError && existingInvoice?.id) {
+        return ok({
+          invoice_id: existingInvoice.id,
+          invoice_number: existingInvoice.invoice_number,
+          reused: true,
+        })
+      }
+    }
+
     const productIds = Array.from(new Set(input.items.map((item) => item.product_id)))
     const quantityByProductId = new Map<string, number>()
 
@@ -150,7 +175,7 @@ export async function POST(request: Request) {
       payment_method: input.payment_method,
       due_date: input.due_date || null,
       date: new Date().toISOString().slice(0, 10),
-      notes: input.notes || null,
+      notes: withOfflineMarker(input.notes, input.offline_client_id),
       invoice_type: input.invoice_type,
       shipping_code: input.shipping_code || null,
       courier_name: input.courier_name || null,
@@ -258,7 +283,7 @@ export async function POST(request: Request) {
       description: `Invoice created: ${invoice.invoice_number}`,
       adminUserId: workspace.context.userId,
       organizationId: workspace.context.organizationId,
-      metadata: { invoice_id: invoice.id, total_amount: input.total_amount },
+      metadata: { invoice_id: invoice.id, total_amount: input.total_amount, offline_client_id: input.offline_client_id || null },
     })
 
     return ok({ invoice_id: invoice.id, invoice_number: invoice.invoice_number })
