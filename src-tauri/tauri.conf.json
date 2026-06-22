@@ -20,9 +20,10 @@
     "active": true,
     "targets": ["dmg", "msi", "nsis"],
     "icon": [
-      "../public/favicon.ico",
-      "../public/android-chrome-192x192.png",
-      "../public/android-chrome-512x512.png"
+      "icons/icon.icns",
+      "icons/icon.ico",
+      "icons/icon.png",
+      "../public/icon-512.png"
     ],
     "category": "Business",
     "shortDescription": "Bezgrow ERP",

@@ -1,9 +1,15 @@
-use std::{process::Child, sync::Mutex};
+use std::{
+    fs::{self, OpenOptions},
+    io::Write,
+    path::PathBuf,
+    process::Child,
+    sync::Mutex,
+    time::{SystemTime, UNIX_EPOCH},
+};
 
 #[cfg(not(debug_assertions))]
 use std::{
     net::{TcpListener, TcpStream},
-    path::PathBuf,
     process::{Command, Stdio},
     thread,
     time::Duration,
@@ -14,6 +20,59 @@ use tauri::{Manager, WebviewUrl};
 const KEYCHAIN_SERVICE: &str = "com.bezgrow.erp";
 
 struct NextServerState(Mutex<Option<Child>>);
+
+fn startup_log_path(app: &tauri::App) -> PathBuf {
+    app.path()
+        .app_log_dir()
+        .or_else(|_| app.path().app_data_dir())
+        .unwrap_or_else(|_| std::env::temp_dir().join("Bezgrow"))
+        .join("bezgrow-startup.log")
+}
+
+fn append_startup_log(app: &tauri::App, message: impl AsRef<str>) {
+    let path = startup_log_path(app);
+
+    if let Some(parent) = path.parent() {
+        let _ = fs::create_dir_all(parent);
+    }
+
+    let Ok(mut file) = OpenOptions::new().create(true).append(true).open(&path) else {
+        return;
+    };
+
+    let timestamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_secs().to_string())
+        .unwrap_or_else(|_| "unknown-time".to_string());
+
+    let _ = writeln!(file, "[{timestamp}] {}", message.as_ref());
+}
+
+fn create_startup_error_window(
+    app: &mut tauri::App,
+    startup_error: &str,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let log_path = startup_log_path(app);
+    let diagnostics = serde_json::json!({
+        "message": startup_error,
+        "logPath": log_path.to_string_lossy(),
+    })
+    .to_string();
+
+    tauri::WebviewWindowBuilder::new(
+        app,
+        "startup-error",
+        WebviewUrl::App("startup-error.html".into()),
+    )
+    .title("Bezgrow ERP")
+    .inner_size(760.0, 520.0)
+    .min_inner_size(640.0, 420.0)
+    .resizable(true)
+    .initialization_script(format!("window.__BEZGROW_STARTUP_ERROR__ = {diagnostics};"))
+    .build()?;
+
+    Ok(())
+}
 
 fn keychain_entry(key: &str) -> Result<keyring::Entry, String> {
     keyring::Entry::new(KEYCHAIN_SERVICE, key).map_err(|error| error.to_string())
@@ -45,16 +104,25 @@ fn delete_secret(key: String) -> Result<(), String> {
 }
 
 #[cfg(not(debug_assertions))]
-fn wait_for_local_server(port: u16) -> bool {
+fn wait_for_local_server(child: &mut Child, port: u16) -> Result<(), String> {
     for _ in 0..120 {
         if TcpStream::connect(("127.0.0.1", port)).is_ok() {
-            return true;
+            return Ok(());
+        }
+
+        if let Some(status) = child
+            .try_wait()
+            .map_err(|error| format!("Unable to inspect bundled server process: {error}"))?
+        {
+            return Err(format!(
+                "Bundled Bezgrow server exited before it was ready with status {status}"
+            ));
         }
 
         thread::sleep(Duration::from_millis(250));
     }
 
-    false
+    Err("Bundled Bezgrow server did not become ready in time".to_string())
 }
 
 #[cfg(not(debug_assertions))]
@@ -86,16 +154,29 @@ fn bundled_node_path(app: &tauri::App) -> Result<PathBuf, Box<dyn std::error::Er
 }
 
 #[cfg(debug_assertions)]
-fn start_next_server(_app: &mut tauri::App) -> Result<u16, Box<dyn std::error::Error>> {
+fn start_next_server(app: &mut tauri::App) -> Result<u16, Box<dyn std::error::Error>> {
+    append_startup_log(app, "Using Next.js dev server at http://localhost:3000");
     Ok(3000)
 }
 
 #[cfg(not(debug_assertions))]
 fn start_next_server(app: &mut tauri::App) -> Result<u16, Box<dyn std::error::Error>> {
     let port = reserve_local_port()?;
+    let resource_dir = app.path().resource_dir()?;
     let server_dir = app.path().resource_dir()?.join("next-server");
     let server_entry = server_dir.join("server.js");
     let node_path = bundled_node_path(app)?;
+    let log_path = startup_log_path(app);
+
+    append_startup_log(
+        app,
+        format!(
+            "Starting bundled Next server. resources={}, node={}, server={}, port={port}",
+            resource_dir.display(),
+            node_path.display(),
+            server_entry.display()
+        ),
+    );
 
     if !server_entry.exists() {
         return Err(format!(
@@ -105,7 +186,16 @@ fn start_next_server(app: &mut tauri::App) -> Result<u16, Box<dyn std::error::Er
         .into());
     }
 
-    let child = Command::new(&node_path)
+    if let Some(parent) = log_path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+
+    let log_file = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&log_path)?;
+
+    let mut child = Command::new(&node_path)
         .arg(&server_entry)
         .current_dir(&server_dir)
         .env("HOSTNAME", "127.0.0.1")
@@ -113,8 +203,8 @@ fn start_next_server(app: &mut tauri::App) -> Result<u16, Box<dyn std::error::Er
         .env("NODE_ENV", "production")
         .env("NEXT_TELEMETRY_DISABLED", "1")
         .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
+        .stdout(Stdio::from(log_file.try_clone()?))
+        .stderr(Stdio::from(log_file))
         .spawn()
         .map_err(|error| {
             format!(
@@ -123,12 +213,15 @@ fn start_next_server(app: &mut tauri::App) -> Result<u16, Box<dyn std::error::Er
             )
         })?;
 
+    if let Err(error) = wait_for_local_server(&mut child, port) {
+        let _ = child.kill();
+        let _ = child.wait();
+        return Err(error.into());
+    }
+
     let state = app.state::<NextServerState>();
     *state.0.lock().expect("next server state poisoned") = Some(child);
-
-    if !wait_for_local_server(port) {
-        return Err("Bundled Bezgrow server did not become ready in time".into());
-    }
+    append_startup_log(app, format!("Bundled Next server is ready on port {port}"));
 
     Ok(port)
 }
@@ -153,8 +246,27 @@ pub fn run() {
         .plugin(tauri_plugin_sql::Builder::default().build())
         .setup(|app| {
             app.manage(NextServerState(Mutex::new(None)));
-            let port = start_next_server(app)?;
-            create_main_window(app, port)?;
+
+            match start_next_server(app).and_then(|port| create_main_window(app, port)) {
+                Ok(()) => {
+                    append_startup_log(app, "Bezgrow desktop window opened successfully");
+                }
+                Err(error) => {
+                    let startup_error = error.to_string();
+                    append_startup_log(
+                        app,
+                        format!("Startup failed before main window opened: {startup_error}"),
+                    );
+
+                    if let Err(window_error) = create_startup_error_window(app, &startup_error) {
+                        append_startup_log(
+                            app,
+                            format!("Unable to show startup error window: {window_error}"),
+                        );
+                    }
+                }
+            }
+
             Ok(())
         })
         .on_window_event(|window, event| {

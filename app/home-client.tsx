@@ -88,9 +88,12 @@ export default function HomeClient() {
             <Link href="/pos" className="hover:text-cyan-100">POS</Link>
             <Link href="/erp" className="hover:text-cyan-100">ERP</Link>
           </div>
-          <div className="flex shrink-0 items-center gap-2 sm:gap-3">
+          <div className="flex shrink-0 flex-wrap items-center justify-end gap-2 sm:gap-3">
             <button onClick={() => router.push("/login")} className="h-10 rounded-2xl border border-white/10 bg-white/[0.035] px-3 text-sm font-bold text-white/75 hover:border-cyan-300/40 sm:h-11 sm:px-5">
               Login
+            </button>
+            <button onClick={() => router.push("/download")} className="h-10 rounded-2xl border border-cyan-300/25 bg-cyan-300/10 px-3 text-sm font-black text-cyan-100 hover:border-cyan-200/50 hover:bg-cyan-300/15 sm:h-11 sm:px-5">
+              Download App
             </button>
             <button onClick={() => router.push("/signup")} className="h-10 rounded-2xl bg-white px-3 text-sm font-black text-black hover:bg-cyan-100 sm:h-11 sm:px-5">
               Start
@@ -112,6 +115,9 @@ export default function HomeClient() {
             <div className="mt-7 flex w-full flex-col gap-3 sm:mt-8 sm:w-auto sm:flex-row">
               <button onClick={() => router.push("/signup")} className="h-12 w-full rounded-2xl bg-cyan-300 px-6 font-black text-black shadow-[0_0_44px_rgba(34,211,238,0.25)] transition hover:-translate-y-0.5 hover:bg-cyan-200 sm:h-14 sm:w-auto sm:px-8">
                 Create Workspace
+              </button>
+              <button onClick={() => router.push("/download")} className="h-12 w-full rounded-2xl border border-cyan-300/25 bg-cyan-300/10 px-6 font-black text-cyan-100 transition hover:-translate-y-0.5 hover:border-cyan-200/50 hover:bg-cyan-300/15 sm:h-14 sm:w-auto sm:px-8">
+                Download App
               </button>
               <button onClick={() => router.push("/login")} className="h-12 w-full rounded-2xl border border-white/12 bg-white/[0.04] px-6 font-bold text-white/85 transition hover:-translate-y-0.5 hover:border-white/30 sm:h-14 sm:w-auto sm:px-8">
                 Login
