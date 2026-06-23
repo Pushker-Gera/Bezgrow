@@ -16,3 +16,12 @@ export async function invokeTauri<T>(command: string, args?: Record<string, unkn
   const { invoke } = await import("@tauri-apps/api/core")
   return invoke<T>(command, args)
 }
+
+export async function openExternalUrl(url: string) {
+  if (!isTauriRuntime()) {
+    window.location.assign(url)
+    return
+  }
+
+  await invokeTauri<void>("open_external_url", { url })
+}

@@ -2,7 +2,7 @@ use std::{
     fs::{self, OpenOptions},
     io::Write,
     path::PathBuf,
-    process::Child,
+    process::{Child, Command},
     sync::Mutex,
     time::{SystemTime, UNIX_EPOCH},
 };
@@ -10,7 +10,7 @@ use std::{
 #[cfg(not(debug_assertions))]
 use std::{
     net::{TcpListener, TcpStream},
-    process::{Command, Stdio},
+    process::Stdio,
     thread,
     time::Duration,
 };
@@ -18,6 +18,7 @@ use std::{
 use tauri::{Manager, WebviewUrl};
 
 const KEYCHAIN_SERVICE: &str = "com.bezgrow.erp";
+const DESKTOP_SERVER_PORT: u16 = 43123;
 
 struct NextServerState(Mutex<Option<Child>>);
 
@@ -103,6 +104,61 @@ fn delete_secret(key: String) -> Result<(), String> {
     }
 }
 
+fn validate_external_url(url: &str) -> Result<(), String> {
+    let parsed = tauri::Url::parse(url).map_err(|error| format!("Invalid URL: {error}"))?;
+
+    if parsed.scheme() == "https" {
+        return Ok(());
+    }
+
+    if parsed.scheme() == "http" {
+        let host = parsed.host_str().unwrap_or_default();
+        if matches!(host, "127.0.0.1" | "localhost") {
+            return Ok(());
+        }
+    }
+
+    Err("Only trusted web URLs can be opened externally.".to_string())
+}
+
+#[tauri::command]
+fn open_external_url(url: String) -> Result<(), String> {
+    validate_external_url(&url)?;
+
+    #[cfg(target_os = "macos")]
+    {
+        Command::new("open")
+            .arg(&url)
+            .spawn()
+            .map_err(|error| format!("Unable to open browser: {error}"))?;
+        return Ok(());
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        Command::new("rundll32.exe")
+            .arg("url.dll,FileProtocolHandler")
+            .arg(&url)
+            .spawn()
+            .map_err(|error| format!("Unable to open browser: {error}"))?;
+        return Ok(());
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        Command::new("xdg-open")
+            .arg(&url)
+            .spawn()
+            .map_err(|error| format!("Unable to open browser: {error}"))?;
+        return Ok(());
+    }
+
+    #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
+    {
+        Err("Opening external browser is not supported on this platform.".to_string())
+    }
+}
+
 #[cfg(not(debug_assertions))]
 fn wait_for_local_server(child: &mut Child, port: u16) -> Result<(), String> {
     for _ in 0..120 {
@@ -127,7 +183,8 @@ fn wait_for_local_server(child: &mut Child, port: u16) -> Result<(), String> {
 
 #[cfg(not(debug_assertions))]
 fn reserve_local_port() -> Result<u16, Box<dyn std::error::Error>> {
-    let listener = TcpListener::bind(("127.0.0.1", 0))?;
+    let listener = TcpListener::bind(("127.0.0.1", DESKTOP_SERVER_PORT))
+        .or_else(|_| TcpListener::bind(("127.0.0.1", 0)))?;
     let port = listener.local_addr()?.port();
     drop(listener);
     Ok(port)
@@ -287,7 +344,8 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             store_secret,
             read_secret,
-            delete_secret
+            delete_secret,
+            open_external_url
         ])
         .run(tauri::generate_context!())
         .expect("error while running Bezgrow ERP");

@@ -2,9 +2,11 @@
 
 import type { FormEvent } from "react"
 import { useCallback, useEffect, useState } from "react"
+import type { Session } from "@supabase/supabase-js"
 import { BezgrowLogoMark } from "@/components/brand/BezgrowLogoMark"
+import { completeDesktopAuthCallback } from "@/lib/desktop/auth-callback"
 import { hasCachedDesktopSession, persistDesktopSession } from "@/lib/desktop/session"
-import { isTauriRuntime } from "@/lib/desktop/tauri"
+import { isTauriRuntime, openExternalUrl } from "@/lib/desktop/tauri"
 import { getCachedWorkspaceBootstrap } from "@/lib/offline/db"
 import { supabase } from "@/lib/supabase"
 
@@ -61,9 +63,10 @@ export default function LoginPage() {
         return (window.location.origin || process.env.NEXT_PUBLIC_SITE_URL || "http://localhost:3000").replace(/\/$/, "")
     }, [])
 
-    const redirectToCallback = useCallback((accessToken: string, refreshToken: string, nextPath = getSafeNextPath("/dashboard")) => {
+    const redirectToCallback = useCallback(async (accessToken: string, refreshToken: string, nextPath = getSafeNextPath("/dashboard")) => {
         if (isTauriRuntime()) {
-            window.location.assign(nextPath)
+            const redirectPath = await completeDesktopAuthCallback(accessToken, refreshToken, nextPath)
+            window.location.replace(redirectPath)
             return
         }
 
@@ -74,6 +77,65 @@ export default function LoginPage() {
         })
         window.location.assign(`${getSiteUrl()}/auth/callback?${params.toString()}`)
     }, [getSafeNextPath, getSiteUrl])
+
+    function createDesktopOAuthState() {
+        const bytes = new Uint8Array(32)
+        crypto.getRandomValues(bytes)
+        return Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("")
+    }
+
+    function getOAuthCallbackUrl(desktopOAuthState?: string) {
+        const callbackUrl = new URL("/auth/callback", getSiteUrl())
+        callbackUrl.searchParams.set("next", getSafeNextPath("/dashboard"))
+        if (desktopOAuthState) {
+            callbackUrl.searchParams.set("desktop_oauth_state", desktopOAuthState)
+        }
+        return callbackUrl.toString()
+    }
+
+    async function waitForDesktopGoogleSignIn(state: string) {
+        const deadline = Date.now() + 5 * 60 * 1000
+
+        while (Date.now() < deadline) {
+            await new Promise((resolve) => globalThis.setTimeout(resolve, 1200))
+
+            const response = await fetch(`/api/desktop-auth/exchange?state=${encodeURIComponent(state)}`, {
+                credentials: "include",
+                cache: "no-store",
+            })
+            const payload = (await response.json().catch(() => ({}))) as {
+                ready?: boolean
+                error?: string
+                session?: Session
+                redirectTo?: string
+            }
+
+            if (!response.ok) {
+                throw new Error(payload.error || "Google login failed.")
+            }
+
+            if (!payload.ready) continue
+
+            const session = payload.session
+            if (!session?.access_token || !session.refresh_token) {
+                throw new Error("Google login did not return a valid session.")
+            }
+
+            const { data, error } = await supabase.auth.setSession({
+                access_token: session.access_token,
+                refresh_token: session.refresh_token,
+            })
+
+            if (error) throw error
+            if (data.session) await persistDesktopSession(data.session)
+
+            const redirectPath = await completeDesktopAuthCallback(session.access_token, session.refresh_token, getSafeNextPath("/dashboard"))
+            window.location.replace(redirectPath)
+            return
+        }
+
+        throw new Error("Google login timed out. Please try again.")
+    }
 
     useEffect(() => {
 
@@ -129,7 +191,7 @@ export default function LoginPage() {
             }
 
             if (session?.access_token && session.refresh_token) {
-                redirectToCallback(session.access_token, session.refresh_token)
+                await redirectToCallback(session.access_token, session.refresh_token)
             }
 
         }
@@ -184,7 +246,7 @@ export default function LoginPage() {
 
             if (data.session?.access_token && data.session.refresh_token) {
                 await persistDesktopSession(data.session)
-                redirectToCallback(data.session.access_token, data.session.refresh_token)
+                await redirectToCallback(data.session.access_token, data.session.refresh_token)
             }
 
         } catch {
@@ -211,10 +273,11 @@ export default function LoginPage() {
             setErrorMessage("")
             setSuccessMessage("")
 
+            const desktopOAuthState = isTauriRuntime() ? createDesktopOAuthState() : undefined
             const { data, error } = await supabase.auth.signInWithOAuth({
                 provider: "google",
                 options: {
-                    redirectTo: `${getSiteUrl()}/auth/callback?next=${encodeURIComponent(getSafeNextPath("/dashboard"))}`,
+                    redirectTo: getOAuthCallbackUrl(desktopOAuthState),
                     skipBrowserRedirect: true,
                 }
             })
@@ -226,6 +289,16 @@ export default function LoginPage() {
             }
 
             if (data.url) {
+                if (desktopOAuthState) {
+                    await openExternalUrl(data.url)
+                    setSuccessMessage("Complete Google sign-in in your browser. Bezgrow will continue automatically.")
+                    void waitForDesktopGoogleSignIn(desktopOAuthState).catch((error) => {
+                        showAuthError(error instanceof Error ? error.message : "Google login failed")
+                        setGoogleLoading(false)
+                    })
+                    return
+                }
+
                 window.location.assign(data.url)
                 return
             }

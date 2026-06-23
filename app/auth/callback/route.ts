@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server"
 import { isConfiguredAdmin } from "@/lib/admin-role"
+import { isValidDesktopOAuthState, storeDesktopOAuthExchange } from "@/lib/desktop/oauth-store"
 import { adminSupabase } from "@/lib/supabase/admin"
 import { createServerSupabase } from "@/lib/supabase/server"
 
@@ -81,28 +82,33 @@ export async function GET(request: Request) {
   const accessToken = url.searchParams.get("access_token")
   const refreshToken = url.searchParams.get("refresh_token")
   const safeNext = getSafeNextPath(url.searchParams.get("next"))
+  const desktopOAuthState = url.searchParams.get("desktop_oauth_state")
   const supabase = await createServerSupabase()
+  let authSession: Awaited<ReturnType<typeof supabase.auth.exchangeCodeForSession>>["data"]["session"] | null = null
 
   console.info("[auth/callback] received", {
     hasCode: Boolean(code),
     hasAccessToken: Boolean(accessToken),
     hasRefreshToken: Boolean(refreshToken),
     next: safeNext,
+    desktopOAuth: isValidDesktopOAuthState(desktopOAuthState),
   })
 
   if (code) {
-    const { error } = await supabase.auth.exchangeCodeForSession(code)
+    const { data, error } = await supabase.auth.exchangeCodeForSession(code)
     if (error) {
       return NextResponse.redirect(new URL("/login", siteUrl))
     }
+    authSession = data.session
   } else if (accessToken && refreshToken) {
-    const { error } = await supabase.auth.setSession({
+    const { data, error } = await supabase.auth.setSession({
       access_token: accessToken,
       refresh_token: refreshToken,
     })
     if (error) {
       return NextResponse.redirect(new URL("/login", siteUrl))
     }
+    authSession = data.session
   } else {
     return NextResponse.redirect(new URL("/login", siteUrl))
   }
@@ -119,6 +125,21 @@ export async function GET(request: Request) {
   console.info("[auth/callback] session user", { userId: user.id })
   const redirectPath = await getProfileRedirect(user.id, user.email, safeNext)
   console.info("[auth/callback] redirect destination", { userId: user.id, redirectPath })
+
+  if (isValidDesktopOAuthState(desktopOAuthState) && authSession?.access_token && authSession.refresh_token) {
+    storeDesktopOAuthExchange(desktopOAuthState!, {
+      access_token: authSession.access_token,
+      refresh_token: authSession.refresh_token,
+      expires_at: authSession.expires_at,
+      expires_in: authSession.expires_in,
+      token_type: authSession.token_type,
+      user: authSession.user,
+      redirectTo: new URL(redirectPath, siteUrl).toString(),
+    })
+
+    return NextResponse.redirect(new URL("/desktop-auth-complete", siteUrl))
+  }
+
   return NextResponse.redirect(new URL(redirectPath, siteUrl))
 }
 

@@ -1,6 +1,7 @@
 "use client"
 
 import { cacheWorkspaceBootstrap, getCachedWorkspaceBootstrap } from "@/lib/offline/db"
+import { syncCachedDesktopSessionWithServer } from "@/lib/desktop/auth-callback"
 
 export type WorkspaceBootstrapPayload = {
   success: boolean
@@ -88,11 +89,24 @@ export async function getWorkspaceBootstrap(options: { forceFresh?: boolean } = 
     if (inFlight) return inFlight
   }
 
-  inFlight = fetch("/api/workspace/bootstrap", {
+  const fetchBootstrap = () => fetch("/api/workspace/bootstrap", {
     credentials: "include",
     cache: options.forceFresh ? "no-store" : "default",
   })
+
+  inFlight = fetchBootstrap()
     .then(async (response) => {
+      if (response.status === 401) {
+        const nextPath =
+          typeof window !== "undefined"
+            ? `${window.location.pathname}${window.location.search}${window.location.hash}`
+            : "/dashboard"
+        const restoredPath = await syncCachedDesktopSessionWithServer(nextPath)
+        if (restoredPath) {
+          response = await fetchBootstrap()
+        }
+      }
+
       const payload = (await response.json()) as WorkspaceBootstrapPayload
       if (response.ok && payload.success) {
         writeCache(payload)

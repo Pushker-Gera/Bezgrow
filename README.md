@@ -39,6 +39,8 @@ Required Supabase Auth URLs:
 - Password reset redirect: `https://bezgrow.com/reset-password`
 - Local redirect URL: `http://localhost:3000/auth/callback`
 - Local password reset URL: `http://localhost:3000/reset-password`
+- Desktop Google redirect URL: `http://127.0.0.1:43123/auth/callback`
+- Optional desktop fallback redirect URL: `http://127.0.0.1:*/auth/callback`
 
 For Google OAuth, configure the provider in Supabase and Google Cloud with the Supabase callback URL shown in the Supabase dashboard.
 
@@ -95,7 +97,7 @@ npm run desktop:build:mac
 npm run desktop:build:windows
 ```
 
-`desktop:prepare` runs a desktop-only Next standalone build, copies the runtime into `desktop-runtime/next-server`, and copies the current platform's Node executable into `desktop-runtime/node` for Tauri bundling. Production desktop startup launches that bundled Next server on `127.0.0.1` inside the native window.
+`desktop:prepare` runs a desktop-only Next standalone build, copies the runtime into `desktop-runtime/next-server`, and copies the current platform's Node executable into `desktop-runtime/node` for Tauri bundling. Production desktop startup launches that bundled Next server on `127.0.0.1:43123` when available, with a random local fallback if the fixed port is already occupied.
 
 Generated desktop artifacts are written under:
 
@@ -104,6 +106,8 @@ src-tauri/target/release/bundle/
 ```
 
 Packaging note: desktop installers include a Node runtime generated on the build machine, so installed users are not asked to install Node manually. Build macOS installers on macOS and Windows installers on Windows so the bundled runtime matches the target platform.
+
+macOS signing note: local macOS builds are ad-hoc signed so the `.app` bundle is sealed and `codesign --verify --deep --strict` passes. Public website distribution still requires an Apple Developer ID certificate plus notarization credentials (`APPLE_ID`, `APPLE_PASSWORD`, `APPLE_TEAM_ID`, or the App Store Connect API key variables) so Gatekeeper accepts the app without warnings on customer Macs.
 
 ### Offline-first desktop behavior
 

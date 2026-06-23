@@ -101,6 +101,26 @@ function InstallerCard({
   )
 }
 
+function MobileInstallCard({
+  label,
+  description,
+  steps,
+}: {
+  label: string
+  description: string
+  steps: string
+}) {
+  return (
+    <div className="rounded-2xl border border-white/10 bg-black/25 p-4">
+      <div className="flex min-h-12 items-center justify-center rounded-2xl border border-cyan-300/25 bg-cyan-300/10 px-5 text-sm font-black text-cyan-100 sm:min-h-14">
+        {label}
+      </div>
+      <p className="mt-3 text-sm leading-6 text-white/58">{description}</p>
+      <p className="mt-2 text-xs font-bold text-white/42">{steps}</p>
+    </div>
+  )
+}
+
 export default function DownloadPage() {
   const macInstaller = getInstallerInfo(macInstallerPath)
   const windowsInstaller = getInstallerInfo(windowsInstallerPath)
@@ -134,6 +154,19 @@ export default function DownloadPage() {
           <div className="mt-7 grid gap-3 sm:grid-cols-2">
             <InstallerCard href={macInstallerPath} info={macInstaller} label="Download for Mac" />
             <InstallerCard href={windowsInstallerPath} info={windowsInstaller} label="Download for Windows" />
+          </div>
+
+          <div className="mt-5 grid gap-3 sm:grid-cols-2">
+            <MobileInstallCard
+              label="Install on Android"
+              description="Open Bezgrow in Chrome and install the web app from the browser menu."
+              steps="Chrome menu > Add to Home screen"
+            />
+            <MobileInstallCard
+              label="Install on iPhone"
+              description="Open Bezgrow in Safari and add it to your Home Screen."
+              steps="Share > Add to Home Screen"
+            />
           </div>
 
           <div className="mt-8 grid gap-4 text-sm leading-7 text-white/58 md:grid-cols-3">

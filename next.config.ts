@@ -2,6 +2,25 @@ import type { NextConfig } from "next";
 
 const isDesktopBuild = process.env.BEZGROW_DESKTOP_BUILD === "1";
 
+const iconHeaders = [
+  { key: "Cache-Control", value: "public, max-age=0, must-revalidate" },
+  { key: "X-Content-Type-Options", value: "nosniff" },
+];
+
+const iconSources = [
+  "/favicon.ico",
+  "/favicon-16x16.png",
+  "/favicon-32x32.png",
+  "/favicon-48x48.png",
+  "/apple-touch-icon.png",
+  "/icon-192.png",
+  "/icon-512.png",
+  "/android-chrome-192x192.png",
+  "/android-chrome-512x512.png",
+  "/maskable-icon-512x512.png",
+  "/brand/bezgrow-growth-logo.png",
+];
+
 const nextConfig: NextConfig = {
   allowedDevOrigins: ["127.0.0.1"],
   ...(isDesktopBuild ? { output: "standalone" as const } : {}),
@@ -14,6 +33,10 @@ const nextConfig: NextConfig = {
   },
   async headers() {
     return [
+      ...iconSources.map((source) => ({
+        source,
+        headers: iconHeaders,
+      })),
       {
         source: "/(.*)",
         headers: [
