@@ -1,6 +1,6 @@
 "use client"
 
-import { isTauriRuntime } from "@/lib/desktop/tauri"
+import { isTauriRuntimeAsync } from "@/lib/desktop/tauri"
 import type { OfflineAction, OfflineActionStatus, OfflineCollection } from "@/lib/offline/db"
 
 type SqlValue = string | number | null
@@ -197,7 +197,7 @@ async function migrate(db: SqlDatabase) {
 }
 
 export async function getSqliteDb() {
-  if (!isTauriRuntime()) return null
+  if (!(await isTauriRuntimeAsync())) return null
   if (dbPromise) return dbPromise
 
   dbPromise = import("@tauri-apps/plugin-sql")

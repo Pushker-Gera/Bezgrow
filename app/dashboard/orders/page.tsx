@@ -4,7 +4,7 @@ import Link from "next/link"
 import { useEffect, useMemo, useState } from "react"
 import { useDebounce } from "use-debounce"
 import { getOrganizationId } from "@/lib/getOrganization"
-import { getOfflineData, putOfflineData } from "@/lib/offline/db"
+import { createOfflineId, getOfflineData, putOfflineData, queueOfflineAction } from "@/lib/offline/db"
 import { supabase } from "@/lib/supabase"
 
 type Product = {
@@ -33,6 +33,22 @@ type OrderItem = {
   total: number
 }
 
+type OrderPayload = {
+  customer_name: string
+  customer_phone: string | null
+  customer_address: string | null
+  courier_name: string | null
+  tracking_number: string | null
+  payment_mode: string
+  sales_channel: string
+  items: Array<{
+    product_id: string
+    quantity: number
+    unit_price: number
+    total: number
+  }>
+}
+
 function money(value: number) {
   return `Rs ${Math.round(value).toLocaleString()}`
 }
@@ -56,6 +72,12 @@ function numberFrom(row: Record<string, unknown>, fields: string[]) {
 function csvCell(value: string | number | null) {
   const text = String(value ?? "")
   return `"${text.replaceAll("\"", "\"\"")}"`
+}
+
+function offlineOrderNumber(date = new Date()) {
+  const pad = (value: number) => String(value).padStart(2, "0")
+  const stamp = `${date.getFullYear()}${pad(date.getMonth() + 1)}${pad(date.getDate())}-${pad(date.getHours())}${pad(date.getMinutes())}${pad(date.getSeconds())}`
+  return `OFFLINE-ORD-${stamp}`
 }
 
 export default function OrdersPage() {
@@ -187,7 +209,8 @@ export default function OrdersPage() {
     if (!selectedProduct || quantity <= 0) return
 
     const availableStock = Number(selectedProduct.stock || 0)
-    if (availableStock > 0 && quantity > availableStock) {
+    const existingQuantity = items.find((item) => item.product_id === selectedProduct.id)?.quantity || 0
+    if (quantity + existingQuantity > availableStock) {
       setNotice("Quantity is higher than available stock.")
       return
     }
@@ -224,6 +247,102 @@ export default function OrdersPage() {
     setItems((prev) => prev.filter((item) => item.product_id !== productId))
   }
 
+  async function createOrderOffline(orderPayload: OrderPayload) {
+    const now = new Date().toISOString()
+    const localOrderId = createOfflineId("order")
+    const orderNumber = offlineOrderNumber()
+    const cachedProducts = await getOfflineData<Product[]>(organizationId, "products", products)
+    const cachedOrders = await getOfflineData<OrderRow[]>(organizationId, "orders", [])
+    const cachedOrderItems = await getOfflineData<Record<string, unknown>[]>(organizationId, "order_items", [])
+    const quantityByProductId = new Map<string, number>()
+
+    orderPayload.items.forEach((item) => {
+      quantityByProductId.set(item.product_id, (quantityByProductId.get(item.product_id) || 0) + item.quantity)
+    })
+
+    for (const [productId, requestedQuantity] of quantityByProductId) {
+      const product = cachedProducts.find((item) => item.id === productId)
+      if (!product) throw new Error("One or more products are not available offline.")
+      if (Number(product.stock || 0) < requestedQuantity) {
+        throw new Error(`${product.name} has only ${Number(product.stock || 0)} in stock.`)
+      }
+    }
+
+    const nextProducts = cachedProducts.map((product) => {
+      const orderedQuantity = quantityByProductId.get(product.id) || 0
+      return orderedQuantity > 0
+        ? { ...product, stock: Number(product.stock || 0) - orderedQuantity, sync_status: "pending_update" }
+        : product
+    })
+    const orderRecord: OrderRow = {
+      id: localOrderId,
+      organization_id: organizationId,
+      order_number: orderNumber,
+      customer_name: orderPayload.customer_name,
+      customer_phone: orderPayload.customer_phone,
+      customer_address: orderPayload.customer_address,
+      courier_name: orderPayload.courier_name,
+      tracking_number: orderPayload.tracking_number,
+      payment_mode: orderPayload.payment_mode,
+      sales_channel: orderPayload.sales_channel,
+      total_amount: grandTotal,
+      grand_total: grandTotal,
+      total: grandTotal,
+      sync_status: "pending_create",
+      created_at: now,
+      updated_at: now,
+    }
+    const orderItemRecords = orderPayload.items.map((item) => ({
+      id: createOfflineId("order-item"),
+      organization_id: organizationId,
+      order_id: localOrderId,
+      product_id: item.product_id,
+      quantity: item.quantity,
+      unit_price: item.unit_price,
+      total: item.total,
+      sync_status: "pending_create",
+      created_at: now,
+      updated_at: now,
+    }))
+
+    await Promise.all([
+      putOfflineData(organizationId, "products", nextProducts),
+      putOfflineData(organizationId, "inventory_items", nextProducts),
+      putOfflineData(organizationId, "orders", [orderRecord, ...cachedOrders]),
+      putOfflineData(organizationId, "order_items", [...orderItemRecords, ...cachedOrderItems]),
+      queueOfflineAction({
+        id: createOfflineId("order-action"),
+        type: "create_order",
+        organizationId,
+        payload: {
+          localOrderId,
+          order: {
+            customer_name: orderPayload.customer_name,
+            customer_phone: orderPayload.customer_phone,
+            customer_address: orderPayload.customer_address,
+            courier_name: orderPayload.courier_name,
+            tracking_number: orderPayload.tracking_number,
+            payment_mode: orderPayload.payment_mode,
+            sales_channel: orderPayload.sales_channel,
+          },
+          items: orderPayload.items,
+        },
+      }),
+    ])
+
+    setOrders([orderRecord, ...cachedOrders])
+    setProducts(nextProducts)
+    setCustomerName("")
+    setCustomerPhone("")
+    setCustomerAddress("")
+    setCourierName("")
+    setTrackingNumber("")
+    setChannel("direct")
+    setPaymentMode("cod")
+    setItems([])
+    setNotice(`${orderNumber} saved offline. Pending sync.`)
+  }
+
   async function createOrder() {
     if (!organizationId) {
       setNotice("Organization not found.")
@@ -241,7 +360,7 @@ export default function OrdersPage() {
     setLoading(true)
     setNotice("")
 
-    const orderPayload = {
+    const orderPayload: OrderPayload = {
       customer_name: customerName.trim(),
       customer_phone: customerPhone.trim() || null,
       customer_address: customerAddress.trim() || null,
@@ -257,21 +376,37 @@ export default function OrdersPage() {
       })),
     }
 
-    const {
-      data: { session },
-    } = await supabase.auth.getSession()
-    const response = await fetch("/api/orders/create", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        ...(session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : {}),
-      },
-      body: JSON.stringify(orderPayload),
-    })
-    const result = (await response.json()) as { error?: string }
+    try {
+      const {
+        data: { session },
+      } = await supabase.auth.getSession()
+      const response = await fetch("/api/orders/create", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          ...(session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : {}),
+        },
+        body: JSON.stringify(orderPayload),
+      })
+      const result = (await response.json()) as { error?: string }
 
-    if (!response.ok) {
-      setNotice(result.error || "Failed to create order.")
+      if (!response.ok) {
+        setNotice(result.error || "Failed to create order.")
+        setLoading(false)
+        return
+      }
+    } catch (error) {
+      if (typeof navigator !== "undefined" && !navigator.onLine) {
+        try {
+          await createOrderOffline(orderPayload)
+        } catch (offlineError) {
+          setNotice(offlineError instanceof Error ? offlineError.message : "Failed to save order offline.")
+        }
+        setLoading(false)
+        return
+      }
+
+      setNotice(error instanceof Error ? error.message : "Failed to create order.")
       setLoading(false)
       return
     }

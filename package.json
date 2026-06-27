@@ -10,9 +10,10 @@
     "tauri": "tauri",
     "desktop:prepare": "node scripts/prepare-desktop-build.mjs",
     "desktop:dev": "tauri dev",
-    "desktop:build": "tauri build",
-    "desktop:build:mac": "tauri build --bundles dmg",
-    "desktop:build:windows": "tauri build --bundles msi,nsis"
+    "desktop:build": "node scripts/build-desktop.mjs",
+    "desktop:build:mac": "node scripts/build-desktop.mjs --bundles dmg",
+    "desktop:build:mac:public": "node scripts/build-desktop.mjs --public-mac --bundles dmg",
+    "desktop:build:windows": "node scripts/build-desktop.mjs --bundles msi,nsis"
   },
   "dependencies": {
     "@supabase/ssr": "^0.10.3",
@@ -20,7 +21,7 @@
     "@tauri-apps/api": "^2.11.1",
     "@tauri-apps/plugin-sql": "^2.4.0",
     "@types/three": "^0.184.1",
-    "next": "16.1.6",
+    "next": "^16.2.9",
     "qrcode.react": "^4.2.0",
     "react": "19.2.3",
     "react-barcode": "^1.6.1",
@@ -28,8 +29,10 @@
     "recharts": "^3.7.0",
     "three": "^0.184.0",
     "use-debounce": "^10.1.1",
-    "xlsx": "^0.18.5",
     "zod": "^4.3.6"
+  },
+  "overrides": {
+    "postcss": "8.5.15"
   },
   "devDependencies": {
     "@tailwindcss/postcss": "^4",
@@ -38,7 +41,7 @@
     "@types/react": "^19",
     "@types/react-dom": "^19",
     "eslint": "^9",
-    "eslint-config-next": "16.1.6",
+    "eslint-config-next": "^16.2.9",
     "tailwindcss": "^4",
     "typescript": "^5"
   }

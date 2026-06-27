@@ -35,6 +35,7 @@ export type OfflineAction = {
   type:
     | "create_invoice"
     | "save_customer"
+    | "customer_status"
     | "save_product"
     | "archive_product"
     | "stock_movement"

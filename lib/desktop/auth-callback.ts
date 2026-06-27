@@ -1,7 +1,7 @@
 "use client"
 
 import { readCachedDesktopSession } from "@/lib/desktop/session"
-import { isTauriRuntime } from "@/lib/desktop/tauri"
+import { isTauriRuntimeAsync } from "@/lib/desktop/tauri"
 
 type DesktopCallbackResponse = {
   redirectTo?: string
@@ -44,7 +44,7 @@ export async function completeDesktopAuthCallback(accessToken: string, refreshTo
 }
 
 export async function syncCachedDesktopSessionWithServer(nextPath = "/dashboard") {
-  if (!isTauriRuntime()) return null
+  if (!(await isTauriRuntimeAsync())) return null
   if (typeof navigator !== "undefined" && !navigator.onLine) return null
 
   const cached = await readCachedDesktopSession()

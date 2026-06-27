@@ -6,7 +6,7 @@ import type { Session } from "@supabase/supabase-js"
 import { BezgrowLogoMark } from "@/components/brand/BezgrowLogoMark"
 import { completeDesktopAuthCallback } from "@/lib/desktop/auth-callback"
 import { hasCachedDesktopSession, persistDesktopSession } from "@/lib/desktop/session"
-import { isTauriRuntime, openExternalUrl } from "@/lib/desktop/tauri"
+import { isTauriRuntimeAsync, openExternalUrl } from "@/lib/desktop/tauri"
 import { getCachedWorkspaceBootstrap } from "@/lib/offline/db"
 import { supabase } from "@/lib/supabase"
 
@@ -64,7 +64,7 @@ export default function LoginPage() {
     }, [])
 
     const redirectToCallback = useCallback(async (accessToken: string, refreshToken: string, nextPath = getSafeNextPath("/dashboard")) => {
-        if (isTauriRuntime()) {
+        if (await isTauriRuntimeAsync()) {
             const redirectPath = await completeDesktopAuthCallback(accessToken, refreshToken, nextPath)
             window.location.replace(redirectPath)
             return
@@ -162,7 +162,10 @@ export default function LoginPage() {
                 return
             }
 
-            const bootstrapResponse = await fetch("/api/workspace/bootstrap", { cache: "no-store" })
+            const bootstrapResponse = await fetch("/api/workspace/bootstrap", {
+                cache: "no-store",
+                credentials: "include",
+            })
             if (bootstrapResponse.ok) {
                 const payload = (await bootstrapResponse.json()) as BootstrapResponse
                 if (payload.success) {
@@ -249,9 +252,9 @@ export default function LoginPage() {
                 await redirectToCallback(data.session.access_token, data.session.refresh_token)
             }
 
-        } catch {
+        } catch (error) {
 
-            setErrorMessage("Something went wrong")
+            setErrorMessage(error instanceof Error ? error.message : "Something went wrong")
 
         } finally {
 
@@ -273,7 +276,8 @@ export default function LoginPage() {
             setErrorMessage("")
             setSuccessMessage("")
 
-            const desktopOAuthState = isTauriRuntime() ? createDesktopOAuthState() : undefined
+            const desktopRuntime = await isTauriRuntimeAsync()
+            const desktopOAuthState = desktopRuntime ? createDesktopOAuthState() : undefined
             const { data, error } = await supabase.auth.signInWithOAuth({
                 provider: "google",
                 options: {
@@ -290,7 +294,10 @@ export default function LoginPage() {
 
             if (data.url) {
                 if (desktopOAuthState) {
-                    await openExternalUrl(data.url)
+                    const openedExternally = await openExternalUrl(data.url)
+                    if (!openedExternally) {
+                        throw new Error("Unable to open Google sign-in in your browser.")
+                    }
                     setSuccessMessage("Complete Google sign-in in your browser. Bezgrow will continue automatically.")
                     void waitForDesktopGoogleSignIn(desktopOAuthState).catch((error) => {
                         showAuthError(error instanceof Error ? error.message : "Google login failed")
@@ -303,9 +310,9 @@ export default function LoginPage() {
                 return
             }
 
-        } catch {
+        } catch (error) {
 
-            setErrorMessage("Google login failed")
+            setErrorMessage(error instanceof Error ? error.message : "Google login failed")
             setGoogleLoading(false)
 
         }
@@ -353,20 +360,20 @@ export default function LoginPage() {
     }
 
     return (
-        <div className="inventory-grid-bg flex min-h-dvh items-center justify-center px-3 py-5 text-white sm:px-5 sm:py-8">
+        <div className="inventory-grid-bg flex min-h-dvh w-full overflow-x-hidden items-center justify-center px-3 py-5 text-white sm:px-5 sm:py-8">
 
-            <form onSubmit={login} className="w-full max-w-md rounded-[22px] border border-white/10 bg-neutral-950/85 p-5 shadow-[0_28px_120px_rgba(0,0,0,0.45)] backdrop-blur-xl sm:rounded-[28px] sm:p-8">
+            <form onSubmit={login} className="w-full min-w-0 max-w-[calc(100vw-1.5rem)] rounded-[22px] border border-white/10 bg-neutral-950/85 p-5 shadow-[0_28px_120px_rgba(0,0,0,0.45)] backdrop-blur-xl sm:max-w-md sm:rounded-[28px] sm:p-8">
 
-                <div className="mb-5 flex items-center gap-3">
+                <div className="mb-5 flex min-w-0 items-center gap-3">
                     <BezgrowLogoMark className="h-10 w-10" size={40} priority />
-                    <span className="text-base font-black">Bezgrow</span>
+                    <span className="min-w-0 text-base font-black">Bezgrow</span>
                 </div>
 
-                <h1 className="mb-2 text-2xl font-bold sm:text-3xl">
+                <h1 className="mb-2 break-words text-2xl font-bold sm:text-3xl">
                     Welcome Back
                 </h1>
 
-                <p className="mb-5 text-sm leading-6 text-gray-400 sm:mb-6">
+                <p className="mb-5 break-words text-sm leading-6 text-gray-400 sm:mb-6">
                     Login to manage your inventory, billing, customers, and business operations.
                 </p>
 
@@ -398,7 +405,7 @@ export default function LoginPage() {
                     onChange={(e) => setPassword(e.target.value)}
                 />
 
-                <div className="mb-6 flex flex-col gap-3 text-sm min-[380px]:flex-row min-[380px]:items-center min-[380px]:justify-between">
+                <div className="mb-6 flex flex-col gap-3 text-sm min-[440px]:flex-row min-[440px]:items-center min-[440px]:justify-between">
 
                     <span className="text-gray-400">You stay signed in until logout</span>
 
@@ -406,7 +413,7 @@ export default function LoginPage() {
                         type="button"
                         onClick={forgotPassword}
                         disabled={resetLoading}
-                        className="text-blue-400 hover:text-blue-300 disabled:opacity-50"
+                        className="self-start text-blue-400 hover:text-blue-300 disabled:opacity-50 min-[440px]:self-auto"
                     >
                         {resetLoading ? "Sending..." : "Forgot password?"}
                     </button>
@@ -442,7 +449,7 @@ export default function LoginPage() {
                     {googleLoading ? "Opening Google..." : "Continue with Google"}
                 </button>
 
-                <p className="text-center text-gray-500 text-sm mt-6">
+                <p className="mt-6 break-words text-center text-sm text-gray-500">
                     Secure business access powered by Supabase authentication.
                 </p>
 

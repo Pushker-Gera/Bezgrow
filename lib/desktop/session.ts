@@ -1,7 +1,7 @@
 "use client"
 
 import type { Session, SupabaseClient } from "@supabase/supabase-js"
-import { invokeTauri, isTauriRuntime } from "@/lib/desktop/tauri"
+import { invokeTauri, isTauriRuntimeAsync } from "@/lib/desktop/tauri"
 
 const SESSION_SECRET_KEY = "supabase-session"
 const SESSION_FALLBACK_KEY = "bezgrow:desktop-session-fallback"
@@ -42,7 +42,7 @@ function parseSession(value: string | null) {
 }
 
 async function readDesktopSecret(key: string) {
-  if (!isTauriRuntime()) return null
+  if (!(await isTauriRuntimeAsync())) return null
 
   try {
     return await invokeTauri<string | null>("read_secret", { key })
@@ -52,7 +52,7 @@ async function readDesktopSecret(key: string) {
 }
 
 async function writeDesktopSecret(key: string, value: string) {
-  if (!isTauriRuntime()) return false
+  if (!(await isTauriRuntimeAsync())) return false
 
   try {
     await invokeTauri<void>("store_secret", { key, value })
@@ -63,7 +63,7 @@ async function writeDesktopSecret(key: string, value: string) {
 }
 
 async function deleteDesktopSecret(key: string) {
-  if (!isTauriRuntime()) return
+  if (!(await isTauriRuntimeAsync())) return
 
   try {
     await invokeTauri<void>("delete_secret", { key })
@@ -184,7 +184,7 @@ export function installDesktopSessionPersistence(supabase: SupabaseClient) {
 
 export const desktopSupabaseStorage = {
   async getItem(key: string) {
-    if (!isTauriRuntime()) {
+    if (!(await isTauriRuntimeAsync())) {
       return storageAvailable() ? localStorage.getItem(key) : null
     }
 
@@ -193,7 +193,7 @@ export const desktopSupabaseStorage = {
     return storageAvailable() ? localStorage.getItem(key) : null
   },
   async setItem(key: string, value: string) {
-    if (!isTauriRuntime()) {
+    if (!(await isTauriRuntimeAsync())) {
       if (storageAvailable()) localStorage.setItem(key, value)
       return
     }

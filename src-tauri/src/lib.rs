@@ -18,6 +18,7 @@ use std::{
 use tauri::{Manager, WebviewUrl};
 
 const KEYCHAIN_SERVICE: &str = "com.bezgrow.erp";
+#[cfg(not(debug_assertions))]
 const DESKTOP_SERVER_PORT: u16 = 43123;
 
 struct NextServerState(Mutex<Option<Child>>);

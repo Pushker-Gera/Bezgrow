@@ -2,7 +2,6 @@
 
 import { useEffect, useMemo, useState } from "react"
 import { useDebounce } from "use-debounce"
-import * as XLSX from "xlsx"
 import { getOrganizationId } from "@/lib/getOrganization"
 import { createOfflineId, getOfflineData, putOfflineData, queueOfflineAction } from "@/lib/offline/db"
 import { supabase } from "@/lib/supabase"
@@ -94,6 +93,56 @@ function csvCell(value: string | number | null) {
   return `"${text.replaceAll("\"", "\"\"")}"`
 }
 
+function xmlCell(value: string | number | null | undefined) {
+  return String(value ?? "")
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll("\"", "&quot;")
+}
+
+function downloadBlob(blob: Blob, fileName: string) {
+  const url = URL.createObjectURL(blob)
+  const link = document.createElement("a")
+
+  link.href = url
+  link.download = fileName
+  document.body.appendChild(link)
+  link.click()
+  document.body.removeChild(link)
+  URL.revokeObjectURL(url)
+}
+
+function exportExcelWorkbook(rows: Array<Record<string, string | number | null>>, fileName: string) {
+  const headers = Object.keys(rows[0])
+  const worksheetRows = [
+    headers.map((header) => `<Cell><Data ss:Type="String">${xmlCell(header)}</Data></Cell>`).join(""),
+    ...rows.map((row) =>
+      headers
+        .map((header) => {
+          const value = row[header]
+          const isNumber = typeof value === "number" && Number.isFinite(value)
+          return `<Cell><Data ss:Type="${isNumber ? "Number" : "String"}">${xmlCell(value)}</Data></Cell>`
+        })
+        .join("")
+    ),
+  ]
+    .map((cells) => `<Row>${cells}</Row>`)
+    .join("")
+  const workbook = `<?xml version="1.0" encoding="UTF-8"?>
+<?mso-application progid="Excel.Sheet"?>
+<Workbook xmlns="urn:schemas-microsoft-com:office:spreadsheet"
+  xmlns:o="urn:schemas-microsoft-com:office:office"
+  xmlns:x="urn:schemas-microsoft-com:office:excel"
+  xmlns:ss="urn:schemas-microsoft-com:office:spreadsheet">
+  <Worksheet ss:Name="Customers">
+    <Table>${worksheetRows}</Table>
+  </Worksheet>
+</Workbook>`
+
+  downloadBlob(new Blob([workbook], { type: "application/vnd.ms-excel;charset=utf-8" }), `${fileName}.xls`)
+}
+
 function formatDate(value: string | null) {
   if (!value) return "-"
   return new Date(value).toLocaleDateString()
@@ -128,7 +177,7 @@ export default function CustomersPage() {
   const [editCustomer, setEditCustomer] = useState<Customer | null>(null)
   const [detailCustomer, setDetailCustomer] = useState<CustomerWithLedger | null>(null)
   const [confirmCustomer, setConfirmCustomer] = useState<Customer | null>(null)
-  const [exportType, setExportType] = useState<"csv" | "xlsx">("csv")
+  const [exportType, setExportType] = useState<"csv" | "excel">("csv")
 
   const pageSize = 50
 
@@ -328,21 +377,31 @@ export default function CustomersPage() {
   async function toggleCustomerStatus(customer: Customer, active: boolean) {
     if (!organizationId) return
 
-    const {
-      data: { session },
-    } = await supabase.auth.getSession()
-    const response = await fetch("/api/customers/status", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        ...(session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : {}),
-      },
-      body: JSON.stringify({ id: customer.id, active }),
-    })
-    const result = (await response.json()) as { error?: string }
+    try {
+      const {
+        data: { session },
+      } = await supabase.auth.getSession()
+      const response = await fetch("/api/customers/status", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          ...(session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : {}),
+        },
+        body: JSON.stringify({ id: customer.id, active }),
+      })
+      const result = (await response.json()) as { error?: string }
 
-    if (!response.ok) {
-      setNotice(result.error || "Customer status could not be updated.")
+      if (!response.ok) {
+        setNotice(result.error || "Customer status could not be updated.")
+        return
+      }
+    } catch (error) {
+      if (navigator.onLine) {
+        setNotice(error instanceof Error ? error.message : "Customer status could not be updated.")
+        return
+      }
+
+      await saveCustomerStatusOffline(customer, { active })
       return
     }
 
@@ -350,24 +409,75 @@ export default function CustomersPage() {
     setNotice(active ? "Customer activated." : "Customer deactivated.")
   }
 
+  async function saveCustomerStatusOffline(customer: Customer, status: { active?: boolean; archive?: boolean }) {
+    if (!organizationId) return
+
+    const now = new Date().toISOString()
+    const cachedCustomers = await getOfflineData<Customer[]>(organizationId, "customers", [])
+    const nextCustomers = cachedCustomers.map((cachedCustomer) =>
+      cachedCustomer.id === customer.id
+        ? {
+            ...cachedCustomer,
+            is_active: status.archive ? false : status.active ?? cachedCustomer.is_active,
+            deleted_at: status.archive ? now : null,
+            sync_status: "pending_update",
+            updated_at: now,
+          }
+        : cachedCustomer
+    )
+
+    await putOfflineData(organizationId, "customers", nextCustomers)
+    await queueOfflineAction({
+      id: createOfflineId("customer-status"),
+      type: "customer_status",
+      organizationId,
+      payload: {
+        customerId: customer.id,
+        status: {
+          id: customer.id.startsWith("offline-") ? undefined : customer.id,
+          ...status,
+        },
+      },
+    })
+
+    const visibleCustomers = nextCustomers.filter((cachedCustomer) => {
+      if (statusFilter === "active") return cachedCustomer.is_active && !cachedCustomer.deleted_at
+      if (statusFilter === "inactive") return !cachedCustomer.is_active && !cachedCustomer.deleted_at
+      return !cachedCustomer.deleted_at
+    })
+    setCustomers(visibleCustomers)
+    setConfirmCustomer(null)
+    setNotice(status.archive ? "Customer archived offline. Pending sync." : "Customer status saved offline. Pending sync.")
+  }
+
   async function archiveCustomer() {
     if (!confirmCustomer || !organizationId) return
 
-    const {
-      data: { session },
-    } = await supabase.auth.getSession()
-    const response = await fetch("/api/customers/status", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        ...(session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : {}),
-      },
-      body: JSON.stringify({ id: confirmCustomer.id, archive: true }),
-    })
-    const result = (await response.json()) as { error?: string }
+    try {
+      const {
+        data: { session },
+      } = await supabase.auth.getSession()
+      const response = await fetch("/api/customers/status", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          ...(session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : {}),
+        },
+        body: JSON.stringify({ id: confirmCustomer.id, archive: true }),
+      })
+      const result = (await response.json()) as { error?: string }
 
-    if (!response.ok) {
-      setNotice(result.error || "Customer could not be archived.")
+      if (!response.ok) {
+        setNotice(result.error || "Customer could not be archived.")
+        return
+      }
+    } catch (error) {
+      if (navigator.onLine) {
+        setNotice(error instanceof Error ? error.message : "Customer could not be archived.")
+        return
+      }
+
+      await saveCustomerStatusOffline(confirmCustomer, { archive: true })
       return
     }
 
@@ -479,11 +589,8 @@ export default function CustomersPage() {
     }))
     const fileName = `customers-export-${new Date().toISOString()}`
 
-    if (exportType === "xlsx") {
-      const worksheet = XLSX.utils.json_to_sheet(rows)
-      const workbook = XLSX.utils.book_new()
-      XLSX.utils.book_append_sheet(workbook, worksheet, "Customers")
-      XLSX.writeFile(workbook, `${fileName}.xlsx`)
+    if (exportType === "excel") {
+      exportExcelWorkbook(rows, fileName)
       return
     }
 
@@ -494,16 +601,7 @@ export default function CustomersPage() {
         headers.map((header) => csvCell(String(row[header as keyof typeof row] ?? ""))).join(",")
       ),
     ].join("\n")
-    const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" })
-    const url = URL.createObjectURL(blob)
-    const link = document.createElement("a")
-
-    link.href = url
-    link.download = `${fileName}.csv`
-    document.body.appendChild(link)
-    link.click()
-    document.body.removeChild(link)
-    URL.revokeObjectURL(url)
+    downloadBlob(new Blob([csv], { type: "text/csv;charset=utf-8;" }), `${fileName}.csv`)
   }
 
   return (
@@ -607,11 +705,11 @@ export default function CustomersPage() {
               <SelectShell>
                 <select
                   value={exportType}
-                  onChange={(event) => setExportType(event.target.value as "csv" | "xlsx")}
+                  onChange={(event) => setExportType(event.target.value as "csv" | "excel")}
                   className="h-14 w-full appearance-none rounded-lg border border-white/10 bg-black/60 py-0 pl-5 pr-16 text-base outline-none"
                 >
                   <option value="csv">CSV</option>
-                  <option value="xlsx">Excel</option>
+                  <option value="excel">Excel</option>
                 </select>
               </SelectShell>
             </div>

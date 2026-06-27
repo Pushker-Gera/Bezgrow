@@ -1,4 +1,4 @@
-import { existsSync, statSync } from "node:fs"
+import { existsSync, readFileSync, statSync } from "node:fs"
 import { join } from "node:path"
 import Link from "next/link"
 import type { Metadata } from "next"
@@ -21,6 +21,8 @@ export const metadata: Metadata = {
 type InstallerInfo = {
   available: boolean
   sizeLabel: string | null
+  statusLabel: string
+  blockedReason?: string
 }
 
 function formatFileSize(bytes: number) {
@@ -36,20 +38,56 @@ function formatFileSize(bytes: number) {
   return `${size >= 10 || unitIndex === 0 ? size.toFixed(0) : size.toFixed(1)} ${units[unitIndex]}`
 }
 
-function getInstallerInfo(path: string): InstallerInfo {
+function readReleaseManifest(path: string) {
+  const manifestPath = join(process.cwd(), "public", `${path.replace(/^\/+/, "")}.release.json`)
+
+  if (!existsSync(manifestPath)) return null
+
+  try {
+    const manifest = JSON.parse(statSync(manifestPath).isFile() ? readFileSync(manifestPath, "utf8") : "{}") as {
+      notarized?: boolean
+    }
+    return manifest.notarized ? manifest : null
+  } catch {
+    return null
+  }
+}
+
+function getInstallerInfo(path: string, options: { requiresReleaseManifest?: boolean } = {}): InstallerInfo {
   if (isDesktopBuild) {
-    return { available: false, sizeLabel: null }
+    return { available: false, sizeLabel: null, statusLabel: "Coming soon" }
   }
 
   const fullPath = join(process.cwd(), "public", path.replace(/^\/+/, ""))
 
   if (!existsSync(fullPath)) {
-    return { available: false, sizeLabel: null }
+    if (options.requiresReleaseManifest) {
+      return {
+        available: false,
+        sizeLabel: null,
+        statusLabel: "Notarization pending",
+        blockedReason: "Mac installer is being signed and notarized for safe download.",
+      }
+    }
+
+    return { available: false, sizeLabel: null, statusLabel: "Coming soon" }
+  }
+
+  const sizeLabel = formatFileSize(statSync(fullPath).size)
+
+  if (options.requiresReleaseManifest && !readReleaseManifest(path)) {
+    return {
+      available: false,
+      sizeLabel,
+      statusLabel: "Notarization pending",
+      blockedReason: "Mac installer is being signed and notarized for safe download.",
+    }
   }
 
   return {
     available: true,
-    sizeLabel: formatFileSize(statSync(fullPath).size),
+    sizeLabel,
+    statusLabel: `Version ${packageJson.version} | ${sizeLabel}`,
   }
 }
 
@@ -95,7 +133,7 @@ function InstallerCard({
         {label}
       </DownloadButton>
       <p className="mt-2 text-center text-xs font-bold text-white/45">
-        {info.available ? `Version ${packageJson.version} | ${info.sizeLabel}` : "Coming soon"}
+        {info.statusLabel}
       </p>
     </div>
   )
@@ -122,22 +160,22 @@ function MobileInstallCard({
 }
 
 export default function DownloadPage() {
-  const macInstaller = getInstallerInfo(macInstallerPath)
+  const macInstaller = getInstallerInfo(macInstallerPath, { requiresReleaseManifest: true })
   const windowsInstaller = getInstallerInfo(windowsInstallerPath)
   const installersReady = macInstaller.available || windowsInstaller.available
 
   return (
-    <main className="min-h-dvh bg-[#020403] px-5 py-8 text-white sm:py-10 lg:px-8">
-      <section className="mx-auto flex min-h-[calc(100dvh-80px)] max-w-5xl flex-col justify-center">
-        <Link href="/" className="mb-10 inline-flex w-fit items-center gap-3 text-sm font-black text-cyan-100 hover:text-white">
+    <main className="min-h-dvh overflow-x-hidden bg-[#020403] px-5 py-8 text-white sm:py-10 lg:px-8">
+      <section className="mx-auto flex min-h-[calc(100dvh-80px)] w-full min-w-0 max-w-5xl flex-col justify-center">
+        <Link href="/" className="mb-10 inline-flex w-fit max-w-full min-w-0 items-center gap-3 text-sm font-black text-cyan-100 hover:text-white">
           <BezgrowLogoMark className="h-10 w-10" size={40} />
           Bezgrow
         </Link>
 
-        <div className="rounded-[28px] border border-white/10 bg-white/[0.035] p-6 shadow-[0_24px_90px_rgba(0,0,0,0.35)] sm:p-8 lg:p-10">
+        <div className="w-full min-w-0 overflow-hidden rounded-[22px] border border-white/10 bg-white/[0.035] p-6 shadow-[0_24px_90px_rgba(0,0,0,0.35)] sm:rounded-[28px] sm:p-8 lg:p-10">
           <p className="text-xs font-black uppercase tracking-[0.22em] text-cyan-200">Desktop ERP</p>
-          <h1 className="mt-4 text-4xl font-black tracking-tight sm:text-5xl">Bezgrow Desktop App</h1>
-          <p className="mt-4 max-w-2xl leading-8 text-white/62">
+          <h1 className="mt-4 break-words text-3xl font-black leading-tight tracking-tight sm:text-5xl">Bezgrow Desktop App</h1>
+          <p className="mt-4 max-w-2xl break-words leading-8 text-white/62">
             Install Bezgrow on your computer for desktop ERP workflows, persistent login, local offline data, printing, and sync when internet returns.
           </p>
 
@@ -146,8 +184,8 @@ export default function DownloadPage() {
           </div>
 
           {!installersReady && (
-            <div className="mt-6 rounded-2xl border border-amber-300/25 bg-amber-300/10 px-4 py-3 text-sm font-bold text-amber-100">
-              Desktop installers are being prepared. Please contact support.
+            <div className="mt-6 break-words rounded-2xl border border-amber-300/25 bg-amber-300/10 px-4 py-3 text-sm font-bold text-amber-100">
+              {macInstaller.blockedReason || "Desktop installers are being prepared. Please contact support."}
             </div>
           )}
 

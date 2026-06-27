@@ -198,9 +198,9 @@ export function HeroScene3D() {
       camera.updateProjectionMatrix()
     }
 
-    const clock = new THREE.Clock()
-    const animate = () => {
-      const time = clock.getElapsedTime()
+    const startedAt = performance.now()
+    const animate = (timestamp = performance.now()) => {
+      const time = (timestamp - startedAt) / 1000
       root.rotation.y = Math.sin(time * 0.18) * 0.045
       shelfGroup.position.y = 0.35 + Math.sin(time * 0.9) * 0.11
       invoiceGroup.position.y = 1.55 + Math.cos(time * 0.8) * 0.12

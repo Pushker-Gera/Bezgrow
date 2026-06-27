@@ -32,10 +32,7 @@
     "category": "Business",
     "shortDescription": "Bezgrow ERP",
     "longDescription": "Offline-first Bezgrow inventory, billing, invoice, customer, and ERP desktop app.",
-    "macOS": {
-      "signingIdentity": "-",
-      "hardenedRuntime": false
-    },
+    "macOS": {},
     "resources": {
       "../desktop-runtime/node/": "node",
       "../desktop-runtime/next-server/": "next-server"

@@ -23,6 +23,7 @@
 
 # tauri / rust
 /src-tauri/target/
+/src-tauri/tauri.generated.conf.json
 /desktop-runtime/next-server/*
 !/desktop-runtime/next-server/.gitkeep
 /desktop-runtime/node/*

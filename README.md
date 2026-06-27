@@ -94,6 +94,7 @@ This starts `next dev`, compiles the Tauri shell, and opens Bezgrow in a native 
 npm run desktop:prepare
 npm run desktop:build
 npm run desktop:build:mac
+npm run desktop:build:mac:public
 npm run desktop:build:windows
 ```
 
@@ -107,7 +108,17 @@ src-tauri/target/release/bundle/
 
 Packaging note: desktop installers include a Node runtime generated on the build machine, so installed users are not asked to install Node manually. Build macOS installers on macOS and Windows installers on Windows so the bundled runtime matches the target platform.
 
-macOS signing note: local macOS builds are ad-hoc signed so the `.app` bundle is sealed and `codesign --verify --deep --strict` passes. Public website distribution still requires an Apple Developer ID certificate plus notarization credentials (`APPLE_ID`, `APPLE_PASSWORD`, `APPLE_TEAM_ID`, or the App Store Connect API key variables) so Gatekeeper accepts the app without warnings on customer Macs.
+macOS signing note: local macOS builds are ad-hoc signed only for testing. Do not upload a local `npm run desktop:build:mac` DMG to the website because Chrome quarantine will make macOS show `"Bezgrow" is damaged and can't be opened.` Public website distribution must be built with:
+
+```bash
+BEZGROW_MAC_SIGNING_IDENTITY="Developer ID Application: Your Company (TEAMID)" \
+APPLE_ID="apple-id@example.com" \
+APPLE_PASSWORD="app-specific-password" \
+APPLE_TEAM_ID="TEAMID" \
+npm run desktop:build:mac:public
+```
+
+Alternatively provide `APPLE_CERTIFICATE`/`APPLE_CERTIFICATE_PASSWORD` plus App Store Connect API notarization variables (`APPLE_API_KEY`, `APPLE_API_ISSUER`, `APPLE_API_KEY_PATH`). The public build mode enables hardened runtime, requires signing/notarization credentials, verifies the DMG with Gatekeeper, copies the notarized installer to `public/downloads/Bezgrow-mac.dmg`, and writes `public/downloads/Bezgrow-mac.dmg.release.json`. The `/download` page only enables the Mac button when that release manifest exists.
 
 ### Offline-first desktop behavior
 
