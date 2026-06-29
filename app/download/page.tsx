@@ -8,6 +8,7 @@ import packageJson from "@/package.json"
 
 const macInstallerPath = "/downloads/Bezgrow-mac.dmg"
 const windowsInstallerPath = "/downloads/Bezgrow-windows.exe"
+const desktopReleaseManifestPath = "/downloads/desktop-release.json"
 const isDesktopBuild = process.env.BEZGROW_DESKTOP_BUILD === "1"
 
 export const metadata: Metadata = {
@@ -20,9 +21,27 @@ export const metadata: Metadata = {
 
 type InstallerInfo = {
   available: boolean
+  href: string
   sizeLabel: string | null
   statusLabel: string
   blockedReason?: string
+}
+
+type ReleaseInstaller = {
+  url?: string
+  file?: string
+  size?: number
+  sha256?: string
+  notarized?: boolean
+  signed?: boolean
+  version?: string
+  generatedAt?: string
+}
+
+type DesktopReleaseManifest = {
+  version?: string
+  mac?: ReleaseInstaller | null
+  windows?: ReleaseInstaller | null
 }
 
 function formatFileSize(bytes: number) {
@@ -53,9 +72,66 @@ function readReleaseManifest(path: string) {
   }
 }
 
-function getInstallerInfo(path: string, options: { requiresReleaseManifest?: boolean } = {}): InstallerInfo {
+function readDesktopReleaseManifest() {
+  const manifestPath = join(process.cwd(), "public", desktopReleaseManifestPath.replace(/^\/+/, ""))
+
+  if (!existsSync(manifestPath)) return null
+
+  try {
+    return JSON.parse(statSync(manifestPath).isFile() ? readFileSync(manifestPath, "utf8") : "{}") as DesktopReleaseManifest
+  } catch {
+    return null
+  }
+}
+
+function releaseHref(entry: ReleaseInstaller | null | undefined) {
+  if (!entry) return ""
+  if (entry.url) return entry.url
+  if (!entry.file) return ""
+  return entry.file.startsWith("/") ? entry.file : `/downloads/${entry.file}`
+}
+
+function getReleaseInstallerInfo(
+  entry: ReleaseInstaller | null | undefined,
+  options: { platform: "mac" | "windows"; manifestVersion?: string }
+): InstallerInfo | null {
+  const href = releaseHref(entry)
+  if (!href) return null
+
+  const sizeLabel = typeof entry?.size === "number" && Number.isFinite(entry.size) ? formatFileSize(entry.size) : null
+  const version = entry?.version || options.manifestVersion || packageJson.version
+
+  if (options.platform === "mac" && entry?.notarized !== true) {
+    return {
+      available: false,
+      href,
+      sizeLabel,
+      statusLabel: "Notarization pending",
+      blockedReason: "Mac installer is waiting for a notarized public release.",
+    }
+  }
+
+  return {
+    available: true,
+    href,
+    sizeLabel,
+    statusLabel: `Version ${version}${sizeLabel ? ` | ${sizeLabel}` : ""}`,
+  }
+}
+
+function getInstallerInfo(
+  path: string,
+  options: { requiresReleaseManifest?: boolean; releaseEntry?: ReleaseInstaller | null; manifestVersion?: string; platform?: "mac" | "windows" } = {}
+): InstallerInfo {
+  const releaseInfo = getReleaseInstallerInfo(options.releaseEntry, {
+    platform: options.platform || "windows",
+    manifestVersion: options.manifestVersion,
+  })
+
+  if (releaseInfo) return releaseInfo
+
   if (isDesktopBuild) {
-    return { available: false, sizeLabel: null, statusLabel: "Coming soon" }
+    return { available: false, href: path, sizeLabel: null, statusLabel: "Coming soon" }
   }
 
   const fullPath = join(process.cwd(), "public", path.replace(/^\/+/, ""))
@@ -64,13 +140,14 @@ function getInstallerInfo(path: string, options: { requiresReleaseManifest?: boo
     if (options.requiresReleaseManifest) {
       return {
         available: false,
+        href: path,
         sizeLabel: null,
         statusLabel: "Notarization pending",
-        blockedReason: "Mac installer is being signed and notarized for safe download.",
+        blockedReason: "Mac installer is waiting for a notarized public release.",
       }
     }
 
-    return { available: false, sizeLabel: null, statusLabel: "Coming soon" }
+    return { available: false, href: path, sizeLabel: null, statusLabel: "Coming soon" }
   }
 
   const sizeLabel = formatFileSize(statSync(fullPath).size)
@@ -78,14 +155,16 @@ function getInstallerInfo(path: string, options: { requiresReleaseManifest?: boo
   if (options.requiresReleaseManifest && !readReleaseManifest(path)) {
     return {
       available: false,
+      href: path,
       sizeLabel,
       statusLabel: "Notarization pending",
-      blockedReason: "Mac installer is being signed and notarized for safe download.",
+      blockedReason: "Mac installer exists locally but is blocked until the notarized release manifest is present.",
     }
   }
 
   return {
     available: true,
+    href: path,
     sizeLabel,
     statusLabel: `Version ${packageJson.version} | ${sizeLabel}`,
   }
@@ -112,7 +191,7 @@ function DownloadButton({
   }
 
   return (
-    <a href={href} download className={`${className} bg-cyan-300 text-black shadow-[0_0_44px_rgba(34,211,238,0.22)] hover:bg-cyan-200`}>
+    <a href={href} download={href.startsWith("/") ? true : undefined} className={`${className} bg-cyan-300 text-black shadow-[0_0_44px_rgba(34,211,238,0.22)] hover:bg-cyan-200`}>
       {children}
     </a>
   )
@@ -129,7 +208,7 @@ function InstallerCard({
 }) {
   return (
     <div>
-      <DownloadButton href={href} available={info.available}>
+      <DownloadButton href={info.href || href} available={info.available}>
         {label}
       </DownloadButton>
       <p className="mt-2 text-center text-xs font-bold text-white/45">
@@ -160,8 +239,18 @@ function MobileInstallCard({
 }
 
 export default function DownloadPage() {
-  const macInstaller = getInstallerInfo(macInstallerPath, { requiresReleaseManifest: true })
-  const windowsInstaller = getInstallerInfo(windowsInstallerPath)
+  const desktopReleaseManifest = readDesktopReleaseManifest()
+  const macInstaller = getInstallerInfo(macInstallerPath, {
+    requiresReleaseManifest: true,
+    releaseEntry: desktopReleaseManifest?.mac,
+    manifestVersion: desktopReleaseManifest?.version,
+    platform: "mac",
+  })
+  const windowsInstaller = getInstallerInfo(windowsInstallerPath, {
+    releaseEntry: desktopReleaseManifest?.windows,
+    manifestVersion: desktopReleaseManifest?.version,
+    platform: "windows",
+  })
   const installersReady = macInstaller.available || windowsInstaller.available
 
   return (

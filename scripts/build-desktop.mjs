@@ -5,17 +5,23 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const root = dirname(dirname(fileURLToPath(import.meta.url)));
+const packageJson = JSON.parse(readFileSync(join(root, "package.json"), "utf8"));
+const packageVersion = packageJson.version;
 const tauriConfigPath = join(root, "src-tauri", "tauri.conf.json");
 const generatedConfigDir = join(root, "src-tauri");
 const generatedConfigPath = join(generatedConfigDir, "tauri.generated.conf.json");
 const publicDownloadsDir = join(root, "public", "downloads");
 const publicMacDmg = join(publicDownloadsDir, "Bezgrow-mac.dmg");
 const publicMacReleaseManifest = join(root, "public", "downloads", "Bezgrow-mac.dmg.release.json");
+const publicWindowsExe = join(publicDownloadsDir, "Bezgrow-windows.exe");
+const desktopReleaseManifest = join(publicDownloadsDir, "desktop-release.json");
 
 const passthroughArgs = process.argv.slice(2);
 const publicMacFlag = "--public-mac";
+const publicWindowsFlag = "--public-windows";
 const publicMacBuild = process.env.BEZGROW_MAC_PUBLIC_BUILD === "1" || passthroughArgs.includes(publicMacFlag);
-const tauriArgs = passthroughArgs.filter((arg) => arg !== publicMacFlag);
+const publicWindowsBuild = process.env.BEZGROW_WINDOWS_PUBLIC_BUILD === "1" || passthroughArgs.includes(publicWindowsFlag);
+const tauriArgs = passthroughArgs.filter((arg) => arg !== publicMacFlag && arg !== publicWindowsFlag);
 
 function hasAppleIdNotaryCredentials() {
   return Boolean(process.env.APPLE_ID && process.env.APPLE_PASSWORD && process.env.APPLE_TEAM_ID);
@@ -109,20 +115,87 @@ function verifyPublicMacDmg() {
 
   const bytes = readFileSync(publicMacDmg);
   const sha256 = createHash("sha256").update(bytes).digest("hex");
+  const generatedAt = new Date().toISOString();
   writeFileSync(
     publicMacReleaseManifest,
     JSON.stringify(
       {
         file: "/downloads/Bezgrow-mac.dmg",
-        version: "0.1.0",
+        version: packageVersion,
         sha256,
+        size: bytes.length,
         notarized: true,
-        generatedAt: new Date().toISOString(),
+        generatedAt,
       },
       null,
       2
     )
   );
+  writeDesktopReleaseManifest({
+    mac: {
+      file: "/downloads/Bezgrow-mac.dmg",
+      version: packageVersion,
+      sha256,
+      size: bytes.length,
+      notarized: true,
+      generatedAt,
+    },
+  });
+}
+
+function writeDesktopReleaseManifest(partialManifest) {
+  const existing = existsSync(desktopReleaseManifest)
+    ? JSON.parse(readFileSync(desktopReleaseManifest, "utf8"))
+    : {};
+
+  mkdirSync(publicDownloadsDir, { recursive: true });
+  writeFileSync(
+    desktopReleaseManifest,
+    `${JSON.stringify(
+      {
+        ...existing,
+        version: packageVersion,
+        ...partialManifest,
+      },
+      null,
+      2
+    )}\n`
+  );
+}
+
+function verifyPublicWindowsInstaller() {
+  if (!publicWindowsBuild) return;
+
+  if (process.platform !== "win32") {
+    throw new Error("Public Windows builds must run on Windows.");
+  }
+
+  const nsisDir = join(root, "src-tauri", "target", "release", "bundle", "nsis");
+  const windowsFile = readdirSync(nsisDir)
+    .filter((file) => file.startsWith("Bezgrow_") && file.endsWith(".exe"))
+    .sort()
+    .at(-1);
+  const windowsPath = windowsFile ? join(nsisDir, windowsFile) : "";
+
+  if (!existsSync(windowsPath)) {
+    throw new Error(`Expected Windows installer was not found in ${nsisDir}`);
+  }
+
+  mkdirSync(publicDownloadsDir, { recursive: true });
+  copyFileSync(windowsPath, publicWindowsExe);
+
+  const bytes = readFileSync(publicWindowsExe);
+  const sha256 = createHash("sha256").update(bytes).digest("hex");
+  writeDesktopReleaseManifest({
+    windows: {
+      file: "/downloads/Bezgrow-windows.exe",
+      version: packageVersion,
+      sha256,
+      size: bytes.length,
+      signed: Boolean(process.env.BEZGROW_WINDOWS_SIGNED === "1"),
+      generatedAt: new Date().toISOString(),
+    },
+  });
 }
 
 mkdirSync(generatedConfigDir, { recursive: true });
@@ -131,3 +204,4 @@ writeFileSync(generatedConfigPath, `${JSON.stringify(config, null, 2)}\n`);
 
 run("tauri", ["build", "--config", generatedConfigPath, ...tauriArgs]);
 verifyPublicMacDmg();
+verifyPublicWindowsInstaller();
