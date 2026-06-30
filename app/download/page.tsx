@@ -27,6 +27,22 @@ type InstallerInfo = {
   signed?: boolean
 }
 
+type DesktopReleaseManifest = {
+  version?: string
+  mac?: {
+    url?: string
+    file?: string
+    size?: number
+    notarized?: boolean
+  }
+  windows?: {
+    url?: string
+    file?: string
+    size?: number
+    signed?: boolean
+  }
+}
+
 function formatFileSize(bytes: number) {
   const units = ["B", "KB", "MB", "GB"]
   let size = bytes
@@ -38,6 +54,17 @@ function formatFileSize(bytes: number) {
   }
 
   return `${size >= 10 || unitIndex === 0 ? size.toFixed(0) : size.toFixed(1)} ${units[unitIndex]}`
+}
+
+function readDesktopReleaseManifest() {
+  const manifestPath = join(process.cwd(), "public", "downloads", "desktop-release.json")
+  if (!existsSync(manifestPath)) return null
+
+  try {
+    return JSON.parse(readFileSync(manifestPath, "utf8")) as DesktopReleaseManifest
+  } catch {
+    return null
+  }
 }
 
 function readReleaseManifest(path: string) {
@@ -52,9 +79,32 @@ function readReleaseManifest(path: string) {
   }
 }
 
-function getInstallerInfo(paths: string | string[], missingStatusLabel: string): InstallerInfo {
+function getInstallerInfo(
+  paths: string | string[],
+  missingStatusLabel: string,
+  releaseInfo?: DesktopReleaseManifest["mac"] | DesktopReleaseManifest["windows"] | null,
+  releaseVersion?: string
+): InstallerInfo {
+  if (releaseInfo?.url) {
+    const sizeLabel = releaseInfo.size ? formatFileSize(releaseInfo.size) : null
+    const version = releaseVersion || packageJson.version
+    return {
+      available: true,
+      href: releaseInfo.url,
+      sizeLabel,
+      notarized: "notarized" in releaseInfo ? releaseInfo.notarized : undefined,
+      signed: "signed" in releaseInfo ? releaseInfo.signed : undefined,
+      statusLabel: `Version ${version}${sizeLabel ? ` | ${sizeLabel}` : ""}`,
+    }
+  }
+
   const candidates = Array.isArray(paths) ? paths : [paths]
+  const releaseFile = releaseInfo?.file && releaseInfo.file.startsWith("/") ? releaseInfo.file : null
+  const releaseCandidates = releaseFile ? [releaseFile, ...candidates] : candidates
   const path = candidates.find((candidate) => {
+    const fullPath = join(process.cwd(), "public", candidate.replace(/^\/+/, ""))
+    return existsSync(fullPath) && statSync(fullPath).isFile()
+  }) || releaseCandidates.find((candidate) => {
     const fullPath = join(process.cwd(), "public", candidate.replace(/^\/+/, ""))
     return existsSync(fullPath) && statSync(fullPath).isFile()
   })
@@ -71,9 +121,9 @@ function getInstallerInfo(paths: string | string[], missingStatusLabel: string):
     available: true,
     href: path,
     sizeLabel,
-    notarized: manifest?.notarized,
-    signed: manifest?.signed,
-    statusLabel: `Version ${manifest?.version || packageJson.version} | ${sizeLabel}`,
+    notarized: releaseInfo && "notarized" in releaseInfo ? releaseInfo.notarized : manifest?.notarized,
+    signed: releaseInfo && "signed" in releaseInfo ? releaseInfo.signed : manifest?.signed,
+    statusLabel: `Version ${releaseVersion || manifest?.version || packageJson.version} | ${sizeLabel}`,
   }
 }
 
@@ -152,8 +202,14 @@ function MobileInstallCard({
 }
 
 export default function DownloadPage() {
-  const macInstaller = getInstallerInfo(macInstallerPath, "Mac installer not found.")
-  const windowsInstaller = getInstallerInfo(windowsInstallerPaths, "Windows installer coming soon.")
+  const releaseManifest = readDesktopReleaseManifest()
+  const macInstaller = getInstallerInfo(macInstallerPath, "Mac installer not found.", releaseManifest?.mac, releaseManifest?.version)
+  const windowsInstaller = getInstallerInfo(
+    windowsInstallerPaths,
+    "Windows installer not found on this build.",
+    releaseManifest?.windows,
+    releaseManifest?.version
+  )
   const installersReady = macInstaller.available || windowsInstaller.available
   const showMacNotarizationWarning = macInstaller.available && macInstaller.notarized !== true
 

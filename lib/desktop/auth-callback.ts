@@ -1,6 +1,6 @@
 "use client"
 
-import { readCachedDesktopSession } from "@/lib/desktop/session"
+import { readCachedDesktopSession, setDesktopAuthMarker } from "@/lib/desktop/session"
 import { isTauriRuntimeAsync } from "@/lib/desktop/tauri"
 import type { WorkspaceBootstrapPayload } from "@/lib/workspaceBootstrapClient"
 
@@ -47,7 +47,25 @@ async function completeDesktopAuthViaCloud(accessToken: string, nextPath: string
     throw new Error(payload?.error || "Unable to validate desktop login.")
   }
 
-  return desktopRedirectFromWorkspace(payload, nextPath)
+  const redirectPath = desktopRedirectFromWorkspace(payload, nextPath)
+
+  await fetch("/auth/callback", {
+    method: "POST",
+    credentials: "include",
+    cache: "no-store",
+    headers: {
+      "content-type": "application/json",
+    },
+    body: JSON.stringify({
+      access_token: accessToken,
+      refresh_token: "desktop-session-cookie-sync",
+      next: redirectPath,
+      desktop: true,
+    }),
+  }).catch(() => undefined)
+  setDesktopAuthMarker()
+
+  return redirectPath
 }
 
 export async function completeDesktopAuthCallback(accessToken: string, refreshToken: string, nextPath = "/dashboard") {

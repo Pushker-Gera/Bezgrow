@@ -2,6 +2,7 @@
 
 import { cacheWorkspaceBootstrap, getCachedWorkspaceBootstrap } from "@/lib/offline/db"
 import { syncCachedDesktopSessionWithServer } from "@/lib/desktop/auth-callback"
+import { supabase } from "@/lib/supabase"
 
 export type WorkspaceBootstrapPayload = {
   success: boolean
@@ -89,10 +90,17 @@ export async function getWorkspaceBootstrap(options: { forceFresh?: boolean } = 
     if (inFlight) return inFlight
   }
 
-  const fetchBootstrap = () => fetch("/api/workspace/bootstrap", {
-    credentials: "include",
-    cache: options.forceFresh ? "no-store" : "default",
-  })
+  const fetchBootstrap = async () => {
+    const {
+      data: { session },
+    } = await supabase.auth.getSession()
+
+    return fetch("/api/workspace/bootstrap", {
+      credentials: "include",
+      cache: options.forceFresh ? "no-store" : "default",
+      headers: session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : undefined,
+    })
+  }
 
   inFlight = fetchBootstrap()
     .then(async (response) => {

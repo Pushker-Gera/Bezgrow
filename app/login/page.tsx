@@ -1,11 +1,11 @@
 "use client"
 
 import type { FormEvent } from "react"
-import { useCallback, useEffect, useState } from "react"
+import { useCallback, useEffect, useRef, useState } from "react"
 import type { Session } from "@supabase/supabase-js"
 import { BezgrowLogoMark } from "@/components/brand/BezgrowLogoMark"
 import { completeDesktopAuthCallback } from "@/lib/desktop/auth-callback"
-import { hasCachedDesktopSession, persistDesktopSession } from "@/lib/desktop/session"
+import { hasCachedDesktopSession, persistDesktopSession, readCachedDesktopSession } from "@/lib/desktop/session"
 import { isTauriRuntimeAsync, openExternalUrl } from "@/lib/desktop/tauri"
 import { getCachedWorkspaceBootstrap } from "@/lib/offline/db"
 import { supabase } from "@/lib/supabase"
@@ -36,6 +36,8 @@ export default function LoginPage() {
     const [errorMessage, setErrorMessage] = useState("")
     const [successMessage, setSuccessMessage] = useState("")
     const [resetLoading, setResetLoading] = useState(false)
+    const [checkingSession, setCheckingSession] = useState(true)
+    const sessionCheckStarted = useRef(false)
 
     const getSafeNextPath = useCallback((fallback: string) => {
         if (typeof window === "undefined") {
@@ -142,14 +144,26 @@ export default function LoginPage() {
     }
 
     useEffect(() => {
+        if (sessionCheckStarted.current) return
+        sessionCheckStarted.current = true
+        let active = true
 
         async function checkUser() {
+            let navigating = false
+
+            const navigate = (path: string) => {
+                navigating = true
+                window.location.replace(path)
+            }
+
             const urlError = new URLSearchParams(window.location.search).get("error")
             if (urlError === "profile_missing") {
                 setErrorMessage("Your login succeeded, but no profile was found for this account. Contact support to repair the admin profile.")
             } else if (urlError === "account_suspended") {
                 setErrorMessage("This account is suspended.")
             }
+
+            const desktopRuntime = await isTauriRuntimeAsync()
 
             if (!navigator.onLine) {
                 const [hasSession, cachedWorkspace] = await Promise.all([
@@ -158,11 +172,34 @@ export default function LoginPage() {
                 ])
 
                 if (hasSession && cachedWorkspace?.success && cachedWorkspace.permissions?.canAccessDashboard) {
-                    window.location.replace("/dashboard")
+                    navigate("/dashboard")
                     return
                 }
 
                 setErrorMessage("Internet required for first login. Reconnect once, then Bezgrow can open offline.")
+                return
+            }
+
+            if (desktopRuntime) {
+                const cachedSession = await readCachedDesktopSession()
+
+                if (cachedSession?.access_token && cachedSession.refresh_token) {
+                    const { error } = await supabase.auth.setSession({
+                        access_token: cachedSession.access_token,
+                        refresh_token: cachedSession.refresh_token,
+                    })
+
+                    if (!error) {
+                        const redirectPath = await completeDesktopAuthCallback(
+                            cachedSession.access_token,
+                            cachedSession.refresh_token,
+                            getSafeNextPath("/dashboard")
+                        )
+                        navigate(redirectPath)
+                        return
+                    }
+                }
+
                 return
             }
 
@@ -174,15 +211,15 @@ export default function LoginPage() {
                 const payload = (await bootstrapResponse.json()) as BootstrapResponse
                 if (payload.success) {
                     if (payload.permissions?.admin || payload.profile?.role === "admin") {
-                        window.location.replace("/admin")
+                        navigate("/admin")
                         return
                     }
                     if (!payload.profile?.approved) {
-                        window.location.replace("/pending-approval")
+                        navigate("/pending-approval")
                         return
                     }
                     const hasBusiness = Boolean(payload.profile.business_created || payload.organization?.id)
-                    window.location.replace(hasBusiness ? "/dashboard" : "/create-business")
+                    navigate(hasBusiness ? "/dashboard" : "/create-business")
                     return
                 }
             }
@@ -199,13 +236,24 @@ export default function LoginPage() {
 
             if (session?.access_token && session.refresh_token) {
                 await redirectToCallback(session.access_token, session.refresh_token)
+                navigating = true
             }
 
+            if (active && !navigating) setCheckingSession(false)
         }
 
         checkUser()
+            .catch((error) => {
+                if (active) showAuthError(error instanceof Error ? error.message : "Unable to check login session.")
+            })
+            .finally(() => {
+                if (active) setCheckingSession(false)
+            })
 
-    }, [redirectToCallback])
+        return () => {
+            active = false
+        }
+    }, [getSafeNextPath, redirectToCallback])
 
     async function login(event?: FormEvent<HTMLFormElement>) {
         event?.preventDefault()
@@ -367,6 +415,23 @@ export default function LoginPage() {
 
             setResetLoading(false)
         }
+    }
+
+    if (checkingSession) {
+        return (
+            <div className="inventory-grid-bg flex min-h-dvh w-full overflow-x-hidden items-center justify-center px-3 py-5 text-white sm:px-5 sm:py-8">
+                <div className="w-full min-w-0 max-w-[calc(100vw-1.5rem)] rounded-[22px] border border-white/10 bg-neutral-950/85 p-5 shadow-[0_28px_120px_rgba(0,0,0,0.45)] backdrop-blur-xl sm:max-w-md sm:rounded-[28px] sm:p-8">
+                    <div className="mb-5 flex min-w-0 items-center gap-3">
+                        <BezgrowLogoMark className="h-10 w-10" size={40} priority />
+                        <span className="min-w-0 text-base font-black">Bezgrow</span>
+                    </div>
+                    <h1 className="mb-2 break-words text-2xl font-bold sm:text-3xl">Opening Bezgrow</h1>
+                    <p className="break-words text-sm leading-6 text-gray-400">
+                        Checking your saved desktop session.
+                    </p>
+                </div>
+            </div>
+        )
     }
 
     return (

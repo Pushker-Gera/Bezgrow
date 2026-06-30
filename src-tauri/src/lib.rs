@@ -259,6 +259,7 @@ fn start_next_server(app: &mut tauri::App) -> Result<u16, Box<dyn std::error::Er
         .env("HOSTNAME", "127.0.0.1")
         .env("PORT", port.to_string())
         .env("NODE_ENV", "production")
+        .env("BEZGROW_DESKTOP_BUILD", "1")
         .env("NEXT_TELEMETRY_DISABLED", "1")
         .stdin(Stdio::null())
         .stdout(Stdio::from(log_file.try_clone()?))

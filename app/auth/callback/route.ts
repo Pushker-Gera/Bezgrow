@@ -150,17 +150,22 @@ export async function POST(request: Request) {
     access_token?: string
     refresh_token?: string
     next?: string
+    desktop?: boolean
   } | null
 
   if (!body?.access_token || !body.refresh_token) {
     return NextResponse.json({ redirectTo: `${siteUrl}/login` }, { status: 400 })
   }
 
+  const desktopValidated = body.desktop === true && process.env.BEZGROW_DESKTOP_BUILD === "1"
+
   const supabase = await createServerSupabase()
-  const { error } = await supabase.auth.setSession({
-    access_token: body.access_token,
-    refresh_token: body.refresh_token,
-  })
+  const { error } = desktopValidated
+    ? await supabase.auth.getUser(body.access_token)
+    : await supabase.auth.setSession({
+        access_token: body.access_token,
+        refresh_token: body.refresh_token,
+      })
 
   if (error) {
     return NextResponse.json({ redirectTo: `${siteUrl}/login` }, { status: 401 })
@@ -168,10 +173,21 @@ export async function POST(request: Request) {
 
   const {
     data: { user },
-  } = await supabase.auth.getUser()
+  } = desktopValidated ? await supabase.auth.getUser(body.access_token) : await supabase.auth.getUser()
 
   if (!user) {
     return NextResponse.json({ redirectTo: `${siteUrl}/login` }, { status: 401 })
+  }
+
+  if (desktopValidated) {
+    const redirectPath = getSafeNextPath(body.next || null)
+    const response = NextResponse.json({ redirectTo: new URL(redirectPath, siteUrl).toString() })
+    response.cookies.set("bezgrow_desktop_auth", "1", {
+      path: "/",
+      maxAge: 60 * 60 * 24 * 180,
+      sameSite: "lax",
+    })
+    return response
   }
 
   console.info("[auth/callback] post session user", { userId: user.id })

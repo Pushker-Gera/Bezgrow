@@ -1,6 +1,7 @@
 "use client"
 
 import { useEffect } from "react"
+import { isTauriRuntime } from "@/lib/desktop/tauri"
 
 function isChunkLoadError(reason: unknown) {
   if (!reason) return false
@@ -20,6 +21,8 @@ function isChunkLoadError(reason: unknown) {
 
 export default function ChunkReloadGuard() {
   useEffect(() => {
+    if (isTauriRuntime()) return
+
     const reloadOnce = () => {
       const key = "bezgrow:chunk-reload"
       if (sessionStorage.getItem(key) === "1") return

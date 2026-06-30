@@ -6,6 +6,7 @@ import { invokeTauri, isTauriRuntimeAsync } from "@/lib/desktop/tauri"
 const SESSION_SECRET_KEY = "supabase-session"
 const SESSION_FALLBACK_KEY = "bezgrow:desktop-session-fallback"
 const SESSION_STORAGE_KEYS_KEY = "bezgrow:desktop-session-storage-keys"
+export const DESKTOP_AUTH_MARKER_COOKIE = "bezgrow_desktop_auth"
 
 type StoredSession = Pick<
   Session,
@@ -101,6 +102,16 @@ function untrackStorageKey(key: string) {
   }
 }
 
+export function setDesktopAuthMarker() {
+  if (!storageAvailable()) return
+  document.cookie = `${DESKTOP_AUTH_MARKER_COOKIE}=1; Max-Age=${60 * 60 * 24 * 180}; Path=/; SameSite=Lax`
+}
+
+export function clearDesktopAuthMarker() {
+  if (!storageAvailable()) return
+  document.cookie = `${DESKTOP_AUTH_MARKER_COOKIE}=; Max-Age=0; Path=/; SameSite=Lax`
+}
+
 export async function persistDesktopSession(session: Session | null) {
   if (!storageAvailable()) return
 
@@ -117,6 +128,7 @@ export async function persistDesktopSession(session: Session | null) {
   } else {
     localStorage.removeItem(SESSION_FALLBACK_KEY)
   }
+  setDesktopAuthMarker()
 }
 
 export async function readCachedDesktopSession() {
@@ -172,6 +184,7 @@ export async function clearDesktopSession() {
   trackedKeys.forEach((key) => localStorage.removeItem(key))
   localStorage.removeItem(SESSION_STORAGE_KEYS_KEY)
   localStorage.removeItem(SESSION_FALLBACK_KEY)
+  clearDesktopAuthMarker()
   await deleteDesktopSecret(SESSION_SECRET_KEY)
 }
 

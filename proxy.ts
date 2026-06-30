@@ -4,6 +4,7 @@ import { authCookieOptions } from "@/lib/supabase/session"
 
 const protectedPrefixes = ["/dashboard", "/profile"]
 const adminPrefixes = ["/admin"]
+const desktopAuthMarkerCookie = "bezgrow_desktop_auth"
 
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL?.trim()
 const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY?.trim()
@@ -85,6 +86,7 @@ function redirectToLogin(request: NextRequest, response: NextResponse) {
 
 export async function proxy(request: NextRequest) {
   const { pathname } = request.nextUrl
+  const localDesktopHost = ["localhost", "127.0.0.1", "[::1]"].includes(request.nextUrl.hostname)
   const isPrefetch =
     request.headers.get("purpose") === "prefetch" ||
     request.headers.get("next-router-prefetch") === "1" ||
@@ -98,6 +100,10 @@ export async function proxy(request: NextRequest) {
   const adminRoute = adminPrefixes.some((prefix) => pathname.startsWith(prefix))
 
   if (!protectedRoute && !adminRoute) {
+    return NextResponse.next()
+  }
+
+  if (localDesktopHost && request.cookies.get(desktopAuthMarkerCookie)?.value === "1") {
     return NextResponse.next()
   }
 
