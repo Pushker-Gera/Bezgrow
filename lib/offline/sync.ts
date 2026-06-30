@@ -9,6 +9,7 @@ import {
   updateOfflineAction,
   type OfflineAction,
 } from "@/lib/offline/db"
+import { writeSqliteConflict, writeSqliteSyncLog } from "@/lib/offline/sqlite"
 
 type ProductRow = Record<string, unknown> & { id: string; stock?: number | null; name?: string | null }
 type CustomerRow = Record<string, unknown> & { id: string; name?: string | null }
@@ -26,6 +27,11 @@ export type SyncProgress = {
 
 function numberFrom(value: unknown) {
   return value === null || value === undefined || value === "" ? 0 : Number(value || 0)
+}
+
+function syncLogId(prefix: string) {
+  const random = typeof crypto !== "undefined" && "randomUUID" in crypto ? crypto.randomUUID() : Math.random().toString(36).slice(2)
+  return `sync-${prefix}-${Date.now()}-${random}`
 }
 
 async function authHeaders() {
@@ -61,6 +67,7 @@ function actionSortRank(action: OfflineAction) {
     archive_product: 2,
     stock_movement: 3,
     create_invoice: 4,
+    update_invoice_status: 5,
     create_order: 6,
     save_settings: 7,
   }
@@ -373,6 +380,44 @@ async function syncInvoice(action: OfflineAction, headers: Record<string, string
   await putOfflineData(action.organizationId, "inventory_items", refreshedProducts)
 }
 
+async function syncInvoiceStatus(action: OfflineAction, headers: Record<string, string>) {
+  const payload = action.payload as {
+    invoiceId: string
+    paymentStatus: string
+  }
+
+  if (payload.invoiceId.startsWith("offline-")) {
+    const invoices = await getOfflineData<InvoiceRow[]>(action.organizationId, "invoices", [])
+    const syncedInvoice = invoices.find((invoice) => invoice.offline_client_id === payload.invoiceId || invoice.id === payload.invoiceId)
+    if (!syncedInvoice?.id || syncedInvoice.id.startsWith("offline-")) {
+      throw new Error("Invoice status is waiting for the invoice record to sync first.")
+    }
+    payload.invoiceId = syncedInvoice.id
+  }
+
+  await postJson<{ success?: boolean }>("/api/invoices/update-status", headers, {
+    invoice_id: payload.invoiceId,
+    payment_status: payload.paymentStatus,
+  })
+
+  const invoices = await getOfflineData<InvoiceRow[]>(action.organizationId, "invoices", [])
+  await putOfflineData(
+    action.organizationId,
+    "invoices",
+    invoices.map((invoice) =>
+      invoice.id === payload.invoiceId
+        ? {
+            ...invoice,
+            payment_status: payload.paymentStatus,
+            status: payload.paymentStatus,
+            sync_status: "synced",
+            updated_at: new Date().toISOString(),
+          }
+        : invoice
+    )
+  )
+}
+
 export async function syncOfflineQueue(onProgress?: (progress: SyncProgress) => void) {
   if (!navigator.onLine) throw new Error("You are offline. Sync will run when internet returns.")
 
@@ -385,6 +430,14 @@ export async function syncOfflineQueue(onProgress?: (progress: SyncProgress) => 
   for (const action of actions) {
     onProgress?.({ total: actions.length, completed, current: action.id, message: `Syncing ${action.type.replace("_", " ")}...` })
     await updateOfflineAction(action.id, { status: "syncing", attempts: action.attempts + 1, error: undefined })
+    await writeSqliteSyncLog({
+      id: syncLogId("start"),
+      organizationId: action.organizationId,
+      actionId: action.id,
+      status: "syncing",
+      message: `Syncing ${action.type}.`,
+      payload: { type: action.type, attempts: action.attempts + 1 },
+    })
 
     try {
       if (action.type === "save_customer") await syncCustomer(action, headers)
@@ -393,16 +446,44 @@ export async function syncOfflineQueue(onProgress?: (progress: SyncProgress) => 
       if (action.type === "archive_product") await syncArchiveProduct(action, headers)
       if (action.type === "stock_movement") await syncStockMovement(action, headers)
       if (action.type === "create_invoice") await syncInvoice(action, headers)
+      if (action.type === "update_invoice_status") await syncInvoiceStatus(action, headers)
       if (action.type === "create_order") await syncOrder(action, headers)
       if (action.type === "save_settings") await syncSettings(action, headers)
       await updateOfflineAction(action.id, { status: "synced", error: undefined })
+      await writeSqliteSyncLog({
+        id: syncLogId("synced"),
+        organizationId: action.organizationId,
+        actionId: action.id,
+        status: "synced",
+        message: `${action.type} synced.`,
+        payload: { type: action.type },
+      })
       completed += 1
     } catch (error) {
       const message = error instanceof Error ? error.message : "Sync failed."
+      const conflict = message.startsWith("CONFLICT:")
       await updateOfflineAction(action.id, {
-        status: message.startsWith("CONFLICT:") ? "conflict" : "error",
+        status: conflict ? "conflict" : "error",
         error: message.replace(/^CONFLICT:\s*/, ""),
       })
+      await writeSqliteSyncLog({
+        id: syncLogId(conflict ? "conflict" : "error"),
+        organizationId: action.organizationId,
+        actionId: action.id,
+        status: conflict ? "conflict" : "error",
+        message: message.replace(/^CONFLICT:\s*/, ""),
+        payload: { type: action.type },
+      })
+      if (conflict) {
+        await writeSqliteConflict({
+          id: syncLogId("conflict"),
+          organizationId: action.organizationId,
+          entityType: action.type,
+          localId: typeof action.payload.localInvoiceId === "string" ? action.payload.localInvoiceId : action.id,
+          localPayload: action.payload,
+          message: message.replace(/^CONFLICT:\s*/, ""),
+        })
+      }
     }
   }
 

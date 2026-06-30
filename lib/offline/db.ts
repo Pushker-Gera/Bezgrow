@@ -39,6 +39,7 @@ export type OfflineAction = {
     | "save_product"
     | "archive_product"
     | "stock_movement"
+    | "update_invoice_status"
     | "save_settings"
     | "create_order"
   organizationId: string

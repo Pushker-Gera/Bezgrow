@@ -5,6 +5,7 @@ import { useEffect, useMemo, useState } from "react"
 import { getOrganizationFeatures } from "@/lib/get-organization-features"
 import { getOrganizationId } from "@/lib/getOrganization"
 import { createOfflineId, getOfflineData, putOfflineData, queueOfflineAction } from "@/lib/offline/db"
+import { shouldSaveOffline } from "@/lib/offline/network"
 import { supabase } from "@/lib/supabase"
 
 type ProductRow = {
@@ -518,7 +519,7 @@ export default function InventoryPage() {
             setShowTransferModal(false)
             setNotice(result.warning || (mode === "add" ? "Stock added successfully." : "Inventory transferred successfully."))
         } catch (error) {
-            if (typeof navigator !== "undefined" && !navigator.onLine) {
+            if (shouldSaveOffline(error)) {
                 const now = new Date().toISOString()
                 const localMovementId = createOfflineId("stock-movement")
                 const cachedProducts = await getOfflineData<ProductRow[]>(organizationId, "products", products)

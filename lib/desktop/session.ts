@@ -147,8 +147,18 @@ export async function restoreDesktopSession(supabase: SupabaseClient) {
   })
 
   if (error) {
-    await clearDesktopSession()
-    return { restored: false, offlineOnly: false, error }
+    const message = error.message.toLowerCase()
+    const isInvalidRefreshToken =
+      message.includes("invalid refresh token") ||
+      message.includes("refresh token not found") ||
+      message.includes("already used")
+
+    if (isInvalidRefreshToken) {
+      await clearDesktopSession()
+      return { restored: false, offlineOnly: false, error }
+    }
+
+    return { restored: false, offlineOnly: true, session: cached, error }
   }
 
   return { restored: true, offlineOnly: false, session: cached }

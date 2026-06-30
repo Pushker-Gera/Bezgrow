@@ -15,6 +15,7 @@ const build = spawnSync(npmCommand, ["run", "build"], {
     ...process.env,
     BEZGROW_DESKTOP_BUILD: "1",
     NEXT_TELEMETRY_DISABLED: "1",
+    SUPABASE_SERVICE_ROLE_KEY: "",
   },
   stdio: "inherit",
 });

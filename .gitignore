@@ -20,11 +20,6 @@
 
 # production
 /build
-/public/downloads/*.dmg
-/public/downloads/*.exe
-/public/downloads/*.msi
-/public/downloads/*.release.json
-!/public/downloads/desktop-release.json
 
 # tauri / rust
 /src-tauri/target/

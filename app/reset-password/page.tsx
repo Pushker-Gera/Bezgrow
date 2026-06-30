@@ -15,6 +15,11 @@ export default function ResetPasswordPage() {
 
   useEffect(() => {
     async function recoverSessionFromUrl() {
+      if (!navigator.onLine) {
+        setError("Internet required to reset your password.")
+        return
+      }
+
       const url = new URL(window.location.href)
       const code = url.searchParams.get("code")
       const accessToken = url.hash ? new URLSearchParams(url.hash.slice(1)).get("access_token") : null
@@ -66,6 +71,11 @@ export default function ResetPasswordPage() {
 
     if (password !== confirmPassword) {
       setError("Passwords do not match.")
+      return
+    }
+
+    if (!navigator.onLine) {
+      setError("Internet required to reset your password.")
       return
     }
 

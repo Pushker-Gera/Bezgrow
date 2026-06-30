@@ -56,6 +56,8 @@ const collectionTables: Record<OfflineCollection, string> = {
   stock_movements: "local_stock_movements",
 }
 
+const metaTable = "local_meta"
+
 let dbPromise: Promise<SqlDatabase | null> | null = null
 let migrated = false
 
@@ -145,6 +147,17 @@ async function migrate(db: SqlDatabase) {
     await db.execute(`CREATE INDEX IF NOT EXISTS idx_${table}_org ON ${table} (organization_id)`)
     await db.execute(`CREATE INDEX IF NOT EXISTS idx_${table}_sync ON ${table} (sync_status)`)
   }
+
+  await db.execute(`
+    CREATE TABLE IF NOT EXISTS ${metaTable} (
+      id TEXT PRIMARY KEY,
+      organization_id TEXT NOT NULL,
+      key TEXT NOT NULL,
+      value_json TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    )
+  `)
+  await db.execute(`CREATE UNIQUE INDEX IF NOT EXISTS idx_${metaTable}_org_key ON ${metaTable} (organization_id, key)`)
 
   await db.execute(`
     CREATE TABLE IF NOT EXISTS sync_queue (
@@ -437,28 +450,32 @@ export async function writeSqliteConflict(input: {
 }
 
 export async function setSqliteMeta(key: string, value: unknown, organizationId = "global") {
-  return putSqliteCollection(organizationId, "workspace", {
-    id: `meta:${key}`,
-    organization_id: organizationId,
-    key,
-    value,
-    updated_at: nowIso(),
-  })
+  const db = await getSqliteDb()
+  if (!db) return false
+
+  await db.execute(
+    `INSERT INTO ${metaTable} (id, organization_id, key, value_json, updated_at)
+     VALUES (?, ?, ?, ?, ?)
+     ON CONFLICT(organization_id, key) DO UPDATE SET
+       value_json = excluded.value_json,
+       updated_at = excluded.updated_at`,
+    [`${organizationId}:${key}`, organizationId, key, JSON.stringify(value), nowIso()]
+  )
+  return true
 }
 
 export async function getSqliteMeta<T>(key: string, fallback: T, organizationId = "global") {
   const db = await getSqliteDb()
   if (!db) return fallback
 
-  const rows = await db.select<LocalRow>(
-    "SELECT payload_json FROM local_workspace WHERE organization_id = ? AND id = ? LIMIT 1",
-    [organizationId, `meta:${key}`]
+  const rows = await db.select<{ value_json: string }>(
+    `SELECT value_json FROM ${metaTable} WHERE organization_id = ? AND key = ? LIMIT 1`,
+    [organizationId, key]
   )
   if (!rows[0]) return fallback
 
   try {
-    const parsed = JSON.parse(rows[0].payload_json) as { value?: T }
-    return parsed.value ?? fallback
+    return JSON.parse(rows[0].value_json) as T
   } catch {
     return fallback
   }
@@ -471,6 +488,7 @@ export async function clearSqliteOfflineData() {
   for (const table of Object.values(collectionTables)) {
     await db.execute(`DELETE FROM ${table}`)
   }
+  await db.execute(`DELETE FROM ${metaTable}`)
   await db.execute("DELETE FROM sync_queue")
   await db.execute("DELETE FROM sync_conflicts")
   await db.execute("DELETE FROM sync_logs")
@@ -494,5 +512,6 @@ export async function exportSqliteBackup() {
     actions: await db.select<QueueRow>("SELECT * FROM sync_queue ORDER BY datetime(created_at) ASC"),
     conflicts: await db.select<Record<string, unknown>>("SELECT * FROM sync_conflicts ORDER BY datetime(created_at) DESC"),
     logs: await db.select<Record<string, unknown>>("SELECT * FROM sync_logs ORDER BY datetime(created_at) DESC"),
+    meta: await db.select<Record<string, unknown>>(`SELECT * FROM ${metaTable} ORDER BY datetime(updated_at) DESC`),
   }
 }

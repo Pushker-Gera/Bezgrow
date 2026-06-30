@@ -6,6 +6,7 @@ import { useDebounce } from "use-debounce"
 import { getOrganizationFeatures } from "@/lib/get-organization-features"
 import { getOrganizationId } from "@/lib/getOrganization"
 import { createOfflineId, getOfflineData, putOfflineData, queueOfflineAction } from "@/lib/offline/db"
+import { offlineFallbackMessage, shouldSaveOffline } from "@/lib/offline/network"
 import { supabase } from "@/lib/supabase"
 
 type ProductRow = {
@@ -367,8 +368,8 @@ export default function ProductsPage() {
             setProducts(cachedProducts)
             writeCachedProducts(cachedProducts)
             setNotice(
-                typeof navigator !== "undefined" && !navigator.onLine
-                    ? "Offline mode: showing cached products."
+                shouldSaveOffline(error)
+                    ? offlineFallbackMessage("Offline mode: showing cached products.", "Connection failed. Showing cached products.")
                     : error instanceof Error ? error.message : "Products failed to load."
             )
         }
@@ -529,7 +530,7 @@ export default function ProductsPage() {
             setSaving(false)
             setNotice(editProduct ? "Product updated successfully." : "Product created successfully.")
         } catch (error) {
-            if (typeof navigator !== "undefined" && !navigator.onLine) {
+            if (shouldSaveOffline(error)) {
                 await saveProductOffline(payload)
                 setSaving(false)
                 return
@@ -590,7 +591,7 @@ export default function ProductsPage() {
         const now = new Date().toISOString()
         setConfirmDeleteId(null)
 
-        if (typeof navigator !== "undefined" && !navigator.onLine) {
+        const archiveOffline = async () => {
             const cachedProducts = await getOfflineData<ProductRow[]>(organizationId, "products", products)
             const nextProducts = cachedProducts.map((product) =>
                 product.id === idToDelete ? { ...product, sync_status: "pending_delete", deleted_at: now, updated_at: now } : product
@@ -606,6 +607,10 @@ export default function ProductsPage() {
             setProducts(nextProducts.filter((product) => product.id !== idToDelete))
             setAnalytics(buildAnalytics(nextProducts.filter((product) => product.id !== idToDelete)))
             setNotice("Product archived offline. Pending sync.")
+        }
+
+        if (shouldSaveOffline()) {
+            await archiveOffline()
             return
         }
 
@@ -634,6 +639,11 @@ export default function ProductsPage() {
             await fetchProducts(undefined, true)
             setNotice("Product moved to trash.")
         } catch (error) {
+            if (shouldSaveOffline(error)) {
+                await archiveOffline()
+                return
+            }
+
             setNotice(error instanceof Error ? error.message : "Product could not be archived.")
             await fetchProducts(undefined, true)
         }

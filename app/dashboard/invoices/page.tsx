@@ -5,7 +5,8 @@ import type { ReactNode } from "react"
 import { useCallback, useEffect, useMemo, useState } from "react"
 import { useDebounce } from "use-debounce"
 import { getOrganizationId } from "@/lib/getOrganization"
-import { getOfflineData, putOfflineData } from "@/lib/offline/db"
+import { createOfflineId, getOfflineData, putOfflineData, queueOfflineAction } from "@/lib/offline/db"
+import { shouldSaveOffline } from "@/lib/offline/network"
 import { supabase } from "@/lib/supabase"
 
 type InvoiceRow = Record<string, unknown> & {
@@ -333,21 +334,47 @@ export default function InvoicesPage() {
     setSavingId(invoiceId)
     setNotice("")
 
-    const {
-      data: { session },
-    } = await supabase.auth.getSession()
-    const response = await fetch("/api/invoices/update-status", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        ...(session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : {}),
-      },
-      body: JSON.stringify({ invoice_id: invoiceId, payment_status: status }),
-    })
-    const result = (await response.json().catch(() => null)) as { success?: boolean; error?: string } | null
+    try {
+      const {
+        data: { session },
+      } = await supabase.auth.getSession()
+      const response = await fetch("/api/invoices/update-status", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          ...(session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : {}),
+        },
+        body: JSON.stringify({ invoice_id: invoiceId, payment_status: status }),
+      })
+      const result = (await response.json().catch(() => null)) as { success?: boolean; error?: string } | null
 
-    if (!response.ok || !result?.success) {
-      setNotice(result?.error || "Invoice status could not be updated.")
+      if (!response.ok || !result?.success) {
+        setNotice(result?.error || "Invoice status could not be updated.")
+        setSavingId(null)
+        return
+      }
+    } catch (error) {
+      if (!shouldSaveOffline(error)) {
+        setNotice(error instanceof Error ? error.message : "Invoice status could not be updated.")
+        setSavingId(null)
+        return
+      }
+
+      const cachedInvoices = await getOfflineData<InvoiceRow[]>(organizationId, "invoices", invoices)
+      const nextInvoices = cachedInvoices.map((invoice) =>
+        invoice.id === invoiceId
+          ? { ...invoice, payment_status: status, status, sync_status: "pending_update", updated_at: new Date().toISOString() }
+          : invoice
+      )
+      await putOfflineData(organizationId, "invoices", nextInvoices)
+      await queueOfflineAction({
+        id: createOfflineId("invoice-status-action"),
+        type: "update_invoice_status",
+        organizationId,
+        payload: { invoiceId, paymentStatus: status },
+      })
+      setInvoices(nextInvoices)
+      setNotice("Invoice status saved offline. Pending sync.")
       setSavingId(null)
       return
     }

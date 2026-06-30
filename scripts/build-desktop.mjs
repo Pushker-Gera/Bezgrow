@@ -14,6 +14,7 @@ const publicDownloadsDir = join(root, "public", "downloads");
 const publicMacDmg = join(publicDownloadsDir, "Bezgrow-mac.dmg");
 const publicMacReleaseManifest = join(root, "public", "downloads", "Bezgrow-mac.dmg.release.json");
 const publicWindowsExe = join(publicDownloadsDir, "Bezgrow-windows.exe");
+const publicWindowsMsi = join(publicDownloadsDir, "Bezgrow-windows.msi");
 const desktopReleaseManifest = join(publicDownloadsDir, "desktop-release.json");
 
 const passthroughArgs = process.argv.slice(2);
@@ -87,15 +88,22 @@ function run(command, args) {
   }
 }
 
+function latestBundleFile(directory, predicate) {
+  if (!existsSync(directory)) return "";
+
+  const file = readdirSync(directory)
+    .filter(predicate)
+    .sort()
+    .at(-1);
+
+  return file ? join(directory, file) : "";
+}
+
 function verifyPublicMacDmg() {
   if (!publicMacBuild || process.platform !== "darwin") return;
 
   const dmgDir = join(root, "src-tauri", "target", "release", "bundle", "dmg");
-  const dmgFile = readdirSync(dmgDir)
-    .filter((file) => file.startsWith("Bezgrow_") && file.endsWith(".dmg"))
-    .sort()
-    .at(-1);
-  const dmgPath = dmgFile ? join(dmgDir, dmgFile) : "";
+  const dmgPath = latestBundleFile(dmgDir, (file) => file.startsWith("Bezgrow_") && file.endsWith(".dmg"));
 
   if (!existsSync(dmgPath)) {
     throw new Error(`Expected notarized DMG was not found in ${dmgDir}`);
@@ -171,11 +179,7 @@ function verifyPublicWindowsInstaller() {
   }
 
   const nsisDir = join(root, "src-tauri", "target", "release", "bundle", "nsis");
-  const windowsFile = readdirSync(nsisDir)
-    .filter((file) => file.startsWith("Bezgrow_") && file.endsWith(".exe"))
-    .sort()
-    .at(-1);
-  const windowsPath = windowsFile ? join(nsisDir, windowsFile) : "";
+  const windowsPath = latestBundleFile(nsisDir, (file) => file.startsWith("Bezgrow_") && file.endsWith(".exe"));
 
   if (!existsSync(windowsPath)) {
     throw new Error(`Expected Windows installer was not found in ${nsisDir}`);
@@ -198,6 +202,38 @@ function verifyPublicWindowsInstaller() {
   });
 }
 
+function copyGeneratedInstallersForDownloads() {
+  const dmgPath = latestBundleFile(
+    join(root, "src-tauri", "target", "release", "bundle", "dmg"),
+    (file) => file.startsWith("Bezgrow_") && file.endsWith(".dmg")
+  );
+  const windowsExePath = latestBundleFile(
+    join(root, "src-tauri", "target", "release", "bundle", "nsis"),
+    (file) => file.startsWith("Bezgrow_") && file.endsWith(".exe")
+  );
+  const windowsMsiPath = latestBundleFile(
+    join(root, "src-tauri", "target", "release", "bundle", "msi"),
+    (file) => file.startsWith("Bezgrow_") && file.endsWith(".msi")
+  );
+
+  mkdirSync(publicDownloadsDir, { recursive: true });
+
+  if (existsSync(dmgPath)) {
+    copyFileSync(dmgPath, publicMacDmg);
+    console.log(`Copied ${dmgPath} to ${publicMacDmg}`);
+  }
+
+  if (existsSync(windowsExePath)) {
+    copyFileSync(windowsExePath, publicWindowsExe);
+    console.log(`Copied ${windowsExePath} to ${publicWindowsExe}`);
+  }
+
+  if (existsSync(windowsMsiPath)) {
+    copyFileSync(windowsMsiPath, publicWindowsMsi);
+    console.log(`Copied ${windowsMsiPath} to ${publicWindowsMsi}`);
+  }
+}
+
 mkdirSync(generatedConfigDir, { recursive: true });
 const config = configureMacSigning(JSON.parse(readFileSync(tauriConfigPath, "utf8")));
 writeFileSync(generatedConfigPath, `${JSON.stringify(config, null, 2)}\n`);
@@ -205,3 +241,4 @@ writeFileSync(generatedConfigPath, `${JSON.stringify(config, null, 2)}\n`);
 run("tauri", ["build", "--config", generatedConfigPath, ...tauriArgs]);
 verifyPublicMacDmg();
 verifyPublicWindowsInstaller();
+copyGeneratedInstallersForDownloads();

@@ -60,7 +60,11 @@ export default function LoginPage() {
     }
 
     const getSiteUrl = useCallback(() => {
-        return (window.location.origin || process.env.NEXT_PUBLIC_SITE_URL || "http://localhost:3000").replace(/\/$/, "")
+        const configuredSiteUrl = (process.env.NEXT_PUBLIC_SITE_URL || "https://www.bezgrow.com").replace(/\/$/, "")
+        const origin = window.location.origin || configuredSiteUrl
+        const isLocalDesktopOrigin = /^https?:\/\/(127\.0\.0\.1|localhost)(:\d+)?$/i.test(origin)
+
+        return (isLocalDesktopOrigin ? configuredSiteUrl : origin).replace(/\/$/, "")
     }, [])
 
     const redirectToCallback = useCallback(async (accessToken: string, refreshToken: string, nextPath = getSafeNextPath("/dashboard")) => {
@@ -211,6 +215,12 @@ export default function LoginPage() {
             setLoading(true)
             setErrorMessage("")
             setSuccessMessage("")
+
+            if (!navigator.onLine) {
+                setErrorMessage("Internet required for login. Reconnect once, then Bezgrow can open offline.")
+                setLoading(false)
+                return
+            }
 
             if (!email.trim() || !password.trim()) {
                 setErrorMessage("Please enter email and password")

@@ -26,6 +26,12 @@ export default function SignupPage() {
             setStatusMessage("")
             setErrorMessage("")
 
+            if (!navigator.onLine) {
+                setErrorMessage("Internet required to submit an access request.")
+                setLoading(false)
+                return
+            }
+
             const cleanFullName = fullName.trim()
             const cleanBusinessName = businessName.trim()
             const cleanPhone = phone.trim()

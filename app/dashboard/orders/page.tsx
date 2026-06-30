@@ -5,6 +5,7 @@ import { useEffect, useMemo, useState } from "react"
 import { useDebounce } from "use-debounce"
 import { getOrganizationId } from "@/lib/getOrganization"
 import { createOfflineId, getOfflineData, putOfflineData, queueOfflineAction } from "@/lib/offline/db"
+import { offlineFallbackMessage, shouldSaveOffline } from "@/lib/offline/network"
 import { supabase } from "@/lib/supabase"
 
 type Product = {
@@ -132,7 +133,7 @@ export default function OrdersPage() {
       await putOfflineData(orgId, "inventory_items", result.data || [])
     } catch (error) {
       setProducts(await getOfflineData<Product[]>(orgId, "products", []))
-      setNotice(navigator.onLine ? error instanceof Error ? error.message : "Products failed to load." : "Offline mode: showing cached products.")
+      setNotice(shouldSaveOffline(error) ? offlineFallbackMessage("Offline mode: showing cached products.", "Connection failed. Showing cached products.") : error instanceof Error ? error.message : "Products failed to load.")
     }
   }
 
@@ -153,7 +154,7 @@ export default function OrdersPage() {
       await putOfflineData(orgId, "orders", result.data || [])
     } catch (error) {
       setOrders(await getOfflineData<OrderRow[]>(orgId, "orders", []))
-      setNotice(navigator.onLine ? error instanceof Error ? error.message : "Orders failed to load." : "Offline mode: showing cached orders.")
+      setNotice(shouldSaveOffline(error) ? offlineFallbackMessage("Offline mode: showing cached orders.", "Connection failed. Showing cached orders.") : error instanceof Error ? error.message : "Orders failed to load.")
     }
   }
 
@@ -396,7 +397,7 @@ export default function OrdersPage() {
         return
       }
     } catch (error) {
-      if (typeof navigator !== "undefined" && !navigator.onLine) {
+      if (shouldSaveOffline(error)) {
         try {
           await createOrderOffline(orderPayload)
         } catch (offlineError) {

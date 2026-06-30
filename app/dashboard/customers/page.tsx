@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from "react"
 import { useDebounce } from "use-debounce"
 import { getOrganizationId } from "@/lib/getOrganization"
 import { createOfflineId, getOfflineData, putOfflineData, queueOfflineAction } from "@/lib/offline/db"
+import { offlineFallbackMessage, shouldSaveOffline } from "@/lib/offline/network"
 import { supabase } from "@/lib/supabase"
 
 type Customer = {
@@ -243,9 +244,9 @@ export default function CustomersPage() {
       setCustomers(cachedCustomers)
       setInvoices(cachedInvoices)
       setNotice(
-        navigator.onLine
-          ? error instanceof Error ? error.message : "Customers failed to load."
-          : "Offline mode: showing cached customers."
+        shouldSaveOffline(error)
+          ? offlineFallbackMessage("Offline mode: showing cached customers.", "Connection failed. Showing cached customers.")
+          : error instanceof Error ? error.message : "Customers failed to load."
       )
     }
   }
@@ -355,7 +356,7 @@ export default function CustomersPage() {
         return
       }
     } catch (error) {
-      if (navigator.onLine) {
+      if (!shouldSaveOffline(error)) {
         setNotice(error instanceof Error ? error.message : "Customer could not be saved.")
         setSaving(false)
         return
@@ -396,7 +397,7 @@ export default function CustomersPage() {
         return
       }
     } catch (error) {
-      if (navigator.onLine) {
+      if (!shouldSaveOffline(error)) {
         setNotice(error instanceof Error ? error.message : "Customer status could not be updated.")
         return
       }
@@ -472,7 +473,7 @@ export default function CustomersPage() {
         return
       }
     } catch (error) {
-      if (navigator.onLine) {
+      if (!shouldSaveOffline(error)) {
         setNotice(error instanceof Error ? error.message : "Customer could not be archived.")
         return
       }

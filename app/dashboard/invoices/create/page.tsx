@@ -6,6 +6,7 @@ import { useCallback, useEffect, useMemo, useState } from "react"
 import { getOrganizationId } from "@/lib/getOrganization"
 import { createWhatsAppInvoiceUrl } from "@/lib/invoice-share"
 import { createOfflineId, getOfflineData, putOfflineData, queueOfflineAction } from "@/lib/offline/db"
+import { shouldSaveOffline } from "@/lib/offline/network"
 import { supabase } from "@/lib/supabase"
 import { getWorkspaceBootstrap } from "@/lib/workspaceBootstrapClient"
 
@@ -681,7 +682,7 @@ export default function CreateInvoicePage() {
         return
       }
     } catch (error) {
-      if (navigator.onLine) {
+      if (!shouldSaveOffline(error)) {
         setNotice({ title: "Transaction Failed", message: error instanceof Error ? error.message : "Invoice transaction failed.", type: "error" })
         setLoading(false)
         return

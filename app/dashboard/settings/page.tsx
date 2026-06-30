@@ -6,6 +6,7 @@ import { readStoredPrintSettings, saveStoredPrintSettings } from "@/components/p
 import type { PrintFormat, PrintSettings } from "@/components/print/types"
 import { getOrganizationId } from "@/lib/getOrganization"
 import { createOfflineId, getOfflineData, putOfflineData, queueOfflineAction } from "@/lib/offline/db"
+import { shouldSaveOffline } from "@/lib/offline/network"
 import { supabase } from "@/lib/supabase"
 
 type Organization = Record<string, unknown> & {
@@ -159,19 +160,29 @@ export default function SettingsPage() {
 
     if (searchTerm.trim()) invoiceParams.set("search", searchTerm.trim())
 
-    const invoiceResponse = await fetch(`/api/invoices/list?${invoiceParams.toString()}`, {
-      headers,
-      cache: "no-store",
-    })
-    const invoices = (await invoiceResponse.json()) as ListResponse<InvoiceCorrectionRow>
+    try {
+      const invoiceResponse = await fetch(`/api/invoices/list?${invoiceParams.toString()}`, {
+        headers,
+        cache: "no-store",
+      })
+      const invoices = (await invoiceResponse.json()) as ListResponse<InvoiceCorrectionRow>
 
-    if (!invoiceResponse.ok) {
-      setNotice(invoices.error || `Invoices failed to load. HTTP ${invoiceResponse.status}`)
-      setRecentInvoices([])
-      return
+      if (!invoiceResponse.ok) {
+        setNotice(invoices.error || `Invoices failed to load. HTTP ${invoiceResponse.status}`)
+        setRecentInvoices([])
+        return
+      }
+
+      setRecentInvoices(invoices.data || [])
+    } catch (error) {
+      const cachedInvoices = await getOfflineData<InvoiceCorrectionRow[]>(orgId, "invoices", [])
+      setRecentInvoices(cachedInvoices)
+      setNotice(
+        shouldSaveOffline(error)
+          ? "Offline mode: showing cached invoices."
+          : error instanceof Error ? error.message : "Invoices failed to load."
+      )
     }
-
-    setRecentInvoices(invoices.data || [])
   }
 
   async function initializeSettings() {
@@ -353,7 +364,7 @@ export default function SettingsPage() {
         return
       }
     } catch (error) {
-      if (typeof navigator !== "undefined" && !navigator.onLine) {
+      if (shouldSaveOffline(error)) {
         const nextOrganization = { ...(organization || { id: organizationId }), ...settingsPayload, updated_at: new Date().toISOString() }
         await putOfflineData(organizationId, "settings", {
           id: `settings:${organizationId}`,
@@ -425,7 +436,7 @@ export default function SettingsPage() {
         await initializeSettings()
       }
     } catch (error) {
-      if (typeof navigator !== "undefined" && !navigator.onLine) {
+      if (shouldSaveOffline(error)) {
         const nextFeatures = existing
           ? features.map((feature) => feature.feature_key === featureKey ? { ...feature, is_enabled: nextEnabled } : feature)
           : [...features, { organization_id: organizationId, feature_key: featureKey, is_enabled: nextEnabled }]
@@ -474,18 +485,28 @@ export default function SettingsPage() {
       data: { session },
     } = await supabase.auth.getSession()
     const deleteParams = new URLSearchParams({ organization_id: organizationId })
-    const response = await fetch(`/api/invoices/delete-with-stock-restore?${deleteParams.toString()}`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        ...(session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : {}),
-      },
-      body: JSON.stringify({ invoice_id: deletingInvoiceId, confirmation: "DELETE" }),
-    })
-    const result = (await response.json()) as { error?: string }
+    try {
+      const response = await fetch(`/api/invoices/delete-with-stock-restore?${deleteParams.toString()}`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          ...(session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : {}),
+        },
+        body: JSON.stringify({ invoice_id: deletingInvoiceId, confirmation: "DELETE" }),
+      })
+      const result = (await response.json()) as { error?: string }
 
-    if (!response.ok) {
-      setNotice(result.error || "Invoice could not be deleted.")
+      if (!response.ok) {
+        setNotice(result.error || "Invoice could not be deleted.")
+        setSaving(false)
+        return
+      }
+    } catch (error) {
+      setNotice(
+        shouldSaveOffline(error)
+          ? "Internet required to delete invoices so stock can be validated and restored safely."
+          : error instanceof Error ? error.message : "Invoice could not be deleted."
+      )
       setSaving(false)
       return
     }

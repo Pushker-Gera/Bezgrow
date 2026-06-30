@@ -7,9 +7,8 @@ import { BezgrowLogoMark } from "@/components/brand/BezgrowLogoMark"
 import packageJson from "@/package.json"
 
 const macInstallerPath = "/downloads/Bezgrow-mac.dmg"
-const windowsInstallerPath = "/downloads/Bezgrow-windows.exe"
-const desktopReleaseManifestPath = "/downloads/desktop-release.json"
-const isDesktopBuild = process.env.BEZGROW_DESKTOP_BUILD === "1"
+const windowsInstallerPaths = ["/downloads/Bezgrow-windows.exe", "/downloads/Bezgrow-windows.msi"]
+const webAppUrl = "https://www.bezgrow.com"
 
 export const metadata: Metadata = {
   title: "Download Bezgrow Desktop App",
@@ -24,24 +23,8 @@ type InstallerInfo = {
   href: string
   sizeLabel: string | null
   statusLabel: string
-  blockedReason?: string
-}
-
-type ReleaseInstaller = {
-  url?: string
-  file?: string
-  size?: number
-  sha256?: string
   notarized?: boolean
   signed?: boolean
-  version?: string
-  generatedAt?: string
-}
-
-type DesktopReleaseManifest = {
-  version?: string
-  mac?: ReleaseInstaller | null
-  windows?: ReleaseInstaller | null
 }
 
 function formatFileSize(bytes: number) {
@@ -58,115 +41,39 @@ function formatFileSize(bytes: number) {
 }
 
 function readReleaseManifest(path: string) {
-  const manifestPath = join(process.cwd(), "public", `${path.replace(/^\/+/, "")}.release.json`)
-
+  const fullPath = join(process.cwd(), "public", path.replace(/^\/+/, ""))
+  const manifestPath = `${fullPath}.release.json`
   if (!existsSync(manifestPath)) return null
 
   try {
-    const manifest = JSON.parse(statSync(manifestPath).isFile() ? readFileSync(manifestPath, "utf8") : "{}") as {
-      notarized?: boolean
-    }
-    return manifest.notarized ? manifest : null
+    return JSON.parse(readFileSync(manifestPath, "utf8")) as { notarized?: boolean; signed?: boolean; version?: string }
   } catch {
     return null
   }
 }
 
-function readDesktopReleaseManifest() {
-  const manifestPath = join(process.cwd(), "public", desktopReleaseManifestPath.replace(/^\/+/, ""))
-
-  if (!existsSync(manifestPath)) return null
-
-  try {
-    return JSON.parse(statSync(manifestPath).isFile() ? readFileSync(manifestPath, "utf8") : "{}") as DesktopReleaseManifest
-  } catch {
-    return null
-  }
-}
-
-function releaseHref(entry: ReleaseInstaller | null | undefined) {
-  if (!entry) return ""
-  if (entry.url) return entry.url
-  if (!entry.file) return ""
-  return entry.file.startsWith("/") ? entry.file : `/downloads/${entry.file}`
-}
-
-function getReleaseInstallerInfo(
-  entry: ReleaseInstaller | null | undefined,
-  options: { platform: "mac" | "windows"; manifestVersion?: string }
-): InstallerInfo | null {
-  const href = releaseHref(entry)
-  if (!href) return null
-
-  const sizeLabel = typeof entry?.size === "number" && Number.isFinite(entry.size) ? formatFileSize(entry.size) : null
-  const version = entry?.version || options.manifestVersion || packageJson.version
-
-  if (options.platform === "mac" && entry?.notarized !== true) {
-    return {
-      available: false,
-      href,
-      sizeLabel,
-      statusLabel: "Notarization pending",
-      blockedReason: "Mac installer is waiting for a notarized public release.",
-    }
-  }
-
-  return {
-    available: true,
-    href,
-    sizeLabel,
-    statusLabel: `Version ${version}${sizeLabel ? ` | ${sizeLabel}` : ""}`,
-  }
-}
-
-function getInstallerInfo(
-  path: string,
-  options: { requiresReleaseManifest?: boolean; releaseEntry?: ReleaseInstaller | null; manifestVersion?: string; platform?: "mac" | "windows" } = {}
-): InstallerInfo {
-  const releaseInfo = getReleaseInstallerInfo(options.releaseEntry, {
-    platform: options.platform || "windows",
-    manifestVersion: options.manifestVersion,
+function getInstallerInfo(paths: string | string[], missingStatusLabel: string): InstallerInfo {
+  const candidates = Array.isArray(paths) ? paths : [paths]
+  const path = candidates.find((candidate) => {
+    const fullPath = join(process.cwd(), "public", candidate.replace(/^\/+/, ""))
+    return existsSync(fullPath) && statSync(fullPath).isFile()
   })
 
-  if (releaseInfo) return releaseInfo
-
-  if (isDesktopBuild) {
-    return { available: false, href: path, sizeLabel: null, statusLabel: "Coming soon" }
+  if (!path) {
+    return { available: false, href: candidates[0], sizeLabel: null, statusLabel: missingStatusLabel }
   }
 
   const fullPath = join(process.cwd(), "public", path.replace(/^\/+/, ""))
-
-  if (!existsSync(fullPath)) {
-    if (options.requiresReleaseManifest) {
-      return {
-        available: false,
-        href: path,
-        sizeLabel: null,
-        statusLabel: "Notarization pending",
-        blockedReason: "Mac installer is waiting for a notarized public release.",
-      }
-    }
-
-    return { available: false, href: path, sizeLabel: null, statusLabel: "Coming soon" }
-  }
-
   const sizeLabel = formatFileSize(statSync(fullPath).size)
-
-  if (options.requiresReleaseManifest && !readReleaseManifest(path)) {
-    return {
-      available: false,
-      href: path,
-      sizeLabel,
-      statusLabel: "Notarization pending",
-      blockedReason: "Mac installer exists locally but is blocked until the notarized release manifest is present.",
-    }
-  }
+  const manifest = readReleaseManifest(path)
 
   return {
     available: true,
     href: path,
     sizeLabel,
-    statusLabel: `Version ${packageJson.version} | ${sizeLabel}`,
+    notarized: manifest?.notarized,
+    signed: manifest?.signed,
+    statusLabel: `Version ${manifest?.version || packageJson.version} | ${sizeLabel}`,
   }
 }
 
@@ -222,16 +129,22 @@ function MobileInstallCard({
   label,
   description,
   steps,
+  href,
 }: {
   label: string
   description: string
   steps: string
+  href: string
 }) {
   return (
     <div className="rounded-2xl border border-white/10 bg-black/25 p-4">
-      <div className="flex min-h-12 items-center justify-center rounded-2xl border border-cyan-300/25 bg-cyan-300/10 px-5 text-sm font-black text-cyan-100 sm:min-h-14">
-        {label}
-      </div>
+      <a
+        href={href}
+        className="flex min-h-12 items-center justify-center rounded-2xl border border-cyan-300/25 bg-cyan-300/10 px-5 text-sm font-black text-cyan-100 transition hover:border-cyan-200/50 hover:bg-cyan-300/15 sm:min-h-14"
+      >
+        Open Web App
+      </a>
+      <h2 className="mt-4 text-base font-black text-white">{label}</h2>
       <p className="mt-3 text-sm leading-6 text-white/58">{description}</p>
       <p className="mt-2 text-xs font-bold text-white/42">{steps}</p>
     </div>
@@ -239,19 +152,10 @@ function MobileInstallCard({
 }
 
 export default function DownloadPage() {
-  const desktopReleaseManifest = readDesktopReleaseManifest()
-  const macInstaller = getInstallerInfo(macInstallerPath, {
-    requiresReleaseManifest: true,
-    releaseEntry: desktopReleaseManifest?.mac,
-    manifestVersion: desktopReleaseManifest?.version,
-    platform: "mac",
-  })
-  const windowsInstaller = getInstallerInfo(windowsInstallerPath, {
-    releaseEntry: desktopReleaseManifest?.windows,
-    manifestVersion: desktopReleaseManifest?.version,
-    platform: "windows",
-  })
+  const macInstaller = getInstallerInfo(macInstallerPath, "Mac installer not found.")
+  const windowsInstaller = getInstallerInfo(windowsInstallerPaths, "Windows installer coming soon.")
   const installersReady = macInstaller.available || windowsInstaller.available
+  const showMacNotarizationWarning = macInstaller.available && macInstaller.notarized !== true
 
   return (
     <main className="min-h-dvh overflow-x-hidden bg-[#020403] px-5 py-8 text-white sm:py-10 lg:px-8">
@@ -274,25 +178,33 @@ export default function DownloadPage() {
 
           {!installersReady && (
             <div className="mt-6 break-words rounded-2xl border border-amber-300/25 bg-amber-300/10 px-4 py-3 text-sm font-bold text-amber-100">
-              {macInstaller.blockedReason || "Desktop installers are being prepared. Please contact support."}
+              Desktop installers are being prepared. Please contact support.
+            </div>
+          )}
+
+          {showMacNotarizationWarning && (
+            <div className="mt-6 break-words rounded-2xl border border-amber-300/25 bg-amber-300/10 px-4 py-3 text-sm font-bold text-amber-100">
+              macOS may show a security warning until notarization is completed.
             </div>
           )}
 
           <div className="mt-7 grid gap-3 sm:grid-cols-2">
             <InstallerCard href={macInstallerPath} info={macInstaller} label="Download for Mac" />
-            <InstallerCard href={windowsInstallerPath} info={windowsInstaller} label="Download for Windows" />
+            <InstallerCard href={windowsInstallerPaths[0]} info={windowsInstaller} label="Download for Windows" />
           </div>
 
           <div className="mt-5 grid gap-3 sm:grid-cols-2">
             <MobileInstallCard
               label="Install on Android"
-              description="Open Bezgrow in Chrome and install the web app from the browser menu."
-              steps="Chrome menu > Add to Home screen"
+              href={webAppUrl}
+              description="Open Bezgrow in Chrome, then use the browser menu to add it to your Home screen or install the app."
+              steps="Chrome menu -> Add to Home screen / Install app"
             />
             <MobileInstallCard
               label="Install on iPhone"
-              description="Open Bezgrow in Safari and add it to your Home Screen."
-              steps="Share > Add to Home Screen"
+              href={webAppUrl}
+              description="Open Bezgrow in Safari, then use Share to add it to your Home Screen."
+              steps="Share -> Add to Home Screen"
             />
           </div>
 
