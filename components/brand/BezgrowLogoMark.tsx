@@ -19,7 +19,7 @@ export function BezgrowLogoMark({
       aria-hidden="true"
     >
       <Image
-        src="/icon-192.png"
+        src="/brand/bezgrow-logo-3d.png"
         alt=""
         fill
         sizes={`${size}px`}

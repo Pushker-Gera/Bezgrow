@@ -5,6 +5,7 @@ import { usePathname, useRouter } from "next/navigation"
 import type { ReactNode } from "react"
 import { useEffect, useState } from "react"
 import { BezgrowLogoMark } from "@/components/brand/BezgrowLogoMark"
+import DesktopBackButton from "@/components/desktop/DesktopBackButton"
 import { isTauriRuntimeAsync } from "@/lib/desktop/tauri"
 import { supabase } from "@/lib/supabase"
 
@@ -138,6 +139,7 @@ export default function AdminLayout({ children }: { children: ReactNode }) {
             <div className="flex min-w-0 flex-1 flex-col overflow-hidden">
                 <header className="z-30 hidden shrink-0 border-b border-white/10 bg-black/80 px-3 py-3 backdrop-blur-xl sm:px-5 sm:py-4 lg:block lg:px-8">
                     <div className="flex items-start gap-3">
+                        <DesktopBackButton fallback="/admin" />
                         <div className="min-w-0 flex-1">
                             <h1 className="truncate text-lg font-black sm:text-2xl">Platform Administration</h1>
                             <p className="mt-1 line-clamp-2 text-sm text-neutral-500 sm:line-clamp-none">
@@ -156,6 +158,7 @@ export default function AdminLayout({ children }: { children: ReactNode }) {
                         >
                             {tabletNavOpen ? "X" : "≡"}
                         </button>
+                        <DesktopBackButton fallback="/admin" />
                         <div className="min-w-0 flex-1">
                             <h1 className="truncate text-2xl font-black">Platform Administration</h1>
                             <p className="mt-1 line-clamp-2 text-sm text-neutral-500">
@@ -185,6 +188,7 @@ export default function AdminLayout({ children }: { children: ReactNode }) {
                 <header className="z-30 shrink-0 border-b border-white/10 bg-black/90 px-4 py-3 backdrop-blur-xl md:hidden">
                     <div className="flex items-center justify-between gap-3">
                         <div className="flex min-w-0 items-center gap-3">
+                            <DesktopBackButton fallback="/admin" />
                             <BezgrowLogoMark className="h-10 w-10 shrink-0" size={40} />
                             <div className="min-w-0">
                                 <p className="truncate text-sm font-black text-white">Platform Admin</p>

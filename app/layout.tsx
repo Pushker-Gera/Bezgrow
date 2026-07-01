@@ -8,7 +8,7 @@ import EntryCalculatorAnimation from "@/components/EntryCalculatorAnimation"
 import PwaRegistration from "@/components/PwaRegistration"
 
 const siteUrl = "https://www.bezgrow.com"
-const iconVersion = "20260623"
+const iconVersion = "20260701"
 
 export const metadata: Metadata = {
   metadataBase: new URL(siteUrl),

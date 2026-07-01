@@ -1,14 +1,16 @@
 {
   "version": "0.1.0",
   "releaseNotes": [
-    "Mobile navigation, responsive ERP registers, and app update checks."
+    "Logged-in startup now opens the correct workspace route without landing/login flicker.",
+    "Mobile invoice viewing now uses a fitted preview with touch-friendly actions.",
+    "Bezgrow logo, favicon, PWA, and desktop app icons were refreshed."
   ],
   "mac": {
-    "url": "",
     "file": "/downloads/Bezgrow-mac.dmg",
-    "size": 99355612,
-    "sha256": "0418e1914163c4bfc4904e98c1a24a6c21b71c08876a27d97dd9d8c9621fded8",
+    "version": "0.1.0",
+    "sha256": "5e6102d043c45064f2cf2193d25b0f5317bf4eab84cfda50bbaea2219954fc9c",
+    "size": 101281553,
     "notarized": false,
-    "generatedAt": "2026-07-01T08:55:48.547Z"
+    "generatedAt": "2026-07-01T17:25:42.301Z"
   }
 }

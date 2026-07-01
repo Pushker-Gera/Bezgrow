@@ -5,6 +5,7 @@ import { usePathname, useRouter } from "next/navigation"
 import type { ReactNode } from "react"
 import { useEffect, useMemo, useState } from "react"
 import { BezgrowLogoMark } from "@/components/brand/BezgrowLogoMark"
+import DesktopBackButton from "@/components/desktop/DesktopBackButton"
 import OfflineStatusBar from "@/components/offline/OfflineStatusBar"
 import { clearDesktopSession } from "@/lib/desktop/session"
 import { clearOfflineData } from "@/lib/offline/db"
@@ -172,6 +173,7 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
             <div className="flex min-w-0 flex-1 flex-col overflow-hidden">
                 <header className="z-30 hidden shrink-0 border-b border-white/10 bg-black/80 px-3 py-3 backdrop-blur-xl sm:px-5 sm:py-4 lg:block lg:px-8">
                     <div className="flex items-center justify-between gap-3">
+                        <DesktopBackButton fallback="/dashboard" />
                         <div className="min-w-0 flex-1">
                             <h1 className="truncate text-lg font-black sm:text-2xl">Global ERP Workspace</h1>
                             <p className="mt-1 truncate text-sm text-neutral-500">
@@ -196,6 +198,7 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
                         >
                             {tabletNavOpen ? "X" : "≡"}
                         </button>
+                        <DesktopBackButton fallback="/dashboard" />
                         <div className="min-w-0 flex-1">
                             <h1 className="truncate text-2xl font-black">Global ERP Workspace</h1>
                             <p className="mt-1 truncate text-sm text-neutral-500">
@@ -232,6 +235,7 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
                 <header className="z-30 shrink-0 border-b border-white/10 bg-black/90 px-4 py-3 backdrop-blur-xl md:hidden">
                     <div className="flex items-center justify-between gap-3">
                         <div className="flex min-w-0 items-center gap-3">
+                            <DesktopBackButton fallback="/dashboard" />
                             <BezgrowLogoMark className="h-10 w-10 shrink-0" size={40} />
                             <div className="min-w-0">
                                 <p className="truncate text-sm font-black text-white">{businessName}</p>

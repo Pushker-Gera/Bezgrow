@@ -1,10 +1,11 @@
 "use client"
 
-import { useEffect } from "react"
+import { useEffect, useRef, useState } from "react"
 import Link from "next/link"
 import { useRouter } from "next/navigation"
 import { BezgrowLogoMark } from "@/components/brand/BezgrowLogoMark"
 import { HeroScene3D } from "@/components/landing/HeroScene3D"
+import { resolveStartupRedirect } from "@/lib/auth/startup-redirect"
 
 const capabilityGroups = [
   ["Inventory", "Stock, batches, suppliers, warehouses"],
@@ -51,8 +52,13 @@ const reasons = [
 
 export default function HomeClient() {
   const router = useRouter()
+  const [checkingSession, setCheckingSession] = useState(true)
+  const sessionCheckStarted = useRef(false)
 
   useEffect(() => {
+    if (sessionCheckStarted.current) return
+    sessionCheckStarted.current = true
+    let active = true
     const params = new URLSearchParams(window.location.search)
     const code = params.get("code")
 
@@ -64,8 +70,43 @@ export default function HomeClient() {
 
     if (window.location.hash.includes("access_token=")) {
       window.location.replace(`/auth/callback?${window.location.hash.slice(1)}`)
+      return
+    }
+
+    queueMicrotask(() => {
+      resolveStartupRedirect("/dashboard")
+        .then((redirectPath) => {
+          if (!active) return
+          if (redirectPath) {
+            window.location.replace(redirectPath)
+            return
+          }
+          setCheckingSession(false)
+        })
+        .catch(() => {
+          if (active) setCheckingSession(false)
+        })
+    })
+
+    return () => {
+      active = false
     }
   }, [])
+
+  if (checkingSession) {
+    return (
+      <div className="inventory-grid-bg flex min-h-dvh items-center justify-center px-4 text-white">
+        <div className="w-full max-w-sm rounded-[22px] border border-white/10 bg-neutral-950/85 p-5 shadow-[0_28px_120px_rgba(0,0,0,0.45)] backdrop-blur-xl">
+          <div className="mb-5 flex items-center gap-3">
+            <BezgrowLogoMark className="h-10 w-10" size={40} priority />
+            <span className="text-base font-black">Bezgrow</span>
+          </div>
+          <h1 className="text-2xl font-black">Opening Bezgrow</h1>
+          <p className="mt-2 text-sm leading-6 text-white/55">Checking your saved session.</p>
+        </div>
+      </div>
+    )
+  }
 
   return (
     <>

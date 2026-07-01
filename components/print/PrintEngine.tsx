@@ -381,6 +381,15 @@ export function PrintEngine({
     window.open(url, "_blank", "noopener,noreferrer")
   }
 
+  function goBack() {
+    if (window.history.length > 1) {
+      window.history.back()
+      return
+    }
+
+    window.location.href = "/dashboard/invoices"
+  }
+
   const template = {
     thermal: <ThermalTemplate invoice={effectiveInvoice} settings={settings} />,
     a4: <A4Template invoice={effectiveInvoice} settings={settings} />,
@@ -489,11 +498,15 @@ export function PrintEngine({
 
         <main className={`print-preview-stage print-format-${format} font-${settings.fontSize} margin-${settings.margins} ${settings.blackAndWhite ? "bw-mode" : ""}`}>
           {!publicMode && <div className="mobile-toolbar no-print">
-            <select value={format} onChange={(event) => setFormat(event.target.value as PrintFormat)}>
+            <select className="mobile-format-select" value={format} onChange={(event) => setFormat(event.target.value as PrintFormat)}>
               {(Object.keys(formatLabels) as PrintFormat[]).map((key) => <option key={key} value={key}>{formatLabels[key]}</option>)}
             </select>
-            <button onClick={printInvoice}>Print</button>
-            <button onClick={whatsappInvoice}>WhatsApp</button>
+            <div className="mobile-action-grid">
+              <button onClick={goBack}>Back</button>
+              <button onClick={downloadPdf}>Download PDF</button>
+              <button onClick={printInvoice}>Print</button>
+              <button onClick={whatsappInvoice}>WhatsApp</button>
+            </div>
           </div>}
           <div className="preview-scroll">
             <div className="print-document" style={{ transform: publicMode ? undefined : `scale(${zoom})` }}>
@@ -538,7 +551,9 @@ function PrintEngineStyles({ format, thermalWidth }: { format: PrintFormat; ther
       .print-notice { border: 1px solid rgba(251,191,36,.35); color: #fde68a; background: rgba(251,191,36,.1); border-radius: 12px; padding: 10px; font-size: 13px; }
       .history-list { color: #94a3b8; font-size: 12px; display: grid; gap: 7px; }
       .print-preview-stage { min-width: 0; background: radial-gradient(circle at top left, rgba(34,211,238,.08), transparent 32%), #111827; }
-      .mobile-toolbar { display: none; gap: 8px; padding: 12px; position: sticky; top: 0; z-index: 10; background: #070b12; }
+      .mobile-toolbar { display: none; gap: 10px; padding: 12px; position: sticky; top: 0; z-index: 10; background: #070b12; border-bottom: 1px solid rgba(255,255,255,.1); }
+      .mobile-format-select { width: 100%; min-width: 0; }
+      .mobile-action-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
       .preview-scroll { height: 100dvh; overflow: auto; padding: 32px; display: flex; justify-content: center; align-items: flex-start; background: #111827; }
       .print-format-thermal .preview-scroll { background: #111827; justify-content: center; }
       .print-document { transform-origin: top center; transition: transform .18s ease; }
@@ -698,8 +713,23 @@ function PrintEngineStyles({ format, thermalWidth }: { format: PrintFormat; ther
       @media (max-width: 900px) {
         .enterprise-print-shell { grid-template-columns: 1fr; }
         .print-control-panel { display: none; }
-        .mobile-toolbar { display: grid; grid-template-columns: 1fr auto auto; }
-        .preview-scroll { height: calc(100dvh - 66px); padding: 18px; justify-content: flex-start; }
+        .mobile-toolbar { display: grid; grid-template-columns: 1fr; }
+        .mobile-toolbar button { min-height: 44px; padding: 0 10px; font-size: 12px; white-space: normal; }
+        .preview-scroll { height: calc(100dvh - 156px); overflow-x: hidden; padding: 12px; justify-content: center; }
+        .print-preview-stage:not(.print-format-thermal) .print-document { width: min(100%, 210mm); transform: none !important; transition: none; }
+        .print-preview-stage:not(.print-format-thermal) .invoice-paper { width: 100%; max-width: 210mm; min-height: auto; margin: 0 auto; }
+        .print-preview-stage .print-a4,
+        .print-preview-stage .print-half-compact,
+        .print-preview-stage .print-half-top { width: 100% !important; min-height: auto; padding: 14px !important; }
+        .print-preview-stage .top-half-content { height: auto; min-height: auto; max-height: none; }
+        .print-preview-stage .print-header-block,
+        .print-preview-stage .customer-grid,
+        .print-preview-stage .total-grid,
+        .print-preview-stage .payment-grid { grid-template-columns: 1fr !important; }
+        .print-preview-stage .brand-block h1 { font-size: 24px; }
+        .print-preview-stage .invoice-meta-card h2 { font-size: 18px; }
+        .print-preview-stage .item-table { display: none !important; }
+        .print-preview-stage .mobile-item-cards { display: grid; gap: 10px; margin-top: 14px; }
         .public-invoice-shell .preview-scroll { height: auto; min-height: 100dvh; padding: 10px; justify-content: center; background: #f8fafc; }
         .public-invoice-shell .print-document { width: 100%; }
         .public-invoice-shell .print-a4 { width: 100% !important; min-height: auto; padding: 14px !important; }

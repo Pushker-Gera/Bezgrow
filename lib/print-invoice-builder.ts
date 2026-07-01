@@ -114,7 +114,7 @@ export function buildPrintInvoice({
       email: stringFrom(organization, ["email", "support_email"]) || "-",
       website: stringFrom(organization, ["website"]) || "bezgrow.com",
       address: stringFrom(organization, ["address", "business_address"]) || "-",
-      logoUrl: stringFrom(organization, ["logo_url", "logo"]),
+      logoUrl: stringFrom(organization, ["logo_url", "logo"]) || "/brand/bezgrow-logo-3d.png",
       branchName: stringFrom(organization, ["branch_name"]) || "Main Branch",
     },
     customer: {

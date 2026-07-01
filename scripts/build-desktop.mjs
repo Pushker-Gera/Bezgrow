@@ -220,16 +220,69 @@ function copyGeneratedInstallersForDownloads() {
 
   if (existsSync(dmgPath)) {
     copyFileSync(dmgPath, publicMacDmg);
+    const bytes = readFileSync(publicMacDmg);
+    const sha256 = createHash("sha256").update(bytes).digest("hex");
+    const generatedAt = new Date().toISOString();
+    const notarized = Boolean(publicMacBuild);
+    writeFileSync(
+      publicMacReleaseManifest,
+      JSON.stringify(
+        {
+          file: "/downloads/Bezgrow-mac.dmg",
+          version: packageVersion,
+          sha256,
+          size: bytes.length,
+          notarized,
+          generatedAt,
+        },
+        null,
+        2
+      )
+    );
+    writeDesktopReleaseManifest({
+      mac: {
+        file: "/downloads/Bezgrow-mac.dmg",
+        version: packageVersion,
+        sha256,
+        size: bytes.length,
+        notarized,
+        generatedAt,
+      },
+    });
     console.log(`Copied ${dmgPath} to ${publicMacDmg}`);
   }
 
   if (existsSync(windowsExePath)) {
     copyFileSync(windowsExePath, publicWindowsExe);
+    const bytes = readFileSync(publicWindowsExe);
+    const sha256 = createHash("sha256").update(bytes).digest("hex");
+    writeDesktopReleaseManifest({
+      windows: {
+        file: "/downloads/Bezgrow-windows.exe",
+        version: packageVersion,
+        sha256,
+        size: bytes.length,
+        signed: Boolean(process.env.BEZGROW_WINDOWS_SIGNED === "1"),
+        generatedAt: new Date().toISOString(),
+      },
+    });
     console.log(`Copied ${windowsExePath} to ${publicWindowsExe}`);
   }
 
   if (existsSync(windowsMsiPath)) {
     copyFileSync(windowsMsiPath, publicWindowsMsi);
+    const bytes = readFileSync(publicWindowsMsi);
+    const sha256 = createHash("sha256").update(bytes).digest("hex");
+    writeDesktopReleaseManifest({
+      windows: {
+        file: "/downloads/Bezgrow-windows.msi",
+        version: packageVersion,
+        sha256,
+        size: bytes.length,
+        signed: Boolean(process.env.BEZGROW_WINDOWS_SIGNED === "1"),
+        generatedAt: new Date().toISOString(),
+      },
+    });
     console.log(`Copied ${windowsMsiPath} to ${publicWindowsMsi}`);
   }
 }

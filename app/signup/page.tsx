@@ -1,8 +1,9 @@
 "use client"
 
-import { useState } from "react"
+import { useEffect, useRef, useState } from "react"
 import { useRouter } from "next/navigation"
 import { BezgrowLogoMark } from "@/components/brand/BezgrowLogoMark"
+import { resolveStartupRedirect } from "@/lib/auth/startup-redirect"
 
 export default function SignupPage() {
 
@@ -15,8 +16,35 @@ export default function SignupPage() {
     const [password, setPassword] = useState("")
     const [termsAccepted, setTermsAccepted] = useState(false)
     const [loading, setLoading] = useState(false)
+    const [checkingSession, setCheckingSession] = useState(true)
     const [statusMessage, setStatusMessage] = useState("")
     const [errorMessage, setErrorMessage] = useState("")
+    const sessionCheckStarted = useRef(false)
+
+    useEffect(() => {
+        if (sessionCheckStarted.current) return
+        sessionCheckStarted.current = true
+        let active = true
+
+        queueMicrotask(() => {
+            resolveStartupRedirect("/dashboard")
+                .then((redirectPath) => {
+                    if (!active) return
+                    if (redirectPath) {
+                        window.location.replace(redirectPath)
+                        return
+                    }
+                    setCheckingSession(false)
+                })
+                .catch(() => {
+                    if (active) setCheckingSession(false)
+                })
+        })
+
+        return () => {
+            active = false
+        }
+    }, [])
 
     async function signup() {
 
@@ -93,6 +121,21 @@ export default function SignupPage() {
 
         }
 
+    }
+
+    if (checkingSession) {
+        return (
+            <div className="inventory-grid-bg flex min-h-dvh items-center justify-center px-3 py-5 text-white sm:px-5 sm:py-8">
+                <div className="w-full max-w-md rounded-[22px] border border-white/10 bg-neutral-950/85 p-5 shadow-[0_28px_120px_rgba(0,0,0,0.45)] backdrop-blur-xl sm:rounded-[28px] sm:p-8">
+                    <div className="mb-5 flex items-center gap-3">
+                        <BezgrowLogoMark className="h-10 w-10" size={40} priority />
+                        <span className="text-base font-black">Bezgrow</span>
+                    </div>
+                    <h1 className="text-2xl font-black">Opening Bezgrow</h1>
+                    <p className="mt-2 text-sm leading-6 text-gray-400">Checking your saved session.</p>
+                </div>
+            </div>
+        )
     }
 
     return (

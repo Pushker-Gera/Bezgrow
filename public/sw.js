@@ -1,4 +1,4 @@
-const CACHE_VERSION = "bezgrow-pwa-v3"
+const CACHE_VERSION = "bezgrow-pwa-v4-logo-20260701"
 const STATIC_CACHE = `${CACHE_VERSION}:static`
 const SHELL_CACHE = `${CACHE_VERSION}:shell`
 
@@ -18,6 +18,7 @@ const SHELL_URLS = [
   "/android-chrome-192x192.png",
   "/android-chrome-512x512.png",
   "/maskable-icon-512x512.png",
+  "/brand/bezgrow-logo-3d.png",
   "/brand/bezgrow-growth-logo.png",
   "/icons/icon-96.png",
   "/icons/icon-192.png",
@@ -66,6 +67,7 @@ function isStaticAsset(requestUrl) {
     requestUrl.pathname === "/android-chrome-192x192.png" ||
     requestUrl.pathname === "/android-chrome-512x512.png" ||
     requestUrl.pathname === "/maskable-icon-512x512.png" ||
+    requestUrl.pathname === "/brand/bezgrow-logo-3d.png" ||
     requestUrl.pathname === "/brand/bezgrow-growth-logo.png" ||
     requestUrl.pathname === "/manifest.json" ||
     requestUrl.pathname === "/robots.txt" ||
