@@ -2,8 +2,10 @@
 
 import { useEffect, useMemo, useState } from "react"
 import { useDebounce } from "use-debounce"
+import AppUpdatesPanel from "@/components/AppUpdatesPanel"
 import { readStoredPrintSettings, saveStoredPrintSettings } from "@/components/print/settings/defaults"
 import type { PrintFormat, PrintSettings } from "@/components/print/types"
+import { isTauriRuntimeAsync } from "@/lib/desktop/tauri"
 import { getOrganizationId } from "@/lib/getOrganization"
 import { createOfflineId, getOfflineData, putOfflineData, queueOfflineAction } from "@/lib/offline/db"
 import { shouldSaveOffline } from "@/lib/offline/network"
@@ -197,9 +199,12 @@ export default function SettingsPage() {
       data: { session },
     } = await supabase.auth.getSession()
     const headers = session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : undefined
+    const bootstrapPath = "/api/workspace/bootstrap"
+    const desktopRuntime = await isTauriRuntimeAsync()
+    const bootstrapUrl = desktopRuntime ? `/api/desktop-proxy?path=${encodeURIComponent(bootstrapPath)}` : bootstrapPath
     try {
       const [workspaceResponse, invoiceResponse] = await Promise.all([
-        fetch("/api/workspace/bootstrap", { headers, cache: "no-store" }),
+        fetch(bootstrapUrl, { headers, cache: "no-store" }),
         fetch(`/api/invoices/list?${new URLSearchParams({ limit: "100", organization_id: orgId }).toString()}`, { headers, cache: "no-store" }),
       ])
       const workspace = (await workspaceResponse.json()) as WorkspaceResponse
@@ -657,6 +662,8 @@ export default function SettingsPage() {
                 ))}
               </div>
             </div>
+
+            <AppUpdatesPanel />
 
             <div className="rounded-[36px] border border-white/10 bg-white/[0.035] p-7 backdrop-blur-2xl">
               <h2 className="text-3xl font-black">ERP Feature Modules</h2>

@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from "react"
 import { useRouter } from "next/navigation"
+import { isTauriRuntimeAsync } from "@/lib/desktop/tauri"
 import { supabase } from "@/lib/supabase"
 
 export default function PendingApprovalPage() {
@@ -31,7 +32,9 @@ export default function PendingApprovalPage() {
         data: { session },
       } = await supabase.auth.getSession()
 
-      const response = await fetch("/api/workspace/bootstrap", {
+      const bootstrapPath = "/api/workspace/bootstrap"
+      const desktopRuntime = await isTauriRuntimeAsync()
+      const response = await fetch(desktopRuntime ? `/api/desktop-proxy?path=${encodeURIComponent(bootstrapPath)}` : bootstrapPath, {
         headers: session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : undefined,
         cache: "no-store",
       })

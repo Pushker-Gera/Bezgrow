@@ -748,26 +748,26 @@ export default function CreateInvoicePage() {
         <div className="absolute bottom-[-180px] right-[-160px] h-[560px] w-[560px] rounded-full bg-blue-500/10 blur-[190px] animate-pulse" />
       </div>
 
-      <main className="relative z-10 mx-auto max-w-[1800px] space-y-8 px-5 py-6 lg:px-8">
-        <section className="inventory-sheen rounded-[40px] border border-white/10 bg-white/[0.035] p-8 shadow-[0_0_90px_rgba(0,0,0,0.5)] backdrop-blur-2xl lg:p-10">
+      <main className="relative z-10 mx-auto max-w-[1800px] space-y-5 px-4 py-4 sm:space-y-8 sm:px-5 sm:py-6 lg:px-8">
+        <section className="inventory-sheen rounded-lg border border-white/10 bg-white/[0.035] p-5 shadow-[0_0_90px_rgba(0,0,0,0.5)] backdrop-blur-2xl sm:rounded-[40px] sm:p-8 lg:p-10">
           <div className="flex flex-col gap-8 xl:flex-row xl:items-end xl:justify-between">
             <div>
               <div className="mb-5 inline-flex rounded-full border border-cyan-400/20 bg-cyan-500/10 px-4 py-2 text-xs font-semibold uppercase tracking-[0.22em] text-cyan-200">
                 Global Invoice Studio
               </div>
-              <h1 className="max-w-6xl text-4xl font-black leading-tight tracking-tight md:text-6xl">
+              <h1 className="max-w-6xl text-3xl font-black leading-tight tracking-tight sm:text-4xl md:text-6xl">
                 Create GST and non-GST bills with inventory intelligence.
               </h1>
-              <p className="mt-5 max-w-4xl text-lg leading-8 text-neutral-400">
+              <p className="mt-4 max-w-4xl text-base leading-7 text-neutral-400 sm:mt-5 sm:text-lg sm:leading-8">
                 Build professional invoices with products, discounts, payment terms, due dates,
                 optional GST, shipping metadata, stock checks, and print-ready output.
               </p>
             </div>
             <div className="grid w-full gap-4 sm:grid-cols-2 xl:w-[420px]">
-              <Link href="/dashboard/invoices" className="flex min-h-[82px] items-center justify-center rounded-[28px] border border-white/10 bg-white/[0.06] px-6 text-xl font-black">
+              <Link href="/dashboard/invoices" className="flex min-h-14 items-center justify-center rounded-lg border border-white/10 bg-white/[0.06] px-5 text-base font-black sm:min-h-[82px] sm:rounded-[28px] sm:px-6 sm:text-xl">
                 Invoice Register
               </Link>
-              <Link href="/dashboard/billing" className="flex min-h-[82px] items-center justify-center rounded-[28px] border border-white/10 bg-white/[0.06] px-6 text-xl font-black">
+              <Link href="/dashboard/billing" className="flex min-h-14 items-center justify-center rounded-lg border border-white/10 bg-white/[0.06] px-5 text-base font-black sm:min-h-[82px] sm:rounded-[28px] sm:px-6 sm:text-xl">
                 Billing Hub
               </Link>
             </div>
@@ -792,18 +792,18 @@ export default function CreateInvoicePage() {
             ["Low Stock", lowStockProducts.length, "text-amber-200", "Needs attention"],
             ["Out Of Stock", outOfStockProducts.length, "text-red-200", "Cannot fulfill"],
           ].map(([label, value, color, helper]) => (
-            <div key={label} className="rounded-[32px] border border-white/10 bg-gradient-to-br from-zinc-950 via-black to-zinc-950 p-7">
+            <div key={label} className="rounded-lg border border-white/10 bg-gradient-to-br from-zinc-950 via-black to-zinc-950 p-4 sm:rounded-[32px] sm:p-7">
               <p className="text-xs font-semibold uppercase tracking-[0.2em] text-neutral-500">{label}</p>
-              <p className={`mt-5 text-4xl font-black tracking-tight ${color}`}>{value}</p>
-              <p className="mt-4 text-sm text-neutral-500">{helper}</p>
+              <p className={`mt-4 text-3xl font-black tracking-tight sm:mt-5 sm:text-4xl ${color}`}>{value}</p>
+              <p className="mt-3 text-sm text-neutral-500 sm:mt-4">{helper}</p>
             </div>
           ))}
         </section>
 
         <section className="grid grid-cols-1 gap-6 2xl:grid-cols-[1fr,420px]">
           <div className="space-y-6">
-            <div className="rounded-[36px] border border-white/10 bg-white/[0.035] p-7 backdrop-blur-2xl">
-              <h2 className="text-3xl font-black">Invoice Configuration</h2>
+            <div className="rounded-lg border border-white/10 bg-white/[0.035] p-5 backdrop-blur-2xl sm:rounded-[36px] sm:p-7">
+              <h2 className="text-2xl font-black sm:text-3xl">Invoice Configuration</h2>
               <div className="mt-6 grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
                 <FieldLabel label="Customer">
                   <select value={selectedCustomer} onChange={(e) => setSelectedCustomer(e.target.value)} className={inputClass()}>
@@ -881,16 +881,16 @@ export default function CreateInvoicePage() {
               </FieldLabel>
             </div>
 
-            <div className="rounded-[36px] border border-white/10 bg-white/[0.035] p-7 backdrop-blur-2xl">
+            <div className="rounded-lg border border-white/10 bg-white/[0.035] p-5 backdrop-blur-2xl sm:rounded-[36px] sm:p-7">
               <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
                 <div>
-                  <h2 className="text-3xl font-black">Invoice Items</h2>
+                  <h2 className="text-2xl font-black sm:text-3xl">Invoice Items</h2>
                   <p className="mt-2 text-sm text-neutral-500">Responsive product rows with stock, batch, barcode, discount, and tax control.</p>
                 </div>
-                <button onClick={addItem} className="h-14 rounded-2xl bg-white px-6 font-black text-black">Add Product</button>
+                <button onClick={addItem} className="h-14 w-full rounded-lg bg-white px-6 font-black text-black md:w-auto md:rounded-2xl">Add Product</button>
               </div>
 
-              <div className="mt-6 rounded-[28px] border border-cyan-400/20 bg-cyan-500/10 p-5">
+              <div className="mt-6 rounded-lg border border-cyan-400/20 bg-cyan-500/10 p-4 sm:rounded-[28px] sm:p-5">
                 <p className="text-xs font-bold uppercase tracking-[0.2em] text-cyan-200">
                   Retail Barcode Scanner
                 </p>
@@ -920,7 +920,7 @@ export default function CreateInvoicePage() {
                   </FieldLabel>
                   <button
                     onClick={handleBarcodeScan}
-                    className="mt-[27px] h-14 rounded-2xl bg-cyan-400 px-6 font-black text-black"
+                    className="h-14 rounded-lg bg-cyan-400 px-6 font-black text-black lg:mt-[27px] lg:rounded-2xl"
                   >
                     Add Scan
                   </button>
@@ -939,8 +939,8 @@ export default function CreateInvoicePage() {
                   const lineTotal = lineBase - discountAmount + lineTax
 
                   return (
-                    <div key={item.id} className="rounded-[30px] border border-white/10 bg-black/40 p-5">
-                      <div className="grid grid-cols-1 gap-4 xl:grid-cols-[1fr,120px,140px,120px,130px,150px]">
+                    <div key={item.id} className="rounded-lg border border-white/10 bg-black/40 p-4 sm:rounded-[30px] sm:p-5">
+                      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-[1fr,120px,140px,120px,130px,150px]">
                         <FieldLabel label="Product">
                           <select value={item.product_id} onChange={(e) => selectProduct(item.id, e.target.value)} className={inputClass()}>
                             <option value="">Select product</option>
@@ -964,7 +964,7 @@ export default function CreateInvoicePage() {
                           <input type="number" min={0} max={100} value={item.discount_percent} onChange={(e) => updateItem(item.id, "discount_percent", Math.min(100, Math.max(0, Number(e.target.value) || 0)))} className={inputClass()} />
                         </FieldLabel>
                         <FieldLabel label="Line Total">
-                          <div className="flex h-14 items-center justify-between rounded-2xl border border-cyan-400/20 bg-cyan-500/10 px-5 font-black text-cyan-200">
+                          <div className="flex h-14 items-center justify-between rounded-lg border border-cyan-400/20 bg-cyan-500/10 px-5 font-black text-cyan-200 sm:rounded-2xl">
                             {money(lineTotal)}
                           </div>
                         </FieldLabel>
@@ -977,7 +977,7 @@ export default function CreateInvoicePage() {
                           {product?.expiry_date && hasExpiryTracking && <span>Expiry {new Date(product.expiry_date).toLocaleDateString()}</span>}
                           {invoiceMode === "no_gst" && <span className="text-cyan-200">GST disabled for this bill</span>}
                         </div>
-                        <button onClick={() => removeItem(item.id)} className="w-fit rounded-xl border border-red-400/20 px-4 py-2 font-semibold text-red-300">
+                        <button onClick={() => removeItem(item.id)} className="min-h-11 w-full rounded-lg border border-red-400/20 px-4 py-2 font-semibold text-red-300 md:w-fit md:rounded-xl">
                           Remove
                         </button>
                       </div>
@@ -989,8 +989,8 @@ export default function CreateInvoicePage() {
           </div>
 
           <aside className="space-y-6">
-            <div className="sticky top-6 rounded-[36px] border border-cyan-400/20 bg-cyan-500/10 p-7 shadow-[0_0_60px_rgba(34,211,238,0.12)]">
-              <h2 className="text-3xl font-black">Bill Summary</h2>
+            <div className="rounded-lg border border-cyan-400/20 bg-cyan-500/10 p-5 shadow-[0_0_60px_rgba(34,211,238,0.12)] sm:rounded-[36px] sm:p-7 lg:sticky lg:top-6">
+              <h2 className="text-2xl font-black sm:text-3xl">Bill Summary</h2>
               <div className="mt-7 space-y-4 text-sm">
                 <div className="flex justify-between"><span className="text-neutral-400">Mode</span><span>{invoiceMode === "no_gst" ? "Without GST" : "GST Bill"}</span></div>
                 <div className="flex justify-between"><span className="text-neutral-400">Lines</span><span>{items.length}</span></div>
@@ -1007,10 +1007,10 @@ export default function CreateInvoicePage() {
                 </div>
               </div>
               <div className="mt-7 grid grid-cols-1 gap-3 sm:grid-cols-2">
-                <button onClick={() => void saveInvoice(false)} disabled={loading} className="h-16 rounded-2xl bg-white text-lg font-black text-black disabled:opacity-50">
+                <button onClick={() => void saveInvoice(false)} disabled={loading} className="h-14 rounded-lg bg-white text-base font-black text-black disabled:opacity-50 sm:h-16 sm:rounded-2xl sm:text-lg">
                   {loading ? "Saving..." : "Save Invoice"}
                 </button>
-                <button onClick={() => void saveInvoice(true)} disabled={loading} className="h-16 rounded-2xl bg-gradient-to-r from-cyan-400 to-blue-600 text-lg font-black text-black shadow-[0_20px_70px_rgba(34,211,238,0.28)] disabled:opacity-50">
+                <button onClick={() => void saveInvoice(true)} disabled={loading} className="h-14 rounded-lg bg-gradient-to-r from-cyan-400 to-blue-600 text-base font-black text-black shadow-[0_20px_70px_rgba(34,211,238,0.28)] disabled:opacity-50 sm:h-16 sm:rounded-2xl sm:text-lg">
                   {loading ? "Saving..." : "Save & Print"}
                 </button>
               </div>

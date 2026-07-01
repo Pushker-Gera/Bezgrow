@@ -318,7 +318,7 @@ export default function Dashboard() {
             meta: `${metrics.fulfillmentRate}% fulfillment`,
             accent: "from-amber-200 to-yellow-500",
             valueClass: "text-amber-200",
-            href: "/dashboard/reports",
+            href: "/dashboard/charts",
         },
     ]
 
@@ -328,7 +328,7 @@ export default function Dashboard() {
         ["Inventory Hub", "/dashboard/inventory", "Warehouse"],
         ["Customers", "/dashboard/customers", "CRM"],
         ["Orders", "/dashboard/orders", "Fulfillment"],
-        ["Reports", "/dashboard/reports", "Analytics"],
+        ["Reports", "/dashboard/charts", "Analytics"],
     ]
 
     const readiness = [
@@ -377,7 +377,7 @@ export default function Dashboard() {
                                     Inventory + Billing + CRM
                                 </span>
                             </div>
-                            <h1 className="mt-5 max-w-5xl text-4xl font-black tracking-tight md:text-6xl">
+                            <h1 className="mt-5 max-w-5xl text-3xl font-black tracking-tight sm:text-4xl md:text-6xl">
                                 Operations Dashboard
                             </h1>
                             <p className="mt-4 max-w-4xl text-base leading-7 text-neutral-300">
@@ -433,13 +433,13 @@ export default function Dashboard() {
                         <Link
                             key={card.label}
                             href={card.href}
-                            className="group relative flex min-h-[170px] flex-col overflow-hidden rounded-lg border border-white/10 bg-black/70 p-5 shadow-xl backdrop-blur transition-all duration-300 hover:-translate-y-1 hover:border-white/20"
+                            className="group relative flex min-h-[148px] flex-col overflow-hidden rounded-lg border border-white/10 bg-black/70 p-4 shadow-xl backdrop-blur transition-all duration-300 hover:-translate-y-1 hover:border-white/20 sm:min-h-[170px] sm:p-5"
                         >
                             <div className={`absolute inset-x-0 top-0 h-1 bg-gradient-to-r ${card.accent}`} />
                             <p className="text-xs uppercase tracking-[0.18em] text-neutral-500">
                                 {card.label}
                             </p>
-                            <h2 className={`mt-5 text-4xl font-black tracking-tight ${card.valueClass}`}>
+                            <h2 className={`mt-4 text-3xl font-black tracking-tight sm:mt-5 sm:text-4xl ${card.valueClass}`}>
                                 {card.value}
                             </h2>
                             <p className="mt-auto pt-5 text-xs text-neutral-500">{card.meta}</p>

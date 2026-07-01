@@ -820,7 +820,7 @@ export default function InventoryPage() {
                             </select>
                         </div>
 
-                        <div className="flex flex-wrap gap-3">
+                        <div className="grid w-full grid-cols-2 gap-3 sm:flex sm:w-auto sm:flex-wrap">
                             <button
                                 onClick={() => setShowAddStockModal(true)}
                                 className="h-12 rounded-lg bg-emerald-400 px-5 text-sm font-bold text-black shadow-lg shadow-emerald-500/20 transition-all duration-300 hover:-translate-y-1 hover:bg-emerald-300"
@@ -893,7 +893,55 @@ export default function InventoryPage() {
                             </div>
                         </div>
 
-                        <div className="mt-4 overflow-x-auto">
+                        <div className="mt-4 space-y-3 lg:hidden">
+                            {filteredProducts.length === 0 && (
+                                <div className="rounded-lg border border-white/10 bg-white/[0.03] p-6 text-center text-sm text-neutral-500">
+                                    No inventory products found.
+                                </div>
+                            )}
+
+                            {filteredProducts.map((product) => {
+                                const isLow = product.currentStock <= Number(product.min_stock ?? 5)
+                                const isOut = product.currentStock <= 0
+
+                                return (
+                                    <article key={product.id} className="rounded-lg border border-white/10 bg-white/[0.045] p-4 shadow-xl">
+                                        <div className="flex items-start justify-between gap-3">
+                                            <div className="min-w-0">
+                                                <h3 className="truncate text-base font-black text-white">{product.name}</h3>
+                                                <p className="mt-1 truncate text-xs text-neutral-500">
+                                                    SKU {product.sku || "N/A"} | {product.category || "General"}
+                                                </p>
+                                            </div>
+                                            <span className={`shrink-0 rounded-full border px-3 py-1 text-xs font-black ${isOut ? "border-red-400/30 bg-red-400/10 text-red-200" : isLow ? "border-amber-400/30 bg-amber-400/10 text-amber-200" : "border-emerald-400/30 bg-emerald-400/10 text-emerald-200"}`}>
+                                                {product.currentStock}
+                                            </span>
+                                        </div>
+
+                                        <div className="mt-4 grid grid-cols-2 gap-3 text-sm">
+                                            <div className="rounded-lg border border-white/10 bg-black/30 p-3">
+                                                <p className="text-xs text-neutral-500">Minimum</p>
+                                                <p className="mt-1 font-black text-white">{product.min_stock ?? 5}</p>
+                                            </div>
+                                            <div className="rounded-lg border border-white/10 bg-black/30 p-3">
+                                                <p className="text-xs text-neutral-500">Sold</p>
+                                                <p className="mt-1 font-black text-sky-200">{product.soldQuantity}</p>
+                                            </div>
+                                            <div className="rounded-lg border border-white/10 bg-black/30 p-3">
+                                                <p className="text-xs text-neutral-500">Warehouse</p>
+                                                <p className="mt-1 truncate font-semibold text-neutral-100">{product.warehouseName}</p>
+                                            </div>
+                                            <div className="rounded-lg border border-white/10 bg-black/30 p-3">
+                                                <p className="text-xs text-neutral-500">Value</p>
+                                                <p className="mt-1 font-black text-emerald-200">{money(product.inventoryValue)}</p>
+                                            </div>
+                                        </div>
+                                    </article>
+                                )
+                            })}
+                        </div>
+
+                        <div className="mt-4 hidden overflow-x-auto lg:block">
                             <table className="w-full min-w-[980px] border-separate border-spacing-y-2 text-sm">
                                 <thead className="text-left text-xs uppercase tracking-[0.16em] text-neutral-500">
                                     <tr>

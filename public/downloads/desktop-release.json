@@ -1,0 +1,14 @@
+{
+  "version": "0.1.0",
+  "releaseNotes": [
+    "Mobile navigation, responsive ERP registers, and app update checks."
+  ],
+  "mac": {
+    "url": "",
+    "file": "/downloads/Bezgrow-mac.dmg",
+    "size": 99355612,
+    "sha256": "0418e1914163c4bfc4904e98c1a24a6c21b71c08876a27d97dd9d8c9621fded8",
+    "notarized": false,
+    "generatedAt": "2026-07-01T08:55:48.547Z"
+  }
+}

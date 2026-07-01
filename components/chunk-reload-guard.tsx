@@ -1,7 +1,7 @@
 "use client"
 
 import { useEffect } from "react"
-import { isTauriRuntime } from "@/lib/desktop/tauri"
+import { isTauriRuntimeAsync } from "@/lib/desktop/tauri"
 
 function isChunkLoadError(reason: unknown) {
   if (!reason) return false
@@ -21,8 +21,8 @@ function isChunkLoadError(reason: unknown) {
 
 export default function ChunkReloadGuard() {
   useEffect(() => {
-    if (isTauriRuntime()) return
-
+    let cancelled = false
+    let removeListeners: (() => void) | undefined
     const reloadOnce = () => {
       const key = "bezgrow:chunk-reload"
       if (sessionStorage.getItem(key) === "1") return
@@ -46,13 +46,21 @@ export default function ChunkReloadGuard() {
       }
     }
 
-    clearReloadFlag()
-    window.addEventListener("error", onError)
-    window.addEventListener("unhandledrejection", onUnhandledRejection)
+    void isTauriRuntimeAsync().then((desktopRuntime) => {
+      if (cancelled || desktopRuntime) return
+
+      clearReloadFlag()
+      window.addEventListener("error", onError)
+      window.addEventListener("unhandledrejection", onUnhandledRejection)
+      removeListeners = () => {
+        window.removeEventListener("error", onError)
+        window.removeEventListener("unhandledrejection", onUnhandledRejection)
+      }
+    })
 
     return () => {
-      window.removeEventListener("error", onError)
-      window.removeEventListener("unhandledrejection", onUnhandledRejection)
+      cancelled = true
+      removeListeners?.()
     }
   }, [])
 

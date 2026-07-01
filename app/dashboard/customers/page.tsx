@@ -756,7 +756,81 @@ export default function CustomersPage() {
             </div>
           ) : (
             <>
-              <div className="mt-4 overflow-x-auto">
+              <div className="mt-4 space-y-3 lg:hidden">
+                {paginatedCustomers.length === 0 && (
+                  <div className="rounded-lg border border-white/10 bg-white/[0.03] p-6 text-center text-sm text-neutral-500">
+                    No customers found for the selected filters.
+                  </div>
+                )}
+
+                {paginatedCustomers.map((customer) => (
+                  <article key={customer.id} className="rounded-lg border border-white/10 bg-white/[0.045] p-4 shadow-xl">
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="min-w-0">
+                        <h3 className="truncate text-base font-black text-white">{customer.name}</h3>
+                        <p className="mt-1 truncate text-xs capitalize text-neutral-500">
+                          {customer.customer_type || "retail"} | {customer.phone || "No phone"}
+                        </p>
+                      </div>
+                      <span className={`shrink-0 rounded-full border px-3 py-1 text-xs font-black ${customer.is_active ? "border-emerald-400/20 bg-emerald-400/10 text-emerald-200" : "border-red-400/20 bg-red-400/10 text-red-200"}`}>
+                        {customer.is_active ? "Active" : "Inactive"}
+                      </span>
+                    </div>
+
+                    <div className="mt-4 grid grid-cols-2 gap-3 text-sm">
+                      <div className="rounded-lg border border-white/10 bg-black/30 p-3">
+                        <p className="text-xs text-neutral-500">Due / Revenue</p>
+                        <p className="mt-1 font-black text-emerald-200">{money(customer.invoiceRevenue)}</p>
+                      </div>
+                      <div className="rounded-lg border border-white/10 bg-black/30 p-3">
+                        <p className="text-xs text-neutral-500">Invoices</p>
+                        <p className="mt-1 font-black text-sky-200">{customer.invoiceCount}</p>
+                      </div>
+                      <div className="rounded-lg border border-white/10 bg-black/30 p-3">
+                        <p className="text-xs text-neutral-500">Email</p>
+                        <p className="mt-1 truncate font-semibold text-neutral-100">{customer.email || "-"}</p>
+                      </div>
+                      <div className="rounded-lg border border-white/10 bg-black/30 p-3">
+                        <p className="text-xs text-neutral-500">Last Purchase</p>
+                        <p className="mt-1 truncate font-semibold text-neutral-100">{formatDate(customer.lastInvoiceAt)}</p>
+                      </div>
+                    </div>
+
+                    <div className="mt-4 grid grid-cols-2 gap-2">
+                      <button
+                        onClick={() => setDetailCustomer(customer)}
+                        className="min-h-11 rounded-lg border border-white/10 bg-white/[0.05] text-sm font-bold text-neutral-100"
+                      >
+                        View
+                      </button>
+                      <button
+                        onClick={() => openEditModal(customer)}
+                        className="min-h-11 rounded-lg border border-sky-400/20 bg-sky-400/10 text-sm font-bold text-sky-100"
+                      >
+                        Edit
+                      </button>
+                      <button
+                        onClick={() =>
+                          customer.is_active
+                            ? toggleCustomerStatus(customer, false)
+                            : toggleCustomerStatus(customer, true)
+                        }
+                        className="min-h-11 rounded-lg border border-amber-400/20 bg-amber-400/10 text-sm font-bold text-amber-100"
+                      >
+                        {customer.is_active ? "Deactivate" : "Activate"}
+                      </button>
+                      <button
+                        onClick={() => setConfirmCustomer(customer)}
+                        className="min-h-11 rounded-lg border border-red-400/20 bg-red-400/10 text-sm font-bold text-red-100"
+                      >
+                        Archive
+                      </button>
+                    </div>
+                  </article>
+                ))}
+              </div>
+
+              <div className="mt-4 hidden overflow-x-auto lg:block">
                 <table className="w-full min-w-[1040px] border-separate border-spacing-y-2 text-sm">
                   <thead className="text-left text-xs uppercase tracking-[0.16em] text-neutral-500">
                     <tr>
@@ -948,12 +1022,12 @@ function CustomerFormModal({
     "w-full rounded-lg border border-white/10 bg-black px-4 py-3 text-sm outline-none transition-all focus:border-sky-300"
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 p-4 backdrop-blur-sm">
-      <div className="w-full max-w-3xl overflow-hidden rounded-lg border border-white/10 bg-[#050606] shadow-2xl inventory-sheen">
-        <div className="sticky top-0 z-30 flex items-center justify-between border-b border-white/10 bg-[#050606]/95 p-5 backdrop-blur-xl">
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 p-2 backdrop-blur-sm sm:p-4">
+      <div className="max-h-[calc(100dvh-16px)] w-full max-w-3xl overflow-y-auto rounded-lg border border-white/10 bg-[#050606] shadow-2xl inventory-sheen sm:max-h-[calc(100vh-32px)]">
+        <div className="sticky top-0 z-30 flex items-center justify-between border-b border-white/10 bg-[#050606]/95 p-4 backdrop-blur-xl sm:p-5">
           <div>
             <p className="text-xs uppercase tracking-[0.18em] text-sky-300">CRM Account</p>
-            <h2 className="mt-2 text-2xl font-black">
+            <h2 className="mt-2 text-xl font-black sm:text-2xl">
               {editMode ? "Edit Customer" : "Add Customer"}
             </h2>
           </div>
@@ -965,7 +1039,7 @@ function CustomerFormModal({
           </button>
         </div>
 
-        <div className="grid gap-4 p-5 md:grid-cols-2">
+        <div className="grid gap-4 p-4 sm:p-5 md:grid-cols-2">
           <input className={inputClass} placeholder="Customer name" value={form.name} onChange={(event) => onChange("name", event.target.value)} />
           <input className={inputClass} placeholder="Phone" value={form.phone} onChange={(event) => onChange("phone", event.target.value)} />
           <input className={inputClass} placeholder="Email" value={form.email} onChange={(event) => onChange("email", event.target.value)} />
@@ -985,12 +1059,12 @@ function CustomerFormModal({
           <textarea className={`${inputClass} min-h-28 md:col-span-2`} placeholder="Billing address" value={form.address} onChange={(event) => onChange("address", event.target.value)} />
         </div>
 
-        <div className="mx-5 rounded-lg border border-emerald-400/20 bg-emerald-400/10 p-4 text-sm text-emerald-100">
+        <div className="mx-4 rounded-lg border border-emerald-400/20 bg-emerald-400/10 p-4 text-sm text-emerald-100 sm:mx-5">
           Customer records connect to billing, GST classification, account status,
           purchase history, and global CRM analytics.
         </div>
 
-        <div className="border-t border-white/10 bg-[#050606]/95 p-5">
+        <div className="border-t border-white/10 bg-[#050606]/95 p-4 sm:p-5">
           <button
             disabled={saving}
             onClick={onSave}

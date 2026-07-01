@@ -24,12 +24,30 @@ const navItems = [
     ["Settings", "/dashboard/settings"],
 ]
 
+const mobilePrimaryNav = [
+    ["Dashboard", "/dashboard"],
+    ["Products", "/dashboard/products"],
+    ["Customers", "/dashboard/customers"],
+    ["Invoices", "/dashboard/invoices"],
+]
+
+const mobileMoreNav = [
+    ["Orders", "/dashboard/orders"],
+    ["Reports", "/dashboard/charts"],
+    ["Billing", "/dashboard/billing"],
+    ["Inventory", "/dashboard/inventory"],
+    ["Settings", "/dashboard/settings"],
+]
+
 export default function DashboardLayout({ children }: { children: ReactNode }) {
     const router = useRouter()
     const pathname = usePathname()
     const [businessName, setBusinessName] = useState("My Business")
     const [ownerEmail, setOwnerEmail] = useState("")
-    const [mobileNavOpen, setMobileNavOpen] = useState(false)
+    const [mobileMoreOpen, setMobileMoreOpen] = useState(false)
+    const [tabletNavOpen, setTabletNavOpen] = useState(false)
+    const [online, setOnline] = useState(() => (typeof navigator === "undefined" ? true : navigator.onLine))
+    const [canShowAdmin, setCanShowAdmin] = useState(false)
     const [offlinePrepMessage, setOfflinePrepMessage] = useState("")
 
     useEffect(() => {
@@ -46,7 +64,9 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
 
                 setOwnerEmail(payload.user?.email || "owner@bezgrow.com")
 
-                if (payload.profile?.role === "admin") router.replace("/admin")
+                const isAdmin = Boolean(payload.permissions?.admin || payload.profile?.role === "admin")
+                setCanShowAdmin(isAdmin)
+                if (isAdmin) router.replace("/admin")
 
                 void prepareOfflineWorkspace(payload, {
                     onProgress: (progress) => {
@@ -68,6 +88,19 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
     }, [router])
 
     useEffect(() => {
+        const handleOnline = () => setOnline(true)
+        const handleOffline = () => setOnline(false)
+
+        window.addEventListener("online", handleOnline)
+        window.addEventListener("offline", handleOffline)
+
+        return () => {
+            window.removeEventListener("online", handleOnline)
+            window.removeEventListener("offline", handleOffline)
+        }
+    }, [])
+
+    useEffect(() => {
         const prefetchDashboardRoutes = () => {
             navItems.forEach(([, href]) => router.prefetch(href))
         }
@@ -82,6 +115,9 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
     }, [router])
 
     const workspaceInitial = useMemo(() => businessName.charAt(0).toUpperCase() || "?", [businessName])
+    const moreNavItems = canShowAdmin ? [...mobileMoreNav, ["Admin", "/admin"]] : mobileMoreNav
+    const isActivePath = (href: string) => pathname === href || (href !== "/dashboard" && pathname.startsWith(`${href}/`))
+    const isMoreActive = moreNavItems.some(([, href]) => isActivePath(href))
 
     async function handleLogout() {
         clearWorkspaceBootstrapCache()
@@ -134,15 +170,8 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
             </aside>
 
             <div className="flex min-w-0 flex-1 flex-col overflow-hidden">
-                <header className="z-30 shrink-0 border-b border-white/10 bg-black/80 px-3 py-3 backdrop-blur-xl sm:px-5 sm:py-4 lg:px-8">
+                <header className="z-30 hidden shrink-0 border-b border-white/10 bg-black/80 px-3 py-3 backdrop-blur-xl sm:px-5 sm:py-4 lg:block lg:px-8">
                     <div className="flex items-center justify-between gap-3">
-                        <button
-                            onClick={() => setMobileNavOpen((value) => !value)}
-                            className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl border border-white/10 bg-white/[0.04] text-lg font-black lg:hidden"
-                            aria-label="Open navigation"
-                        >
-                            {mobileNavOpen ? "X" : "≡"}
-                        </button>
                         <div className="min-w-0 flex-1">
                             <h1 className="truncate text-lg font-black sm:text-2xl">Global ERP Workspace</h1>
                             <p className="mt-1 truncate text-sm text-neutral-500">
@@ -156,18 +185,41 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
                             <span className="hidden max-w-[180px] truncate text-sm font-bold lg:block">{businessName}</span>
                         </Link>
                     </div>
-                    {mobileNavOpen && (
-                        <nav className="mt-3 flex gap-2 overflow-x-auto rounded-2xl border border-white/10 bg-[#060909] p-2 sm:grid sm:grid-cols-3 sm:p-3 lg:hidden">
+                </header>
+
+                <header className="z-30 hidden shrink-0 border-b border-white/10 bg-black/80 px-5 py-4 backdrop-blur-xl md:block lg:hidden">
+                    <div className="flex items-center justify-between gap-3">
+                        <button
+                            onClick={() => setTabletNavOpen((value) => !value)}
+                            className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl border border-white/10 bg-white/[0.04] text-lg font-black"
+                            aria-label="Open navigation"
+                        >
+                            {tabletNavOpen ? "X" : "≡"}
+                        </button>
+                        <div className="min-w-0 flex-1">
+                            <h1 className="truncate text-2xl font-black">Global ERP Workspace</h1>
+                            <p className="mt-1 truncate text-sm text-neutral-500">
+                                Inventory, billing, retail POS, analytics, and launch operations.
+                            </p>
+                        </div>
+                        <Link href="/profile" className="flex h-12 shrink-0 items-center gap-3 rounded-2xl border border-white/10 bg-white/[0.04] px-3 hover:border-cyan-400/30">
+                            <span className="flex h-9 w-9 items-center justify-center rounded-xl bg-cyan-400 text-sm font-black text-black">
+                                {workspaceInitial}
+                            </span>
+                        </Link>
+                    </div>
+                    {tabletNavOpen && (
+                        <nav className="mt-3 grid grid-cols-3 gap-2 rounded-2xl border border-white/10 bg-[#060909] p-3">
                             {navItems.map(([name, href]) => {
-                                const active = pathname === href
+                                const active = isActivePath(href)
                                 return (
                                     <Link
                                         key={href}
                                         href={href}
                                         onMouseEnter={() => router.prefetch(href)}
                                         onFocus={() => router.prefetch(href)}
-                                        onClick={() => setMobileNavOpen(false)}
-                                        className={`flex min-h-11 min-w-[120px] items-center justify-center rounded-xl border px-3 text-center text-xs font-bold sm:min-w-0 ${active ? "border-cyan-300/40 bg-cyan-300/10 text-cyan-100" : "border-white/10 bg-white/[0.03] text-white/65"}`}
+                                        onClick={() => setTabletNavOpen(false)}
+                                        className={`flex min-h-11 items-center justify-center rounded-xl border px-3 text-center text-xs font-bold ${active ? "border-cyan-300/40 bg-cyan-300/10 text-cyan-100" : "border-white/10 bg-white/[0.03] text-white/65"}`}
                                     >
                                         {name}
                                     </Link>
@@ -177,7 +229,38 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
                     )}
                 </header>
 
-                <main className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden bg-black pb-4">
+                <header className="z-30 shrink-0 border-b border-white/10 bg-black/90 px-4 py-3 backdrop-blur-xl md:hidden">
+                    <div className="flex items-center justify-between gap-3">
+                        <div className="flex min-w-0 items-center gap-3">
+                            <BezgrowLogoMark className="h-10 w-10 shrink-0" size={40} />
+                            <div className="min-w-0">
+                                <p className="truncate text-sm font-black text-white">{businessName}</p>
+                                <div className="mt-1 flex items-center gap-2 text-[11px] font-bold uppercase tracking-[0.12em] text-neutral-500">
+                                    <span className={`h-2 w-2 rounded-full ${online ? "bg-emerald-300" : "bg-amber-300"}`} />
+                                    <span>{online ? "Synced" : "Offline"}</span>
+                                </div>
+                            </div>
+                        </div>
+                        <div className="flex shrink-0 items-center gap-2">
+                            <button
+                                type="button"
+                                aria-label="Notifications"
+                                className="flex h-11 w-11 items-center justify-center rounded-2xl border border-white/10 bg-white/[0.04] text-sm font-black text-cyan-100"
+                            >
+                                !
+                            </button>
+                            <Link
+                                href="/profile"
+                                aria-label="Profile"
+                                className="flex h-11 w-11 items-center justify-center rounded-2xl bg-cyan-300 text-sm font-black text-black"
+                            >
+                                {workspaceInitial}
+                            </Link>
+                        </div>
+                    </div>
+                </header>
+
+                <main className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden bg-black pb-28 md:pb-4">
                     <OfflineStatusBar />
                     {offlinePrepMessage && (
                         <div className="border-b border-emerald-400/20 bg-emerald-500/10 px-3 py-2 text-sm font-semibold text-emerald-100">
@@ -186,6 +269,66 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
                     )}
                     {children}
                 </main>
+
+                <nav className="fixed inset-x-0 bottom-0 z-40 border-t border-white/10 bg-[#050707]/95 px-2 pb-[calc(env(safe-area-inset-bottom)+0.5rem)] pt-2 shadow-[0_-18px_60px_rgba(0,0,0,0.35)] backdrop-blur-xl md:hidden">
+                    {mobileMoreOpen && (
+                        <div className="absolute inset-x-3 bottom-[calc(100%+0.5rem)] overflow-hidden rounded-lg border border-white/10 bg-[#080b0b] shadow-2xl">
+                            <div className="grid grid-cols-2 gap-2 p-2">
+                                {moreNavItems.map(([name, href]) => (
+                                    <Link
+                                        key={href}
+                                        href={href}
+                                        onClick={() => setMobileMoreOpen(false)}
+                                        className={`flex min-h-12 items-center rounded-lg border px-3 text-sm font-bold ${isActivePath(href)
+                                            ? "border-cyan-300/35 bg-cyan-300/10 text-cyan-100"
+                                            : "border-white/10 bg-white/[0.04] text-neutral-200"
+                                            }`}
+                                    >
+                                        {name}
+                                    </Link>
+                                ))}
+                                <button
+                                    type="button"
+                                    onClick={() => void handleLogout()}
+                                    className="flex min-h-12 items-center rounded-lg border border-red-400/20 bg-red-500/10 px-3 text-left text-sm font-bold text-red-200"
+                                >
+                                    Logout
+                                </button>
+                            </div>
+                        </div>
+                    )}
+                    <div className="grid grid-cols-5 gap-1">
+                        {mobilePrimaryNav.map(([name, href]) => {
+                            const active = isActivePath(href)
+                            return (
+                                <Link
+                                    key={href}
+                                    href={href}
+                                    onMouseEnter={() => router.prefetch(href)}
+                                    onFocus={() => router.prefetch(href)}
+                                    className={`flex min-h-[58px] flex-col items-center justify-center rounded-lg px-1 text-[11px] font-black ${active
+                                        ? "bg-cyan-300 text-black"
+                                        : "text-neutral-400"
+                                        }`}
+                                >
+                                    <span className={`mb-1 h-1.5 w-1.5 rounded-full ${active ? "bg-black" : "bg-neutral-600"}`} />
+                                    {name}
+                                </Link>
+                            )
+                        })}
+                        <button
+                            type="button"
+                            onClick={() => setMobileMoreOpen((value) => !value)}
+                            className={`flex min-h-[58px] flex-col items-center justify-center rounded-lg px-1 text-[11px] font-black ${mobileMoreOpen || isMoreActive
+                                ? "bg-cyan-300 text-black"
+                                : "text-neutral-400"
+                                }`}
+                        >
+                            <span className={`mb-1 h-1.5 w-1.5 rounded-full ${mobileMoreOpen || isMoreActive ? "bg-black" : "bg-neutral-600"}`} />
+                            More
+                        </button>
+                    </div>
+                </nav>
             </div>
         </div>
     )

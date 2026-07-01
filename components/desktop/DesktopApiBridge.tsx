@@ -1,7 +1,7 @@
 "use client"
 
 import { useEffect } from "react"
-import { isTauriRuntime } from "@/lib/desktop/tauri"
+import { isTauriRuntimeAsync } from "@/lib/desktop/tauri"
 import { supabase } from "@/lib/supabase"
 
 function apiPathFrom(input: RequestInfo | URL) {
@@ -18,38 +18,42 @@ function apiPathFrom(input: RequestInfo | URL) {
 
 export default function DesktopApiBridge() {
   useEffect(() => {
-    if (!isTauriRuntime()) return
-
+    let cancelled = false
     const originalFetch = window.fetch.bind(window)
 
-    window.fetch = async (input, init) => {
-      const apiPath = apiPathFrom(input)
-      if (!apiPath) return originalFetch(input, init)
+    void isTauriRuntimeAsync().then((desktopRuntime) => {
+      if (cancelled || !desktopRuntime) return
 
-      if (!navigator.onLine) {
-        throw new TypeError("Internet required for this action.")
-      }
+      window.fetch = async (input, init) => {
+        const apiPath = apiPathFrom(input)
+        if (!apiPath) return originalFetch(input, init)
 
-      const headers = new Headers(init?.headers || (input instanceof Request ? input.headers : undefined))
-      if (!headers.has("authorization")) {
-        const {
-          data: { session },
-        } = await supabase.auth.getSession()
-
-        if (session?.access_token) {
-          headers.set("authorization", `Bearer ${session.access_token}`)
+        if (!navigator.onLine) {
+          throw new TypeError("Internet required for this action.")
         }
-      }
 
-      const proxyUrl = `/api/desktop-proxy?path=${encodeURIComponent(apiPath)}`
-      return originalFetch(proxyUrl, {
-        ...init,
-        headers,
-        cache: "no-store",
-      })
-    }
+        const headers = new Headers(init?.headers || (input instanceof Request ? input.headers : undefined))
+        if (!headers.has("authorization")) {
+          const {
+            data: { session },
+          } = await supabase.auth.getSession()
+
+          if (session?.access_token) {
+            headers.set("authorization", `Bearer ${session.access_token}`)
+          }
+        }
+
+        const proxyUrl = `/api/desktop-proxy?path=${encodeURIComponent(apiPath)}`
+        return originalFetch(proxyUrl, {
+          ...init,
+          headers,
+          cache: "no-store",
+        })
+      }
+    })
 
     return () => {
+      cancelled = true
       window.fetch = originalFetch
     }
   }, [])

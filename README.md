@@ -39,7 +39,7 @@ Required Supabase Auth URLs:
 - Password reset redirect: `https://bezgrow.com/reset-password`
 - Local redirect URL: `http://localhost:3000/auth/callback`
 - Local password reset URL: `http://localhost:3000/reset-password`
-- Desktop Google redirect URL: `http://127.0.0.1:43123/auth/callback`
+- Desktop Google redirect URL: `http://127.0.0.1:43124/auth/callback`
 - Optional desktop fallback redirect URL: `http://127.0.0.1:*/auth/callback`
 
 For Google OAuth, configure the provider in Supabase and Google Cloud with the Supabase callback URL shown in the Supabase dashboard.
@@ -99,7 +99,7 @@ npm run desktop:build:windows
 npm run desktop:build:windows:public
 ```
 
-`desktop:prepare` runs a desktop-only Next standalone build, copies the runtime into `desktop-runtime/next-server`, and copies the current platform's Node executable into `desktop-runtime/node` for Tauri bundling. Production desktop startup launches that bundled Next server on `127.0.0.1:43123` when available, with a random local fallback if the fixed port is already occupied.
+`desktop:prepare` runs a desktop-only Next standalone build, copies the runtime into `desktop-runtime/next-server`, and copies the current platform's Node executable into `desktop-runtime/node` for Tauri bundling. Production desktop startup launches that bundled Next server on `127.0.0.1:43124` when available, with a random local fallback if the fixed port is already occupied.
 
 Generated desktop artifacts are written under:
 

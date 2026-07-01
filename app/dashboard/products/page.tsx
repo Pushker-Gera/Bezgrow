@@ -1040,7 +1040,90 @@ export default function ProductsPage() {
                             </div>
                         </div>
 
-                        <div className="mt-4 overflow-x-auto">
+                        <div className="mt-4 space-y-3 lg:hidden">
+                            {filteredProducts.length === 0 && (
+                                <div className="rounded-lg border border-white/10 bg-white/[0.03] p-6 text-center text-sm text-neutral-500">
+                                    No products found for the selected filters.
+                                </div>
+                            )}
+
+                            {filteredProducts.map((product) => {
+                                const sale = Number(product.sale_rate || product.price || 0)
+                                const purchase = Number(product.purchase_rate || 0)
+                                const stock = Number(product.stock || 0)
+                                const lowStock = stock <= Number(product.min_stock ?? 5)
+                                const expired = isExpired(product)
+                                const expiring = isExpiringSoon(product)
+
+                                return (
+                                    <article key={product.id} className="rounded-lg border border-white/10 bg-white/[0.045] p-4 shadow-xl">
+                                        <div className="flex items-start justify-between gap-3">
+                                            <div className="min-w-0">
+                                                <h3 className="truncate text-base font-black text-white">{product.name}</h3>
+                                                <p className="mt-1 truncate text-xs text-neutral-500">
+                                                    SKU {product.sku || "N/A"} | {product.category || "General"}
+                                                </p>
+                                            </div>
+                                            <span className={`shrink-0 rounded-full border px-3 py-1 text-xs font-black ${stock <= 0
+                                                ? "border-red-400/30 bg-red-400/10 text-red-200"
+                                                : lowStock
+                                                    ? "border-amber-400/30 bg-amber-400/10 text-amber-200"
+                                                    : "border-emerald-400/30 bg-emerald-400/10 text-emerald-200"
+                                                }`}>
+                                                {stock} {product.unit || "pcs"}
+                                            </span>
+                                        </div>
+
+                                        <div className="mt-4 grid grid-cols-2 gap-3 text-sm">
+                                            <div className="rounded-lg border border-white/10 bg-black/30 p-3">
+                                                <p className="text-xs text-neutral-500">Price</p>
+                                                <p className="mt-1 font-black text-emerald-200">{money(sale)}</p>
+                                            </div>
+                                            <div className="rounded-lg border border-white/10 bg-black/30 p-3">
+                                                <p className="text-xs text-neutral-500">Margin</p>
+                                                <p className="mt-1 font-black text-sky-200">{money(sale - purchase)}</p>
+                                            </div>
+                                            <div className="rounded-lg border border-white/10 bg-black/30 p-3">
+                                                <p className="text-xs text-neutral-500">Supplier</p>
+                                                <p className="mt-1 truncate font-semibold text-neutral-100">{product.supplier || "-"}</p>
+                                            </div>
+                                            <div className="rounded-lg border border-white/10 bg-black/30 p-3">
+                                                <p className="text-xs text-neutral-500">Expiry</p>
+                                                <p className={`mt-1 truncate font-semibold ${expired ? "text-red-300" : expiring ? "text-amber-300" : "text-neutral-100"}`}>
+                                                    {formatDate(product.expiry_date)}
+                                                </p>
+                                            </div>
+                                        </div>
+
+                                        <div className="mt-4 grid grid-cols-3 gap-2">
+                                            <button
+                                                onClick={async () => {
+                                                    setViewProduct(product)
+                                                    await fetchStockMovements(product.id)
+                                                }}
+                                                className="min-h-11 rounded-lg border border-white/10 bg-white/[0.05] text-sm font-bold text-neutral-100"
+                                            >
+                                                View
+                                            </button>
+                                            <button
+                                                onClick={() => openEditModal(product)}
+                                                className="min-h-11 rounded-lg border border-sky-400/20 bg-sky-400/10 text-sm font-bold text-sky-100"
+                                            >
+                                                Edit
+                                            </button>
+                                            <button
+                                                onClick={() => setConfirmDeleteId(product.id)}
+                                                className="min-h-11 rounded-lg border border-red-400/20 bg-red-400/10 text-sm font-bold text-red-100"
+                                            >
+                                                Delete
+                                            </button>
+                                        </div>
+                                    </article>
+                                )
+                            })}
+                        </div>
+
+                        <div className="mt-4 hidden overflow-x-auto lg:block">
                             <table className="w-full min-w-[1120px] border-separate border-spacing-y-2 text-sm">
                                 <thead className="text-left text-xs uppercase tracking-[0.16em] text-neutral-500">
                                     <tr>
@@ -1369,14 +1452,14 @@ function ProductFormModal({
         "w-full appearance-none rounded-lg border border-white/10 bg-black py-3 pl-4 pr-14 text-sm outline-none transition-all focus:border-sky-300"
 
     return (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 p-4 backdrop-blur-sm">
-            <div className="relative max-h-[calc(100vh-32px)] w-full max-w-6xl overflow-y-auto overscroll-contain rounded-lg border border-white/10 bg-[#050606] shadow-2xl inventory-sheen">
-                <div className="sticky top-0 z-30 flex items-center justify-between gap-4 border-b border-white/10 bg-[#050606]/95 p-5 backdrop-blur-xl">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 p-2 backdrop-blur-sm sm:p-4">
+            <div className="relative max-h-[calc(100dvh-16px)] w-full max-w-6xl overflow-y-auto overscroll-contain rounded-lg border border-white/10 bg-[#050606] shadow-2xl inventory-sheen sm:max-h-[calc(100vh-32px)]">
+                <div className="sticky top-0 z-30 flex items-center justify-between gap-4 border-b border-white/10 bg-[#050606]/95 p-4 backdrop-blur-xl sm:p-5">
                     <div>
                         <p className="text-xs uppercase tracking-[0.18em] text-sky-300">
                             Product Master
                         </p>
-                        <h2 className="mt-2 text-2xl font-black">
+                        <h2 className="mt-2 text-xl font-black sm:text-2xl">
                             {editMode ? "Edit Product" : "Add Product"}
                         </h2>
                     </div>
@@ -1394,7 +1477,7 @@ function ProductFormModal({
                     </div>
                 )}
 
-                <div className="relative z-10 grid gap-5 p-5 lg:grid-cols-3">
+                <div className="relative z-10 grid gap-5 p-4 sm:p-5 lg:grid-cols-3">
                     <section className="space-y-3">
                         <h3 className="text-sm font-bold uppercase tracking-[0.16em] text-neutral-400">
                             Identity
@@ -1452,7 +1535,7 @@ function ProductFormModal({
                         <h3 className="text-sm font-bold uppercase tracking-[0.16em] text-neutral-400">
                             Pricing and Inventory
                         </h3>
-                        <div className="grid grid-cols-2 gap-3">
+                        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
                             <input className={inputClass} type="number" placeholder="Stock" value={form.stock} onChange={(event) => onChange("stock", event.target.value)} />
                             <input className={inputClass} type="number" placeholder="Min stock" value={form.minStock} onChange={(event) => onChange("minStock", event.target.value)} />
                             <input className={inputClass} type="number" placeholder="Purchase rate" value={form.purchaseRate} onChange={(event) => onChange("purchaseRate", event.target.value)} />
@@ -1464,7 +1547,7 @@ function ProductFormModal({
                         {hasBatchTracking && (
                             <input className={inputClass} placeholder="Batch number" value={form.batchNo} onChange={(event) => onChange("batchNo", event.target.value)} />
                         )}
-                        <div className="grid grid-cols-2 gap-3">
+                        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
                             <label className="text-xs text-neutral-400">
                                 Expiry date
                                 <input
@@ -1487,7 +1570,7 @@ function ProductFormModal({
                     </section>
                 </div>
 
-                <div className="relative z-10 mx-5 rounded-lg border border-emerald-400/20 bg-emerald-400/10 p-4">
+                <div className="relative z-10 mx-4 rounded-lg border border-emerald-400/20 bg-emerald-400/10 p-4 sm:mx-5">
                     <p className="text-sm font-semibold text-emerald-100">
                         ERP intelligence
                     </p>
@@ -1498,7 +1581,7 @@ function ProductFormModal({
                     </p>
                 </div>
 
-                <div className="sticky bottom-0 z-30 mt-5 border-t border-white/10 bg-[#050606]/95 p-5 backdrop-blur-xl">
+                <div className="sticky bottom-0 z-30 mt-5 border-t border-white/10 bg-[#050606]/95 p-4 backdrop-blur-xl sm:p-5">
                     <button
                         disabled={saving}
                         onClick={onSave}

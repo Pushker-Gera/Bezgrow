@@ -431,53 +431,53 @@ export default function InvoicesPage() {
         <div className="absolute bottom-[-180px] right-[-160px] h-[560px] w-[560px] rounded-full bg-blue-500/10 blur-[190px] animate-pulse" />
       </div>
 
-      <main className="relative z-10 mx-auto max-w-[1800px] space-y-8 px-5 py-6 lg:px-8">
-        <section className="inventory-sheen relative overflow-hidden rounded-[40px] border border-white/10 bg-white/[0.035] p-7 shadow-[0_0_90px_rgba(0,0,0,0.5)] backdrop-blur-2xl lg:p-9">
+      <main className="relative z-10 mx-auto max-w-[1800px] space-y-5 px-4 py-4 sm:space-y-8 sm:px-5 sm:py-6 lg:px-8">
+        <section className="inventory-sheen relative overflow-hidden rounded-lg border border-white/10 bg-white/[0.035] p-5 shadow-[0_0_90px_rgba(0,0,0,0.5)] backdrop-blur-2xl sm:rounded-[40px] sm:p-7 lg:p-9">
           <div className="grid grid-cols-1 gap-8 2xl:grid-cols-[1fr,620px] 2xl:items-center">
             <div className="max-w-4xl">
               <div className="mb-5 inline-flex rounded-full border border-cyan-400/20 bg-cyan-500/10 px-4 py-2 text-xs font-semibold uppercase tracking-[0.22em] text-cyan-200">
                 Enterprise Invoice Operations
               </div>
-              <h1 className="text-4xl font-black leading-tight tracking-tight text-white md:text-5xl">
+              <h1 className="text-3xl font-black leading-tight tracking-tight text-white sm:text-4xl md:text-5xl">
                 Invoices, collections, tax, print, and audit control.
               </h1>
-              <p className="mt-5 max-w-3xl text-base leading-8 text-neutral-400">
+              <p className="mt-4 max-w-3xl text-base leading-7 text-neutral-400 sm:mt-5 sm:leading-8">
                 Run global billing from one workspace with live invoice records, payment status control,
                 due-date risk, customer ledgers, tax visibility, CSV export, and print-ready invoice routes.
               </p>
             </div>
 
-            <div className="rounded-[34px] border border-white/10 bg-black/30 p-5 shadow-[0_20px_70px_rgba(0,0,0,0.25)]">
+            <div className="rounded-lg border border-white/10 bg-black/30 p-4 shadow-[0_20px_70px_rgba(0,0,0,0.25)] sm:rounded-[34px] sm:p-5">
               <div className="grid grid-cols-3 gap-4">
-                <div className="rounded-2xl border border-white/10 bg-white/[0.035] p-4">
+                <div className="rounded-lg border border-white/10 bg-white/[0.035] p-3 sm:rounded-2xl sm:p-4">
                   <p className="text-[10px] font-black uppercase tracking-[0.18em] text-neutral-500">Invoices</p>
-                  <p className="mt-2 text-2xl font-black text-white">{analytics.invoiceCount}</p>
+                  <p className="mt-2 text-xl font-black text-white sm:text-2xl">{analytics.invoiceCount}</p>
                 </div>
-                <div className="rounded-2xl border border-white/10 bg-white/[0.035] p-4">
+                <div className="rounded-lg border border-white/10 bg-white/[0.035] p-3 sm:rounded-2xl sm:p-4">
                   <p className="text-[10px] font-black uppercase tracking-[0.18em] text-neutral-500">Today</p>
-                  <p className="mt-2 text-2xl font-black text-cyan-200">{analytics.todayCount}</p>
+                  <p className="mt-2 text-xl font-black text-cyan-200 sm:text-2xl">{analytics.todayCount}</p>
                 </div>
-                <div className="rounded-2xl border border-white/10 bg-white/[0.035] p-4">
+                <div className="rounded-lg border border-white/10 bg-white/[0.035] p-3 sm:rounded-2xl sm:p-4">
                   <p className="text-[10px] font-black uppercase tracking-[0.18em] text-neutral-500">Collect</p>
-                  <p className="mt-2 text-2xl font-black text-emerald-200">{analytics.collectionRate}%</p>
+                  <p className="mt-2 text-xl font-black text-emerald-200 sm:text-2xl">{analytics.collectionRate}%</p>
                 </div>
               </div>
               <div className="mt-5 grid grid-cols-3 gap-4">
               <Link
                 href="/dashboard/billing"
-                className="flex min-h-[82px] items-center justify-center rounded-[26px] border border-white/10 bg-white/[0.06] px-5 text-center text-xl font-black leading-tight text-white shadow-[0_18px_55px_rgba(0,0,0,0.25)] transition-all duration-300 hover:-translate-y-1 hover:border-cyan-400/30 hover:bg-cyan-500/10"
+                className="flex min-h-14 items-center justify-center rounded-lg border border-white/10 bg-white/[0.06] px-2 text-center text-sm font-black leading-tight text-white shadow-[0_18px_55px_rgba(0,0,0,0.25)] transition-all duration-300 hover:-translate-y-1 hover:border-cyan-400/30 hover:bg-cyan-500/10 sm:min-h-[82px] sm:rounded-[26px] sm:px-5 sm:text-xl"
               >
                 Billing Hub
               </Link>
               <button
                 onClick={exportCSV}
-                className="min-h-[82px] rounded-[26px] border border-white/10 bg-white/[0.06] px-5 text-center text-xl font-black leading-tight text-white shadow-[0_18px_55px_rgba(0,0,0,0.25)] transition-all duration-300 hover:-translate-y-1 hover:border-cyan-400/30 hover:bg-white/[0.09]"
+                className="min-h-14 rounded-lg border border-white/10 bg-white/[0.06] px-2 text-center text-sm font-black leading-tight text-white shadow-[0_18px_55px_rgba(0,0,0,0.25)] transition-all duration-300 hover:-translate-y-1 hover:border-cyan-400/30 hover:bg-white/[0.09] sm:min-h-[82px] sm:rounded-[26px] sm:px-5 sm:text-xl"
               >
                 Export CSV
               </button>
               <Link
                 href="/dashboard/invoices/create"
-                className="flex min-h-[82px] items-center justify-center rounded-[26px] bg-gradient-to-r from-cyan-400 to-blue-600 px-5 text-center text-xl font-black leading-tight text-black shadow-[0_20px_70px_rgba(34,211,238,0.35)] transition-all duration-300 hover:-translate-y-1 hover:scale-[1.02]"
+                className="flex min-h-14 items-center justify-center rounded-lg bg-gradient-to-r from-cyan-400 to-blue-600 px-2 text-center text-sm font-black leading-tight text-black shadow-[0_20px_70px_rgba(34,211,238,0.35)] transition-all duration-300 hover:-translate-y-1 hover:scale-[1.02] sm:min-h-[82px] sm:rounded-[26px] sm:px-5 sm:text-xl"
               >
                 Create Invoice
               </Link>
@@ -501,20 +501,20 @@ export default function InvoicesPage() {
           ].map(([label, value, color, helper]) => (
             <div
               key={label}
-              className="group relative overflow-hidden rounded-[32px] border border-white/10 bg-gradient-to-br from-zinc-950 via-black to-zinc-950 p-7 transition-all duration-300 hover:-translate-y-1 hover:border-cyan-400/30 hover:shadow-[0_0_45px_rgba(34,211,238,0.12)]"
+              className="group relative overflow-hidden rounded-lg border border-white/10 bg-gradient-to-br from-zinc-950 via-black to-zinc-950 p-4 transition-all duration-300 hover:-translate-y-1 hover:border-cyan-400/30 hover:shadow-[0_0_45px_rgba(34,211,238,0.12)] sm:rounded-[32px] sm:p-7"
             >
               <div className="absolute inset-0 bg-[radial-gradient(circle_at_top_left,rgba(34,211,238,0.10),transparent_34%)] opacity-0 transition-opacity duration-300 group-hover:opacity-100" />
               <div className="relative">
                 <p className="text-xs font-semibold uppercase tracking-[0.2em] text-neutral-500">{label}</p>
-                <p className={`mt-5 text-4xl font-black tracking-tight ${color}`}>{value}</p>
-                <p className="mt-4 text-sm text-neutral-500">{helper}</p>
+                <p className={`mt-4 text-3xl font-black tracking-tight sm:mt-5 sm:text-4xl ${color}`}>{value}</p>
+                <p className="mt-3 text-sm text-neutral-500 sm:mt-4">{helper}</p>
               </div>
             </div>
           ))}
         </section>
 
         <section className="grid grid-cols-1 gap-5 xl:grid-cols-[1.3fr,0.7fr]">
-          <div className="rounded-[36px] border border-white/10 bg-white/[0.035] p-6 shadow-[0_0_70px_rgba(0,0,0,0.35)] backdrop-blur-2xl">
+          <div className="rounded-lg border border-white/10 bg-white/[0.035] p-4 shadow-[0_0_70px_rgba(0,0,0,0.35)] backdrop-blur-2xl sm:rounded-[36px] sm:p-6">
             <div className="grid grid-cols-1 gap-4 lg:grid-cols-[1.3fr,1fr,1fr,1fr,1fr]">
               <input
                 value={search}
@@ -554,31 +554,31 @@ export default function InvoicesPage() {
             </div>
           </div>
 
-          <div className="grid grid-cols-2 gap-4 rounded-[36px] border border-white/10 bg-white/[0.035] p-6 backdrop-blur-2xl">
+          <div className="grid grid-cols-2 gap-4 rounded-lg border border-white/10 bg-white/[0.035] p-4 backdrop-blur-2xl sm:rounded-[36px] sm:p-6">
             <div>
               <p className="text-xs uppercase tracking-[0.18em] text-neutral-500">Today</p>
-              <p className="mt-3 text-3xl font-black text-white">{analytics.todayCount}</p>
+              <p className="mt-2 text-2xl font-black text-white sm:mt-3 sm:text-3xl">{analytics.todayCount}</p>
             </div>
             <div>
               <p className="text-xs uppercase tracking-[0.18em] text-neutral-500">Average</p>
-              <p className="mt-3 text-3xl font-black text-cyan-200">{money(analytics.averageInvoice)}</p>
+              <p className="mt-2 text-2xl font-black text-cyan-200 sm:mt-3 sm:text-3xl">{money(analytics.averageInvoice)}</p>
             </div>
             <div>
               <p className="text-xs uppercase tracking-[0.18em] text-neutral-500">Partial</p>
-              <p className="mt-3 text-3xl font-black text-amber-200">{analytics.partialCount}</p>
+              <p className="mt-2 text-2xl font-black text-amber-200 sm:mt-3 sm:text-3xl">{analytics.partialCount}</p>
             </div>
             <div>
               <p className="text-xs uppercase tracking-[0.18em] text-neutral-500">Unpaid</p>
-              <p className="mt-3 text-3xl font-black text-red-200">{analytics.unpaidCount}</p>
+              <p className="mt-2 text-2xl font-black text-red-200 sm:mt-3 sm:text-3xl">{analytics.unpaidCount}</p>
             </div>
           </div>
         </section>
 
         <section className="grid grid-cols-1 gap-6 2xl:grid-cols-[1fr,420px]">
-          <div className="overflow-hidden rounded-[36px] border border-white/10 bg-gradient-to-br from-zinc-950/95 to-black shadow-[0_0_80px_rgba(0,0,0,0.4)]">
-            <div className="flex flex-col gap-4 border-b border-white/10 p-6 md:flex-row md:items-center md:justify-between">
+          <div className="overflow-hidden rounded-lg border border-white/10 bg-gradient-to-br from-zinc-950/95 to-black shadow-[0_0_80px_rgba(0,0,0,0.4)] sm:rounded-[36px]">
+            <div className="flex flex-col gap-4 border-b border-white/10 p-4 md:flex-row md:items-center md:justify-between sm:p-6">
               <div>
-                <h2 className="text-3xl font-black tracking-tight">Invoice Register</h2>
+                <h2 className="text-2xl font-black tracking-tight sm:text-3xl">Invoice Register</h2>
                 <p className="mt-2 text-sm text-neutral-500">
                   {filteredInvoices.length} filtered records from {analytics.invoiceCount} total invoices.
                 </p>
@@ -609,7 +609,73 @@ export default function InvoicesPage() {
                 <p className="mt-2 text-sm text-neutral-500">Create invoices or adjust filters to see billing records.</p>
               </div>
             ) : (
-              <div className="overflow-x-auto">
+              <>
+              <div className="space-y-3 p-4 lg:hidden">
+                {visibleInvoices.map((invoice) => (
+                  <article key={invoice.id} className="rounded-lg border border-white/10 bg-white/[0.045] p-4 shadow-xl">
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="min-w-0">
+                        <h3 className="truncate text-base font-black text-white">{stringFrom(invoice, ["invoice_number"]) || "Invoice"}</h3>
+                        <p className="mt-1 truncate text-xs text-neutral-500">{invoice.customerName} | {formatDate(invoice.created_at)}</p>
+                      </div>
+                      <p className="shrink-0 text-right text-lg font-black text-cyan-200">{money(invoice.amount)}</p>
+                    </div>
+
+                    {stringFrom(invoice, ["sync_status"]) && stringFrom(invoice, ["sync_status"]) !== "synced" ? (
+                      <p className="mt-3 inline-flex rounded-full border border-amber-400/30 bg-amber-500/10 px-2.5 py-1 text-[11px] font-black uppercase tracking-[0.12em] text-amber-100">
+                        Pending Sync
+                      </p>
+                    ) : null}
+
+                    <div className="mt-4 grid grid-cols-2 gap-3 text-sm">
+                      <div className="rounded-lg border border-white/10 bg-black/30 p-3">
+                        <p className="text-xs text-neutral-500">Payment</p>
+                        <p className={`mt-2 inline-flex rounded-full border px-3 py-1 text-xs font-bold capitalize ${statusClass(invoice.statusLabel)}`}>
+                          {savingId === invoice.id ? "Saving..." : invoice.statusLabel}
+                        </p>
+                      </div>
+                      <div className="rounded-lg border border-white/10 bg-black/30 p-3">
+                        <p className="text-xs text-neutral-500">Due</p>
+                        <p className={`mt-1 font-semibold capitalize ${invoice.dueState === "overdue" ? "text-red-300" : invoice.dueState === "due-soon" ? "text-amber-300" : "text-neutral-100"}`}>
+                          {invoice.dueState.replace("-", " ")}
+                        </p>
+                      </div>
+                      <div className="rounded-lg border border-white/10 bg-black/30 p-3">
+                        <p className="text-xs text-neutral-500">Items</p>
+                        <p className="mt-1 font-black text-white">{invoice.itemCount} lines</p>
+                      </div>
+                      <div className="rounded-lg border border-white/10 bg-black/30 p-3">
+                        <p className="text-xs text-neutral-500">Tax</p>
+                        <p className="mt-1 font-black text-sky-200">{money(invoice.tax)}</p>
+                      </div>
+                    </div>
+
+                    <div className="mt-4">
+                      <SelectShell
+                        label="Payment status"
+                        value={invoice.statusLabel}
+                        onChange={(value) => void updatePaymentStatus(invoice.id, value)}
+                      >
+                        <option value="unpaid">Unpaid</option>
+                        <option value="partial">Partial</option>
+                        <option value="paid">Paid</option>
+                        <option value="cancelled">Cancelled</option>
+                      </SelectShell>
+                    </div>
+
+                    <div className="mt-4 grid grid-cols-2 gap-2">
+                      <Link href={`/dashboard/invoices/${invoice.id}`} className="flex min-h-11 items-center justify-center rounded-lg border border-white/10 bg-white/[0.05] text-sm font-bold text-neutral-100">
+                        View
+                      </Link>
+                      <Link href={`/dashboard/invoices/${invoice.id}/print`} className="flex min-h-11 items-center justify-center rounded-lg bg-white text-sm font-black text-black">
+                        Print
+                      </Link>
+                    </div>
+                  </article>
+                ))}
+              </div>
+
+              <div className="hidden overflow-x-auto lg:block">
                 <table className="w-full min-w-[1080px]">
                   <thead className="border-b border-white/10 bg-white/[0.03]">
                     <tr className="text-left text-xs uppercase tracking-[0.18em] text-neutral-500">
@@ -682,6 +748,7 @@ export default function InvoicesPage() {
                   </tbody>
                 </table>
               </div>
+              </>
             )}
           </div>
 

@@ -164,7 +164,7 @@ function InstallerCard({
   label: string
 }) {
   return (
-    <div>
+    <div className="min-w-0">
       <DownloadButton href={info.href || href} available={info.available}>
         {label}
       </DownloadButton>
@@ -187,7 +187,7 @@ function MobileInstallCard({
   href: string
 }) {
   return (
-    <div className="rounded-2xl border border-white/10 bg-black/25 p-4">
+    <div className="min-w-0 rounded-2xl border border-white/10 bg-black/25 p-4">
       <a
         href={href}
         className="flex min-h-12 items-center justify-center rounded-2xl border border-cyan-300/25 bg-cyan-300/10 px-5 text-sm font-black text-cyan-100 transition hover:border-cyan-200/50 hover:bg-cyan-300/15 sm:min-h-14"
@@ -195,8 +195,8 @@ function MobileInstallCard({
         Open Web App
       </a>
       <h2 className="mt-4 text-base font-black text-white">{label}</h2>
-      <p className="mt-3 text-sm leading-6 text-white/58">{description}</p>
-      <p className="mt-2 text-xs font-bold text-white/42">{steps}</p>
+      <p className="mt-3 text-sm leading-6 text-white/58 [overflow-wrap:anywhere]">{description}</p>
+      <p className="mt-2 text-xs font-bold text-white/42 [overflow-wrap:anywhere]">{steps}</p>
     </div>
   )
 }
@@ -214,17 +214,17 @@ export default function DownloadPage() {
   const showMacNotarizationWarning = macInstaller.available && macInstaller.notarized !== true
 
   return (
-    <main className="min-h-dvh overflow-x-hidden bg-[#020403] px-5 py-8 text-white sm:py-10 lg:px-8">
-      <section className="mx-auto flex min-h-[calc(100dvh-80px)] w-full min-w-0 max-w-5xl flex-col justify-center">
+    <main className="min-h-dvh overflow-x-hidden bg-[#020403] px-4 py-8 text-white sm:px-5 sm:py-10 lg:px-8">
+      <section className="mx-auto flex min-h-[calc(100dvh-80px)] w-full min-w-0 max-w-5xl flex-col justify-center overflow-hidden">
         <Link href="/" className="mb-10 inline-flex w-fit max-w-full min-w-0 items-center gap-3 text-sm font-black text-cyan-100 hover:text-white">
           <BezgrowLogoMark className="h-10 w-10" size={40} />
           Bezgrow
         </Link>
 
-        <div className="w-full min-w-0 overflow-hidden rounded-[22px] border border-white/10 bg-white/[0.035] p-6 shadow-[0_24px_90px_rgba(0,0,0,0.35)] sm:rounded-[28px] sm:p-8 lg:p-10">
+        <div className="w-full max-w-[calc(100vw-2rem)] min-w-0 overflow-hidden rounded-[22px] border border-white/10 bg-white/[0.035] p-6 shadow-[0_24px_90px_rgba(0,0,0,0.35)] sm:max-w-none sm:rounded-[28px] sm:p-8 lg:p-10">
           <p className="text-xs font-black uppercase tracking-[0.22em] text-cyan-200">Desktop ERP</p>
-          <h1 className="mt-4 break-words text-3xl font-black leading-tight tracking-tight sm:text-5xl">Bezgrow Desktop App</h1>
-          <p className="mt-4 max-w-2xl break-words leading-8 text-white/62">
+          <h1 className="mt-4 break-words text-3xl font-black leading-tight tracking-tight [overflow-wrap:anywhere] sm:text-5xl">Bezgrow Desktop App</h1>
+          <p className="mt-4 max-w-2xl break-words leading-8 text-white/62 [overflow-wrap:anywhere]">
             Install Bezgrow on your computer for desktop ERP workflows, persistent login, local offline data, printing, and sync when internet returns.
           </p>
 
@@ -233,13 +233,13 @@ export default function DownloadPage() {
           </div>
 
           {!installersReady && (
-            <div className="mt-6 break-words rounded-2xl border border-amber-300/25 bg-amber-300/10 px-4 py-3 text-sm font-bold text-amber-100">
+            <div className="mt-6 break-words rounded-2xl border border-amber-300/25 bg-amber-300/10 px-4 py-3 text-sm font-bold text-amber-100 [overflow-wrap:anywhere]">
               Desktop installers are being prepared. Please contact support.
             </div>
           )}
 
           {showMacNotarizationWarning && (
-            <div className="mt-6 break-words rounded-2xl border border-amber-300/25 bg-amber-300/10 px-4 py-3 text-sm font-bold text-amber-100">
+            <div className="mt-6 break-words rounded-2xl border border-amber-300/25 bg-amber-300/10 px-4 py-3 text-sm font-bold text-amber-100 [overflow-wrap:anywhere]">
               macOS may show a security warning until notarization is completed.
             </div>
           )}

@@ -19,7 +19,7 @@ use tauri::{Manager, WebviewUrl};
 
 const KEYCHAIN_SERVICE: &str = "com.bezgrow.erp";
 #[cfg(not(debug_assertions))]
-const DESKTOP_SERVER_PORT: u16 = 43123;
+const DESKTOP_SERVER_PORT: u16 = 43124;
 
 struct NextServerState(Mutex<Option<Child>>);
 
@@ -294,6 +294,7 @@ fn create_main_window(app: &mut tauri::App, port: u16) -> Result<(), Box<dyn std
         .min_inner_size(1100.0, 720.0)
         .resizable(true)
         .fullscreen(false)
+        .initialization_script("window.__BEZGROW_DESKTOP__ = true; window.isTauri = true;")
         .build()?;
 
     Ok(())

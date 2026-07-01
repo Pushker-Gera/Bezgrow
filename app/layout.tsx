@@ -1,5 +1,6 @@
 import "./globals.css"
 import type { Metadata, Viewport } from "next"
+import AppUpdatePrompt from "@/components/AppUpdatePrompt"
 import ChunkReloadGuard from "@/components/chunk-reload-guard"
 import DesktopApiBridge from "@/components/desktop/DesktopApiBridge"
 import DesktopAuthBridge from "@/components/desktop/DesktopAuthBridge"
@@ -129,6 +130,7 @@ export default function RootLayout({
         <DesktopApiBridge />
         <DesktopAuthBridge />
         <PwaRegistration />
+        <AppUpdatePrompt />
         <EntryCalculatorAnimation />
 
         {children}

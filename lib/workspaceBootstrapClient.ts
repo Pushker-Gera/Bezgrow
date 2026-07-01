@@ -2,6 +2,7 @@
 
 import { cacheWorkspaceBootstrap, getCachedWorkspaceBootstrap } from "@/lib/offline/db"
 import { syncCachedDesktopSessionWithServer } from "@/lib/desktop/auth-callback"
+import { isTauriRuntimeAsync } from "@/lib/desktop/tauri"
 import { supabase } from "@/lib/supabase"
 
 export type WorkspaceBootstrapPayload = {
@@ -94,8 +95,11 @@ export async function getWorkspaceBootstrap(options: { forceFresh?: boolean } = 
     const {
       data: { session },
     } = await supabase.auth.getSession()
+    const apiPath = "/api/workspace/bootstrap"
+    const desktopRuntime = await isTauriRuntimeAsync()
+    const url = desktopRuntime ? `/api/desktop-proxy?path=${encodeURIComponent(apiPath)}` : apiPath
 
-    return fetch("/api/workspace/bootstrap", {
+    return fetch(url, {
       credentials: "include",
       cache: options.forceFresh ? "no-store" : "default",
       headers: session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : undefined,

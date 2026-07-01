@@ -1,12 +1,14 @@
 "use client"
 
 type TauriWindow = Window & {
+  __BEZGROW_DESKTOP__?: boolean
   __TAURI_INTERNALS__?: { invoke?: unknown }
   __TAURI__?: unknown
   isTauri?: boolean
 }
 
 type TauriGlobal = typeof globalThis & {
+  __BEZGROW_DESKTOP__?: boolean
   __TAURI_INTERNALS__?: { invoke?: unknown }
   __TAURI__?: unknown
   isTauri?: boolean
@@ -19,7 +21,9 @@ export function isTauriRuntime() {
   const tauriGlobal = globalThis as TauriGlobal
 
   return Boolean(
-    tauriGlobal.isTauri ||
+    tauriGlobal.__BEZGROW_DESKTOP__ ||
+      tauriWindow.__BEZGROW_DESKTOP__ ||
+      tauriGlobal.isTauri ||
       tauriWindow.isTauri ||
       tauriGlobal.__TAURI_INTERNALS__?.invoke ||
       tauriWindow.__TAURI_INTERNALS__?.invoke ||
