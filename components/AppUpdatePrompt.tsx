@@ -30,6 +30,7 @@ export default function AppUpdatePrompt() {
   useEffect(() => {
     let cancelled = false
     let cleanupWebListeners: (() => void) | undefined
+    let cancelScheduledCheck: (() => void) | undefined
 
     function maybeShow(nextPrompt: UpdatePrompt) {
       if (cancelled) return
@@ -98,10 +99,22 @@ export default function AppUpdatePrompt() {
       if (registration) setupRegistration(registration)
     }
 
-    void checkForUpdates()
+    const scheduleCheck = () => {
+      if ("requestIdleCallback" in window) {
+        const idleId = window.requestIdleCallback(() => void checkForUpdates(), { timeout: 8000 })
+        cancelScheduledCheck = () => window.cancelIdleCallback(idleId)
+        return
+      }
+
+      const timeoutId = globalThis.setTimeout(() => void checkForUpdates(), 4500)
+      cancelScheduledCheck = () => globalThis.clearTimeout(timeoutId)
+    }
+
+    scheduleCheck()
 
     return () => {
       cancelled = true
+      cancelScheduledCheck?.()
       cleanupWebListeners?.()
     }
   }, [])

@@ -162,7 +162,7 @@ fn open_external_url(url: String) -> Result<(), String> {
 
 #[cfg(not(debug_assertions))]
 fn wait_for_local_server(child: &mut Child, port: u16) -> Result<(), String> {
-    for _ in 0..120 {
+    for _ in 0..240 {
         if TcpStream::connect(("127.0.0.1", port)).is_ok() {
             return Ok(());
         }
@@ -176,7 +176,7 @@ fn wait_for_local_server(child: &mut Child, port: u16) -> Result<(), String> {
             ));
         }
 
-        thread::sleep(Duration::from_millis(250));
+        thread::sleep(Duration::from_millis(100));
     }
 
     Err("Bundled Bezgrow server did not become ready in time".to_string())

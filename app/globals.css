@@ -362,6 +362,17 @@ video {
   pointer-events: none;
 }
 
+@media (max-width: 640px), (prefers-reduced-motion: reduce) {
+  .inventory-grid-bg {
+    animation: none;
+  }
+
+  .inventory-sheen::after,
+  .animate-pulse {
+    animation: none !important;
+  }
+}
+
 .hero-scene-3d {
   position: absolute;
   inset: 74px 0 120px;

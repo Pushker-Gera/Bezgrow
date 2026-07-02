@@ -1,8 +1,8 @@
 "use client"
 
 import { useEffect } from "react"
+import { getCachedAccessToken } from "@/lib/api/client-fetch"
 import { isTauriRuntimeAsync } from "@/lib/desktop/tauri"
-import { supabase } from "@/lib/supabase"
 
 function apiPathFrom(input: RequestInfo | URL) {
   const rawUrl = typeof input === "string" || input instanceof URL ? input.toString() : input.url
@@ -34,13 +34,8 @@ export default function DesktopApiBridge() {
 
         const headers = new Headers(init?.headers || (input instanceof Request ? input.headers : undefined))
         if (!headers.has("authorization")) {
-          const {
-            data: { session },
-          } = await supabase.auth.getSession()
-
-          if (session?.access_token) {
-            headers.set("authorization", `Bearer ${session.access_token}`)
-          }
+          const token = await getCachedAccessToken()
+          if (token) headers.set("authorization", `Bearer ${token}`)
         }
 
         const proxyUrl = `/api/desktop-proxy?path=${encodeURIComponent(apiPath)}`

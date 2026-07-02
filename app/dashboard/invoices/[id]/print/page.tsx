@@ -69,19 +69,19 @@ export default function PrintInvoicePage() {
     }
     setInvoice(typedInvoice)
 
-    const { data: itemRows } = await supabase.from("invoice_items").select("*").eq("invoice_id", invoiceId)
+    const [{ data: itemRows }, { data: organizationData }, { data: customerData }] = await Promise.all([
+      supabase.from("invoice_items").select("*").eq("invoice_id", invoiceId),
+      typedInvoice?.organization_id
+        ? supabase.from("organizations").select("*").eq("id", typedInvoice.organization_id).single()
+        : Promise.resolve({ data: null }),
+      typedInvoice?.customer_id
+        ? supabase.from("customers").select("*").eq("id", typedInvoice.customer_id).single()
+        : Promise.resolve({ data: null }),
+    ])
     const typedItems = (itemRows || []) as PrintRow[]
     setItems(typedItems)
-
-    if (typedInvoice?.organization_id) {
-      const { data } = await supabase.from("organizations").select("*").eq("id", typedInvoice.organization_id).single()
-      setOrganization(data as PrintRow | null)
-    }
-
-    if (typedInvoice?.customer_id) {
-      const { data } = await supabase.from("customers").select("*").eq("id", typedInvoice.customer_id).single()
-      setCustomer(data as PrintRow | null)
-    }
+    setOrganization(organizationData as PrintRow | null)
+    setCustomer(customerData as PrintRow | null)
 
     const productIds = Array.from(new Set(typedItems.map((item) => stringFrom(item, ["product_id"])).filter(Boolean)))
     if (productIds.length) {

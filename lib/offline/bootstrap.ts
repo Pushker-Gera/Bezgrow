@@ -1,6 +1,7 @@
 "use client"
 
 import { cacheWorkspaceBootstrap, getOfflineMeta, putOfflineData, setOfflineMeta } from "@/lib/offline/db"
+import { getCachedAccessToken } from "@/lib/api/client-fetch"
 import { supabase } from "@/lib/supabase"
 import type { WorkspaceBootstrapPayload } from "@/lib/workspaceBootstrapClient"
 
@@ -27,11 +28,9 @@ function organizationIdFrom(payload: WorkspaceBootstrapPayload) {
 }
 
 async function authHeaders() {
-  const {
-    data: { session },
-  } = await supabase.auth.getSession()
+  const accessToken = await getCachedAccessToken()
 
-  return session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : undefined
+  return accessToken ? { Authorization: `Bearer ${accessToken}` } : undefined
 }
 
 async function fetchList<T>(url: string, headers?: HeadersInit) {

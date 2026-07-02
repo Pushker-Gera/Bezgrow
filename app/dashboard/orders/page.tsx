@@ -3,10 +3,10 @@
 import Link from "next/link"
 import { useEffect, useMemo, useState } from "react"
 import { useDebounce } from "use-debounce"
+import { apiFetch } from "@/lib/api/client-fetch"
 import { getOrganizationId } from "@/lib/getOrganization"
 import { createOfflineId, getOfflineData, putOfflineData, queueOfflineAction } from "@/lib/offline/db"
 import { offlineFallbackMessage, shouldSaveOffline } from "@/lib/offline/network"
-import { supabase } from "@/lib/supabase"
 
 type Product = {
   id: string
@@ -105,7 +105,7 @@ export default function OrdersPage() {
     const orgId = await getOrganizationId()
 
     if (!orgId) {
-      setNotice("No organization is connected to this account.")
+      setNotice("No business is connected to this account.")
       setLoading(false)
       return
     }
@@ -117,12 +117,9 @@ export default function OrdersPage() {
 
   async function fetchProducts(orgId = organizationId) {
     if (!orgId) return
-    const {
-      data: { session },
-    } = await supabase.auth.getSession()
     try {
-      const response = await fetch("/api/products/list?limit=100", {
-        headers: session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : undefined,
+      const response = await apiFetch("/api/products/list?limit=100", {
+        credentials: "include",
         cache: "no-store",
       })
       const result = (await response.json()) as ListResponse<Product>
@@ -139,12 +136,9 @@ export default function OrdersPage() {
 
   async function fetchOrders(orgId = organizationId) {
     if (!orgId) return
-    const {
-      data: { session },
-    } = await supabase.auth.getSession()
     try {
-      const response = await fetch("/api/orders/list?limit=100", {
-        headers: session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : undefined,
+      const response = await apiFetch("/api/orders/list?limit=100", {
+        credentials: "include",
         cache: "no-store",
       })
       const result = (await response.json()) as ListResponse<OrderRow>
@@ -341,12 +335,12 @@ export default function OrdersPage() {
     setChannel("direct")
     setPaymentMode("cod")
     setItems([])
-    setNotice(`${orderNumber} saved offline. Pending sync.`)
+    setNotice(`${orderNumber} saved on this device. It will update online when the connection returns.`)
   }
 
   async function createOrder() {
     if (!organizationId) {
-      setNotice("Organization not found.")
+      setNotice("Business not found.")
       return
     }
     if (!customerName.trim()) {
@@ -378,14 +372,10 @@ export default function OrdersPage() {
     }
 
     try {
-      const {
-        data: { session },
-      } = await supabase.auth.getSession()
-      const response = await fetch("/api/orders/create", {
+      const response = await apiFetch("/api/orders/create", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          ...(session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : {}),
         },
         body: JSON.stringify(orderPayload),
       })
@@ -511,7 +501,7 @@ export default function OrdersPage() {
         <section className="grid grid-cols-1 gap-6 2xl:grid-cols-[1fr,420px]">
           <div className="space-y-6 rounded-[36px] border border-white/10 bg-white/[0.035] p-7 backdrop-blur-2xl">
             <div>
-              <h2 className="text-3xl font-black">Create ERP Order</h2>
+              <h2 className="text-3xl font-black">Create Order</h2>
               <p className="mt-2 text-sm text-neutral-500">Customer, fulfillment, shipping, payment, and line items.</p>
             </div>
 

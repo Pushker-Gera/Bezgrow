@@ -2,6 +2,7 @@
 
 import Link from "next/link"
 import { useEffect, useMemo, useState } from "react"
+import { apiFetch } from "@/lib/api/client-fetch"
 import { getOrganizationFeatures } from "@/lib/get-organization-features"
 import { getOrganizationId } from "@/lib/getOrganization"
 import { createOfflineId, getOfflineData, putOfflineData, queueOfflineAction } from "@/lib/offline/db"
@@ -444,7 +445,7 @@ export default function InventoryPage() {
             orgId = (await getOrganizationId()) || ""
 
             if (!orgId) {
-                setNotice("No organization is connected to this account.")
+                setNotice("No business is connected to this account.")
                 setLoading(false)
                 return
             }
@@ -499,14 +500,10 @@ export default function InventoryPage() {
         }
 
         try {
-            const {
-                data: { session },
-            } = await supabase.auth.getSession()
-            const response = await fetch("/api/inventory/simple-movement", {
+            const response = await apiFetch("/api/inventory/simple-movement", {
                 method: "POST",
                 headers: {
                     "Content-Type": "application/json",
-                    ...(session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : {}),
                 },
                 body: JSON.stringify(movementPayload),
             })
@@ -569,7 +566,7 @@ export default function InventoryPage() {
                 setShowAddStockModal(false)
                 setShowTransferModal(false)
                 await loadCachedInventory(organizationId)
-                setNotice("Stock updated offline. Pending sync.")
+                setNotice("Stock updated on this device. It will update online when the connection returns.")
                 return
             }
 
@@ -745,10 +742,10 @@ export default function InventoryPage() {
                         <div className="h-9 w-9 rounded-full border-2 border-emerald-400/30 border-t-emerald-300 animate-spin" />
                         <div>
                             <p className="text-sm uppercase tracking-[0.24em] text-emerald-200">
-                                Inventory Cloud
+                                Stock
                             </p>
                             <p className="mt-1 text-neutral-400">
-                                Loading live stock intelligence
+                                Loading stock
                             </p>
                         </div>
                     </div>
@@ -765,10 +762,10 @@ export default function InventoryPage() {
                         <div>
                             <div className="flex flex-wrap items-center gap-3">
                                 <span className="rounded-full border border-emerald-400/25 bg-emerald-400/10 px-3 py-1 text-xs font-semibold uppercase tracking-[0.2em] text-emerald-200">
-                                    Global Inventory Cloud
+                                    Stock Control
                                 </span>
                                 <span className="rounded-full border border-sky-400/20 bg-sky-400/10 px-3 py-1 text-xs font-semibold uppercase tracking-[0.2em] text-sky-200">
-                                    Live Supabase Data
+                                    Live Data
                                 </span>
                             </div>
 
@@ -777,9 +774,9 @@ export default function InventoryPage() {
                             </h1>
 
                             <p className="mt-4 max-w-4xl text-base leading-7 text-neutral-300">
-                                Enterprise stock control for products, warehouses,
+                                Stock control for products, warehouses,
                                 invoice-linked sales, replenishment alerts, and valuation
-                                across your SaaS operating system.
+                                across your business.
                             </p>
                         </div>
 
@@ -790,7 +787,7 @@ export default function InventoryPage() {
                                     className="rounded-lg border border-white/10 bg-white/[0.04] p-4 shadow-lg transition-all duration-300 hover:-translate-y-1 hover:border-emerald-300/30 hover:bg-white/[0.07]"
                                 >
                                     <p className="text-xs uppercase tracking-[0.18em] text-neutral-500">
-                                        Signal
+                                        Status
                                     </p>
                                     <p className="mt-2 text-sm font-semibold text-neutral-100">
                                         {signal}

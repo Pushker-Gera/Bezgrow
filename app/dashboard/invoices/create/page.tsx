@@ -1,13 +1,14 @@
 "use client"
 
 import Link from "next/link"
+import { useRouter } from "next/navigation"
 import type { ReactNode } from "react"
 import { useCallback, useEffect, useMemo, useState } from "react"
+import { apiFetch } from "@/lib/api/client-fetch"
 import { getOrganizationId } from "@/lib/getOrganization"
 import { createWhatsAppInvoiceUrl } from "@/lib/invoice-share"
 import { createOfflineId, getOfflineData, putOfflineData, queueOfflineAction } from "@/lib/offline/db"
 import { shouldSaveOffline } from "@/lib/offline/network"
-import { supabase } from "@/lib/supabase"
 import { getWorkspaceBootstrap } from "@/lib/workspaceBootstrapClient"
 
 type Customer = {
@@ -39,6 +40,7 @@ type Product = {
   gst: number | null
   stock: number | null
   sku?: string | null
+  category?: string | null
   barcode?: string | null
   batch_no?: string | null
   expiry_date?: string | null
@@ -147,13 +149,15 @@ function FieldLabel({ label, children }: { label: string; children: ReactNode })
 }
 
 export default function CreateInvoicePage() {
+  const router = useRouter()
   const [features, setFeatures] = useState<string[]>([])
   const [customers, setCustomers] = useState<Customer[]>([])
   const [products, setProducts] = useState<Product[]>([])
   const [selectedCustomer, setSelectedCustomer] = useState("")
+  const [customerSearch, setCustomerSearch] = useState("")
   const [invoiceMode, setInvoiceMode] = useState<"gst" | "no_gst">("gst")
   const [invoiceType, setInvoiceType] = useState("standard")
-  const [paymentStatus, setPaymentStatus] = useState("unpaid")
+  const [paymentStatus, setPaymentStatus] = useState("paid")
   const [paymentMethod, setPaymentMethod] = useState("cash")
   const [dueDate, setDueDate] = useState("")
   const [invoiceNotes, setInvoiceNotes] = useState("")
@@ -161,6 +165,7 @@ export default function CreateInvoicePage() {
   const [courierName, setCourierName] = useState("")
   const [trackingNumber, setTrackingNumber] = useState("")
   const [items, setItems] = useState<InvoiceItem[]>([newItem()])
+  const [productSearch, setProductSearch] = useState("")
   const [barcodeInput, setBarcodeInput] = useState("")
   const [scanQuantity, setScanQuantity] = useState(1)
   const [sendSmsMessage, setSendSmsMessage] = useState(true)
@@ -181,8 +186,8 @@ export default function CreateInvoicePage() {
 
     if (!orgId) {
       setNotice({
-        title: "Organization Error",
-        message: "No organization found for this account.",
+        title: "Business Not Found",
+        message: "No business is connected to this account.",
         type: "error",
       })
       return
@@ -200,13 +205,10 @@ export default function CreateInvoicePage() {
 
   async function fetchCustomers(orgId = organizationId) {
     if (!orgId) return
-    const {
-      data: { session },
-    } = await supabase.auth.getSession()
 
     try {
-      const response = await fetch("/api/customers/list?limit=100", {
-        headers: session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : undefined,
+      const response = await apiFetch("/api/customers/list?limit=100", {
+        credentials: "include",
         cache: "no-store",
       })
       const payload = (await response.json()) as ListResponse<Customer>
@@ -228,13 +230,10 @@ export default function CreateInvoicePage() {
 
   async function fetchProducts(orgId = organizationId) {
     if (!orgId) return
-    const {
-      data: { session },
-    } = await supabase.auth.getSession()
 
     try {
-      const response = await fetch("/api/products/list?limit=100&sort=name&direction=asc", {
-        headers: session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : undefined,
+      const response = await apiFetch("/api/products/list?limit=100&sort=name&direction=asc", {
+        credentials: "include",
         cache: "no-store",
       })
       const payload = (await response.json()) as ListResponse<Product>
@@ -260,8 +259,8 @@ export default function CreateInvoicePage() {
         console.error("Initialize error:", error)
 
         setNotice({
-          title: "Initialization Failed",
-          message: error instanceof Error ? error.message : "Unknown error",
+          title: "Billing Could Not Open",
+          message: error instanceof Error ? error.message : "Please refresh and try again.",
           type: "error",
         })
       })
@@ -270,6 +269,34 @@ export default function CreateInvoicePage() {
   }, [])
 
   const productsMap = useMemo(() => new Map(products.map((product) => [product.id, product])), [products])
+  const visibleCustomers = useMemo(() => {
+    const term = customerSearch.trim().toLowerCase()
+    if (!term) return customers.slice(0, 80)
+
+    return customers
+      .filter((customer) =>
+        [customer.name, customer.phone, customer.gst_number]
+          .filter(Boolean)
+          .join(" ")
+          .toLowerCase()
+          .includes(term)
+      )
+      .slice(0, 80)
+  }, [customerSearch, customers])
+  const visibleProducts = useMemo(() => {
+    const term = productSearch.trim().toLowerCase()
+    if (!term) return products.slice(0, 100)
+
+    return products
+      .filter((product) =>
+        [product.name, product.sku, product.barcode, product.category]
+          .filter(Boolean)
+          .join(" ")
+          .toLowerCase()
+          .includes(term)
+      )
+      .slice(0, 100)
+  }, [productSearch, products])
   const selectedCustomerRecord = useMemo(
     () => customers.find((customer) => customer.id === selectedCustomer) || null,
     [customers, selectedCustomer]
@@ -370,9 +397,10 @@ export default function CreateInvoicePage() {
 
   const resetInvoiceForm = useCallback(() => {
     setSelectedCustomer("")
+    setCustomerSearch("")
     setInvoiceMode("gst")
     setInvoiceType("standard")
-    setPaymentStatus("unpaid")
+    setPaymentStatus("paid")
     setPaymentMethod("cash")
     setDueDate("")
     setInvoiceNotes("")
@@ -380,6 +408,7 @@ export default function CreateInvoicePage() {
     setCourierName("")
     setTrackingNumber("")
     setItems([newItem()])
+    setProductSearch("")
     setBarcodeInput("")
     setScanQuantity(1)
     setSmsBillLink("")
@@ -467,7 +496,7 @@ export default function CreateInvoicePage() {
   }
 
   async function saveInvoiceOffline(invoicePayload: InvoicePayload, invoiceItems: InvoiceItemPayload[], printAfterSave: boolean) {
-    if (!organizationId) throw new Error("No cached organization is available for offline billing.")
+    if (!organizationId) throw new Error("No saved business is available for offline billing.")
 
     const now = new Date().toISOString()
     const offlineClientId = createOfflineId("invoice-client")
@@ -584,13 +613,13 @@ export default function CreateInvoicePage() {
 
     if (printAfterSave) {
       setLoading(false)
-      window.location.href = `/dashboard/invoices/${localInvoiceId}/print`
+      router.push(`/dashboard/invoices/${localInvoiceId}/print`)
       return
     }
 
     setNotice({
-      title: "Invoice Saved Offline",
-      message: `${invoiceNumber} is pending sync. Local stock was reduced.`,
+      title: "Bill Saved On This Device",
+      message: `${invoiceNumber} will update online when the connection returns. Local stock was reduced.`,
       type: "warning",
     })
     setLoading(false)
@@ -610,7 +639,7 @@ export default function CreateInvoicePage() {
     const stockValidationErrors = validateSaleableStock()
     if (stockValidationErrors.length > 0) {
       setNotice({
-        title: "Stock Validation Failed",
+        title: "Check Stock",
         message: stockValidationErrors.slice(0, 3).join(" "),
         type: "error",
       })
@@ -660,14 +689,10 @@ export default function CreateInvoicePage() {
     let data: InvoiceCreateResponse
 
     try {
-      const {
-        data: { session },
-      } = await supabase.auth.getSession()
-      const response = await fetch("/api/invoices/create", {
+      const response = await apiFetch("/api/invoices/create", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          ...(session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : {}),
         },
         body: JSON.stringify({
           ...invoicePayload,
@@ -677,13 +702,13 @@ export default function CreateInvoicePage() {
       data = (await response.json()) as InvoiceCreateResponse
 
       if (!response.ok || !data.success) {
-        setNotice({ title: "Transaction Failed", message: data.error || "Invoice transaction failed.", type: "error" })
+        setNotice({ title: "Bill Not Saved", message: data.error || "Please check the bill and try again.", type: "error" })
         setLoading(false)
         return
       }
     } catch (error) {
       if (!shouldSaveOffline(error)) {
-        setNotice({ title: "Transaction Failed", message: error instanceof Error ? error.message : "Invoice transaction failed.", type: "error" })
+        setNotice({ title: "Bill Not Saved", message: error instanceof Error ? error.message : "Please check the bill and try again.", type: "error" })
         setLoading(false)
         return
       }
@@ -693,12 +718,10 @@ export default function CreateInvoicePage() {
     }
 
     if (!data.success) {
-      setNotice({ title: "Transaction Failed", message: data.error || "Invoice transaction failed.", type: "error" })
+      setNotice({ title: "Bill Not Saved", message: data.error || "Please check the bill and try again.", type: "error" })
       setLoading(false)
       return
     }
-
-    await fetchProducts()
 
     let whatsappPhoneMissing = false
     if (data?.invoice_id && sendSmsMessage) {
@@ -711,16 +734,34 @@ export default function CreateInvoicePage() {
     }
 
     if (printAfterSave && data?.invoice_id) {
+      setProducts((current) =>
+        current.map((product) => {
+          const billedQuantity = invoiceItems
+            .filter((item) => item.product_id === product.id)
+            .reduce((sum, item) => sum + item.quantity, 0)
+
+          return billedQuantity > 0 ? { ...product, stock: Number(product.stock || 0) - billedQuantity } : product
+        })
+      )
       resetInvoiceForm()
       setLoading(false)
-      window.location.href = `/dashboard/invoices/${data.invoice_id}/print`
+      router.push(`/dashboard/invoices/${data.invoice_id}/print`)
       return
     }
 
     setNotice(
       whatsappPhoneMissing
         ? { title: "WhatsApp Not Ready", message: "Customer phone number required.", type: "warning" }
-        : { title: "Invoice Created", message: "Invoice created successfully.", type: "success" }
+        : { title: "Bill Created", message: "Bill created successfully.", type: "success" }
+    )
+    setProducts((current) =>
+      current.map((product) => {
+        const billedQuantity = invoiceItems
+          .filter((item) => item.product_id === product.id)
+          .reduce((sum, item) => sum + item.quantity, 0)
+
+        return billedQuantity > 0 ? { ...product, stock: Number(product.stock || 0) - billedQuantity } : product
+      })
     )
     resetInvoiceForm()
     setLoading(false)
@@ -753,22 +794,21 @@ export default function CreateInvoicePage() {
           <div className="flex flex-col gap-8 xl:flex-row xl:items-end xl:justify-between">
             <div>
               <div className="mb-5 inline-flex rounded-full border border-cyan-400/20 bg-cyan-500/10 px-4 py-2 text-xs font-semibold uppercase tracking-[0.22em] text-cyan-200">
-                Global Invoice Studio
+                Fast Billing
               </div>
               <h1 className="max-w-6xl text-3xl font-black leading-tight tracking-tight sm:text-4xl md:text-6xl">
-                Create GST and non-GST bills with inventory intelligence.
+                Create a bill in under 15 seconds.
               </h1>
               <p className="mt-4 max-w-4xl text-base leading-7 text-neutral-400 sm:mt-5 sm:text-lg sm:leading-8">
-                Build professional invoices with products, discounts, payment terms, due dates,
-                optional GST, shipping metadata, stock checks, and print-ready output.
+                Pick a customer, add products, check the total, and print a professional GST or non-GST bill.
               </p>
             </div>
             <div className="grid w-full gap-4 sm:grid-cols-2 xl:w-[420px]">
               <Link href="/dashboard/invoices" className="flex min-h-14 items-center justify-center rounded-lg border border-white/10 bg-white/[0.06] px-5 text-base font-black sm:min-h-[82px] sm:rounded-[28px] sm:px-6 sm:text-xl">
-                Invoice Register
+                All Invoices
               </Link>
               <Link href="/dashboard/billing" className="flex min-h-14 items-center justify-center rounded-lg border border-white/10 bg-white/[0.06] px-5 text-base font-black sm:min-h-[82px] sm:rounded-[28px] sm:px-6 sm:text-xl">
-                Billing Hub
+                Billing Overview
               </Link>
             </div>
           </div>
@@ -783,6 +823,28 @@ export default function CreateInvoicePage() {
               </a>
             )}
           </div>
+        )}
+
+        {(customers.length === 0 || products.length === 0) && (
+          <section className="rounded-lg border border-amber-400/25 bg-amber-500/10 p-5 text-amber-50 sm:rounded-[28px] sm:p-6">
+            <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
+              <div>
+                <p className="text-xs font-black uppercase tracking-[0.18em] text-amber-200">Quick setup needed</p>
+                <h2 className="mt-2 text-2xl font-black text-white">Finish setup before billing</h2>
+                <p className="mt-2 text-sm leading-6 text-amber-100/80">
+                  Add at least one product and one customer to create bills quickly.
+                </p>
+              </div>
+              <div className="grid gap-3 sm:grid-cols-2">
+                <Link href="/dashboard/products" className="flex h-12 items-center justify-center rounded-lg bg-white px-5 text-sm font-black text-black">
+                  Add Products
+                </Link>
+                <Link href="/dashboard/customers" className="flex h-12 items-center justify-center rounded-lg border border-white/20 bg-white/10 px-5 text-sm font-black text-white">
+                  Add Customers
+                </Link>
+              </div>
+            </div>
+          </section>
         )}
 
         <section className="grid grid-cols-1 gap-5 md:grid-cols-2 2xl:grid-cols-4">
@@ -803,12 +865,20 @@ export default function CreateInvoicePage() {
         <section className="grid grid-cols-1 gap-6 2xl:grid-cols-[1fr,420px]">
           <div className="space-y-6">
             <div className="rounded-lg border border-white/10 bg-white/[0.035] p-5 backdrop-blur-2xl sm:rounded-[36px] sm:p-7">
-              <h2 className="text-2xl font-black sm:text-3xl">Invoice Configuration</h2>
+              <h2 className="text-2xl font-black sm:text-3xl">Bill Details</h2>
               <div className="mt-6 grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
+                <FieldLabel label="Find Customer">
+                  <input
+                    value={customerSearch}
+                    onChange={(event) => setCustomerSearch(event.target.value)}
+                    placeholder="Search name, phone, or GST"
+                    className={inputClass()}
+                  />
+                </FieldLabel>
                 <FieldLabel label="Customer">
                   <select value={selectedCustomer} onChange={(e) => setSelectedCustomer(e.target.value)} className={inputClass()}>
                     <option value="">Choose customer</option>
-                    {customers.map((customer) => (
+                    {visibleCustomers.map((customer) => (
                       <option key={customer.id} value={customer.id}>{customer.name}</option>
                     ))}
                   </select>
@@ -835,9 +905,9 @@ export default function CreateInvoicePage() {
                 </FieldLabel>
                 <FieldLabel label="Payment Status">
                   <select value={paymentStatus} onChange={(e) => setPaymentStatus(e.target.value)} className={inputClass()}>
+                    <option value="paid">Paid</option>
                     <option value="unpaid">Unpaid</option>
                     <option value="partial">Partial</option>
-                    <option value="paid">Paid</option>
                   </select>
                 </FieldLabel>
                 <FieldLabel label="Payment Method">
@@ -877,22 +947,33 @@ export default function CreateInvoicePage() {
                 </div>
               )}
               <FieldLabel label="Invoice Notes">
-                <textarea value={invoiceNotes} onChange={(e) => setInvoiceNotes(e.target.value)} rows={4} placeholder="Invoice notes, payment terms, dispatch details..." className={`${inputClass("mt-5 h-auto py-4")} resize-none`} />
+                  <textarea value={invoiceNotes} onChange={(e) => setInvoiceNotes(e.target.value)} rows={4} placeholder="Notes, payment terms, or dispatch details..." className={`${inputClass("mt-5 h-auto py-4")} resize-none`} />
               </FieldLabel>
             </div>
 
             <div className="rounded-lg border border-white/10 bg-white/[0.035] p-5 backdrop-blur-2xl sm:rounded-[36px] sm:p-7">
               <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
                 <div>
-                  <h2 className="text-2xl font-black sm:text-3xl">Invoice Items</h2>
-                  <p className="mt-2 text-sm text-neutral-500">Responsive product rows with stock, batch, barcode, discount, and tax control.</p>
+                  <h2 className="text-2xl font-black sm:text-3xl">Products on Bill</h2>
+                  <p className="mt-2 text-sm text-neutral-500">Search, scan, or add products. Totals update instantly.</p>
                 </div>
                 <button onClick={addItem} className="h-14 w-full rounded-lg bg-white px-6 font-black text-black md:w-auto md:rounded-2xl">Add Product</button>
               </div>
 
+              <div className="mt-6">
+                <FieldLabel label="Find Product">
+                  <input
+                    value={productSearch}
+                    onChange={(event) => setProductSearch(event.target.value)}
+                    placeholder="Search product, SKU, barcode, or category"
+                    className={inputClass()}
+                  />
+                </FieldLabel>
+              </div>
+
               <div className="mt-6 rounded-lg border border-cyan-400/20 bg-cyan-500/10 p-4 sm:rounded-[28px] sm:p-5">
                 <p className="text-xs font-bold uppercase tracking-[0.2em] text-cyan-200">
-                  Retail Barcode Scanner
+                  Barcode / SKU
                 </p>
                 <div className="mt-4 grid grid-cols-1 gap-4 lg:grid-cols-[1fr,150px,180px]">
                   <FieldLabel label="Barcode / SKU">
@@ -909,7 +990,7 @@ export default function CreateInvoicePage() {
                       className={inputClass()}
                     />
                   </FieldLabel>
-                  <FieldLabel label="Scan Qty">
+                  <FieldLabel label="Qty">
                     <input
                       type="number"
                       min={1}
@@ -922,17 +1003,20 @@ export default function CreateInvoicePage() {
                     onClick={handleBarcodeScan}
                     className="h-14 rounded-lg bg-cyan-400 px-6 font-black text-black lg:mt-[27px] lg:rounded-2xl"
                   >
-                    Add Scan
+                    Add
                   </button>
                 </div>
                 <p className="mt-3 text-xs text-neutral-400">
-                  Works with USB barcode scanners that type into the focused field, ideal for malls, supermarkets, retail counters, and POS billing.
+                  Works with barcode scanners that type into the focused field.
                 </p>
               </div>
 
               <div className="mt-6 space-y-4">
                 {items.map((item) => {
                   const product = productsMap.get(item.product_id)
+                  const productOptions = product && !visibleProducts.some((option) => option.id === product.id)
+                    ? [product, ...visibleProducts]
+                    : visibleProducts
                   const lineBase = item.quantity * item.unit_price
                   const discountAmount = (lineBase * item.discount_percent) / 100
                   const lineTax = invoiceMode === "no_gst" ? 0 : ((lineBase - discountAmount) * item.tax_percent) / 100
@@ -944,7 +1028,7 @@ export default function CreateInvoicePage() {
                         <FieldLabel label="Product">
                           <select value={item.product_id} onChange={(e) => selectProduct(item.id, e.target.value)} className={inputClass()}>
                             <option value="">Select product</option>
-                            {products.map((product) => (
+                            {productOptions.map((product) => (
                               <option key={product.id} value={product.id}>
                                 {product.name} {product.sku ? `- ${product.sku}` : ""} ({product.stock || 0} stock)
                               </option>
@@ -1008,7 +1092,7 @@ export default function CreateInvoicePage() {
               </div>
               <div className="mt-7 grid grid-cols-1 gap-3 sm:grid-cols-2">
                 <button onClick={() => void saveInvoice(false)} disabled={loading} className="h-14 rounded-lg bg-white text-base font-black text-black disabled:opacity-50 sm:h-16 sm:rounded-2xl sm:text-lg">
-                  {loading ? "Saving..." : "Save Invoice"}
+                  {loading ? "Saving..." : "Save Bill"}
                 </button>
                 <button onClick={() => void saveInvoice(true)} disabled={loading} className="h-14 rounded-lg bg-gradient-to-r from-cyan-400 to-blue-600 text-base font-black text-black shadow-[0_20px_70px_rgba(34,211,238,0.28)] disabled:opacity-50 sm:h-16 sm:rounded-2xl sm:text-lg">
                   {loading ? "Saving..." : "Save & Print"}

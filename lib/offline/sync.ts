@@ -1,6 +1,6 @@
 "use client"
 
-import { supabase } from "@/lib/supabase"
+import { getCachedAccessToken } from "@/lib/api/client-fetch"
 import {
   getOfflineData,
   listOfflineActions,
@@ -35,17 +35,15 @@ function syncLogId(prefix: string) {
 }
 
 async function authHeaders() {
-  const {
-    data: { session },
-  } = await supabase.auth.getSession()
+  const accessToken = await getCachedAccessToken()
 
-  if (!session?.access_token) {
+  if (!accessToken) {
     throw new Error("Internet required to refresh login.")
   }
 
   return {
     "Content-Type": "application/json",
-    Authorization: `Bearer ${session.access_token}`,
+    Authorization: `Bearer ${accessToken}`,
   }
 }
 

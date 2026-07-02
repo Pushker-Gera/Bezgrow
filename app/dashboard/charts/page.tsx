@@ -97,7 +97,7 @@ export default function AnalyticsPage() {
             const orgId = await getOrganizationId()
 
             if (!orgId) {
-                setNotice("No organization is connected to this account.")
+                setNotice("No business is connected to this account.")
                 return
             }
 
@@ -271,17 +271,17 @@ export default function AnalyticsPage() {
                         <div>
                             <div className="flex flex-wrap gap-3">
                                 <span className="rounded-full border border-sky-400/25 bg-sky-400/10 px-3 py-1 text-xs font-semibold uppercase tracking-[0.2em] text-sky-200">
-                                    Global Analytics
+                                    Reports
                                 </span>
                                 <span className="rounded-full border border-emerald-400/25 bg-emerald-400/10 px-3 py-1 text-xs font-semibold uppercase tracking-[0.2em] text-emerald-200">
-                                    ERP Intelligence
+                                    Business Insights
                                 </span>
                             </div>
                             <h1 className="mt-5 max-w-5xl text-4xl font-black tracking-tight md:text-6xl">
-                                Analytics
+                                Reports
                             </h1>
                             <p className="mt-4 max-w-4xl text-base leading-7 text-neutral-300">
-                                Organization-scoped intelligence for revenue, inventory value,
+                                Business reports for revenue, inventory value,
                                 stock health, customer growth, fulfillment, margin, and expiry risk.
                             </p>
                         </div>
@@ -405,15 +405,15 @@ export default function AnalyticsPage() {
                             </ChartCard>
 
                             <div className="rounded-lg border border-white/10 bg-black/75 p-5 shadow-2xl backdrop-blur-xl">
-                                <p className="text-xs uppercase tracking-[0.18em] text-sky-300">Global Scale Signals</p>
+                                <p className="text-xs uppercase tracking-[0.18em] text-sky-300">Business Readiness</p>
                                 <div className="mt-4 grid gap-3 md:grid-cols-2">
                                     {[
-                                        ["Tenant Scoped Data", "Analytics now uses current organization only"],
-                                        ["Revenue Schema Resilience", "Supports grand_total, total_amount, and total"],
+                                        ["Private Business Data", "Reports show the current business only"],
+                                        ["Revenue Totals", "Invoices are counted consistently across billing views"],
                                         ["Inventory Intelligence", `${analytics.lowStock.length} low-stock products`],
-                                        ["Customer Intelligence", `${state.customers.length} CRM accounts`],
+                                        ["Customer Records", `${state.customers.length} customer accounts`],
                                         ["Fulfillment Health", `${analytics.pendingOrders.length} pending orders`],
-                                        ["Launch Gap", "Add RLS audit, multi-currency, tax profiles, monitoring"],
+                                        ["Daily Review", "Check revenue, stock risk, and unpaid work before closing"],
                                     ].map(([title, body]) => (
                                         <div key={title} className="rounded-lg border border-white/10 bg-white/[0.04] p-4">
                                             <p className="font-semibold">{title}</p>

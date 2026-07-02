@@ -3,6 +3,7 @@
 import type { FormEvent } from "react"
 import { useCallback, useEffect, useRef, useState } from "react"
 import type { Session } from "@supabase/supabase-js"
+import { useRouter } from "next/navigation"
 import { BezgrowLogoMark } from "@/components/brand/BezgrowLogoMark"
 import { completeDesktopAuthCallback } from "@/lib/desktop/auth-callback"
 import { hasCachedDesktopSession, persistDesktopSession, readCachedDesktopSession } from "@/lib/desktop/session"
@@ -27,6 +28,7 @@ type BootstrapResponse = {
 }
 
 export default function LoginPage() {
+    const router = useRouter()
 
     const [email, setEmail] = useState("")
     const [password, setPassword] = useState("")
@@ -70,19 +72,9 @@ export default function LoginPage() {
     }, [])
 
     const redirectToCallback = useCallback(async (accessToken: string, refreshToken: string, nextPath = getSafeNextPath("/dashboard")) => {
-        if (await isTauriRuntimeAsync()) {
-            const redirectPath = await completeDesktopAuthCallback(accessToken, refreshToken, nextPath)
-            window.location.replace(redirectPath)
-            return
-        }
-
-        const params = new URLSearchParams({
-            access_token: accessToken,
-            refresh_token: refreshToken,
-            next: nextPath,
-        })
-        window.location.assign(`${getSiteUrl()}/auth/callback?${params.toString()}`)
-    }, [getSafeNextPath, getSiteUrl])
+        const redirectPath = await completeDesktopAuthCallback(accessToken, refreshToken, nextPath)
+        router.replace(redirectPath)
+    }, [getSafeNextPath, router])
 
     function createDesktopOAuthState() {
         const bytes = new Uint8Array(32)
@@ -136,7 +128,7 @@ export default function LoginPage() {
             if (data.session) await persistDesktopSession(data.session)
 
             const redirectPath = await completeDesktopAuthCallback(session.access_token, session.refresh_token, getSafeNextPath("/dashboard"))
-            window.location.replace(redirectPath)
+            router.replace(redirectPath)
             return
         }
 
@@ -153,7 +145,7 @@ export default function LoginPage() {
 
             const navigate = (path: string) => {
                 navigating = true
-                window.location.replace(path)
+                router.replace(path)
             }
 
             const urlError = new URLSearchParams(window.location.search).get("error")
@@ -253,7 +245,7 @@ export default function LoginPage() {
         return () => {
             active = false
         }
-    }, [getSafeNextPath, redirectToCallback])
+    }, [getSafeNextPath, redirectToCallback, router])
 
     async function login(event?: FormEvent<HTMLFormElement>) {
         event?.preventDefault()
@@ -525,7 +517,7 @@ export default function LoginPage() {
                 </button>
 
                 <p className="mt-6 break-words text-center text-sm text-gray-500">
-                    Secure business access powered by Supabase authentication.
+                    Secure access for your business account.
                 </p>
 
             </form>

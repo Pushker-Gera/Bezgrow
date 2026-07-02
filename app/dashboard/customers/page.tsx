@@ -2,10 +2,10 @@
 
 import { useEffect, useMemo, useState } from "react"
 import { useDebounce } from "use-debounce"
+import { apiFetch } from "@/lib/api/client-fetch"
 import { getOrganizationId } from "@/lib/getOrganization"
 import { createOfflineId, getOfflineData, putOfflineData, queueOfflineAction } from "@/lib/offline/db"
 import { offlineFallbackMessage, shouldSaveOffline } from "@/lib/offline/network"
-import { supabase } from "@/lib/supabase"
 
 type Customer = {
   id: string
@@ -188,7 +188,7 @@ export default function CustomersPage() {
       const orgId = await getOrganizationId()
 
       if (!orgId) {
-        setNotice("No organization is connected to this account.")
+        setNotice("No business is connected to this account.")
         return
       }
 
@@ -204,10 +204,6 @@ export default function CustomersPage() {
   async function fetchData(orgId = organizationId) {
     if (!orgId) return
 
-    const {
-      data: { session },
-    } = await supabase.auth.getSession()
-    const headers = session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : undefined
     const customerParams = new URLSearchParams({
       limit: "100",
       organization_id: orgId,
@@ -219,8 +215,8 @@ export default function CustomersPage() {
 
     try {
       const [customersResponse, invoicesResponse] = await Promise.all([
-        fetch(`/api/customers/list?${customerParams.toString()}`, { headers, cache: "no-store" }),
-        fetch(`/api/invoices/list?${invoiceParams.toString()}`, { headers, cache: "no-store" }),
+        apiFetch(`/api/customers/list?${customerParams.toString()}`, { cache: "no-store" }),
+        apiFetch(`/api/invoices/list?${invoiceParams.toString()}`, { cache: "no-store" }),
       ])
 
       const customersResult = (await customersResponse.json()) as ListResponse<Customer>
@@ -334,14 +330,10 @@ export default function CustomersPage() {
     }
 
     try {
-      const {
-        data: { session },
-      } = await supabase.auth.getSession()
-      const response = await fetch("/api/customers/save", {
+      const response = await apiFetch("/api/customers/save", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          ...(session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : {}),
         },
         body: JSON.stringify({
           id: editCustomer?.id,
@@ -379,14 +371,10 @@ export default function CustomersPage() {
     if (!organizationId) return
 
     try {
-      const {
-        data: { session },
-      } = await supabase.auth.getSession()
-      const response = await fetch("/api/customers/status", {
+      const response = await apiFetch("/api/customers/status", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          ...(session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : {}),
         },
         body: JSON.stringify({ id: customer.id, active }),
       })
@@ -455,14 +443,10 @@ export default function CustomersPage() {
     if (!confirmCustomer || !organizationId) return
 
     try {
-      const {
-        data: { session },
-      } = await supabase.auth.getSession()
-      const response = await fetch("/api/customers/status", {
+      const response = await apiFetch("/api/customers/status", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          ...(session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : {}),
         },
         body: JSON.stringify({ id: confirmCustomer.id, archive: true }),
       })
@@ -613,7 +597,7 @@ export default function CustomersPage() {
             <div>
               <div className="flex flex-wrap gap-3">
                 <span className="rounded-full border border-sky-400/25 bg-sky-400/10 px-3 py-1 text-xs font-semibold uppercase tracking-[0.2em] text-sky-200">
-                  Global CRM Ledger
+                  Customer Ledger
                 </span>
                 <span className="rounded-full border border-emerald-400/25 bg-emerald-400/10 px-3 py-1 text-xs font-semibold uppercase tracking-[0.2em] text-emerald-200">
                   Billing-Linked Customers
@@ -623,8 +607,8 @@ export default function CustomersPage() {
                 Customers
               </h1>
               <p className="mt-4 max-w-4xl text-base leading-7 text-neutral-300">
-                Professional CRM for retail, wholesale, GST customers, recurring buyers,
-                billing history, account health, and globally scalable customer operations.
+                Customer records for retail, wholesale, GST buyers, recurring customers,
+                billing history, account health, and everyday follow-ups.
               </p>
             </div>
 
@@ -743,7 +727,7 @@ export default function CustomersPage() {
           <div className="flex items-center justify-between border-b border-white/10 pb-4">
             <div>
               <p className="text-xs uppercase tracking-[0.18em] text-sky-300">Customer Ledger</p>
-              <h2 className="mt-2 text-2xl font-black">CRM Accounts</h2>
+              <h2 className="mt-2 text-2xl font-black">Customer Accounts</h2>
             </div>
             <p className="text-sm text-neutral-500">
               {filteredCustomers.length} visible accounts
@@ -971,7 +955,7 @@ export default function CustomersPage() {
           <div className="w-full max-w-md rounded-lg border border-white/10 bg-[#050606] p-6 shadow-2xl">
             <h2 className="text-xl font-black text-red-200">Archive Customer</h2>
             <p className="mt-3 text-sm leading-6 text-neutral-400">
-              Archive {confirmCustomer.name}? They will be removed from active CRM workflows.
+              Archive {confirmCustomer.name}? They will be removed from active customer workflows.
             </p>
             <div className="mt-6 flex justify-end gap-3">
               <button
@@ -1026,7 +1010,7 @@ function CustomerFormModal({
       <div className="max-h-[calc(100dvh-16px)] w-full max-w-3xl overflow-y-auto rounded-lg border border-white/10 bg-[#050606] shadow-2xl inventory-sheen sm:max-h-[calc(100vh-32px)]">
         <div className="sticky top-0 z-30 flex items-center justify-between border-b border-white/10 bg-[#050606]/95 p-4 backdrop-blur-xl sm:p-5">
           <div>
-            <p className="text-xs uppercase tracking-[0.18em] text-sky-300">CRM Account</p>
+            <p className="text-xs uppercase tracking-[0.18em] text-sky-300">Customer Account</p>
             <h2 className="mt-2 text-xl font-black sm:text-2xl">
               {editMode ? "Edit Customer" : "Add Customer"}
             </h2>
@@ -1061,7 +1045,7 @@ function CustomerFormModal({
 
         <div className="mx-4 rounded-lg border border-emerald-400/20 bg-emerald-400/10 p-4 text-sm text-emerald-100 sm:mx-5">
           Customer records connect to billing, GST classification, account status,
-          purchase history, and global CRM analytics.
+          purchase history, and customer analytics.
         </div>
 
         <div className="border-t border-white/10 bg-[#050606]/95 p-4 sm:p-5">

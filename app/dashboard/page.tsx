@@ -1,7 +1,7 @@
 "use client"
 
 import Link from "next/link"
-import { useEffect, useMemo, useState } from "react"
+import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { getCachedWorkspaceBootstrap, getOfflineData } from "@/lib/offline/db"
 
 type AnyRow = Record<string, unknown>
@@ -130,13 +130,25 @@ export default function Dashboard() {
     const [dashboard, setDashboard] = useState<DashboardState>(emptyDashboard)
     const [loading, setLoading] = useState(true)
     const [notice, setNotice] = useState("")
+    const dashboardRequestRef = useRef<AbortController | null>(null)
+    const lastDashboardLoadRef = useRef(0)
 
-    async function loadDashboard() {
+    const loadDashboard = useCallback(async (options: { silent?: boolean; force?: boolean } = {}) => {
+        const now = Date.now()
+        if (!options.force && dashboardRequestRef.current) return
+        if (!options.force && options.silent && now - lastDashboardLoadRef.current < 60000) return
+
+        dashboardRequestRef.current?.abort()
+        const controller = new AbortController()
+        dashboardRequestRef.current = controller
+        lastDashboardLoadRef.current = now
+
         try {
-            setLoading(true)
+            if (!options.silent) setLoading(true)
             const response = await fetch("/api/dashboard/summary", {
                 credentials: "include",
                 cache: "no-store",
+                signal: controller.signal,
             })
             const payload = await response.json()
 
@@ -164,6 +176,7 @@ export default function Dashboard() {
                 },
             })
         } catch (error) {
+            if (error instanceof DOMException && error.name === "AbortError") return
             const cached = getCachedWorkspaceBootstrap()
             const organizationId = cached?.organization?.id || cached?.membership?.organization_id || null
 
@@ -246,17 +259,19 @@ export default function Dashboard() {
                     : error instanceof Error ? error.message : "Dashboard loaded from local cache."
             )
         } finally {
-            setLoading(false)
+            if (dashboardRequestRef.current === controller) dashboardRequestRef.current = null
+            if (!options.silent) setLoading(false)
         }
-    }
-
-    useEffect(() => {
-        loadDashboard()
     }, [])
 
     useEffect(() => {
+        void loadDashboard({ force: true })
+    }, [loadDashboard])
+
+    useEffect(() => {
         const refreshOnFocus = () => {
-            void loadDashboard()
+            if (document.visibilityState === "hidden") return
+            void loadDashboard({ silent: true })
         }
 
         window.addEventListener("focus", refreshOnFocus)
@@ -266,7 +281,7 @@ export default function Dashboard() {
             window.removeEventListener("focus", refreshOnFocus)
             document.removeEventListener("visibilitychange", refreshOnFocus)
         }
-    }, [])
+    }, [loadDashboard])
 
     const metrics = useMemo(
         () => ({ ...dashboard.summaryMetrics, lowStockProducts: dashboard.lowStockProducts }),
@@ -313,7 +328,7 @@ export default function Dashboard() {
             href: "/dashboard/customers",
         },
         {
-            label: "ERP Health",
+            label: "Business Health",
             value: `${metrics.erpHealth}%`,
             meta: `${metrics.fulfillmentRate}% fulfillment`,
             accent: "from-amber-200 to-yellow-500",
@@ -324,35 +339,63 @@ export default function Dashboard() {
 
     const operationLinks = [
         ["Create Invoice", "/dashboard/invoices/create", "Billing"],
-        ["Manage Products", "/dashboard/products", "Catalog"],
-        ["Inventory Hub", "/dashboard/inventory", "Warehouse"],
-        ["Customers", "/dashboard/customers", "CRM"],
-        ["Orders", "/dashboard/orders", "Fulfillment"],
+        ["Products", "/dashboard/products", "Stock list"],
+        ["Stock", "/dashboard/inventory", "Inventory"],
+        ["Customers", "/dashboard/customers", "Customer list"],
+        ["Orders", "/dashboard/orders", "Delivery"],
         ["Reports", "/dashboard/charts", "Analytics"],
     ]
 
     const readiness = [
         {
-            label: "Tenant data isolation",
-            status: "Needs RLS audit",
-            ok: false,
+            label: "Business data protected",
+            status: "Private to this account",
+            ok: true,
         },
         {
-            label: "Invoice schema consistency",
-            status: "Standardize totals",
-            ok: false,
+            label: "Invoices and totals",
+            status: dashboard.counts.invoices > 0 ? "Ready" : "Add first invoice",
+            ok: dashboard.counts.invoices > 0,
         },
         {
-            label: "Inventory and billing data",
-            status: loading ? "Syncing" : "Live",
+            label: "Stock and billing data",
+            status: loading ? "Updating" : "Ready",
             ok: !loading,
         },
         {
-            label: "Global tax and currency",
-            status: "Roadmap",
-            ok: false,
+            label: "Currency",
+            status: "Configured",
+            ok: true,
         },
     ]
+
+    const setupSteps = [
+        {
+            label: "Business created",
+            helper: dashboard.organizationName,
+            href: "/dashboard/settings",
+            done: true,
+        },
+        {
+            label: "Add products",
+            helper: "Create your stock list",
+            href: "/dashboard/products",
+            done: dashboard.counts.products > 0,
+        },
+        {
+            label: "Add customers",
+            helper: "Save regular buyers",
+            href: "/dashboard/customers",
+            done: dashboard.counts.customers > 0,
+        },
+        {
+            label: "Create first invoice",
+            helper: "Start billing",
+            href: "/dashboard/invoices/create",
+            done: dashboard.counts.invoices > 0,
+        },
+    ]
+    const showSetupGuide = setupSteps.some((step) => !step.done)
 
     return (
         <div className="inventory-grid-bg min-h-full overflow-x-hidden text-white">
@@ -361,7 +404,7 @@ export default function Dashboard() {
                     <div className="fixed right-6 top-24 z-50 rounded-full border border-white/10 bg-black/80 px-4 py-2 shadow-2xl backdrop-blur">
                         <div className="flex items-center gap-3">
                             <div className="h-4 w-4 rounded-full border-2 border-neutral-600 border-t-sky-300 animate-spin" />
-                            <span className="text-sm text-neutral-300">Syncing dashboard</span>
+                            <span className="text-sm text-neutral-300">Updating dashboard</span>
                         </div>
                     </div>
                 )}
@@ -371,25 +414,24 @@ export default function Dashboard() {
                         <div>
                             <div className="flex flex-wrap gap-3">
                                 <span className="rounded-full border border-sky-400/25 bg-sky-400/10 px-3 py-1 text-xs font-semibold uppercase tracking-[0.2em] text-sky-200">
-                                    Global ERP Command Center
+                                    Business Overview
                                 </span>
                                 <span className="rounded-full border border-emerald-400/25 bg-emerald-400/10 px-3 py-1 text-xs font-semibold uppercase tracking-[0.2em] text-emerald-200">
-                                    Inventory + Billing + CRM
+                                    Stock + Billing + Customers
                                 </span>
                             </div>
                             <h1 className="mt-5 max-w-5xl text-3xl font-black tracking-tight sm:text-4xl md:text-6xl">
                                 Operations Dashboard
                             </h1>
                             <p className="mt-4 max-w-4xl text-base leading-7 text-neutral-300">
-                                Live business control for {dashboard.organizationName}: stock,
-                                billing, orders, collections, customers, warehouse activity,
-                                and global launch readiness.
+                                Live business control for {dashboard.organizationName}: sales,
+                                stock, collections, customers, orders, and daily activity.
                             </p>
                         </div>
 
                         <div className="grid gap-3 sm:grid-cols-3">
                             {[
-                                [`${metrics.erpHealth}%`, "ERP health"],
+                                [`${metrics.erpHealth}%`, "business health"],
                                 [`${dashboard.counts.warehouses}`, "warehouses"],
                                 [`${metrics.pendingInvoices}`, "pending bills"],
                             ].map(([value, label]) => (
@@ -427,6 +469,41 @@ export default function Dashboard() {
                         </div>
                     )}
                 </section>
+
+                {showSetupGuide && (
+                    <section className="rounded-lg border border-emerald-400/20 bg-emerald-400/[0.06] p-5 shadow-2xl backdrop-blur-xl">
+                        <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
+                            <div>
+                                <p className="text-xs font-black uppercase tracking-[0.18em] text-emerald-200">2-minute setup</p>
+                                <h2 className="mt-2 text-2xl font-black text-white">Get ready to create your first bill</h2>
+                                <p className="mt-2 text-sm leading-6 text-neutral-400">
+                                    Complete these basics once. Bezgrow will feel much faster after products and customers are saved.
+                                </p>
+                            </div>
+                            <Link href="/dashboard/invoices/create" className="flex h-12 items-center justify-center rounded-lg bg-white px-5 text-sm font-black text-black">
+                                Start Billing
+                            </Link>
+                        </div>
+                        <div className="mt-5 grid gap-3 md:grid-cols-4">
+                            {setupSteps.map((step, index) => (
+                                <Link
+                                    key={step.label}
+                                    href={step.href}
+                                    className={`rounded-lg border p-4 transition-all hover:-translate-y-1 ${step.done ? "border-emerald-400/20 bg-emerald-400/10" : "border-white/10 bg-black/35 hover:border-emerald-300/30"}`}
+                                >
+                                    <div className="flex items-center justify-between gap-3">
+                                        <span className="text-xs font-black uppercase tracking-[0.16em] text-neutral-500">Step {index + 1}</span>
+                                        <span className={`rounded-full px-2.5 py-1 text-[11px] font-black ${step.done ? "bg-emerald-300 text-black" : "bg-white/10 text-white"}`}>
+                                            {step.done ? "Done" : "Next"}
+                                        </span>
+                                    </div>
+                                    <p className="mt-4 font-black text-white">{step.label}</p>
+                                    <p className="mt-2 text-xs text-neutral-500">{step.helper}</p>
+                                </Link>
+                            ))}
+                        </div>
+                    </section>
+                )}
 
                 <section className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-5">
                     {kpiCards.map((card) => (
@@ -553,7 +630,7 @@ export default function Dashboard() {
 
                         <div className="rounded-lg border border-white/10 bg-black/75 p-5 shadow-2xl backdrop-blur-xl">
                             <p className="text-xs uppercase tracking-[0.18em] text-sky-300">
-                                Global Launch Readiness
+                                Business Safety
                             </p>
                             <div className="mt-4 space-y-3">
                                 {readiness.map((item) => (
@@ -633,7 +710,7 @@ export default function Dashboard() {
                         <div className="flex items-center justify-between">
                             <h2 className="text-xl font-black">Stock Activity</h2>
                             <Link href="/dashboard/inventory" className="text-sm text-sky-200 hover:text-sky-100">
-                                View hub
+                                View stock
                             </Link>
                         </div>
                         <div className="mt-4 space-y-3">

@@ -20,8 +20,8 @@ const navItems = [
     ["Invoices", "/dashboard/invoices"],
     ["Orders", "/dashboard/orders"],
     ["Billing", "/dashboard/billing"],
-    ["Inventory", "/dashboard/inventory"],
-    ["Analytics", "/dashboard/charts"],
+    ["Stock", "/dashboard/inventory"],
+    ["Reports", "/dashboard/charts"],
     ["Settings", "/dashboard/settings"],
 ]
 
@@ -36,9 +36,27 @@ const mobileMoreNav = [
     ["Orders", "/dashboard/orders"],
     ["Reports", "/dashboard/charts"],
     ["Billing", "/dashboard/billing"],
-    ["Inventory", "/dashboard/inventory"],
+    ["Stock", "/dashboard/inventory"],
     ["Settings", "/dashboard/settings"],
 ]
+
+const priorityPrefetchRoutes = [
+    "/dashboard/invoices/create",
+    "/dashboard/products",
+    "/dashboard/customers",
+]
+
+function scheduleIdleTask(callback: () => void, timeout = 3000) {
+    if (typeof window === "undefined") return () => undefined
+
+    if ("requestIdleCallback" in window) {
+        const idleId = window.requestIdleCallback(callback, { timeout })
+        return () => window.cancelIdleCallback(idleId)
+    }
+
+    const timeoutId = globalThis.setTimeout(callback, Math.min(timeout, 1200))
+    return () => globalThis.clearTimeout(timeoutId)
+}
 
 export default function DashboardLayout({ children }: { children: ReactNode }) {
     const router = useRouter()
@@ -52,9 +70,13 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
     const [offlinePrepMessage, setOfflinePrepMessage] = useState("")
 
     useEffect(() => {
+        let cancelled = false
+        let cancelOfflinePrep: () => void = () => undefined
+
         queueMicrotask(async () => {
             try {
                 const payload = await getWorkspaceBootstrap()
+                if (cancelled) return
 
                 if (!payload?.success) {
                     router.replace("/login")
@@ -67,25 +89,43 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
 
                 const isAdmin = Boolean(payload.permissions?.admin || payload.profile?.role === "admin")
                 setCanShowAdmin(isAdmin)
-                if (isAdmin) router.replace("/admin")
+                if (isAdmin) {
+                    router.replace("/admin")
+                    return
+                }
 
-                void prepareOfflineWorkspace(payload, {
-                    onProgress: (progress) => {
-                        setOfflinePrepMessage(progress.message)
-                        if (progress.completed >= progress.total) {
-                            globalThis.setTimeout(() => setOfflinePrepMessage(""), 4000)
+                cancelOfflinePrep = scheduleIdleTask(() => {
+                    if (cancelled) return
+                    let lastProgressAt = 0
+
+                    void prepareOfflineWorkspace(payload, {
+                        onProgress: (progress) => {
+                            const now = Date.now()
+                            const isDone = progress.completed >= progress.total
+                            if (!isDone && now - lastProgressAt < 900) return
+                            lastProgressAt = now
+
+                            setOfflinePrepMessage(progress.message)
+                            if (isDone) {
+                                globalThis.setTimeout(() => setOfflinePrepMessage(""), 4000)
+                            }
+                        },
+                    }).catch((error) => {
+                        if (typeof navigator !== "undefined" && navigator.onLine) {
+                            setOfflinePrepMessage(error instanceof Error ? error.message : "Offline data could not be prepared.")
+                            globalThis.setTimeout(() => setOfflinePrepMessage(""), 6000)
                         }
-                    },
-                }).catch((error) => {
-                    if (typeof navigator !== "undefined" && navigator.onLine) {
-                        setOfflinePrepMessage(error instanceof Error ? error.message : "Offline workspace preparation failed.")
-                        globalThis.setTimeout(() => setOfflinePrepMessage(""), 6000)
-                    }
+                    })
                 })
             } catch (error) {
                 console.error("Dashboard access error:", error)
             }
         })
+
+        return () => {
+            cancelled = true
+            cancelOfflinePrep()
+        }
     }, [router])
 
     useEffect(() => {
@@ -103,15 +143,17 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
 
     useEffect(() => {
         const prefetchDashboardRoutes = () => {
-            navItems.forEach(([, href]) => router.prefetch(href))
+            priorityPrefetchRoutes.forEach((href, index) => {
+                globalThis.setTimeout(() => router.prefetch(href), index * 250)
+            })
         }
 
         if ("requestIdleCallback" in window) {
-            const idleId = window.requestIdleCallback(prefetchDashboardRoutes, { timeout: 2500 })
+            const idleId = window.requestIdleCallback(prefetchDashboardRoutes, { timeout: 4000 })
             return () => window.cancelIdleCallback(idleId)
         }
 
-        const timeout = globalThis.setTimeout(prefetchDashboardRoutes, 600)
+        const timeout = globalThis.setTimeout(prefetchDashboardRoutes, 1500)
         return () => globalThis.clearTimeout(timeout)
     }, [router])
 
@@ -175,9 +217,9 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
                     <div className="flex items-center justify-between gap-3">
                         <DesktopBackButton fallback="/dashboard" />
                         <div className="min-w-0 flex-1">
-                            <h1 className="truncate text-lg font-black sm:text-2xl">Global ERP Workspace</h1>
+                            <h1 className="truncate text-lg font-black sm:text-2xl">Business Dashboard</h1>
                             <p className="mt-1 truncate text-sm text-neutral-500">
-                                Inventory, billing, retail POS, analytics, and launch operations.
+                                Sales, stock, customers, invoices, and reports.
                             </p>
                         </div>
                         <Link href="/profile" className="flex h-11 shrink-0 items-center gap-2 rounded-2xl border border-white/10 bg-white/[0.04] px-2 hover:border-cyan-400/30 sm:h-12 sm:gap-3 sm:px-3">
@@ -200,9 +242,9 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
                         </button>
                         <DesktopBackButton fallback="/dashboard" />
                         <div className="min-w-0 flex-1">
-                            <h1 className="truncate text-2xl font-black">Global ERP Workspace</h1>
+                            <h1 className="truncate text-2xl font-black">Business Dashboard</h1>
                             <p className="mt-1 truncate text-sm text-neutral-500">
-                                Inventory, billing, retail POS, analytics, and launch operations.
+                                Sales, stock, customers, invoices, and reports.
                             </p>
                         </div>
                         <Link href="/profile" className="flex h-12 shrink-0 items-center gap-3 rounded-2xl border border-white/10 bg-white/[0.04] px-3 hover:border-cyan-400/30">

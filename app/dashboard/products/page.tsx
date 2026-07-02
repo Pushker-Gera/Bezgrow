@@ -3,6 +3,7 @@
 import Link from "next/link"
 import { useEffect, useMemo, useRef, useState } from "react"
 import { useDebounce } from "use-debounce"
+import { apiFetch } from "@/lib/api/client-fetch"
 import { getOrganizationFeatures } from "@/lib/get-organization-features"
 import { getOrganizationId } from "@/lib/getOrganization"
 import { createOfflineId, getOfflineData, putOfflineData, queueOfflineAction } from "@/lib/offline/db"
@@ -313,7 +314,7 @@ export default function ProductsPage() {
             const orgId = await getOrganizationId()
 
             if (!orgId) {
-                setNotice("No organization is connected to this account.")
+                setNotice("No business is connected to this account.")
                 setProducts([])
                 return
             }
@@ -425,7 +426,7 @@ export default function ProductsPage() {
         if (saving) return
 
         if (!organizationId) {
-            setFormError("Organization not found. Please refresh and try again.")
+            setFormError("Business not found. Please refresh and try again.")
             return
         }
         if (!form.name.trim()) {
@@ -501,14 +502,10 @@ export default function ProductsPage() {
         }
 
         try {
-            const {
-                data: { session },
-            } = await supabase.auth.getSession()
-            const response = await fetch(editProduct ? "/api/products/update" : "/api/products/create", {
+            const response = await apiFetch(editProduct ? "/api/products/update" : "/api/products/create", {
                 method: "POST",
                 headers: {
                     "Content-Type": "application/json",
-                    ...(session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : {}),
                 },
                 body: JSON.stringify(editProduct ? { id: editProduct.id, ...payload } : payload),
             })
@@ -617,14 +614,10 @@ export default function ProductsPage() {
         setProducts((current) => current.filter((product) => product.id !== idToDelete))
 
         try {
-            const {
-                data: { session },
-            } = await supabase.auth.getSession()
-            const response = await fetch("/api/products/archive", {
+            const response = await apiFetch("/api/products/archive", {
                 method: "POST",
                 headers: {
                     "Content-Type": "application/json",
-                    ...(session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : {}),
                 },
                 body: JSON.stringify({ id: idToDelete }),
             })
@@ -804,7 +797,7 @@ export default function ProductsPage() {
 
     const statCards = [
         {
-            label: "Product Master",
+            label: "Products",
             value: analytics.totalProducts,
             meta: `${analytics.categoriesCount} categories`,
             filter: "all",
@@ -832,7 +825,7 @@ export default function ProductsPage() {
             accent: "from-emerald-200 to-green-500",
         },
         {
-            label: "Supply Network",
+            label: "Suppliers",
             value: analytics.suppliersCount,
             meta: `${analytics.warehousesCount} warehouse labels`,
             filter: "all",
@@ -841,14 +834,14 @@ export default function ProductsPage() {
     ]
 
     const erpModules = [
-        "Product master data",
+        "Product records",
         "SKU and barcode control",
         "Pricing and GST",
         "Supplier mapping",
         "Warehouse labels",
         "Stock movement audit",
-        hasExpiryTracking ? "Expiry tracking" : "Expiry-ready schema",
-        hasBatchTracking ? "Batch tracking" : "Batch-ready schema",
+        hasExpiryTracking ? "Expiry tracking" : "Expiry fields ready",
+        hasBatchTracking ? "Batch tracking" : "Batch fields ready",
         hasShippingLabels ? "Shipping label workflow" : "Shipping-ready workflow",
     ]
 
@@ -868,10 +861,10 @@ export default function ProductsPage() {
                             </div>
                             <div className="flex flex-wrap gap-3">
                                 <span className="rounded-full border border-sky-400/25 bg-sky-400/10 px-3 py-1 text-xs font-semibold uppercase tracking-[0.2em] text-sky-200">
-                                    Global Product Master
+                                    Product List
                                 </span>
                                 <span className="rounded-full border border-emerald-400/25 bg-emerald-400/10 px-3 py-1 text-xs font-semibold uppercase tracking-[0.2em] text-emerald-200">
-                                    Inventory + Billing ERP
+                                    Stock + Billing
                                 </span>
                             </div>
 
@@ -880,7 +873,7 @@ export default function ProductsPage() {
                             </h1>
 
                             <p className="mt-4 max-w-4xl text-base leading-7 text-neutral-300">
-                                A professional product master for SKUs, pricing, GST,
+                                A professional product list for SKUs, pricing, GST,
                                 batches, expiry, suppliers, warehouse labels, billing
                                 readiness, and stock audit trails.
                             </p>
@@ -1017,7 +1010,7 @@ export default function ProductsPage() {
                                     Product Ledger
                                 </p>
                                 <h2 className="mt-2 text-2xl font-black">
-                                    ERP Product Catalog
+                                    Product Catalog
                                 </h2>
                             </div>
                             <div className="flex flex-wrap gap-2">
@@ -1311,7 +1304,7 @@ export default function ProductsPage() {
 
                         <div className="rounded-lg border border-white/10 bg-black/75 p-5 shadow-2xl backdrop-blur-xl">
                             <p className="text-xs uppercase tracking-[0.18em] text-amber-300">
-                                ERP Coverage
+                                Product Coverage
                             </p>
                             <h2 className="mt-2 text-2xl font-black">
                                 Operating Modules
@@ -1336,7 +1329,7 @@ export default function ProductsPage() {
                             <div className="mt-4 flex flex-wrap gap-2">
                                 {features.length === 0 && (
                                     <span className="rounded-full border border-white/10 bg-white/[0.04] px-3 py-1 text-xs text-neutral-400">
-                                        Core ERP mode
+                                        Core business mode
                                     </span>
                                 )}
                                 {features.map((feature, index) => (
@@ -1393,7 +1386,7 @@ export default function ProductsPage() {
                     <div className="w-full max-w-md rounded-lg border border-white/10 bg-[#050606] p-6 shadow-2xl">
                         <h2 className="text-xl font-black text-red-200">Delete Product</h2>
                         <p className="mt-3 text-sm leading-6 text-neutral-400">
-                            This product will be moved to trash and removed from active ERP
+                            This product will be moved to trash and removed from active stock
                             workflows.
                         </p>
                         <div className="mt-6 flex justify-end gap-3">
@@ -1457,7 +1450,7 @@ function ProductFormModal({
                 <div className="sticky top-0 z-30 flex items-center justify-between gap-4 border-b border-white/10 bg-[#050606]/95 p-4 backdrop-blur-xl sm:p-5">
                     <div>
                         <p className="text-xs uppercase tracking-[0.18em] text-sky-300">
-                            Product Master
+                            Product Details
                         </p>
                         <h2 className="mt-2 text-xl font-black sm:text-2xl">
                             {editMode ? "Edit Product" : "Add Product"}
@@ -1516,12 +1509,12 @@ function ProductFormModal({
                         </div>
                         {hasSerialNumbers && (
                             <div className="rounded-lg border border-emerald-400/20 bg-emerald-400/10 p-3 text-xs text-emerald-100">
-                                Serial number workflows are enabled for this organization.
+                                Serial number workflows are enabled for this business.
                             </div>
                         )}
                         {hasWarrantyTracking && (
                             <div className="rounded-lg border border-emerald-400/20 bg-emerald-400/10 p-3 text-xs text-emerald-100">
-                                Warranty tracking workflows are enabled for this organization.
+                                Warranty tracking workflows are enabled for this business.
                             </div>
                         )}
                         {hasShippingLabels && (
@@ -1572,10 +1565,10 @@ function ProductFormModal({
 
                 <div className="relative z-10 mx-4 rounded-lg border border-emerald-400/20 bg-emerald-400/10 p-4 sm:mx-5">
                     <p className="text-sm font-semibold text-emerald-100">
-                        ERP intelligence
+                        Product safety
                     </p>
                     <p className="mt-1 text-xs leading-6 text-neutral-300">
-                        Saving updates the product master, billing-ready price data, stock
+                        Saving updates the product record, billing-ready price data, stock
                         threshold, GST fields, and stock movement audit history when quantity
                         changes.
                     </p>

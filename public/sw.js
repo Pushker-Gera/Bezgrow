@@ -1,4 +1,4 @@
-const CACHE_VERSION = "bezgrow-pwa-v4-logo-20260701"
+const CACHE_VERSION = "bezgrow-pwa-v5-perf-20260703"
 const STATIC_CACHE = `${CACHE_VERSION}:static`
 const SHELL_CACHE = `${CACHE_VERSION}:shell`
 
@@ -15,21 +15,11 @@ const SHELL_URLS = [
   "/apple-touch-icon.png",
   "/icon-192.png",
   "/icon-512.png",
-  "/android-chrome-192x192.png",
-  "/android-chrome-512x512.png",
   "/maskable-icon-512x512.png",
-  "/brand/bezgrow-logo-3d.png",
-  "/brand/bezgrow-growth-logo.png",
   "/icons/icon-96.png",
   "/icons/icon-192.png",
-  "/icons/icon-512.png",
   "/icons/maskable-512.png",
-  "/icons/apple-touch-icon.png",
-  "/icons/shortcut-dashboard.png",
-  "/icons/shortcut-products.png",
-  "/icons/shortcut-invoices.png",
-  "/screenshots/desktop-dashboard.png",
-  "/screenshots/mobile-dashboard.png"
+  "/icons/shortcut-dashboard.png"
 ]
 
 self.addEventListener("install", (event) => {

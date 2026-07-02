@@ -100,7 +100,7 @@ export default function LabelPage() {
 
                 courierName={
                     order.courier_name ||
-                    "ERP Courier"
+                    "Courier"
                 }
 
                 codAmount={order.total_amount ?? undefined}

@@ -1,9 +1,9 @@
 "use client"
 
 import { cacheWorkspaceBootstrap, getCachedWorkspaceBootstrap } from "@/lib/offline/db"
+import { getCachedAccessToken } from "@/lib/api/client-fetch"
 import { syncCachedDesktopSessionWithServer } from "@/lib/desktop/auth-callback"
 import { isTauriRuntimeAsync } from "@/lib/desktop/tauri"
-import { supabase } from "@/lib/supabase"
 
 export type WorkspaceBootstrapPayload = {
   success: boolean
@@ -92,9 +92,7 @@ export async function getWorkspaceBootstrap(options: { forceFresh?: boolean } = 
   }
 
   const fetchBootstrap = async () => {
-    const {
-      data: { session },
-    } = await supabase.auth.getSession()
+    const accessToken = await getCachedAccessToken()
     const apiPath = "/api/workspace/bootstrap"
     const desktopRuntime = await isTauriRuntimeAsync()
     const url = desktopRuntime ? `/api/desktop-proxy?path=${encodeURIComponent(apiPath)}` : apiPath
@@ -102,7 +100,7 @@ export async function getWorkspaceBootstrap(options: { forceFresh?: boolean } = 
     return fetch(url, {
       credentials: "include",
       cache: options.forceFresh ? "no-store" : "default",
-      headers: session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : undefined,
+      headers: accessToken ? { Authorization: `Bearer ${accessToken}` } : undefined,
     })
   }
 

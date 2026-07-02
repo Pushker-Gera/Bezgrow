@@ -6,6 +6,43 @@ import { businessTypeFeatures, categoryFeatures } from "@/lib/business-features"
 import { isTauriRuntimeAsync } from "@/lib/desktop/tauri"
 import { supabase } from "@/lib/supabase"
 
+const featureLabels: Record<string, string> = {
+    pos_billing: "Counter billing",
+    quick_checkout: "Fast checkout",
+    gst_b2b: "GST bills",
+    batch_tracking: "Batch tracking",
+    expiry_tracking: "Expiry alerts",
+    barcode_scanning: "Barcode scanning",
+    thermal_printing: "Thermal receipts",
+    purchase_orders: "Purchase orders",
+    warehouse_transfers: "Stock transfers",
+    bulk_inventory: "Bulk stock",
+    shipping_labels: "Shipping labels",
+    awb_tracking: "Courier tracking",
+    parcel_qr: "Parcel QR",
+    bulk_pricing: "Wholesale pricing",
+    size_variants: "Size variants",
+    color_variants: "Color variants",
+    serial_numbers: "Serial numbers",
+    warranty_tracking: "Warranty tracking",
+    prescription_required: "Prescription control",
+    prescription_upload: "Prescription upload",
+    kot_printing: "Kitchen tickets",
+    table_management: "Table billing",
+    raw_materials: "Raw material stock",
+    recipe_tracking: "Recipe stock",
+    production_batches: "Production batches",
+    quotation_system: "Quotations",
+    service_invoices: "Service bills",
+    weight_inventory: "Weight-based stock",
+    weight_tracking: "Weight tracking",
+    purity_tracking: "Purity tracking",
+}
+
+function friendlyFeatureLabel(feature: string) {
+    return featureLabels[feature] || feature.replaceAll("_", " ")
+}
+
 export default function CreateBusiness() {
 
     const router = useRouter()
@@ -152,8 +189,17 @@ export default function CreateBusiness() {
                 </h1>
 
                 <p className="mb-5 text-sm leading-6 text-gray-400 sm:mb-6">
-                    Set up your intelligent ERP workspace with dynamic inventory, billing, warehouse, and industry-specific workflows.
+                    Set up your business account. After this, Bezgrow will guide you to add products, add customers, and create your first invoice.
                 </p>
+
+                <div className="mb-6 grid grid-cols-1 gap-3 sm:grid-cols-4">
+                    {["Business", "Products", "Customers", "First bill"].map((step, index) => (
+                        <div key={step} className={`rounded-xl border p-3 ${index === 0 ? "border-cyan-400/30 bg-cyan-400/10" : "border-white/10 bg-black/25"}`}>
+                            <p className="text-[10px] font-black uppercase tracking-[0.16em] text-gray-500">Step {index + 1}</p>
+                            <p className="mt-2 text-sm font-black text-white">{step}</p>
+                        </div>
+                    ))}
+                </div>
 
                 {errorMessage && (
                     <div className="bg-red-900 border border-red-600 text-red-300 p-3 rounded mb-4 text-sm">
@@ -373,7 +419,7 @@ export default function CreateBusiness() {
                 <div className="mb-6 rounded-xl border border-gray-700 bg-gray-800 p-3 sm:p-4">
 
                     <h3 className="text-sm font-semibold text-white mb-3">
-                        ERP Features Preview
+                        What Bezgrow Will Set Up
                     </h3>
 
                     <div className="flex flex-wrap gap-2">
@@ -392,7 +438,7 @@ export default function CreateBusiness() {
                                 key={feature}
                                 className="rounded-full border border-gray-600 bg-black px-3 py-1 text-xs text-green-400"
                             >
-                                {feature.replaceAll("_", " ")}
+                                {friendlyFeatureLabel(feature)}
                             </div>
                         ))}
 
@@ -405,7 +451,7 @@ export default function CreateBusiness() {
                     disabled={loading}
                     className="min-h-12 w-full rounded-lg bg-white p-3 font-semibold text-black transition hover:bg-gray-200 disabled:opacity-50"
                 >
-                    {loading ? "Creating Business..." : "Create Business"}
+                    {loading ? "Creating Business..." : "Create Business & Continue"}
                 </button>
 
             </div>

@@ -1,13 +1,13 @@
 "use client"
 
-import { useEffect, useMemo, useState } from "react"
+import { useEffect, useMemo, useRef, useState } from "react"
 import { useDebounce } from "use-debounce"
 import AppUpdatesPanel from "@/components/AppUpdatesPanel"
 import { readStoredPrintSettings, saveStoredPrintSettings } from "@/components/print/settings/defaults"
 import type { PrintFormat, PrintSettings } from "@/components/print/types"
 import { isTauriRuntimeAsync } from "@/lib/desktop/tauri"
 import { getOrganizationId } from "@/lib/getOrganization"
-import { createOfflineId, getOfflineData, putOfflineData, queueOfflineAction } from "@/lib/offline/db"
+import { createOfflineId, exportOfflineBackup, getOfflineData, putOfflineData, queueOfflineAction, restoreOfflineBackup } from "@/lib/offline/db"
 import { shouldSaveOffline } from "@/lib/offline/network"
 import { supabase } from "@/lib/supabase"
 
@@ -138,6 +138,7 @@ export default function SettingsPage() {
   const [printSettings, setPrintSettings] = useState<PrintSettings>(() => readStoredPrintSettings())
   const [saving, setSaving] = useState(false)
   const [notice, setNotice] = useState("")
+  const backupInputRef = useRef<HTMLInputElement | null>(null)
   const [form, setForm] = useState({
     name: "",
     industry: "",
@@ -190,7 +191,7 @@ export default function SettingsPage() {
   async function initializeSettings() {
     const orgId = await getOrganizationId()
     if (!orgId) {
-      setNotice("No organization is connected to this account.")
+      setNotice("No business is connected to this account.")
       return
     }
 
@@ -210,7 +211,7 @@ export default function SettingsPage() {
       const workspace = (await workspaceResponse.json()) as WorkspaceResponse
       const invoices = (await invoiceResponse.json()) as ListResponse<InvoiceCorrectionRow>
 
-      if (!workspaceResponse.ok) setNotice(workspace.error || "Workspace settings failed to load.")
+      if (!workspaceResponse.ok) setNotice(workspace.error || "Business settings failed to load.")
       if (!invoiceResponse.ok) setNotice(invoices.error || `Invoices failed to load. HTTP ${invoiceResponse.status}`)
 
       if (workspace.organization) {
@@ -294,6 +295,40 @@ export default function SettingsPage() {
     const updated = { ...printSettings, ...next }
     setPrintSettings(updated)
     saveStoredPrintSettings(updated)
+  }
+
+  async function downloadBackup() {
+    const backup = await exportOfflineBackup()
+    if (!backup) {
+      setNotice("No local backup data is available on this device yet.")
+      return
+    }
+
+    const blob = new Blob([JSON.stringify(backup, null, 2)], { type: "application/json" })
+    const url = URL.createObjectURL(blob)
+    const link = document.createElement("a")
+    link.href = url
+    link.download = `bezgrow-backup-${new Date().toISOString().slice(0, 10)}.json`
+    document.body.appendChild(link)
+    link.click()
+    document.body.removeChild(link)
+    URL.revokeObjectURL(url)
+    setNotice("Backup downloaded.")
+  }
+
+  async function restoreBackup(file: File | null) {
+    if (!file) return
+
+    try {
+      const payload = JSON.parse(await file.text()) as unknown
+      const result = await restoreOfflineBackup(payload)
+      setNotice(`Backup restored: ${result.restoredRecords} records${result.restoredActions ? ` and ${result.restoredActions} pending updates` : ""}.`)
+      await initializeSettings()
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : "Backup could not be restored.")
+    } finally {
+      if (backupInputRef.current) backupInputRef.current.value = ""
+    }
   }
 
   const enabledFeatureSet = useMemo(() => {
@@ -385,7 +420,7 @@ export default function SettingsPage() {
           payload: { kind: "organization", data: settingsPayload },
         })
         setOrganization(nextOrganization as Organization)
-        setNotice("Settings saved offline. Pending sync.")
+        setNotice("Settings saved on this device. They will update online when the connection returns.")
         setSaving(false)
         return
       }
@@ -461,7 +496,7 @@ export default function SettingsPage() {
             data: { feature_key: featureKey, is_enabled: nextEnabled },
           },
         })
-        setNotice("Feature setting saved offline. Pending sync.")
+        setNotice("Module change saved on this device. It will update online when the connection returns.")
         return
       }
 
@@ -536,14 +571,13 @@ export default function SettingsPage() {
         <section className="inventory-sheen rounded-[40px] border border-white/10 bg-white/[0.035] p-8 shadow-[0_0_90px_rgba(0,0,0,0.5)] backdrop-blur-2xl lg:p-10">
           <div className="max-w-5xl">
             <div className="mb-5 inline-flex rounded-full border border-cyan-400/20 bg-cyan-500/10 px-4 py-2 text-xs font-semibold uppercase tracking-[0.22em] text-cyan-200">
-              Workspace Control Center
+              Business Settings
             </div>
             <h1 className="text-4xl font-black leading-tight tracking-tight md:text-6xl">
-              Settings for global ERP scale, billing, inventory, and launch readiness.
+              Settings for your business, billing, printing, and data safety.
             </h1>
             <p className="mt-5 max-w-4xl text-lg leading-8 text-neutral-400">
-              Configure organization identity, currency, business type, industry features,
-              invoice behavior, inventory modules, and operational readiness.
+              Configure business details, currency, print formats, invoice correction, modules, backups, and restore options.
             </p>
           </div>
         </section>
@@ -557,7 +591,7 @@ export default function SettingsPage() {
         <section className="grid grid-cols-1 gap-6 2xl:grid-cols-[1fr,420px]">
           <div className="space-y-6">
             <div className="rounded-[36px] border border-white/10 bg-white/[0.035] p-7 backdrop-blur-2xl">
-              <h2 className="text-3xl font-black">Organization Profile</h2>
+              <h2 className="text-3xl font-black">Business Profile</h2>
               <div className="mt-6 grid grid-cols-1 gap-4 md:grid-cols-2">
                 <input value={form.name} onChange={(e) => setForm((current) => ({ ...current, name: e.target.value }))} placeholder="Business name" className="h-14 rounded-2xl border border-white/10 bg-black/50 px-5 outline-none focus:border-cyan-400/40" />
                 <input value={form.industry} onChange={(e) => setForm((current) => ({ ...current, industry: e.target.value }))} placeholder="Industry" className="h-14 rounded-2xl border border-white/10 bg-black/50 px-5 outline-none focus:border-cyan-400/40" />
@@ -591,7 +625,7 @@ export default function SettingsPage() {
                 <textarea value={form.address} onChange={(e) => setForm((current) => ({ ...current, address: e.target.value }))} placeholder="Business address" className="min-h-28 rounded-2xl border border-white/10 bg-black/50 px-5 py-4 outline-none focus:border-cyan-400/40 md:col-span-2" />
               </div>
               <button onClick={saveOrganization} disabled={saving} className="mt-6 h-14 rounded-2xl bg-white px-7 font-black text-black disabled:opacity-50">
-                {saving ? "Saving..." : "Save Organization"}
+                {saving ? "Saving..." : "Save Business"}
               </button>
             </div>
 
@@ -666,8 +700,8 @@ export default function SettingsPage() {
             <AppUpdatesPanel />
 
             <div className="rounded-[36px] border border-white/10 bg-white/[0.035] p-7 backdrop-blur-2xl">
-              <h2 className="text-3xl font-black">ERP Feature Modules</h2>
-              <p className="mt-2 text-sm text-neutral-500">Turn on the capabilities needed for your industry and global workflows.</p>
+              <h2 className="text-3xl font-black">Business Modules</h2>
+              <p className="mt-2 text-sm text-neutral-500">Turn on the capabilities needed for your industry.</p>
               <div className="mt-6 grid grid-cols-1 gap-4 md:grid-cols-2">
                 {featureCatalog.map(([key, title, description]) => {
                   const enabled = enabledFeatureSet.has(key)
@@ -768,7 +802,7 @@ export default function SettingsPage() {
 
           <aside className="space-y-6">
             <div className="rounded-[36px] border border-cyan-400/20 bg-cyan-500/10 p-7 shadow-[0_0_60px_rgba(34,211,238,0.12)]">
-              <h2 className="text-3xl font-black">Launch Readiness</h2>
+              <h2 className="text-3xl font-black">Setup Readiness</h2>
               <div className="mt-7 space-y-4">
                 {readiness.map(([label, ready]) => (
                   <div key={String(label)} className="flex items-center justify-between rounded-2xl border border-white/10 bg-black/30 px-4 py-4">
@@ -782,9 +816,31 @@ export default function SettingsPage() {
             </div>
 
             <div className="rounded-[36px] border border-white/10 bg-white/[0.035] p-7 backdrop-blur-2xl">
-              <h2 className="text-3xl font-black">Workspace</h2>
+              <h2 className="text-3xl font-black">Data Safety</h2>
+              <p className="mt-3 text-sm leading-6 text-neutral-400">
+                Download a local backup before major changes, or restore a Bezgrow backup file on this device.
+              </p>
+              <div className="mt-5 grid gap-3">
+                <button onClick={() => void downloadBackup()} className="h-12 rounded-2xl bg-white px-5 text-sm font-black text-black">
+                  Download Backup
+                </button>
+                <button onClick={() => backupInputRef.current?.click()} className="h-12 rounded-2xl border border-white/10 bg-white/[0.06] px-5 text-sm font-black text-white">
+                  Restore Backup
+                </button>
+                <input
+                  ref={backupInputRef}
+                  type="file"
+                  accept="application/json,.json"
+                  className="hidden"
+                  onChange={(event) => void restoreBackup(event.target.files?.[0] || null)}
+                />
+              </div>
+            </div>
+
+            <div className="rounded-[36px] border border-white/10 bg-white/[0.035] p-7 backdrop-blur-2xl">
+              <h2 className="text-3xl font-black">Business Info</h2>
               <div className="mt-6 space-y-4 text-sm text-neutral-400">
-                <p>ID: {organization?.id || "-"}</p>
+                <p>Business reference: {organization?.id || "-"}</p>
                 <p>Currency: {form.currency}</p>
                 <p>Enabled modules: {enabledFeatureSet.size}</p>
                 <p>Business type: {form.businessType}</p>

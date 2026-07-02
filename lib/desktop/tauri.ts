@@ -14,6 +14,8 @@ type TauriGlobal = typeof globalThis & {
   isTauri?: boolean
 }
 
+let tauriRuntimePromise: Promise<boolean> | null = null
+
 export function isTauriRuntime() {
   if (typeof window === "undefined") return false
 
@@ -34,13 +36,13 @@ export function isTauriRuntime() {
 
 export async function isTauriRuntimeAsync() {
   if (isTauriRuntime()) return true
+  if (tauriRuntimePromise) return tauriRuntimePromise
 
-  try {
-    const { isTauri } = await import("@tauri-apps/api/core")
-    return isTauri()
-  } catch {
-    return false
-  }
+  tauriRuntimePromise = import("@tauri-apps/api/core")
+    .then(({ isTauri }) => isTauri())
+    .catch(() => false)
+
+  return tauriRuntimePromise
 }
 
 export async function invokeTauri<T>(command: string, args?: Record<string, unknown>) {

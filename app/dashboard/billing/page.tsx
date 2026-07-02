@@ -2,12 +2,61 @@
 
 import Link from "next/link"
 import { useEffect, useMemo, useState } from "react"
-import { getOrganizationId } from "@/lib/getOrganization"
-import { supabase } from "@/lib/supabase"
+import { apiFetch } from "@/lib/api/client-fetch"
 
 type DataRow = Record<string, unknown> & {
   id: string
   created_at?: string | null
+}
+
+type BillingMetrics = {
+  revenue: number
+  monthlyRevenue: number
+  outstanding: number
+  tax: number
+  inventoryValue: number
+  avgInvoice: number
+  collectionRate: number
+  invoiceCount: number
+  paidCount: number
+  unpaidCount: number
+  partialCount: number
+  lowStockCount: number
+  customerCount: number
+  productCount: number
+  orderCount: number
+}
+
+type WeeklyBar = {
+  label: string
+  total: number
+}
+
+type BillingSummaryResponse = {
+  metrics?: Partial<BillingMetrics> & {
+    averageInvoice?: number
+  }
+  weeklyRevenue?: WeeklyBar[]
+  recentInvoices?: DataRow[]
+  error?: string
+}
+
+const emptyBillingMetrics: BillingMetrics = {
+  revenue: 0,
+  monthlyRevenue: 0,
+  outstanding: 0,
+  tax: 0,
+  inventoryValue: 0,
+  avgInvoice: 0,
+  collectionRate: 0,
+  invoiceCount: 0,
+  paidCount: 0,
+  unpaidCount: 0,
+  partialCount: 0,
+  lowStockCount: 0,
+  customerCount: 0,
+  productCount: 0,
+  orderCount: 0,
 }
 
 function numberFrom(row: Record<string, unknown>, fields: string[]) {
@@ -41,71 +90,39 @@ function statusOf(row: Record<string, unknown>) {
   return stringFrom(row, ["payment_status", "status"]).toLowerCase() || "unpaid"
 }
 
-function isThisMonth(value: string | null | undefined) {
-  if (!value) return false
-  const date = new Date(value)
-  const now = new Date()
-  return date.getFullYear() === now.getFullYear() && date.getMonth() === now.getMonth()
-}
-
 function readinessClass(ready: boolean) {
   return ready ? "bg-emerald-500/15 text-emerald-200" : "bg-amber-500/15 text-amber-200"
 }
 
 export default function BillingPage() {
   const [invoices, setInvoices] = useState<DataRow[]>([])
-  const [customers, setCustomers] = useState<DataRow[]>([])
-  const [products, setProducts] = useState<DataRow[]>([])
-  const [orders, setOrders] = useState<DataRow[]>([])
+  const [summaryMetrics, setSummaryMetrics] = useState<BillingMetrics>(emptyBillingMetrics)
+  const [weeklyBars, setWeeklyBars] = useState<WeeklyBar[]>([])
   const [loading, setLoading] = useState(true)
   const [notice, setNotice] = useState("")
 
   async function initializeBilling() {
     try {
       setLoading(true)
-      const orgId = await getOrganizationId()
+      const response = await apiFetch("/api/dashboard/billing/summary", {
+        credentials: "include",
+        cache: "no-store",
+      })
+      const payload = (await response.json()) as BillingSummaryResponse
 
-      if (!orgId) {
-        setNotice("No organization is connected to this account.")
+      if (!response.ok) {
+        setNotice(payload.error || "Billing data failed to load.")
         return
       }
 
-      const [invoiceResult, customerResult, productResult, orderResult] = await Promise.all([
-        supabase
-          .from("invoices")
-          .select("*")
-          .eq("organization_id", orgId)
-          .order("created_at", { ascending: false })
-          .limit(1000),
-        supabase
-          .from("customers")
-          .select("*")
-          .eq("organization_id", orgId)
-          .is("deleted_at", null)
-          .limit(1000),
-        supabase
-          .from("products")
-          .select("*")
-          .eq("organization_id", orgId)
-          .is("deleted_at", null)
-          .limit(1000),
-        supabase
-          .from("orders")
-          .select("*")
-          .eq("organization_id", orgId)
-          .order("created_at", { ascending: false })
-          .limit(1000),
-      ])
-
-      if (invoiceResult.error) setNotice(invoiceResult.error.message)
-      if (customerResult.error) setNotice(customerResult.error.message)
-      if (productResult.error) setNotice(productResult.error.message)
-      if (orderResult.error) setNotice(orderResult.error.message)
-
-      setInvoices((invoiceResult.data || []) as DataRow[])
-      setCustomers((customerResult.data || []) as DataRow[])
-      setProducts((productResult.data || []) as DataRow[])
-      setOrders((orderResult.data || []) as DataRow[])
+      const metrics = payload.metrics || {}
+      setInvoices(payload.recentInvoices || [])
+      setWeeklyBars(payload.weeklyRevenue || [])
+      setSummaryMetrics({
+        ...emptyBillingMetrics,
+        ...metrics,
+        avgInvoice: Number(metrics.averageInvoice ?? metrics.avgInvoice ?? 0),
+      })
     } catch (error) {
       setNotice(error instanceof Error ? error.message : "Billing data failed to load.")
     } finally {
@@ -119,67 +136,9 @@ export default function BillingPage() {
     })
   }, [])
 
-  const analytics = useMemo(() => {
-    const revenue = invoices.reduce((sum, invoice) => sum + numberFrom(invoice, ["grand_total", "total_amount", "total"]), 0)
-    const monthlyRevenue = invoices
-      .filter((invoice) => isThisMonth(invoice.created_at))
-      .reduce((sum, invoice) => sum + numberFrom(invoice, ["grand_total", "total_amount", "total"]), 0)
-    const paidInvoices = invoices.filter((invoice) => statusOf(invoice) === "paid")
-    const unpaidInvoices = invoices.filter((invoice) => statusOf(invoice) === "unpaid")
-    const partialInvoices = invoices.filter((invoice) => statusOf(invoice) === "partial")
-    const tax = invoices.reduce((sum, invoice) => sum + numberFrom(invoice, ["tax_amount", "tax_total"]), 0)
-    const outstanding = [...unpaidInvoices, ...partialInvoices].reduce(
-      (sum, invoice) => sum + numberFrom(invoice, ["grand_total", "total_amount", "total"]),
-      0
-    )
-    const inventoryValue = products.reduce(
-      (sum, product) =>
-        sum + numberFrom(product, ["stock", "quantity"]) * numberFrom(product, ["sale_rate", "price", "mrp"]),
-      0
-    )
-    const lowStock = products.filter(
-      (product) => numberFrom(product, ["stock", "quantity"]) <= numberFrom(product, ["min_stock"])
-    )
-    const avgInvoice = invoices.length ? revenue / invoices.length : 0
-    const collectionRate = revenue
-      ? Math.round((paidInvoices.reduce((sum, invoice) => sum + numberFrom(invoice, ["grand_total", "total_amount", "total"]), 0) / revenue) * 100)
-      : 0
-
-    return {
-      revenue,
-      monthlyRevenue,
-      outstanding,
-      tax,
-      inventoryValue,
-      avgInvoice,
-      collectionRate,
-      invoiceCount: invoices.length,
-      paidCount: paidInvoices.length,
-      unpaidCount: unpaidInvoices.length,
-      partialCount: partialInvoices.length,
-      lowStockCount: lowStock.length,
-      customerCount: customers.length,
-      productCount: products.length,
-      orderCount: orders.length,
-    }
-  }, [customers.length, invoices, orders.length, products])
+  const analytics = useMemo(() => summaryMetrics, [summaryMetrics])
 
   const recentInvoices = invoices.slice(0, 6)
-
-  const weeklyBars = useMemo(() => {
-    return Array.from({ length: 7 }, (_, index) => {
-      const date = new Date()
-      date.setDate(date.getDate() - (6 - index))
-      const total = invoices
-        .filter((invoice) => invoice.created_at && new Date(invoice.created_at).toDateString() === date.toDateString())
-        .reduce((sum, invoice) => sum + numberFrom(invoice, ["grand_total", "total_amount", "total"]), 0)
-
-      return {
-        label: date.toLocaleDateString(undefined, { weekday: "short" }),
-        total,
-      }
-    })
-  }, [invoices])
 
   const maxWeekValue = Math.max(...weeklyBars.map((bar) => bar.total), 1)
   const hasWeeklyRevenue = weeklyBars.some((bar) => bar.total > 0)
@@ -197,14 +156,14 @@ export default function BillingPage() {
           <div className="grid gap-8 xl:grid-cols-[1.4fr,0.6fr] xl:items-end">
             <div>
               <div className="mb-5 inline-flex rounded-full border border-cyan-400/20 bg-cyan-500/10 px-4 py-2 text-xs font-semibold uppercase tracking-[0.22em] text-cyan-200">
-                Global Billing Command Center
+                Billing Overview
               </div>
               <h1 className="max-w-6xl text-4xl font-black leading-tight tracking-tight text-white md:text-6xl">
-                Billing, collections, tax, inventory value, and launch readiness.
+                Billing, collections, tax, inventory value, and billing readiness.
               </h1>
               <p className="mt-5 max-w-4xl text-base leading-8 text-neutral-400 md:text-lg">
-                A professional ERP billing hub for global SaaS scaling: live revenue, collection risk,
-                GST/tax visibility, invoice creation, print workflows, product readiness, and operational controls.
+                A professional billing view for revenue, collection risk,
+                GST/tax visibility, invoice creation, print workflows, product readiness, and daily controls.
               </p>
             </div>
 
@@ -329,7 +288,7 @@ export default function BillingPage() {
               </div>
 
               {loading ? (
-                <div className="p-12 text-center text-neutral-500">Loading billing engine...</div>
+                <div className="p-12 text-center text-neutral-500">Loading billing...</div>
               ) : recentInvoices.length === 0 ? (
                 <div className="p-12 text-center">
                   <p className="text-lg font-semibold text-white">No invoices yet.</p>
@@ -341,10 +300,8 @@ export default function BillingPage() {
                     const status = statusOf(invoice)
                     const amount = numberFrom(invoice, ["grand_total", "total_amount", "total"])
                     const invoiceNumber = stringFrom(invoice, ["invoice_number"]) || "Invoice"
-                    const linkedCustomer = customers.find((customer) => customer.id === stringFrom(invoice, ["customer_id"]))
                     const customerName =
                       stringFrom(invoice, ["customer_name"]) ||
-                      stringFrom(linkedCustomer || {}, ["name", "customer_name", "business_name"]) ||
                       "Walk-in customer"
 
                     return (
@@ -377,7 +334,7 @@ export default function BillingPage() {
 
           <aside className="space-y-6">
             <div className="rounded-[36px] border border-cyan-400/20 bg-cyan-500/10 p-7 shadow-[0_0_60px_rgba(34,211,238,0.12)]">
-              <h3 className="text-2xl font-black">Professional Billing Stack</h3>
+              <h3 className="text-2xl font-black">Billing Tools</h3>
               <div className="mt-6 space-y-4 text-sm text-neutral-300">
                 {[
                   "GST and tax-aware invoice workflow",
@@ -395,7 +352,7 @@ export default function BillingPage() {
             </div>
 
             <div className="rounded-[36px] border border-white/10 bg-white/[0.035] p-7 backdrop-blur-2xl">
-              <h3 className="text-2xl font-black">Global Launch Checklist</h3>
+              <h3 className="text-2xl font-black">Billing Readiness</h3>
               <div className="mt-6 space-y-4">
                 {[
                   ["Products connected", analytics.productCount > 0],
@@ -416,12 +373,12 @@ export default function BillingPage() {
             </div>
 
             <div className="rounded-[36px] border border-white/10 bg-gradient-to-br from-zinc-950 to-black p-7">
-              <h3 className="text-2xl font-black">Next Build Priorities</h3>
+              <h3 className="text-2xl font-black">Recommended Next Steps</h3>
               <div className="mt-6 space-y-3 text-sm text-neutral-400">
-                <p>1. Add multi-currency and country tax profiles.</p>
-                <p>2. Add bank and collection reconciliation.</p>
-                <p>3. Add recurring invoice reminders and customer ledger follow-ups.</p>
-                <p>4. Add accountant exports for GST, VAT, and sales ledgers.</p>
+                <p>1. Add products with correct sale rates and GST.</p>
+                <p>2. Add customer phone numbers for WhatsApp sharing.</p>
+                <p>3. Review unpaid and partial bills daily.</p>
+                <p>4. Download regular backups from Settings.</p>
               </div>
             </div>
           </aside>

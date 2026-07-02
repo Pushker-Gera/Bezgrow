@@ -2,12 +2,12 @@
 
 import Link from "next/link"
 import type { ReactNode } from "react"
-import { useCallback, useEffect, useMemo, useState } from "react"
+import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { useDebounce } from "use-debounce"
+import { apiFetch } from "@/lib/api/client-fetch"
 import { getOrganizationId } from "@/lib/getOrganization"
 import { createOfflineId, getOfflineData, putOfflineData, queueOfflineAction } from "@/lib/offline/db"
 import { shouldSaveOffline } from "@/lib/offline/network"
-import { supabase } from "@/lib/supabase"
 
 type InvoiceRow = Record<string, unknown> & {
   id: string
@@ -27,6 +27,14 @@ type InvoiceItemRow = {
   quantity: number | null
   line_total: number | null
   gst_amount: number | null
+}
+
+type ListResponse<T> = {
+  data?: T[]
+  pagination?: {
+    total?: number
+  }
+  error?: string
 }
 
 type InvoiceWithMetrics = InvoiceRow & {
@@ -147,45 +155,53 @@ export default function InvoicesPage() {
   const [customerFilter, setCustomerFilter] = useState("all")
   const [riskFilter, setRiskFilter] = useState("all")
   const [currentPage, setCurrentPage] = useState(1)
+  const [serverTotal, setServerTotal] = useState(0)
+  const skipNextInvoicesRefresh = useRef(false)
 
   const fetchBillingData = useCallback(async (orgId = organizationId) => {
     if (!orgId) return
 
+    const invoiceParams = new URLSearchParams({
+      page: String(currentPage),
+      limit: String(pageSize),
+      search: debouncedSearch.trim(),
+      status: statusFilter,
+      period: periodFilter,
+      customer_id: customerFilter,
+    })
+    const customerParams = new URLSearchParams({
+      limit: "100",
+      organization_id: orgId,
+      sort: "name",
+      direction: "asc",
+    })
+
     try {
-      const [invoiceResult, customerResult, itemResult] = await Promise.all([
-        supabase
-          .from("invoices")
-          .select("*")
-          .eq("organization_id", orgId)
-          .order("created_at", { ascending: false })
-          .limit(1500),
-        supabase
-          .from("customers")
-          .select("id,name,phone,email")
-          .eq("organization_id", orgId)
-          .is("deleted_at", null)
-          .limit(1000),
-        supabase
-          .from("invoice_items")
-          .select("invoice_id,quantity,line_total,gst_amount")
-          .eq("organization_id", orgId)
-          .limit(5000),
+      const [invoiceResponse, customerResponse] = await Promise.all([
+        apiFetch(`/api/invoices/list?${invoiceParams.toString()}`, {
+          credentials: "include",
+          cache: "no-store",
+        }),
+        apiFetch(`/api/customers/list?${customerParams.toString()}`, {
+          credentials: "include",
+          cache: "no-store",
+        }),
       ])
+      const invoiceResult = (await invoiceResponse.json()) as ListResponse<InvoiceRow>
+      const customerResult = (await customerResponse.json()) as ListResponse<CustomerRow>
 
-      if (invoiceResult.error) throw new Error(invoiceResult.error.message)
-      if (customerResult.error) setNotice(customerResult.error.message)
-      if (itemResult.error) setNotice(itemResult.error.message)
+      if (!invoiceResponse.ok) throw new Error(invoiceResult.error || "Invoices failed to load.")
+      if (!customerResponse.ok) setNotice(customerResult.error || "Customers failed to load.")
 
-      const nextInvoices = (invoiceResult.data || []) as InvoiceRow[]
-      const nextCustomers = (customerResult.data || []) as CustomerRow[]
-      const nextItems = (itemResult.data || []) as InvoiceItemRow[]
+      const nextInvoices = invoiceResult.data || []
+      const nextCustomers = customerResult.data || []
 
       await putOfflineData(orgId, "invoices", nextInvoices)
       await putOfflineData(orgId, "customers", nextCustomers)
-      await putOfflineData(orgId, "invoice_items", nextItems)
       setInvoices(nextInvoices)
       setCustomers(nextCustomers)
-      setItems(nextItems)
+      setItems([])
+      setServerTotal(invoiceResult.pagination?.total || nextInvoices.length)
     } catch (error) {
       const [cachedInvoices, cachedCustomers, cachedItems] = await Promise.all([
         getOfflineData<InvoiceRow[]>(orgId, "invoices", []),
@@ -195,13 +211,14 @@ export default function InvoicesPage() {
       setInvoices(cachedInvoices)
       setCustomers(cachedCustomers)
       setItems(cachedItems)
+      setServerTotal(cachedInvoices.length)
       setNotice(
         typeof navigator !== "undefined" && !navigator.onLine
           ? "Offline mode: showing cached invoices."
           : error instanceof Error ? error.message : "Invoices failed to load."
       )
     }
-  }, [organizationId])
+  }, [currentPage, customerFilter, debouncedSearch, organizationId, periodFilter, statusFilter])
 
   const initializeInvoices = useCallback(async () => {
     try {
@@ -209,10 +226,11 @@ export default function InvoicesPage() {
       const orgId = await getOrganizationId()
 
       if (!orgId) {
-        setNotice("No organization is connected to this account.")
+        setNotice("No business is connected to this account.")
         return
       }
 
+      skipNextInvoicesRefresh.current = true
       setOrganizationId(orgId)
       await fetchBillingData(orgId)
     } catch (error) {
@@ -226,7 +244,19 @@ export default function InvoicesPage() {
     queueMicrotask(() => {
       void initializeInvoices()
     })
-  }, [initializeInvoices])
+    // Initial invoice bootstrap intentionally runs once; filter changes use fetchBillingData below.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  useEffect(() => {
+    if (!organizationId) return
+    if (skipNextInvoicesRefresh.current) {
+      skipNextInvoicesRefresh.current = false
+      return
+    }
+
+    void fetchBillingData(organizationId)
+  }, [fetchBillingData, organizationId])
 
   const customerMap = useMemo(() => {
     return new Map(customers.map((customer) => [customer.id, customer]))
@@ -250,7 +280,11 @@ export default function InvoicesPage() {
   const enrichedInvoices = useMemo<InvoiceWithMetrics[]>(() => {
     return invoices.map((invoice) => {
       const customer = invoice.customer_id ? customerMap.get(invoice.customer_id) : null
-      const metrics = itemMetrics.get(invoice.id) || { itemCount: 0, quantity: 0, tax: 0 }
+      const metrics = itemMetrics.get(invoice.id) || {
+        itemCount: numberFrom(invoice, ["item_count"]),
+        quantity: numberFrom(invoice, ["total_quantity"]),
+        tax: numberFrom(invoice, ["item_tax"]),
+      }
       const status = normalizeStatus(invoice)
 
       return {
@@ -297,8 +331,8 @@ export default function InvoicesPage() {
     })
   }, [customerFilter, debouncedSearch, enrichedInvoices, periodFilter, riskFilter, statusFilter])
 
-  const totalPages = Math.max(1, Math.ceil(filteredInvoices.length / pageSize))
-  const visibleInvoices = filteredInvoices.slice((currentPage - 1) * pageSize, currentPage * pageSize)
+  const totalPages = Math.max(1, Math.ceil((serverTotal || filteredInvoices.length) / pageSize))
+  const visibleInvoices = filteredInvoices
 
   const analytics = useMemo(() => {
     const paid = enrichedInvoices.filter((invoice) => invoice.statusLabel === "paid")
@@ -318,7 +352,7 @@ export default function InvoicesPage() {
       paidRevenue,
       outstanding,
       tax,
-      invoiceCount: enrichedInvoices.length,
+      invoiceCount: serverTotal || enrichedInvoices.length,
       paidCount: paid.length,
       partialCount: partial.length,
       unpaidCount: unpaid.length,
@@ -327,7 +361,7 @@ export default function InvoicesPage() {
       averageInvoice: enrichedInvoices.length ? revenue / enrichedInvoices.length : 0,
       collectionRate: revenue ? Math.round((paidRevenue / revenue) * 100) : 0,
     }
-  }, [enrichedInvoices])
+  }, [enrichedInvoices, serverTotal])
 
   async function updatePaymentStatus(invoiceId: string, status: string) {
     if (!organizationId) return
@@ -335,14 +369,10 @@ export default function InvoicesPage() {
     setNotice("")
 
     try {
-      const {
-        data: { session },
-      } = await supabase.auth.getSession()
-      const response = await fetch("/api/invoices/update-status", {
+      const response = await apiFetch("/api/invoices/update-status", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          ...(session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : {}),
         },
         body: JSON.stringify({ invoice_id: invoiceId, payment_status: status }),
       })
@@ -374,12 +404,18 @@ export default function InvoicesPage() {
         payload: { invoiceId, paymentStatus: status },
       })
       setInvoices(nextInvoices)
-      setNotice("Invoice status saved offline. Pending sync.")
+      setNotice("Invoice status saved on this device. It will update online when the connection returns.")
       setSavingId(null)
       return
     }
 
-    await fetchBillingData()
+    setInvoices((current) =>
+      current.map((invoice) =>
+        invoice.id === invoiceId
+          ? { ...invoice, payment_status: status, status, updated_at: new Date().toISOString() }
+          : invoice
+      )
+    )
     setSavingId(null)
   }
 
@@ -436,14 +472,13 @@ export default function InvoicesPage() {
           <div className="grid grid-cols-1 gap-8 2xl:grid-cols-[1fr,620px] 2xl:items-center">
             <div className="max-w-4xl">
               <div className="mb-5 inline-flex rounded-full border border-cyan-400/20 bg-cyan-500/10 px-4 py-2 text-xs font-semibold uppercase tracking-[0.22em] text-cyan-200">
-                Enterprise Invoice Operations
+                Invoice Register
               </div>
               <h1 className="text-3xl font-black leading-tight tracking-tight text-white sm:text-4xl md:text-5xl">
                 Invoices, collections, tax, print, and audit control.
               </h1>
               <p className="mt-4 max-w-3xl text-base leading-7 text-neutral-400 sm:mt-5 sm:leading-8">
-                Run global billing from one workspace with live invoice records, payment status control,
-                due-date risk, customer ledgers, tax visibility, CSV export, and print-ready invoice routes.
+                Track invoices, payment status, due dates, customer bills, tax totals, CSV export, and print-ready invoice copies.
               </p>
             </div>
 
@@ -467,7 +502,7 @@ export default function InvoicesPage() {
                 href="/dashboard/billing"
                 className="flex min-h-14 items-center justify-center rounded-lg border border-white/10 bg-white/[0.06] px-2 text-center text-sm font-black leading-tight text-white shadow-[0_18px_55px_rgba(0,0,0,0.25)] transition-all duration-300 hover:-translate-y-1 hover:border-cyan-400/30 hover:bg-cyan-500/10 sm:min-h-[82px] sm:rounded-[26px] sm:px-5 sm:text-xl"
               >
-                Billing Hub
+                Billing Overview
               </Link>
               <button
                 onClick={exportCSV}
@@ -623,7 +658,7 @@ export default function InvoicesPage() {
 
                     {stringFrom(invoice, ["sync_status"]) && stringFrom(invoice, ["sync_status"]) !== "synced" ? (
                       <p className="mt-3 inline-flex rounded-full border border-amber-400/30 bg-amber-500/10 px-2.5 py-1 text-[11px] font-black uppercase tracking-[0.12em] text-amber-100">
-                        Pending Sync
+                        Pending Update
                       </p>
                     ) : null}
 
@@ -696,7 +731,7 @@ export default function InvoicesPage() {
                           <p className="mt-1 text-xs text-neutral-500">{formatDate(invoice.created_at)}</p>
                           {stringFrom(invoice, ["sync_status"]) && stringFrom(invoice, ["sync_status"]) !== "synced" ? (
                             <p className="mt-2 inline-flex rounded-full border border-amber-400/30 bg-amber-500/10 px-2.5 py-1 text-[11px] font-black uppercase tracking-[0.12em] text-amber-100">
-                              Pending Sync
+                              Pending Update
                             </p>
                           ) : null}
                         </td>
@@ -754,7 +789,7 @@ export default function InvoicesPage() {
 
           <aside className="space-y-6">
             <div className="rounded-[36px] border border-cyan-400/20 bg-cyan-500/10 p-7 shadow-[0_0_60px_rgba(34,211,238,0.12)]">
-              <h3 className="text-2xl font-black">Global Billing Features</h3>
+              <h3 className="text-2xl font-black">Billing Tools</h3>
               <div className="mt-6 space-y-4 text-sm text-neutral-300">
                 {[
                   "Invoice creation with product and stock integration",
@@ -772,7 +807,7 @@ export default function InvoicesPage() {
             </div>
 
             <div className="rounded-[36px] border border-white/10 bg-white/[0.035] p-7 backdrop-blur-2xl">
-              <h3 className="text-2xl font-black">Launch Readiness</h3>
+              <h3 className="text-2xl font-black">Billing Readiness</h3>
               <div className="mt-6 space-y-4">
                 {[
                   ["Payment collection", analytics.collectionRate >= 70],

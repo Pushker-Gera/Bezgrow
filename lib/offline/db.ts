@@ -51,6 +51,25 @@ export type OfflineAction = {
   error?: string
 }
 
+type OfflineBackupRecord = {
+  organizationId?: string
+  organization_id?: string
+  collection?: OfflineCollection
+  value?: unknown
+}
+
+type SqliteBackupRow = {
+  organization_id?: string | null
+  payload_json?: string | null
+}
+
+type OfflineBackupPayload = {
+  app?: string
+  storage?: string
+  data?: OfflineBackupRecord[] | Partial<Record<OfflineCollection, SqliteBackupRow[]>>
+  actions?: Array<Partial<OfflineAction>>
+}
+
 type OfflineDataRecord<T> = {
   key: string
   organizationId: string
@@ -61,6 +80,22 @@ type OfflineDataRecord<T> = {
 
 const DB_NAME = "bezgrow-offline"
 const DB_VERSION = 1
+const offlineCollections: OfflineCollection[] = [
+  "workspace",
+  "profiles",
+  "organization",
+  "organization_members",
+  "products",
+  "inventory_items",
+  "customers",
+  "invoices",
+  "invoice_items",
+  "orders",
+  "order_items",
+  "settings",
+  "stock_movements",
+]
+const singleRecordCollections = new Set<OfflineCollection>(["workspace", "organization", "settings"])
 
 let dbPromise: Promise<IDBDatabase> | null = null
 
@@ -316,4 +351,97 @@ export async function exportOfflineBackup() {
     data,
     actions,
   }
+}
+
+function isOfflineCollection(value: unknown): value is OfflineCollection {
+  return typeof value === "string" && offlineCollections.includes(value as OfflineCollection)
+}
+
+function parseSqlitePayload(row: SqliteBackupRow) {
+  if (!row.payload_json) return null
+
+  try {
+    return JSON.parse(row.payload_json) as unknown
+  } catch {
+    return null
+  }
+}
+
+function maybeCacheWorkspaceFromValue(value: unknown, organizationId: string) {
+  if (!isBrowser() || !value || typeof value !== "object") return
+
+  const payload = (value as { payload?: WorkspaceBootstrapPayload }).payload
+  if (payload?.success) {
+    localStorage.setItem("bezgrow:offline-workspace", JSON.stringify({ payload, organizationId, cachedAt: Date.now() }))
+  }
+}
+
+async function restoreCollection(organizationId: string, collection: OfflineCollection, values: unknown[]) {
+  if (!organizationId || values.length === 0) return 0
+
+  const value = singleRecordCollections.has(collection) ? values[0] : values
+  await putOfflineData(organizationId, collection, value)
+
+  if (collection === "workspace") maybeCacheWorkspaceFromValue(value, organizationId)
+  return values.length
+}
+
+export async function restoreOfflineBackup(input: unknown) {
+  if (!isBrowser()) throw new Error("Backup restore is available only inside Bezgrow.")
+
+  const backup = input as OfflineBackupPayload | null
+  if (!backup || backup.app !== "Bezgrow" || !backup.data) {
+    throw new Error("This does not look like a Bezgrow backup file.")
+  }
+
+  let restoredRecords = 0
+  let restoredActions = 0
+
+  if (Array.isArray(backup.data)) {
+    for (const record of backup.data) {
+      if (!isOfflineCollection(record.collection)) continue
+      const organizationId = record.organizationId || record.organization_id
+      if (!organizationId) continue
+
+      restoredRecords += await restoreCollection(organizationId, record.collection, [record.value])
+    }
+  } else {
+    for (const collection of offlineCollections) {
+      const rows = backup.data[collection]
+      if (!Array.isArray(rows)) continue
+
+      const rowsByOrganization = new Map<string, unknown[]>()
+      rows.forEach((row) => {
+        const organizationId = row.organization_id || "global"
+        const value = parseSqlitePayload(row)
+        if (!value) return
+
+        rowsByOrganization.set(organizationId, [...(rowsByOrganization.get(organizationId) || []), value])
+      })
+
+      for (const [organizationId, values] of rowsByOrganization) {
+        restoredRecords += await restoreCollection(organizationId, collection, values)
+      }
+    }
+  }
+
+  if (Array.isArray(backup.actions)) {
+    for (const action of backup.actions) {
+      if (!action.id || !action.type || !action.organizationId || !action.payload) continue
+      if (action.status === "synced") continue
+
+      await queueOfflineAction({
+        id: action.id,
+        type: action.type,
+        organizationId: action.organizationId,
+        payload: action.payload,
+      })
+      restoredActions += 1
+    }
+  }
+
+  window.dispatchEvent(new Event("bezgrow:offline-data-changed"))
+  window.dispatchEvent(new Event("bezgrow:offline-actions-changed"))
+
+  return { restoredRecords, restoredActions }
 }
