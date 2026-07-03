@@ -1,16 +1,16 @@
 {
-  "version": "0.1.0",
+  "version": "0.1.1",
   "releaseNotes": [
-    "Logged-in startup now opens the correct workspace route without landing/login flicker.",
-    "Mobile invoice viewing now uses a fitted preview with touch-friendly actions.",
-    "Bezgrow logo, favicon, PWA, and desktop app icons were refreshed."
+    "Billing dashboard summaries now load reliably across older and newer invoice database schemas.",
+    "Desktop update checks now read the live release metadata instead of relying only on stale bundled files.",
+    "The normal online sync strip stays hidden when there is nothing pending, keeping the dashboard cleaner."
   ],
   "mac": {
     "file": "/downloads/Bezgrow-mac.dmg",
-    "version": "0.1.0",
-    "sha256": "5e6102d043c45064f2cf2193d25b0f5317bf4eab84cfda50bbaea2219954fc9c",
-    "size": 101281553,
+    "version": "0.1.1",
+    "sha256": "047efbc4b5702cfc5df54b868895fc78ef7f9bfbf4f0c0a62157acbafb4577f9",
+    "size": 101266658,
     "notarized": false,
-    "generatedAt": "2026-07-01T17:25:42.301Z"
+    "generatedAt": "2026-07-03T08:05:48.507Z"
   }
 }
