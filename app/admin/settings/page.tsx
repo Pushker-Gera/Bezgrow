@@ -25,7 +25,7 @@ type AdminMetricsResponse = {
   success: boolean
   error?: string
   organizations?: unknown[]
-  profiles?: Array<{ approved: boolean | null }>
+  profiles?: Array<{ approved: boolean | null; is_suspended?: boolean | null }>
   usersCount?: number
   logs?: LogRow[]
 }
@@ -126,7 +126,7 @@ export default function AdminSettingsPage() {
         setNotice(metrics.error || "Admin settings metrics failed to load.")
       }
 
-      const pendingProfiles = (metrics.profiles || []).filter((profile) => profile.approved === false)
+      const pendingProfiles = (metrics.profiles || []).filter((profile) => profile.approved === false && !profile.is_suspended)
 
       if (settingsPayload.settings) {
         setSettings({

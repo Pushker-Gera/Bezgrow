@@ -56,6 +56,7 @@ export async function GET(request: Request) {
         adminSupabase
           .from("pending_users")
           .select("id,email,full_name,business_name,status,created_at")
+          .or("status.is.null,status.eq.pending")
           .order("created_at", { ascending: false })
           .limit(500),
       ])

@@ -4,6 +4,37 @@ import { fail } from "@/lib/api/responses"
 
 export const dynamic = "force-dynamic"
 
+const baseInvoiceColumns = [
+  "id",
+  "organization_id",
+  "customer_id",
+  "invoice_number",
+  "payment_status",
+  "payment_method",
+  "notes",
+  "due_date",
+  "grand_total",
+  "total_amount",
+  "total",
+  "tax_amount",
+  "tax_total",
+  "created_at",
+  "sync_status",
+  "invoice_type",
+]
+
+const requiredInvoiceColumns = new Set(["id", "organization_id", "customer_id", "invoice_number", "created_at"])
+
+function missingColumnFromError(error: { message?: string } | null) {
+  if (!error?.message) return null
+  const quotedColumnMatch =
+    error.message.match(/column [a-zA-Z0-9_]+\.([a-zA-Z0-9_]+) does not exist/i) ||
+    error.message.match(/column "([^"]+)" does not exist/i) ||
+    error.message.match(/Could not find the '([^']+)' column/i)
+
+  return quotedColumnMatch?.[1] || null
+}
+
 export async function GET(request: Request) {
   const workspace = await requireWorkspace(request)
   if (!workspace.ok) return fail(workspace.error, workspace.status)
@@ -17,6 +48,7 @@ export async function GET(request: Request) {
   const customerId = url.searchParams.get("customer_id") || "all"
   const period = url.searchParams.get("period") || "all"
   let matchingCustomerIds: string[] = []
+  let selectColumns = [...baseInvoiceColumns]
 
   if (pagination.search) {
     const customerTerm = pagination.search.replaceAll(",", " ").trim()
@@ -30,68 +62,74 @@ export async function GET(request: Request) {
     matchingCustomerIds = (matchingCustomers || []).map((customer) => customer.id).filter(Boolean)
   }
 
-  let query = adminSupabase
-    .from("invoices")
-    .select(
-      "id,organization_id,customer_id,customer_name,invoice_number,payment_status,status,payment_method,notes,due_date,grand_total,total_amount,total,tax_amount,tax_total,created_at,sync_status,invoice_type",
-      { count: "exact" }
-    )
-    .eq("organization_id", orgId)
-    .order("created_at", { ascending: false })
-    .range(from, to)
+  const runQuery = async () => {
+    let query = adminSupabase
+      .from("invoices")
+      .select(selectColumns.join(","), { count: "exact" })
+      .eq("organization_id", orgId)
+      .order("created_at", { ascending: false })
+      .range(from, to)
 
-  if (status !== "all") {
-    query = query.or(`payment_status.eq.${status},status.eq.${status}`)
-  }
-
-  if (customerId !== "all") {
-    query = query.eq("customer_id", customerId)
-  }
-
-  if (period !== "all") {
-    const now = new Date()
-    let start: Date | null = null
-    let end: Date | null = null
-
-    if (period === "today") {
-      start = new Date(now.getFullYear(), now.getMonth(), now.getDate())
-      end = new Date(start)
-      end.setDate(start.getDate() + 1)
+    if (status !== "all" && selectColumns.includes("payment_status")) {
+      query = query.eq("payment_status", status)
     }
 
-    if (period === "week") {
-      start = new Date(now)
-      start.setDate(now.getDate() - 7)
+    if (customerId !== "all") {
+      query = query.eq("customer_id", customerId)
     }
 
-    if (period === "month") {
-      start = new Date(now.getFullYear(), now.getMonth(), 1)
+    if (period !== "all") {
+      const now = new Date()
+      let start: Date | null = null
+      let end: Date | null = null
+
+      if (period === "today") {
+        start = new Date(now.getFullYear(), now.getMonth(), now.getDate())
+        end = new Date(start)
+        end.setDate(start.getDate() + 1)
+      }
+
+      if (period === "week") {
+        start = new Date(now)
+        start.setDate(now.getDate() - 7)
+      }
+
+      if (period === "month") {
+        start = new Date(now.getFullYear(), now.getMonth(), 1)
+      }
+
+      if (start) query = query.gte("created_at", start.toISOString())
+      if (end) query = query.lt("created_at", end.toISOString())
     }
 
-    if (start) query = query.gte("created_at", start.toISOString())
-    if (end) query = query.lt("created_at", end.toISOString())
+    if (pagination.search) {
+      const term = pagination.search.replaceAll(",", " ")
+      const filters = []
+
+      if (selectColumns.includes("invoice_number")) filters.push(`invoice_number.ilike.%${term}%`)
+      if (selectColumns.includes("payment_method")) filters.push(`payment_method.ilike.%${term}%`)
+      if (matchingCustomerIds.length > 0) filters.push(`customer_id.in.(${matchingCustomerIds.join(",")})`)
+      if (filters.length > 0) query = query.or(filters.join(","))
+    }
+
+    return query
   }
 
-  if (pagination.search) {
-    const term = pagination.search.replaceAll(",", " ")
-    const filters = [
-      `invoice_number.ilike.%${term}%`,
-      `customer_name.ilike.%${term}%`,
-      `payment_method.ilike.%${term}%`,
-    ]
+  let { data, error, count } = await runQuery()
+  for (let attempt = 0; error && attempt < baseInvoiceColumns.length; attempt += 1) {
+    const missingColumn = missingColumnFromError(error)
+    if (!missingColumn || requiredInvoiceColumns.has(missingColumn) || !selectColumns.includes(missingColumn)) break
 
-    if (matchingCustomerIds.length > 0) {
-      filters.push(`customer_id.in.(${matchingCustomerIds.join(",")})`)
-    }
-
-    query = query.or(filters.join(","))
+    selectColumns = selectColumns.filter((column) => column !== missingColumn)
+    ;({ data, error, count } = await runQuery())
   }
 
-  const { data, error, count } = await query
   if (error) return fail(`Invoices failed to load: ${error.message}`, 500)
 
-  const rows = data || []
-  const invoiceIds = rows.map((invoice) => invoice.id).filter(Boolean)
+  const rows = (data || []) as unknown as Array<Record<string, unknown>>
+  const invoiceIds = rows
+    .map((invoice) => (typeof invoice.id === "string" ? invoice.id : ""))
+    .filter(Boolean)
   const customerIds = Array.from(
     new Set(
       rows
@@ -139,10 +177,11 @@ export async function GET(request: Request) {
   }
 
   const enrichedRows = rows.map((invoice) => {
-    const record = invoice as Record<string, unknown>
+    const record = invoice
+    const invoiceId = typeof record.id === "string" ? record.id : ""
     const customerId = typeof record.customer_id === "string" ? record.customer_id : ""
     const customer = customerMap.get(customerId)
-    const metrics = itemMetrics.get(invoice.id) || { itemCount: 0, quantity: 0, tax: 0, total: 0 }
+    const metrics = itemMetrics.get(invoiceId) || { itemCount: 0, quantity: 0, tax: 0, total: 0 }
 
     return {
       ...invoice,

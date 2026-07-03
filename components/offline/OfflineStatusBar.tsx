@@ -5,7 +5,7 @@ import { exportOfflineBackup, getCachedWorkspaceBootstrap, getOfflineMeta, listO
 import { syncOfflineQueue } from "@/lib/offline/sync"
 
 export default function OfflineStatusBar() {
-  const [online, setOnline] = useState(() => (typeof navigator === "undefined" ? true : navigator.onLine))
+  const [online, setOnline] = useState(true)
   const [pending, setPending] = useState(0)
   const [needsReview, setNeedsReview] = useState(0)
   const [lastSyncedAt, setLastSyncedAt] = useState("")
@@ -89,7 +89,7 @@ export default function OfflineStatusBar() {
       void refreshCount()
     }
 
-    setOnline(navigator.onLine)
+    setOnline(typeof navigator === "undefined" ? true : navigator.onLine)
     void refreshCount()
     window.addEventListener("online", handleOnline)
     window.addEventListener("offline", handleOffline)

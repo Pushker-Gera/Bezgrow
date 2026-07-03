@@ -27,6 +27,23 @@ type BootstrapResponse = {
     }
 }
 
+const SESSION_CHECK_TIMEOUT_MS = 6000
+
+async function withTimeout<T>(promise: Promise<T>, timeoutMs = SESSION_CHECK_TIMEOUT_MS) {
+    let timeoutId: ReturnType<typeof globalThis.setTimeout> | undefined
+
+    try {
+        return await Promise.race<T | null>([
+            promise,
+            new Promise<null>((resolve) => {
+                timeoutId = globalThis.setTimeout(() => resolve(null), timeoutMs)
+            }),
+        ])
+    } finally {
+        if (timeoutId) globalThis.clearTimeout(timeoutId)
+    }
+}
+
 export default function LoginPage() {
     const router = useRouter()
 
@@ -155,13 +172,13 @@ export default function LoginPage() {
                 setErrorMessage("This account is suspended.")
             }
 
-            const desktopRuntime = await isTauriRuntimeAsync()
+            const desktopRuntime = (await withTimeout(isTauriRuntimeAsync(), 2500)) || false
 
             if (!navigator.onLine) {
-                const [hasSession, cachedWorkspace] = await Promise.all([
+                const [hasSession, cachedWorkspace] = await withTimeout(Promise.all([
                     hasCachedDesktopSession(),
                     Promise.resolve(getCachedWorkspaceBootstrap()),
-                ])
+                ]), 3000) || [false, null]
 
                 if (hasSession && cachedWorkspace?.success && cachedWorkspace.permissions?.canAccessDashboard) {
                     navigate("/dashboard")
@@ -173,21 +190,21 @@ export default function LoginPage() {
             }
 
             if (desktopRuntime) {
-                const cachedSession = await readCachedDesktopSession()
+                const cachedSession = await withTimeout(readCachedDesktopSession(), 3000)
 
                 if (cachedSession?.access_token && cachedSession.refresh_token) {
-                    const { error } = await supabase.auth.setSession({
+                    const sessionResult = await withTimeout(supabase.auth.setSession({
                         access_token: cachedSession.access_token,
                         refresh_token: cachedSession.refresh_token,
-                    })
+                    }), SESSION_CHECK_TIMEOUT_MS)
 
-                    if (!error) {
-                        const redirectPath = await completeDesktopAuthCallback(
+                    if (sessionResult && !sessionResult.error) {
+                        const redirectPath = await withTimeout(completeDesktopAuthCallback(
                             cachedSession.access_token,
                             cachedSession.refresh_token,
                             getSafeNextPath("/dashboard")
-                        )
-                        navigate(redirectPath)
+                        ), SESSION_CHECK_TIMEOUT_MS)
+                        if (redirectPath) navigate(redirectPath)
                         return
                     }
                 }
@@ -195,11 +212,11 @@ export default function LoginPage() {
                 return
             }
 
-            const bootstrapResponse = await fetch("/api/workspace/bootstrap", {
+            const bootstrapResponse = await withTimeout(fetch("/api/workspace/bootstrap", {
                 cache: "no-store",
                 credentials: "include",
-            })
-            if (bootstrapResponse.ok) {
+            }), SESSION_CHECK_TIMEOUT_MS)
+            if (bootstrapResponse?.ok) {
                 const payload = (await bootstrapResponse.json()) as BootstrapResponse
                 if (payload.success) {
                     if (payload.permissions?.admin || payload.profile?.role === "admin") {
@@ -216,10 +233,13 @@ export default function LoginPage() {
                 }
             }
 
+            const sessionResult = await withTimeout(supabase.auth.getSession(), SESSION_CHECK_TIMEOUT_MS)
+            if (!sessionResult) return
+
             const {
                 data: { session },
                 error,
-            } = await supabase.auth.getSession()
+            } = sessionResult
 
             if (error) {
                 showAuthError(error.message)

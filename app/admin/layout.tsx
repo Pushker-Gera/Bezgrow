@@ -49,7 +49,7 @@ export default function AdminLayout({ children }: { children: ReactNode }) {
     const [adminEmail, setAdminEmail] = useState("")
     const [mobileMoreOpen, setMobileMoreOpen] = useState(false)
     const [tabletNavOpen, setTabletNavOpen] = useState(false)
-    const [online, setOnline] = useState(() => (typeof navigator === "undefined" ? true : navigator.onLine))
+    const [online, setOnline] = useState(true)
 
     useEffect(() => {
         queueMicrotask(async () => {
@@ -81,10 +81,14 @@ export default function AdminLayout({ children }: { children: ReactNode }) {
         const handleOnline = () => setOnline(true)
         const handleOffline = () => setOnline(false)
 
+        const initialSync = globalThis.setTimeout(() => {
+            setOnline(typeof navigator === "undefined" ? true : navigator.onLine)
+        }, 0)
         window.addEventListener("online", handleOnline)
         window.addEventListener("offline", handleOffline)
 
         return () => {
+            globalThis.clearTimeout(initialSync)
             window.removeEventListener("online", handleOnline)
             window.removeEventListener("offline", handleOffline)
         }
