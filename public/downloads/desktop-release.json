@@ -8,9 +8,9 @@
   "mac": {
     "file": "/downloads/Bezgrow-mac.dmg",
     "version": "0.1.1",
-    "sha256": "047efbc4b5702cfc5df54b868895fc78ef7f9bfbf4f0c0a62157acbafb4577f9",
-    "size": 101266658,
+    "sha256": "57fc3f4fcff650d889b8b5d696edda6de270a9d75c2419aa8ca33d8b64fbd19b",
+    "size": 101375075,
     "notarized": false,
-    "generatedAt": "2026-07-03T08:05:48.507Z"
+    "generatedAt": "2026-07-07T22:32:14.830Z"
   }
 }

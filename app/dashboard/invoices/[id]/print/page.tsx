@@ -54,6 +54,11 @@ export default function PrintInvoicePage() {
       return
     }
 
+    if (await loadOfflineInvoice()) {
+      setLoading(false)
+      return true
+    }
+
     let typedInvoice: PrintRow | null = null
     try {
       const { data: invoiceData } = await supabase.from("invoices").select("*").eq("id", invoiceId).single()

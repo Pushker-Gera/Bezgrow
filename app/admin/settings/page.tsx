@@ -37,6 +37,24 @@ type AdminSettingsResponse = {
   settings?: Partial<PlatformSettings> | null
 }
 
+type AdminLicenseResponse = {
+  success: boolean
+  error?: string
+  license_key?: string
+  license_file?: Record<string, unknown>
+}
+
+type LicenseForm = {
+  customer_name: string
+  business_name: string
+  device_id: string
+  plan_name: string
+  expiry_date: string
+  grace_period_days: number
+  allowed_features: string[]
+  notes: string
+}
+
 const defaultSettings: PlatformSettings = {
   platform_name: "Bezgrow ERP",
   support_email: "support@bezgrow.com",
@@ -46,6 +64,30 @@ const defaultSettings: PlatformSettings = {
   inventory_tracking: true,
   billing_automation: true,
 }
+
+const defaultLicenseForm: LicenseForm = {
+  customer_name: "",
+  business_name: "",
+  device_id: "",
+  plan_name: "Offline ERP",
+  expiry_date: new Date(Date.now() + 365 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10),
+  grace_period_days: 7,
+  allowed_features: ["billing", "inventory", "customers", "orders", "reports", "backup"],
+  notes: "",
+}
+
+const licenseFeatures = [
+  "billing",
+  "inventory",
+  "customers",
+  "orders",
+  "purchase",
+  "payments",
+  "reports",
+  "backup",
+  "print",
+  "settings",
+]
 
 function ToggleCard({
   title,
@@ -89,6 +131,10 @@ export default function AdminSettingsPage() {
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
   const [notice, setNotice] = useState("")
+  const [licenseForm, setLicenseForm] = useState<LicenseForm>(defaultLicenseForm)
+  const [generatingLicense, setGeneratingLicense] = useState(false)
+  const [generatedLicenseKey, setGeneratedLicenseKey] = useState("")
+  const [generatedLicenseFile, setGeneratedLicenseFile] = useState<Record<string, unknown> | null>(null)
 
   async function fetchSettings() {
     setLoading(true)
@@ -245,6 +291,70 @@ export default function AdminSettingsPage() {
     }
   }
 
+  function updateLicenseForm<K extends keyof LicenseForm>(field: K, value: LicenseForm[K]) {
+    setLicenseForm((current) => ({ ...current, [field]: value }))
+  }
+
+  function toggleLicenseFeature(feature: string) {
+    setLicenseForm((current) => ({
+      ...current,
+      allowed_features: current.allowed_features.includes(feature)
+        ? current.allowed_features.filter((item) => item !== feature)
+        : [...current.allowed_features, feature].sort(),
+    }))
+  }
+
+  async function generateLicense() {
+    setGeneratingLicense(true)
+    setNotice("")
+    setGeneratedLicenseKey("")
+    setGeneratedLicenseFile(null)
+
+    try {
+      const {
+        data: { session },
+      } = await supabase.auth.getSession()
+      const response = await fetch("/api/admin/license/generate", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          ...(session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : {}),
+        },
+        body: JSON.stringify(licenseForm),
+      })
+      const result = (await response.json()) as AdminLicenseResponse
+      if (!response.ok || !result.success || !result.license_key) {
+        setNotice(result.error || "License could not be generated.")
+        return
+      }
+      setGeneratedLicenseKey(result.license_key)
+      setGeneratedLicenseFile(result.license_file || null)
+      setNotice("Offline license generated successfully.")
+      await fetchSettings()
+    } catch {
+      setNotice("License could not be generated.")
+    } finally {
+      setGeneratingLicense(false)
+    }
+  }
+
+  async function copyGeneratedLicense() {
+    if (!generatedLicenseKey) return
+    await navigator.clipboard.writeText(generatedLicenseKey)
+    setNotice("License key copied.")
+  }
+
+  function downloadGeneratedLicense() {
+    if (!generatedLicenseFile) return
+    const blob = new Blob([JSON.stringify(generatedLicenseFile, null, 2)], { type: "application/json" })
+    const url = URL.createObjectURL(blob)
+    const link = document.createElement("a")
+    link.href = url
+    link.download = `bezgrow-license-${licenseForm.business_name.trim().toLowerCase().replace(/[^a-z0-9]+/g, "-") || "offline"}.json`
+    link.click()
+    URL.revokeObjectURL(url)
+  }
+
   return (
     <div className="space-y-8 text-white">
       <section className="inventory-sheen rounded-[40px] border border-white/10 bg-white/[0.035] p-8 shadow-[0_0_90px_rgba(0,0,0,0.5)]">
@@ -362,6 +472,80 @@ export default function AdminSettingsPage() {
             </div>
           </div>
         </div>
+      </section>
+
+      <section className="rounded-[36px] border border-white/10 bg-white/[0.035] p-7">
+        <div className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
+          <div>
+            <h2 className="text-3xl font-black">Offline License Generator</h2>
+            <p className="mt-2 max-w-3xl text-sm text-neutral-400">Create admin-issued licenses for customer devices. The customer activates by pasting the key or importing the file on the offline screen.</p>
+          </div>
+          <button type="button" disabled={generatingLicense || loading} onClick={() => void generateLicense()} className="h-12 rounded-2xl bg-white px-6 text-sm font-black text-black disabled:cursor-not-allowed disabled:opacity-50">
+            {generatingLicense ? "Generating..." : "Generate License"}
+          </button>
+        </div>
+
+        <div className="mt-6 grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
+          <label>
+            <span className="mb-2 block text-xs font-black uppercase tracking-[0.18em] text-neutral-500">Customer Name</span>
+            <input value={licenseForm.customer_name} onChange={(event) => updateLicenseForm("customer_name", event.target.value)} className="h-14 w-full rounded-2xl border border-white/10 bg-black/50 px-5 outline-none" />
+          </label>
+          <label>
+            <span className="mb-2 block text-xs font-black uppercase tracking-[0.18em] text-neutral-500">Business Name</span>
+            <input value={licenseForm.business_name} onChange={(event) => updateLicenseForm("business_name", event.target.value)} className="h-14 w-full rounded-2xl border border-white/10 bg-black/50 px-5 outline-none" />
+          </label>
+          <label>
+            <span className="mb-2 block text-xs font-black uppercase tracking-[0.18em] text-neutral-500">Device ID</span>
+            <input value={licenseForm.device_id} onChange={(event) => updateLicenseForm("device_id", event.target.value.trim())} className="h-14 w-full rounded-2xl border border-white/10 bg-black/50 px-5 outline-none" />
+          </label>
+          <label>
+            <span className="mb-2 block text-xs font-black uppercase tracking-[0.18em] text-neutral-500">Plan Name</span>
+            <input value={licenseForm.plan_name} onChange={(event) => updateLicenseForm("plan_name", event.target.value)} className="h-14 w-full rounded-2xl border border-white/10 bg-black/50 px-5 outline-none" />
+          </label>
+          <label>
+            <span className="mb-2 block text-xs font-black uppercase tracking-[0.18em] text-neutral-500">Expiry Date</span>
+            <input type="date" value={licenseForm.expiry_date} onChange={(event) => updateLicenseForm("expiry_date", event.target.value)} className="h-14 w-full rounded-2xl border border-white/10 bg-black/50 px-5 outline-none" />
+          </label>
+          <label>
+            <span className="mb-2 block text-xs font-black uppercase tracking-[0.18em] text-neutral-500">Grace Days</span>
+            <input type="number" min={0} max={365} value={licenseForm.grace_period_days} onChange={(event) => updateLicenseForm("grace_period_days", Number(event.target.value || 0))} className="h-14 w-full rounded-2xl border border-white/10 bg-black/50 px-5 outline-none" />
+          </label>
+        </div>
+
+        <div className="mt-6">
+          <p className="mb-3 text-xs font-black uppercase tracking-[0.18em] text-neutral-500">Allowed Features</p>
+          <div className="grid grid-cols-2 gap-3 md:grid-cols-5">
+            {licenseFeatures.map((feature) => {
+              const selected = licenseForm.allowed_features.includes(feature)
+              return (
+                <button
+                  key={feature}
+                  type="button"
+                  onClick={() => toggleLicenseFeature(feature)}
+                  className={`h-11 rounded-2xl border text-sm font-bold ${selected ? "border-cyan-400/30 bg-cyan-500/10 text-cyan-100" : "border-white/10 bg-black/35 text-neutral-400"}`}
+                >
+                  {feature}
+                </button>
+              )
+            })}
+          </div>
+        </div>
+
+        <label className="mt-6 block">
+          <span className="mb-2 block text-xs font-black uppercase tracking-[0.18em] text-neutral-500">Notes</span>
+          <textarea value={licenseForm.notes} onChange={(event) => updateLicenseForm("notes", event.target.value)} rows={3} className="w-full resize-none rounded-3xl border border-white/10 bg-black/50 px-5 py-4 text-sm outline-none" />
+        </label>
+
+        {generatedLicenseKey && (
+          <div className="mt-6 rounded-3xl border border-cyan-400/20 bg-cyan-500/10 p-5">
+            <p className="text-xs font-black uppercase tracking-[0.18em] text-cyan-200">Generated License</p>
+            <textarea readOnly value={generatedLicenseKey} rows={5} className="mt-3 w-full resize-none rounded-2xl border border-white/10 bg-black/50 px-4 py-3 text-xs text-cyan-100 outline-none" />
+            <div className="mt-4 grid gap-3 sm:grid-cols-2">
+              <button type="button" onClick={() => void copyGeneratedLicense()} className="h-12 rounded-2xl bg-white px-5 text-sm font-black text-black">Copy Key</button>
+              <button type="button" onClick={downloadGeneratedLicense} className="h-12 rounded-2xl border border-white/15 bg-white/10 px-5 text-sm font-black">Download File</button>
+            </div>
+          </div>
+        )}
       </section>
 
       <section className="rounded-[36px] border border-white/10 bg-gradient-to-br from-zinc-950/95 to-black p-7">

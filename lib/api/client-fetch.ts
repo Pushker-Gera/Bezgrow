@@ -1,6 +1,7 @@
 "use client"
 
 import { supabase } from "@/lib/supabase"
+import { localApiFetch } from "@/lib/offline/local/api"
 
 type CachedToken = {
   token: string
@@ -68,6 +69,9 @@ export async function authHeaders(headersInit?: HeadersInit) {
 }
 
 export async function apiFetch(input: RequestInfo | URL, init: RequestInit = {}) {
+  const localResult = await localApiFetch(input, init)
+  if (localResult.handled && localResult.response) return localResult.response
+
   return fetch(input, {
     ...init,
     headers: await authHeaders(init.headers),

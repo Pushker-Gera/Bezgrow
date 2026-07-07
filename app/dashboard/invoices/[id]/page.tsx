@@ -4,6 +4,7 @@ import Link from "next/link"
 import { useCallback, useEffect, useMemo, useState } from "react"
 import { useParams } from "next/navigation"
 import { createWhatsAppInvoiceUrl } from "@/lib/invoice-share"
+import { getCachedWorkspaceBootstrap, getOfflineData } from "@/lib/offline/db"
 import { supabase } from "@/lib/supabase"
 
 type DataRow = Record<string, unknown> & {
@@ -41,8 +42,37 @@ export default function InvoiceViewPage() {
   const [loading, setLoading] = useState(true)
   const [notice, setNotice] = useState("")
 
+  const loadOfflineInvoice = useCallback(async () => {
+    if (!invoiceId) return false
+    const cachedWorkspace = getCachedWorkspaceBootstrap()
+    const organizationId = cachedWorkspace?.organization?.id || cachedWorkspace?.membership?.organization_id || ""
+    if (!organizationId) return false
+
+    const cachedInvoices = await getOfflineData<DataRow[]>(organizationId, "invoices", [])
+    const offlineInvoice = cachedInvoices.find((row) => stringFrom(row, ["id"]) === invoiceId)
+    if (!offlineInvoice) return false
+
+    const [cachedCustomers, cachedOrganization] = await Promise.all([
+      getOfflineData<DataRow[]>(organizationId, "customers", []),
+      getOfflineData<DataRow | null>(organizationId, "organization", null),
+    ])
+    const customerId = stringFrom(offlineInvoice, ["customer_id"])
+
+    setInvoice(offlineInvoice)
+    setCustomer(
+      cachedCustomers.find((row) => stringFrom(row, ["id"]) === customerId || stringFrom(row, ["offline_local_id"]) === customerId) || null
+    )
+    setOrganization(cachedOrganization)
+    return true
+  }, [invoiceId])
+
   const loadInvoice = useCallback(async () => {
     if (!invoiceId) {
+      setLoading(false)
+      return
+    }
+
+    if (await loadOfflineInvoice()) {
       setLoading(false)
       return
     }
@@ -62,7 +92,7 @@ export default function InvoiceViewPage() {
     }
 
     setLoading(false)
-  }, [invoiceId])
+  }, [invoiceId, loadOfflineInvoice])
 
   useEffect(() => {
     queueMicrotask(() => {

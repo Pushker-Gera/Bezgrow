@@ -66,11 +66,47 @@ function actionSortRank(action: OfflineAction) {
     stock_movement: 3,
     create_invoice: 4,
     update_invoice_status: 5,
+    delete_invoice: 5,
     create_order: 6,
     save_settings: 7,
+    save_supplier: 8,
+    delete_supplier: 8,
+    create_purchase_order: 9,
+    create_goods_received: 10,
+    create_purchase: 11,
+    create_purchase_return: 12,
+    create_payment: 13,
+    create_quotation: 14,
+    create_delivery_challan: 14,
+    create_proforma_invoice: 14,
+    create_credit_note: 14,
+    create_debit_note: 14,
+    create_expense: 15,
+    create_accounting_voucher: 16,
+    create_backup_manifest: 99,
   }
 
   return rank[action.type] || 99
+}
+
+function isLocalOnlyPhase4Action(type: OfflineAction["type"]) {
+  return (
+    type === "save_supplier" ||
+    type === "delete_supplier" ||
+    type === "create_purchase" ||
+    type === "create_purchase_return" ||
+    type === "create_purchase_order" ||
+    type === "create_goods_received" ||
+    type === "create_payment" ||
+    type === "create_quotation" ||
+    type === "create_delivery_challan" ||
+    type === "create_proforma_invoice" ||
+    type === "create_credit_note" ||
+    type === "create_debit_note" ||
+    type === "create_expense" ||
+    type === "create_accounting_voucher" ||
+    type === "create_backup_manifest"
+  )
 }
 
 async function postJson<T>(url: string, headers: Record<string, string>, body: Record<string, unknown>) {
@@ -416,6 +452,16 @@ async function syncInvoiceStatus(action: OfflineAction, headers: Record<string, 
   )
 }
 
+async function syncDeleteInvoice(action: OfflineAction, headers: Record<string, string>) {
+  const payload = action.payload as { invoiceId: string }
+  if (!payload.invoiceId || payload.invoiceId.startsWith("offline-")) return
+
+  await postJson<{ success?: boolean }>("/api/invoices/delete-with-stock-restore", headers, {
+    invoice_id: payload.invoiceId,
+    confirmation: "DELETE",
+  })
+}
+
 export async function syncOfflineQueue(onProgress?: (progress: SyncProgress) => void) {
   if (!navigator.onLine) throw new Error("You are offline. Sync will run when internet returns.")
 
@@ -445,8 +491,12 @@ export async function syncOfflineQueue(onProgress?: (progress: SyncProgress) => 
       if (action.type === "stock_movement") await syncStockMovement(action, headers)
       if (action.type === "create_invoice") await syncInvoice(action, headers)
       if (action.type === "update_invoice_status") await syncInvoiceStatus(action, headers)
+      if (action.type === "delete_invoice") await syncDeleteInvoice(action, headers)
       if (action.type === "create_order") await syncOrder(action, headers)
       if (action.type === "save_settings") await syncSettings(action, headers)
+      if (isLocalOnlyPhase4Action(action.type)) {
+        throw new Error(`${action.type.replace(/_/g, " ")} is stored in local SQLite. Cloud sync for this Phase 4 module is not configured yet.`)
+      }
       await updateOfflineAction(action.id, { status: "synced", error: undefined })
       await writeSqliteSyncLog({
         id: syncLogId("synced"),

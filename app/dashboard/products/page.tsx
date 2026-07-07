@@ -8,7 +8,6 @@ import { getOrganizationFeatures } from "@/lib/get-organization-features"
 import { getOrganizationId } from "@/lib/getOrganization"
 import { createOfflineId, getOfflineData, putOfflineData, queueOfflineAction } from "@/lib/offline/db"
 import { offlineFallbackMessage, shouldSaveOffline } from "@/lib/offline/network"
-import { supabase } from "@/lib/supabase"
 
 type ProductRow = {
     id: string
@@ -43,6 +42,7 @@ type ProductRow = {
 
 type StockMovement = {
     id: string
+    product_id?: string | null
     type: string | null
     quantity: number | null
     previous_stock: number | null
@@ -347,7 +347,7 @@ export default function ProductsPage() {
         if (forceFresh) params.set("_t", String(Date.now()))
 
         try {
-            const response = await fetch(`/api/products/list?${params.toString()}`, {
+            const response = await apiFetch(`/api/products/list?${params.toString()}`, {
                 credentials: "include",
                 cache: forceFresh ? "no-store" : "default",
             })
@@ -385,21 +385,13 @@ export default function ProductsPage() {
         if (!organizationId) return
 
         setMovementLoading(true)
-        const { data, error } = await supabase
-            .from("stock_movements")
-            .select("id,type,quantity,previous_stock,new_stock,reason,reference_no,created_at")
-            .eq("product_id", productId)
-            .eq("organization_id", organizationId)
-            .order("created_at", { ascending: false })
-            .limit(20)
-
-        if (error) {
-            setNotice(error.message)
-            setMovementLoading(false)
-            return
-        }
-
-        setStockMovements((data || []) as unknown as StockMovement[])
+        const movements = await getOfflineData<StockMovement[]>(organizationId, "stock_movements", [])
+        setStockMovements(
+            movements
+                .filter((movement) => movement.product_id === productId)
+                .sort((a, b) => String(b.created_at || "").localeCompare(String(a.created_at || "")))
+                .slice(0, 20)
+        )
         setMovementLoading(false)
     }
 

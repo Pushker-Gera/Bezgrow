@@ -5,11 +5,11 @@ import { useDebounce } from "use-debounce"
 import AppUpdatesPanel from "@/components/AppUpdatesPanel"
 import { readStoredPrintSettings, saveStoredPrintSettings } from "@/components/print/settings/defaults"
 import type { PrintFormat, PrintSettings } from "@/components/print/types"
+import { apiFetch } from "@/lib/api/client-fetch"
 import { isTauriRuntimeAsync } from "@/lib/desktop/tauri"
 import { getOrganizationId } from "@/lib/getOrganization"
 import { createOfflineId, exportOfflineBackup, getOfflineData, putOfflineData, queueOfflineAction, restoreOfflineBackup } from "@/lib/offline/db"
 import { shouldSaveOffline } from "@/lib/offline/network"
-import { supabase } from "@/lib/supabase"
 
 type Organization = Record<string, unknown> & {
   id: string
@@ -155,17 +155,12 @@ export default function SettingsPage() {
   })
 
   async function loadCorrectionInvoices(orgId: string, searchTerm = "") {
-    const {
-      data: { session },
-    } = await supabase.auth.getSession()
-    const headers = session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : undefined
     const invoiceParams = new URLSearchParams({ limit: "100", organization_id: orgId })
 
     if (searchTerm.trim()) invoiceParams.set("search", searchTerm.trim())
 
     try {
-      const invoiceResponse = await fetch(`/api/invoices/list?${invoiceParams.toString()}`, {
-        headers,
+      const invoiceResponse = await apiFetch(`/api/invoices/list?${invoiceParams.toString()}`, {
         cache: "no-store",
       })
       const invoices = (await invoiceResponse.json()) as ListResponse<InvoiceCorrectionRow>
@@ -196,17 +191,40 @@ export default function SettingsPage() {
     }
 
     setOrganizationId(orgId)
-    const {
-      data: { session },
-    } = await supabase.auth.getSession()
-    const headers = session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : undefined
+    const [cachedSettings, cachedInvoices] = await Promise.all([
+      getOfflineData<Record<string, unknown>>(orgId, "settings", {}),
+      getOfflineData<InvoiceCorrectionRow[]>(orgId, "invoices", []),
+    ])
+    const cachedOrg = (cachedSettings.organization || null) as Organization | null
+    const cachedFeatures = normalizeFeatures(cachedSettings.features as WorkspaceResponse["features"], orgId)
+    if (cachedOrg) {
+      setOrganization(cachedOrg)
+      setForm({
+        name: valueText(cachedOrg.name || cachedOrg.business_name),
+        industry: valueText(cachedOrg.industry),
+        currency: valueText(cachedOrg.currency) || "INR",
+        businessType: valueText(cachedOrg.business_type) || "retail",
+        businessCategory: valueText(cachedOrg.business_category) || "general",
+        gstNumber: valueText(cachedOrg.gst_number),
+        phone: valueText(cachedOrg.phone),
+        email: valueText(cachedOrg.email),
+        fssai: valueText(cachedOrg.fssai),
+        website: valueText(cachedOrg.website),
+        address: valueText(cachedOrg.address),
+        branchName: valueText(cachedOrg.branch_name) || "Main Branch",
+      })
+      setFeatures(cachedFeatures)
+      setRecentInvoices(cachedInvoices)
+      return
+    }
+
     const bootstrapPath = "/api/workspace/bootstrap"
     const desktopRuntime = await isTauriRuntimeAsync()
     const bootstrapUrl = desktopRuntime ? `/api/desktop-proxy?path=${encodeURIComponent(bootstrapPath)}` : bootstrapPath
     try {
       const [workspaceResponse, invoiceResponse] = await Promise.all([
-        fetch(bootstrapUrl, { headers, cache: "no-store" }),
-        fetch(`/api/invoices/list?${new URLSearchParams({ limit: "100", organization_id: orgId }).toString()}`, { headers, cache: "no-store" }),
+        fetch(bootstrapUrl, { cache: "no-store" }),
+        apiFetch(`/api/invoices/list?${new URLSearchParams({ limit: "100", organization_id: orgId }).toString()}`, { cache: "no-store" }),
       ])
       const workspace = (await workspaceResponse.json()) as WorkspaceResponse
       const invoices = (await invoiceResponse.json()) as ListResponse<InvoiceCorrectionRow>
@@ -384,15 +402,11 @@ export default function SettingsPage() {
       address: form.address.trim(),
       branch_name: form.branchName.trim() || "Main Branch",
     }
-    const {
-      data: { session },
-    } = await supabase.auth.getSession()
     try {
-      const response = await fetch("/api/settings/update-organization", {
+      const response = await apiFetch("/api/settings/update-organization", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          ...(session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : {}),
         },
         body: JSON.stringify(settingsPayload),
       })
@@ -457,15 +471,11 @@ export default function SettingsPage() {
       ]
     })
 
-    const {
-      data: { session },
-    } = await supabase.auth.getSession()
     try {
-      const response = await fetch("/api/settings/toggle-feature", {
+      const response = await apiFetch("/api/settings/toggle-feature", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          ...(session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : {}),
         },
         body: JSON.stringify({ feature_key: featureKey, is_enabled: nextEnabled }),
       })
@@ -521,16 +531,12 @@ export default function SettingsPage() {
       return
     }
 
-    const {
-      data: { session },
-    } = await supabase.auth.getSession()
     const deleteParams = new URLSearchParams({ organization_id: organizationId })
     try {
-      const response = await fetch(`/api/invoices/delete-with-stock-restore?${deleteParams.toString()}`, {
+      const response = await apiFetch(`/api/invoices/delete-with-stock-restore?${deleteParams.toString()}`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          ...(session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : {}),
         },
         body: JSON.stringify({ invoice_id: deletingInvoiceId, confirmation: "DELETE" }),
       })

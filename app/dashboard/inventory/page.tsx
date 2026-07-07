@@ -7,7 +7,6 @@ import { getOrganizationFeatures } from "@/lib/get-organization-features"
 import { getOrganizationId } from "@/lib/getOrganization"
 import { createOfflineId, getOfflineData, putOfflineData, queueOfflineAction } from "@/lib/offline/db"
 import { shouldSaveOffline } from "@/lib/offline/network"
-import { supabase } from "@/lib/supabase"
 
 type ProductRow = {
     id: string
@@ -21,10 +20,12 @@ type ProductRow = {
     price: number | null
     category: string | null
     warehouse_id: string | null
+    warehouse?: string | null
     batch_no: string | null
     barcode: string | null
     expiry_date: string | null
     created_at: string | null
+    deleted_at?: string | null
     updated_at?: string | null
     sync_status?: string | null
 }
@@ -174,86 +175,26 @@ export default function InventoryPage() {
     async function fetchInventoryData(orgId: string) {
         setLoading(true)
         setNotice("")
+        await loadCachedInventory(orgId, false)
+    }
 
-        const productsQuery = supabase
-            .from("products")
-            .select(`
-                id,
-                name,
-                sku,
-                stock,
-                min_stock,
-                purchase_rate,
-                sale_rate,
-                price,
-                category,
-                warehouse_id,
-                batch_no,
-                barcode,
-                expiry_date,
-                created_at
-            `)
-            .eq("organization_id", orgId)
-            .is("deleted_at", null)
-            .order("created_at", { ascending: false })
+    async function loadCachedInventory(orgId: string, showOfflineNotice = true) {
+        const [cachedProducts, cachedInvoices, cachedInvoiceItems, cachedMovements, cachedWarehouses] = await Promise.all([
+            getOfflineData<ProductRow[]>(orgId, "products", []),
+            getOfflineData<InvoiceRow[]>(orgId, "invoices", []),
+            getOfflineData<InvoiceItemRow[]>(orgId, "invoice_items", []),
+            getOfflineData<StockMovementRow[]>(orgId, "stock_movements", []),
+            getOfflineData<WarehouseRow[]>(orgId, "warehouses", []),
+        ])
 
-        const invoicesQuery = supabase
-            .from("invoices")
-            .select(`
-                id,
-                grand_total,
-                created_at,
-                invoice_items (
-                    quantity,
-                    product_name,
-                    product_id
-                )
-            `)
-            .eq("organization_id", orgId)
-
-        const warehousesQuery = supabase
-            .from("warehouses")
-            .select("id, name")
-            .eq("organization_id", orgId)
-            .eq("is_active", true)
-            .order("created_at", { ascending: true })
-
-        const movementsQuery = supabase
-            .from("stock_movements")
-            .select(`
-                id,
-                quantity,
-                type,
-                created_at,
-                product_id,
-                warehouse_id,
-                products ( name ),
-                warehouses ( name )
-            `)
-            .eq("organization_id", orgId)
-            .order("created_at", { ascending: false })
-            .limit(30)
-
-        const [productsResult, invoicesResult, warehousesResult, movementsResult] =
-            await Promise.all([
-                productsQuery,
-                invoicesQuery,
-                warehousesQuery,
-                movementsQuery,
-            ])
-
-        if (productsResult.error) throw new Error(productsResult.error.message)
-
-        const productRows = (productsResult.data || []) as ProductRow[]
-        const invoiceRows = (invoicesResult.data || []) as InvoiceRow[]
-        const warehouseRows = (warehousesResult.data || []) as WarehouseRow[]
-        const movementRows = (movementsResult.data || []) as StockMovementRow[]
+        const productRows = cachedProducts.filter((product) => !product.deleted_at)
+        const invoiceRows = cachedInvoices
+        const warehouseRows = cachedWarehouses.length ? cachedWarehouses : [{ id: "local-main", name: "Main Warehouse" }]
+        const movementRows = cachedMovements
         const warehouseNameById = new Map(
             warehouseRows.map((warehouse) => [warehouse.id, warehouse.name])
         )
-        const invoiceItems = invoiceRows.flatMap(
-            (invoice) => invoice.invoice_items || []
-        )
+        const invoiceItems = cachedInvoiceItems.length ? cachedInvoiceItems : invoiceRows.flatMap((invoice) => invoice.invoice_items || [])
 
         const normalizedProducts = productRows.map((product) => {
             const soldQuantity = invoiceItems
@@ -275,6 +216,7 @@ export default function InventoryPage() {
                 inventoryValue: currentStock * unitValue,
                 warehouseName:
                     warehouseNameById.get(product.warehouse_id || "") ||
+                    product.warehouse ||
                     "Unassigned",
             }
         })
@@ -359,7 +301,7 @@ export default function InventoryPage() {
         setMovements(
             movementRows.map((movement) => ({
                 id: movement.id,
-                product: relationName(movement.products) || "Unknown product",
+                product: relationName(movement.products) || String((movement as Record<string, unknown>).product_name || "Unknown product"),
                 type: movementLabels[movement.type || ""] || movement.type || "Movement",
                 quantity: Number(movement.quantity || 0),
                 warehouse:
@@ -369,73 +311,7 @@ export default function InventoryPage() {
                 createdAt: movement.created_at,
             }))
         )
-        await putOfflineData(orgId, "products", productRows)
-        await putOfflineData(orgId, "inventory_items", productRows)
-        await putOfflineData(orgId, "invoices", invoiceRows)
-        await putOfflineData(orgId, "stock_movements", movementRows)
-        setLoading(false)
-    }
-
-    async function loadCachedInventory(orgId: string) {
-        const [cachedProducts, cachedInvoices, cachedMovements] = await Promise.all([
-            getOfflineData<ProductRow[]>(orgId, "products", []),
-            getOfflineData<InvoiceRow[]>(orgId, "invoices", []),
-            getOfflineData<StockMovementRow[]>(orgId, "stock_movements", []),
-        ])
-        const invoiceItems = cachedInvoices.flatMap((invoice) => invoice.invoice_items || [])
-        const normalizedProducts = cachedProducts.map((product) => {
-            const soldQuantity = invoiceItems
-                .filter((item) => item.product_id === product.id)
-                .reduce((sum, item) => sum + Number(item.quantity || 0), 0)
-            const currentStock = Number(product.stock || 0)
-            const unitValue = Number(product.sale_rate || product.price || product.purchase_rate || 0)
-
-            return {
-                ...product,
-                currentStock,
-                soldQuantity,
-                inventoryValue: currentStock * unitValue,
-                warehouseName: "Cached Warehouse",
-            }
-        })
-        const lowStockProducts = normalizedProducts.filter((product) => product.currentStock <= Number(product.min_stock ?? 5))
-        const outOfStockProducts = normalizedProducts.filter((product) => product.currentStock <= 0)
-        const inventoryValue = normalizedProducts.reduce((sum, product) => sum + product.inventoryValue, 0)
-        const invoiceRevenue = cachedInvoices.reduce((sum, invoice) => sum + Number(invoice.grand_total || 0), 0)
-        const soldUnits = invoiceItems.reduce((sum, item) => sum + Number(item.quantity || 0), 0)
-
-        setProducts(normalizedProducts)
-        setWarehouses([])
-        setWarehouseStats([])
-        setCategoryStats(
-            Array.from(
-                normalizedProducts.reduce((map, product) => {
-                    const category = product.category || "General"
-                    map.set(category, (map.get(category) || 0) + product.currentStock)
-                    return map
-                }, new Map<string, number>())
-            ).map(([name, stock]) => ({ name, stock }))
-        )
-        setStats({
-            totalSkus: normalizedProducts.length,
-            lowStock: lowStockProducts.length,
-            outOfStock: outOfStockProducts.length,
-            soldUnits,
-            totalInvoices: cachedInvoices.length,
-            invoiceRevenue,
-            inventoryValue,
-        })
-        setMovements(
-            cachedMovements.map((movement) => ({
-                id: movement.id,
-                product: relationName(movement.products) || "Cached product",
-                type: movementLabels[movement.type || ""] || movement.type || "Movement",
-                quantity: Number(movement.quantity || 0),
-                warehouse: "Cached Warehouse",
-                createdAt: movement.created_at,
-            }))
-        )
-        setNotice("Offline mode: showing cached inventory.")
+        if (showOfflineNotice) setNotice("Offline mode: showing local inventory.")
         setLoading(false)
     }
 

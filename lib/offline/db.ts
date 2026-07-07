@@ -1,6 +1,7 @@
 "use client"
 
 import type { WorkspaceBootstrapPayload } from "@/lib/workspaceBootstrapClient"
+import { evaluateStoredLicense, isLicenseRestrictedAction, isLicenseRestrictedCollection, type StoredLicenseRow } from "@/lib/license/policy"
 import {
   clearSqliteOfflineData,
   exportSqliteBackup,
@@ -21,12 +22,38 @@ export type OfflineCollection =
   | "products"
   | "inventory_items"
   | "customers"
+  | "suppliers"
+  | "warehouses"
   | "invoices"
   | "invoice_items"
+  | "purchase_invoices"
+  | "purchase_items"
   | "orders"
   | "order_items"
+  | "quotations"
+  | "quotation_items"
+  | "delivery_challans"
+  | "delivery_challan_items"
+  | "credit_notes"
+  | "credit_note_items"
+  | "debit_notes"
+  | "debit_note_items"
+  | "expenses"
+  | "payments"
+  | "payment_receipts"
+  | "ledger_entries"
+  | "chart_of_accounts"
+  | "accounting_vouchers"
+  | "accounting_voucher_entries"
+  | "bank_accounts"
+  | "print_templates"
+  | "license"
+  | "device_activations"
+  | "audit_logs"
   | "settings"
   | "stock_movements"
+  | "stock_batches"
+  | "backup_manifest"
 
 export type OfflineActionStatus = "pending" | "syncing" | "synced" | "error" | "conflict"
 
@@ -40,8 +67,24 @@ export type OfflineAction = {
     | "archive_product"
     | "stock_movement"
     | "update_invoice_status"
+    | "delete_invoice"
     | "save_settings"
     | "create_order"
+    | "save_supplier"
+    | "delete_supplier"
+    | "create_purchase"
+    | "create_purchase_return"
+    | "create_purchase_order"
+    | "create_goods_received"
+    | "create_payment"
+    | "create_quotation"
+    | "create_delivery_challan"
+    | "create_proforma_invoice"
+    | "create_credit_note"
+    | "create_debit_note"
+    | "create_expense"
+    | "create_accounting_voucher"
+    | "create_backup_manifest"
   organizationId: string
   status: OfflineActionStatus
   createdAt: string
@@ -88,12 +131,38 @@ const offlineCollections: OfflineCollection[] = [
   "products",
   "inventory_items",
   "customers",
+  "suppliers",
+  "warehouses",
   "invoices",
   "invoice_items",
+  "purchase_invoices",
+  "purchase_items",
   "orders",
   "order_items",
+  "quotations",
+  "quotation_items",
+  "delivery_challans",
+  "delivery_challan_items",
+  "credit_notes",
+  "credit_note_items",
+  "debit_notes",
+  "debit_note_items",
+  "expenses",
+  "payments",
+  "payment_receipts",
+  "ledger_entries",
+  "chart_of_accounts",
+  "accounting_vouchers",
+  "accounting_voucher_entries",
+  "bank_accounts",
+  "print_templates",
+  "license",
+  "device_activations",
+  "audit_logs",
   "settings",
   "stock_movements",
+  "stock_batches",
+  "backup_manifest",
 ]
 const singleRecordCollections = new Set<OfflineCollection>(["workspace", "organization", "settings"])
 
@@ -154,6 +223,49 @@ function dataKey(organizationId: string, collection: OfflineCollection) {
   return `${organizationId}:${collection}`
 }
 
+function deviceIdForGuard() {
+  if (typeof window === "undefined") return ""
+  return localStorage.getItem("bezgrow:device-id") || ""
+}
+
+function valueLooksLikeMutation(value: unknown): boolean {
+  const rows = (Array.isArray(value) ? value : [value]).filter((row): row is Record<string, unknown> => Boolean(row && typeof row === "object"))
+  return rows.some((row) => {
+    const status = typeof row.sync_status === "string" ? row.sync_status : ""
+    return status.startsWith("pending") || Boolean(row.deleted_at)
+  })
+}
+
+async function readLicenseRowsForGuard(organizationId: string) {
+  const sqliteRows: StoredLicenseRow[] = []
+  for (const id of [...new Set([organizationId, "global"].filter(Boolean))]) {
+    const result = await getSqliteCollection<StoredLicenseRow[]>(id, "license", []).catch(() => ({ hit: false, value: [] as StoredLicenseRow[] }))
+    if (result.hit && Array.isArray(result.value)) sqliteRows.push(...result.value)
+  }
+  if (sqliteRows.length) return sqliteRows
+
+  if (!isBrowser()) return []
+  const { store } = await storeTransaction("data", "readonly")
+  const rows: StoredLicenseRow[] = []
+  for (const id of [...new Set([organizationId, "global"].filter(Boolean))]) {
+    const record = await requestToPromise<OfflineDataRecord<StoredLicenseRow[]> | undefined>(store.get(dataKey(id, "license")))
+    if (Array.isArray(record?.value)) rows.push(...record.value)
+  }
+  return rows
+}
+
+async function assertOfflineMutationAllowed(organizationId: string, collection: OfflineCollection, value: unknown) {
+  if (!organizationId || !isLicenseRestrictedCollection(collection) || !valueLooksLikeMutation(value)) return
+  const status = evaluateStoredLicense(await readLicenseRowsForGuard(organizationId), { deviceId: deviceIdForGuard() })
+  if (!status.allowed) throw new Error(status.reason)
+}
+
+async function assertOfflineActionAllowed(action: Omit<OfflineAction, "status" | "createdAt" | "updatedAt" | "attempts">) {
+  if (!isLicenseRestrictedAction(action.type)) return
+  const status = evaluateStoredLicense(await readLicenseRowsForGuard(action.organizationId), { deviceId: deviceIdForGuard() })
+  if (!status.allowed) throw new Error(status.reason)
+}
+
 export function createOfflineId(prefix: string) {
   const random = typeof crypto !== "undefined" && "randomUUID" in crypto ? crypto.randomUUID() : Math.random().toString(36).slice(2)
   return `offline-${prefix}-${Date.now()}-${random}`
@@ -161,6 +273,7 @@ export function createOfflineId(prefix: string) {
 
 export async function putOfflineData<T>(organizationId: string, collection: OfflineCollection, value: T) {
   if (!organizationId || !isBrowser()) return
+  await assertOfflineMutationAllowed(organizationId, collection, value)
   const sqliteHandled = await putSqliteCollection(organizationId, collection, value)
   if (sqliteHandled) {
     window.dispatchEvent(new Event("bezgrow:offline-data-changed"))
@@ -244,6 +357,7 @@ export function getCachedWorkspaceBootstrap(): WorkspaceBootstrapPayload | null 
 }
 
 export async function queueOfflineAction(action: Omit<OfflineAction, "status" | "createdAt" | "updatedAt" | "attempts">) {
+  await assertOfflineActionAllowed(action)
   const now = new Date().toISOString()
   const record: OfflineAction = {
     ...action,
@@ -358,7 +472,7 @@ function isOfflineCollection(value: unknown): value is OfflineCollection {
 }
 
 function parseSqlitePayload(row: SqliteBackupRow) {
-  if (!row.payload_json) return null
+  if (!row.payload_json) return row
 
   try {
     return JSON.parse(row.payload_json) as unknown
