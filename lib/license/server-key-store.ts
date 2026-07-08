@@ -1,7 +1,7 @@
 import "server-only"
 
-import { createHash, createPrivateKey, createPublicKey, sign, verify } from "node:crypto"
-import { normalizePem } from "@/lib/license/codec"
+import { createHash, createPrivateKey, createPublicKey, sign, type KeyObject, verify } from "node:crypto"
+import { normalizeLicenseEnvKey, rawEd25519KeyToBytes } from "@/lib/license/codec"
 
 export const LICENSE_SIGNING_ALGORITHM = "ed25519"
 export const LICENSE_PRIVATE_KEY_ENV = "BEZGROW_LICENSE_PRIVATE_KEY"
@@ -16,6 +16,7 @@ export type LicenseKeyStoreStatus = {
   keyId: string | null
   keyStorePath: string
   integrity: "ok" | "missing" | "corrupted" | "unavailable"
+  issue: "configured" | "missing" | "invalid_format" | "mismatched_pair"
   canRegenerate: boolean
   message: string
   setupInstructions: string[]
@@ -26,42 +27,74 @@ export type LicenseKeyStoreStatus = {
 export type LicenseSigningKeypair = {
   algorithm: typeof LICENSE_SIGNING_ALGORITHM
   keyId: string
-  publicKeyPem: string
-  privateKeyPem: string
+  publicKeyRaw: string
+  privateKeyRaw: string
+  publicKey: KeyObject
+  privateKey: KeyObject
+}
+
+type Ed25519Jwk = {
+  kty: "OKP"
+  crv: "Ed25519"
+  x: string
+  d?: string
 }
 
 function sha256(value: string) {
   return createHash("sha256").update(value).digest("base64url")
 }
 
-function keyId(publicKeyPem: string) {
-  return `ed25519_${sha256(normalizePem(publicKeyPem)).slice(0, 20)}`
+function keyId(publicKeyRaw: string) {
+  return `ed25519_${sha256(publicKeyRaw).slice(0, 20)}`
 }
 
-function publicKeyFromPrivate(privateKeyPem: string) {
-  return normalizePem(
-    createPublicKey(createPrivateKey(privateKeyPem)).export({
-      type: "spki",
-      format: "pem",
-    }) as string
-  )
+function publicKeyObject(publicKeyRaw: string) {
+  return createPublicKey({
+    key: {
+      kty: "OKP",
+      crv: "Ed25519",
+      x: publicKeyRaw,
+    } satisfies Ed25519Jwk,
+    format: "jwk",
+  })
+}
+
+function privateKeyObject(privateKeyRaw: string, publicKeyRaw: string) {
+  return createPrivateKey({
+    key: {
+      kty: "OKP",
+      crv: "Ed25519",
+      x: publicKeyRaw,
+      d: privateKeyRaw,
+    } satisfies Ed25519Jwk,
+    format: "jwk",
+  })
+}
+
+function publicKeyFromPrivate(privateKey: KeyObject) {
+  const publicJwk = createPublicKey(privateKey).export({ format: "jwk" }) as Ed25519Jwk
+  if (publicJwk.kty !== "OKP" || publicJwk.crv !== "Ed25519" || !publicJwk.x) {
+    throw new Error("Derived license public key has invalid format.")
+  }
+  return publicJwk.x
 }
 
 function setupInstructions() {
   return [
     "Run npm run generate-license-keys.",
-    `Set ${LICENSE_PRIVATE_KEY_ENV} in the server environment.`,
-    `Set ${LICENSE_PUBLIC_KEY_ENV} in the app/client environment and rebuild the desktop/web app.`,
+    `Set ${LICENSE_PRIVATE_KEY_ENV} to the printed raw base64url private key in the server environment.`,
+    `Set ${LICENSE_PUBLIC_KEY_ENV} to the printed raw base64url public key in the app/client environment and rebuild the desktop/web app.`,
+    "Do not use PEM blocks, quotes, or generated key files.",
   ]
 }
 
-function statusBase(): Omit<LicenseKeyStoreStatus, "configured" | "privateKeyConfigured" | "publicKeyConfigured" | "keyId" | "integrity" | "message" | "setupInstructions"> {
+function statusBase(): Omit<LicenseKeyStoreStatus, "configured" | "privateKeyConfigured" | "publicKeyConfigured" | "keyId" | "integrity" | "issue" | "message" | "setupInstructions"> {
   return {
     production: process.env.NODE_ENV === "production",
     algorithm: LICENSE_SIGNING_ALGORITHM,
     keyStorePath: "",
     canRegenerate: false,
-    source: "environment",
+    source: "environment:raw-ed25519-base64url",
   }
 }
 
@@ -73,12 +106,13 @@ function missingStatus(privateKeyConfigured: boolean, publicKeyConfigured: boole
     publicKeyConfigured,
     keyId: null,
     integrity: "missing",
+    issue: "missing",
     message,
     setupInstructions: setupInstructions(),
   }
 }
 
-function invalidStatus(privateKeyConfigured: boolean, publicKeyConfigured: boolean, message: string): LicenseKeyStoreStatus {
+function invalidFormatStatus(privateKeyConfigured: boolean, publicKeyConfigured: boolean, message: string): LicenseKeyStoreStatus {
   return {
     ...statusBase(),
     configured: false,
@@ -86,16 +120,31 @@ function invalidStatus(privateKeyConfigured: boolean, publicKeyConfigured: boole
     publicKeyConfigured,
     keyId: null,
     integrity: "corrupted",
+    issue: "invalid_format",
+    message,
+    setupInstructions: setupInstructions(),
+  }
+}
+
+function mismatchedStatus(privateKeyConfigured: boolean, publicKeyConfigured: boolean, message: string): LicenseKeyStoreStatus {
+  return {
+    ...statusBase(),
+    configured: false,
+    privateKeyConfigured,
+    publicKeyConfigured,
+    keyId: null,
+    integrity: "corrupted",
+    issue: "mismatched_pair",
     message,
     setupInstructions: setupInstructions(),
   }
 }
 
 function readEnvKeypair(): { keypair: LicenseSigningKeypair; publicKeyConfigured: boolean } | { error: LicenseKeyStoreStatus } {
-  const privateKeyPem = normalizePem(process.env[LICENSE_PRIVATE_KEY_ENV] || "")
-  const configuredPublicKeyPem = normalizePem(process.env[LICENSE_PUBLIC_KEY_ENV] || "")
-  const privateKeyConfigured = Boolean(privateKeyPem)
-  const publicKeyConfigured = Boolean(configuredPublicKeyPem)
+  const privateKeyValue = process.env[LICENSE_PRIVATE_KEY_ENV] || ""
+  const publicKeyValue = process.env[LICENSE_PUBLIC_KEY_ENV] || ""
+  const privateKeyConfigured = Boolean(normalizeLicenseEnvKey(privateKeyValue))
+  const publicKeyConfigured = Boolean(normalizeLicenseEnvKey(publicKeyValue))
 
   if (!privateKeyConfigured || !publicKeyConfigured) {
     return {
@@ -111,32 +160,47 @@ function readEnvKeypair(): { keypair: LicenseSigningKeypair; publicKeyConfigured
     }
   }
 
+  let privateKeyRaw = ""
+  let publicKeyRaw = ""
+  let publicKey: KeyObject
+  let privateKey: KeyObject
+
   try {
-    const privateKey = createPrivateKey(privateKeyPem)
-    if (privateKey.asymmetricKeyType !== LICENSE_SIGNING_ALGORITHM) {
+    rawEd25519KeyToBytes(privateKeyValue, LICENSE_PRIVATE_KEY_ENV)
+    rawEd25519KeyToBytes(publicKeyValue, LICENSE_PUBLIC_KEY_ENV)
+    privateKeyRaw = normalizeLicenseEnvKey(privateKeyValue)
+    publicKeyRaw = normalizeLicenseEnvKey(publicKeyValue)
+    publicKey = publicKeyObject(publicKeyRaw)
+  } catch (error) {
+    return {
+      error: invalidFormatStatus(
+        privateKeyConfigured,
+        publicKeyConfigured,
+        error instanceof Error ? error.message : "License key format is invalid."
+      ),
+    }
+  }
+
+  try {
+    privateKey = privateKeyObject(privateKeyRaw, publicKeyRaw)
+    if (privateKey.asymmetricKeyType !== LICENSE_SIGNING_ALGORITHM || publicKey.asymmetricKeyType !== LICENSE_SIGNING_ALGORITHM) {
       return {
-        error: invalidStatus(privateKeyConfigured, publicKeyConfigured, `${LICENSE_PRIVATE_KEY_ENV} must be an Ed25519 private key.`),
+        error: invalidFormatStatus(privateKeyConfigured, publicKeyConfigured, "License keys must be raw Ed25519 keys."),
       }
     }
 
-    const derivedPublicKeyPem = publicKeyFromPrivate(privateKeyPem)
-    const publicKey = createPublicKey(configuredPublicKeyPem)
-    if (publicKey.asymmetricKeyType !== LICENSE_SIGNING_ALGORITHM) {
+    const derivedPublicKeyRaw = publicKeyFromPrivate(privateKey)
+    if (derivedPublicKeyRaw !== publicKeyRaw) {
       return {
-        error: invalidStatus(privateKeyConfigured, publicKeyConfigured, `${LICENSE_PUBLIC_KEY_ENV} must be an Ed25519 public key.`),
-      }
-    }
-    if (derivedPublicKeyPem !== configuredPublicKeyPem) {
-      return {
-        error: invalidStatus(privateKeyConfigured, publicKeyConfigured, "License public key does not match the private signing key."),
+        error: mismatchedStatus(privateKeyConfigured, publicKeyConfigured, "License keys mismatched: public key does not match private key."),
       }
     }
 
-    const probe = new TextEncoder().encode(`bezgrow-license-integrity:${keyId(derivedPublicKeyPem)}`)
-    const signature = sign(null, probe, privateKeyPem)
-    if (!verify(null, probe, configuredPublicKeyPem, signature)) {
+    const probe = new TextEncoder().encode(`bezgrow-license-integrity:${keyId(publicKeyRaw)}`)
+    const signature = sign(null, probe, privateKey)
+    if (!verify(null, probe, publicKey, signature)) {
       return {
-        error: invalidStatus(privateKeyConfigured, publicKeyConfigured, "License signing key self-test failed."),
+        error: mismatchedStatus(privateKeyConfigured, publicKeyConfigured, "License keys mismatched: signing self-test failed."),
       }
     }
 
@@ -144,17 +208,19 @@ function readEnvKeypair(): { keypair: LicenseSigningKeypair; publicKeyConfigured
       publicKeyConfigured,
       keypair: {
         algorithm: LICENSE_SIGNING_ALGORITHM,
-        keyId: keyId(derivedPublicKeyPem),
-        publicKeyPem: derivedPublicKeyPem,
-        privateKeyPem,
+        keyId: keyId(publicKeyRaw),
+        publicKeyRaw,
+        privateKeyRaw,
+        publicKey,
+        privateKey,
       },
     }
   } catch (error) {
     return {
-      error: invalidStatus(
+      error: mismatchedStatus(
         privateKeyConfigured,
         publicKeyConfigured,
-        error instanceof Error ? error.message : "License signing keys could not be validated."
+        error instanceof Error ? `License keys mismatched: ${error.message}` : "License keys mismatched."
       ),
     }
   }
@@ -172,6 +238,7 @@ export function ensureLicenseSigningKeyStore() {
       publicKeyConfigured: result.publicKeyConfigured,
       keyId: result.keypair.keyId,
       integrity: "ok" as const,
+      issue: "configured" as const,
       message: "Licensing configured.",
       setupInstructions: [],
     },

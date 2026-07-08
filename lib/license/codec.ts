@@ -1,5 +1,6 @@
 export const LICENSE_KEY_PREFIX = "BZG-LIC-v1"
 export const LICENSE_SCHEMA_VERSION = 1
+export const ED25519_RAW_KEY_BYTES = 32
 
 export type LicensePayload = {
   schema_version: number
@@ -67,6 +68,35 @@ export function base64UrlToBytes(value: string) {
   if (buffer) return new Uint8Array(buffer.from(padded, "base64") as unknown as ArrayBufferLike)
   const binary = atob(padded)
   return Uint8Array.from(binary, (char) => char.charCodeAt(0))
+}
+
+export function normalizeLicenseEnvKey(value: string) {
+  let normalized = value.trim()
+  if (
+    (normalized.startsWith('"') && normalized.endsWith('"')) ||
+    (normalized.startsWith("'") && normalized.endsWith("'"))
+  ) {
+    normalized = normalized.slice(1, -1)
+  }
+  return normalized.trim().replace(/\s+/g, "")
+}
+
+export function rawEd25519KeyToBytes(value: string, label = "License key") {
+  const trimmed = value.trim()
+  const normalized = normalizeLicenseEnvKey(value)
+  if (!normalized) throw new Error(`${label} is missing.`)
+  if (trimmed.includes("-----BEGIN") || trimmed.includes("-----END") || trimmed.includes("\\n")) {
+    throw new Error(`${label} has invalid format. Use raw base64url Ed25519 keys, not PEM.`)
+  }
+  if (!/^[A-Za-z0-9_-]+$/.test(normalized)) {
+    throw new Error(`${label} has invalid format. Use unquoted raw base64url Ed25519 key text.`)
+  }
+
+  const bytes = base64UrlToBytes(normalized)
+  if (bytes.length !== ED25519_RAW_KEY_BYTES) {
+    throw new Error(`${label} has invalid format. Expected a ${ED25519_RAW_KEY_BYTES}-byte raw Ed25519 key encoded as base64url.`)
+  }
+  return bytes
 }
 
 function normalizeValue(value: unknown): unknown {
@@ -190,16 +220,16 @@ function arrayBuffer(bytes: Uint8Array) {
   return copy.buffer
 }
 
-function licensePublicKey(publicKeyPem?: string | null) {
-  return normalizePem(publicKeyPem || "")
+function licensePublicKey(publicKeyValue?: string | null) {
+  return normalizeLicenseEnvKey(publicKeyValue || "")
 }
 
-async function verifyEd25519(parsed: ParsedLicenseKey, publicKeyPem: string) {
+async function verifyEd25519(parsed: ParsedLicenseKey, publicKeyRaw: string) {
   if (typeof crypto === "undefined" || !crypto.subtle) throw new Error("License verification is not available in this runtime.")
 
   const publicKey = await crypto.subtle.importKey(
-    "spki",
-    arrayBuffer(pemToBytes(publicKeyPem)),
+    "raw",
+    arrayBuffer(rawEd25519KeyToBytes(publicKeyRaw, "License public key")),
     { name: "Ed25519" },
     false,
     ["verify"]
@@ -238,6 +268,6 @@ export async function verifyLicenseSignature(parsed: ParsedLicenseKey, publicKey
 
   const algorithm = String(parsed.payload.signature_algorithm || "rsa-pss-sha256").toLowerCase()
   if (algorithm === "ed25519") return verifyEd25519(parsed, publicKey)
-  if (algorithm === "rsa-pss-sha256") return verifyRsaPssSha256(parsed, publicKey)
+  if (algorithm === "rsa-pss-sha256") return verifyRsaPssSha256(parsed, normalizePem(publicKeyPem || ""))
   throw new Error(`Unsupported license signature algorithm: ${algorithm}.`)
 }

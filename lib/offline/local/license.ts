@@ -1,6 +1,6 @@
 "use client"
 
-import { parseLicenseInput, verifyLicenseSignature, normalizePem, type LicensePayload } from "@/lib/license/codec"
+import { normalizeLicenseEnvKey, parseLicenseInput, verifyLicenseSignature, type LicensePayload } from "@/lib/license/codec"
 import { evaluateStoredLicense, type LicensePolicyResult, type StoredLicenseRow } from "@/lib/license/policy"
 import { setDesktopAuthMarker } from "@/lib/desktop/session"
 import { createOfflineId, cacheWorkspaceBootstrap, getCachedWorkspaceBootstrap, getOfflineData, getOfflineMeta, putOfflineData, setOfflineMeta } from "@/lib/offline/db"
@@ -10,7 +10,7 @@ type DataRow = Record<string, unknown> & { id?: string }
 
 const DEVICE_META_KEY = "bezgrow_device_id"
 const DEVICE_STORAGE_KEY = "bezgrow:device-id"
-const PUBLIC_KEY = normalizePem(process.env.NEXT_PUBLIC_BEZGROW_LICENSE_PUBLIC_KEY || "")
+const PUBLIC_KEY = normalizeLicenseEnvKey(process.env.NEXT_PUBLIC_BEZGROW_LICENSE_PUBLIC_KEY || "")
 
 type LicenseVerificationResponse = {
   success: boolean

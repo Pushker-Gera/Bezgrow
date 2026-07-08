@@ -48,6 +48,7 @@ type LicenseSigningStatus = {
   keyId: string | null
   keyStorePath: string
   integrity: "ok" | "missing" | "corrupted" | "unavailable"
+  issue?: "configured" | "missing" | "invalid_format" | "mismatched_pair"
   canRegenerate: boolean
   message: string
   setupInstructions: string[]
@@ -128,13 +129,23 @@ const defaultLicenseSigningStatus: LicenseSigningStatus = {
   keyId: null,
   keyStorePath: "",
   integrity: "missing",
+  issue: "missing",
   canRegenerate: false,
   message: "License signing keys are not configured.",
   setupInstructions: [
     "Run npm run generate-license-keys.",
-    "Set BEZGROW_LICENSE_PRIVATE_KEY in the server environment.",
-    "Set NEXT_PUBLIC_BEZGROW_LICENSE_PUBLIC_KEY in the app/client environment and rebuild the desktop/web app.",
+    "Set BEZGROW_LICENSE_PRIVATE_KEY to the printed raw base64url private key in the server environment.",
+    "Set NEXT_PUBLIC_BEZGROW_LICENSE_PUBLIC_KEY to the printed raw base64url public key in the app/client environment and rebuild the desktop/web app.",
+    "Do not use PEM blocks, quotes, or generated key files.",
   ],
+}
+
+function licenseSigningHeadline(status: LicenseSigningStatus) {
+  if (status.configured || status.issue === "configured") return "Licensing configured"
+  if (status.issue === "invalid_format") return "License key format invalid"
+  if (status.issue === "mismatched_pair") return "License keys mismatched"
+  if (status.issue === "missing" || status.integrity === "missing") return "License keys missing"
+  return "License keys invalid"
 }
 
 function ToggleCard({
@@ -553,7 +564,7 @@ export default function AdminSettingsPage() {
           <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
             <div>
               <p className={`text-lg font-black ${licenseSigning.configured ? "text-emerald-100" : "text-red-100"}`}>
-                {licenseSigning.configured ? "Licensing configured" : licenseSigning.integrity === "corrupted" ? "License keys invalid" : "License keys missing"}
+                {licenseSigningHeadline(licenseSigning)}
               </p>
               <p className="mt-2 text-sm leading-6 text-neutral-300">{licenseSigning.message}</p>
               {licenseSigning.warning && <p className="mt-2 text-sm leading-6 text-amber-200">{licenseSigning.warning}</p>}

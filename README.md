@@ -38,14 +38,21 @@ Generate an Ed25519 key pair with:
 npm run generate-license-keys
 ```
 
-Set the printed values exactly:
+The command prints two raw base64url Ed25519 values with no PEM headers:
+
+```bash
+BEZGROW_LICENSE_PRIVATE_KEY=<raw-base64url-private-key>
+NEXT_PUBLIC_BEZGROW_LICENSE_PUBLIC_KEY=<raw-base64url-public-key>
+```
+
+Set the printed values exactly, without quotes:
 
 - `BEZGROW_LICENSE_PRIVATE_KEY`: server/admin private signing key.
 - `NEXT_PUBLIC_BEZGROW_LICENSE_PUBLIC_KEY`: app/client public verification key.
 
 Server license generation uses only `BEZGROW_LICENSE_PRIVATE_KEY`. Desktop/client verification uses only `NEXT_PUBLIC_BEZGROW_LICENSE_PUBLIC_KEY`; generated license payloads do not carry a trusted public key.
 
-If either key is missing or mismatched, `/admin/settings` shows setup instructions instead of generating a license.
+If keys are missing, invalid format, or mismatched, `/admin/settings` shows a clear setup error instead of generating a license.
 
 ## Supabase Setup
 

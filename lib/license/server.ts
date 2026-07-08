@@ -39,7 +39,7 @@ export function signLicensePayload(payload: LicensePayload) {
   }
 
   const payloadText = canonicalLicenseText(signedPayload)
-  const signature = sign(null, encodeUtf8(payloadText), keypair.privateKeyPem)
+  const signature = sign(null, encodeUtf8(payloadText), keypair.privateKey)
 
   return {
     license_key: encodeLicenseKey(signedPayload, signature),
