@@ -7,12 +7,12 @@ function encodeUtf8(value: string) {
   return new TextEncoder().encode(value)
 }
 
-function publicKeyFor(parsed: ParsedLicenseKey, publicKeyPem?: string | null) {
-  return normalizePem(parsed.payload.issuer_public_key || publicKeyPem || "")
+function publicKeyFor(publicKeyPem?: string | null) {
+  return normalizePem(publicKeyPem || "")
 }
 
 export function verifyLicenseSignatureNode(parsed: ParsedLicenseKey, publicKeyPem?: string | null) {
-  const publicKey = publicKeyFor(parsed, publicKeyPem)
+  const publicKey = publicKeyFor(publicKeyPem)
   if (!publicKey) throw new Error("License public key is not configured.")
 
   const algorithm = String(parsed.payload.signature_algorithm || "rsa-pss-sha256").toLowerCase()

@@ -208,7 +208,7 @@ async function verifyLicenseForActivation(input: unknown, parsed: ReturnType<typ
     const response = await fetch("/api/license/verify", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ license: input, public_key: PUBLIC_KEY || undefined }),
+      body: JSON.stringify({ license: input }),
     })
     const result = (await response.json().catch(() => null)) as LicenseVerificationResponse | null
     if (!response.ok || !result?.success || !result.valid) {

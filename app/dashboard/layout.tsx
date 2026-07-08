@@ -8,6 +8,7 @@ import { BezgrowLogoMark } from "@/components/brand/BezgrowLogoMark"
 import DesktopBackButton from "@/components/desktop/DesktopBackButton"
 import OfflineStatusBar from "@/components/offline/OfflineStatusBar"
 import { clearDesktopSession } from "@/lib/desktop/session"
+import { isTauriRuntimeAsync } from "@/lib/desktop/tauri"
 import { prepareOfflineWorkspace } from "@/lib/offline/bootstrap"
 import { localLicenseSnapshot } from "@/lib/offline/local/license"
 import { supabase } from "@/lib/supabase"
@@ -75,6 +76,15 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
 
         queueMicrotask(async () => {
             try {
+                const desktopRuntime = await isTauriRuntimeAsync().catch(() => false)
+                if (desktopRuntime) {
+                    const license = await localLicenseSnapshot().catch(() => null)
+                    if (!license?.allowed) {
+                        router.replace(`/offline?next=${encodeURIComponent(pathname || "/dashboard")}`)
+                        return
+                    }
+                }
+
                 const payload = await getWorkspaceBootstrap()
                 if (cancelled) return
 
@@ -127,7 +137,7 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
             cancelled = true
             cancelOfflinePrep()
         }
-    }, [router])
+    }, [pathname, router])
 
     useEffect(() => {
         const handleOnline = () => setOnline(true)

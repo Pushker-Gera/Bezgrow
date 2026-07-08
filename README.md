@@ -30,25 +30,22 @@ Never expose `SUPABASE_SERVICE_ROLE_KEY` or `BEZGROW_LICENSE_PRIVATE_KEY` to cli
 
 ### Offline License Keys
 
-Admin license generation initializes a secure Ed25519 signing key pair automatically on first admin launch. The private key is stored only in the server keystore at `.bezgrow/license-signing-key.json` by default, with restricted file permissions. The public key is included in generated license payloads so desktop activation can verify licenses offline without manual `.env` edits.
+Admin license generation is environment-only for serverless compatibility. Bezgrow never writes `.bezgrow`, `license-signing-key.json`, or any signing key file at runtime.
 
-Optional server-only overrides:
-
-- `BEZGROW_LICENSE_KEYSTORE_DIR`: custom directory for the generated server keystore.
-- `BEZGROW_LICENSE_KEYSTORE_PATH`: exact server keystore file path.
-
-Legacy/manual key environment variables are still recognized for migration or emergency recovery, but normal admins should not edit `.env` files for licensing:
-
-- `BEZGROW_LICENSE_PRIVATE_KEY`: legacy server/admin private key.
-- `NEXT_PUBLIC_BEZGROW_LICENSE_PUBLIC_KEY`: legacy public verification key.
-
-For emergency/manual deployments only, generate an Ed25519 key pair with:
+Generate an Ed25519 key pair with:
 
 ```bash
-npm run license:keys
+npm run generate-license-keys
 ```
 
-If the server keystore becomes corrupted, `/admin/settings` shows a recovery action. Bezgrow never regenerates healthy signing keys automatically.
+Set the printed values exactly:
+
+- `BEZGROW_LICENSE_PRIVATE_KEY`: server/admin private signing key.
+- `NEXT_PUBLIC_BEZGROW_LICENSE_PUBLIC_KEY`: app/client public verification key.
+
+Server license generation uses only `BEZGROW_LICENSE_PRIVATE_KEY`. Desktop/client verification uses only `NEXT_PUBLIC_BEZGROW_LICENSE_PUBLIC_KEY`; generated license payloads do not carry a trusted public key.
+
+If either key is missing or mismatched, `/admin/settings` shows setup instructions instead of generating a license.
 
 ## Supabase Setup
 

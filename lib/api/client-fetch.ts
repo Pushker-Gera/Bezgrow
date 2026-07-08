@@ -74,7 +74,7 @@ export async function apiFetch(input: RequestInfo | URL, init: RequestInit = {})
     if (localResult.response.status === 403 && typeof window !== "undefined") {
       const payload = (await localResult.response.clone().json().catch(() => null)) as { error?: string } | null
       if (payload?.error && /activation required|license|another device|reactivation/i.test(payload.error)) {
-        sessionStorage.setItem("bezgrow:license-message", "Please activate Bezgrow using your license key.")
+        sessionStorage.setItem("bezgrow:license-message", payload.error)
         const next = `${window.location.pathname}${window.location.search}${window.location.hash}`
         window.location.assign(`/offline?reason=license_required&next=${encodeURIComponent(next)}`)
       }

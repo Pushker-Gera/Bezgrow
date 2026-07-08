@@ -349,8 +349,8 @@ export default function Dashboard() {
 
     const readiness = [
         {
-            label: "Business data protected",
-            status: "Private to this account",
+            label: "Business data ready",
+            status: "Stored for this workspace",
             ok: true,
         },
         {

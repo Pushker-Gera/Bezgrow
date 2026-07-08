@@ -107,6 +107,14 @@ export async function proxy(request: NextRequest) {
     return NextResponse.next()
   }
 
+  if (localDesktopHost && protectedRoute) {
+    return redirectWithCookies(
+      request,
+      NextResponse.next({ request }),
+      `/offline?next=${encodeURIComponent(`${pathname}${request.nextUrl.search}`)}`
+    )
+  }
+
   if (!supabaseUrl || !supabaseAnonKey) {
     return redirectToLogin(request, NextResponse.next({ request }))
   }

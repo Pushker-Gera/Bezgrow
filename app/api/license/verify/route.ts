@@ -7,7 +7,6 @@ export const dynamic = "force-dynamic"
 
 const verifySchema = z.object({
   license: z.unknown(),
-  public_key: z.string().optional(),
 })
 
 export async function POST(request: Request) {
@@ -16,7 +15,7 @@ export async function POST(request: Request) {
 
   try {
     const parsed = parseLicenseInput(parsedBody.data.license)
-    const valid = verifyLicenseSignatureNode(parsed, parsedBody.data.public_key)
+    const valid = verifyLicenseSignatureNode(parsed, process.env.NEXT_PUBLIC_BEZGROW_LICENSE_PUBLIC_KEY)
     if (!valid) return fail("License signature is invalid.", 422)
 
     return ok({

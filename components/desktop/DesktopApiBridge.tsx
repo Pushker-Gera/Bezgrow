@@ -29,6 +29,9 @@ export default function DesktopApiBridge() {
         if (!apiPath) return originalFetch(input, init)
 
         if (!navigator.onLine) {
+          const { localApiFetch } = await import("@/lib/offline/local/api")
+          const localResult = await localApiFetch(input, init)
+          if (localResult.handled && localResult.response) return localResult.response
           throw new TypeError("Internet required for this action.")
         }
 

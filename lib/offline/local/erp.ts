@@ -1419,7 +1419,24 @@ function duplicates(rows: DataRow[], keys: string[]) {
 }
 
 export async function runProfessionalIntegrityChecks(organizationId: string) {
-  const [dbIntegrity, invoices, invoiceItems, purchases, purchaseItems, ledgerEntries, products, vouchers, voucherEntries, accounts] = await Promise.all([
+  const [
+    dbIntegrity,
+    invoices,
+    invoiceItems,
+    purchases,
+    purchaseItems,
+    ledgerEntries,
+    products,
+    stockMovements,
+    customers,
+    suppliers,
+    expenses,
+    creditNotes,
+    debitNotes,
+    vouchers,
+    voucherEntries,
+    accounts,
+  ] = await Promise.all([
     service.integrityReport(),
     readRows(organizationId, "invoices"),
     readRows(organizationId, "invoice_items"),
@@ -1427,6 +1444,12 @@ export async function runProfessionalIntegrityChecks(organizationId: string) {
     readRows(organizationId, "purchase_items"),
     readRows(organizationId, "ledger_entries"),
     readRows(organizationId, "products"),
+    readRows(organizationId, "stock_movements"),
+    readRows(organizationId, "customers"),
+    readRows(organizationId, "suppliers"),
+    readRows(organizationId, "expenses"),
+    readRows(organizationId, "credit_notes"),
+    readRows(organizationId, "debit_notes"),
     readRows(organizationId, "accounting_vouchers"),
     readRows(organizationId, "accounting_voucher_entries"),
     readRows(organizationId, "chart_of_accounts"),
@@ -1459,6 +1482,58 @@ export async function runProfessionalIntegrityChecks(organizationId: string) {
   const unbalancedVouchers = Array.from(voucherTotals.entries())
     .filter(([, value]) => Math.abs(value.debit - value.credit) > 0.01)
     .map(([key, value]) => ({ key, debit: money(value.debit), credit: money(value.credit) }))
+  const activeProducts = activeRows(products)
+  const activeLedger = activeRows(ledgerEntries)
+  const stockMovementRows = activeRows(stockMovements)
+  const stockBalanceMismatches = activeProducts.flatMap((product) => {
+    const latestMovement = stockMovementRows
+      .filter((row) => row.product_id === product.id)
+      .sort((a, b) => localString(b.created_at).localeCompare(localString(a.created_at)))[0]
+    if (!latestMovement) return []
+    const expected = money(localNumber(latestMovement.new_stock))
+    const actual = money(localNumber(product.stock))
+    return Math.abs(expected - actual) > 0.01 ? [{ product_id: product.id, product_name: product.name, expected, actual }] : []
+  })
+  const ledgerBalance = (accountType: string, accountId?: string | null) => {
+    const rows = activeLedger.filter((row) => row.account_type === accountType && (accountId ? row.account_id === accountId : true))
+    return {
+      debit: money(rows.reduce((sum, row) => sum + localNumber(row.debit), 0)),
+      credit: money(rows.reduce((sum, row) => sum + localNumber(row.credit), 0)),
+    }
+  }
+  const customerLedgerMismatches = activeRows(customers).flatMap((customer) => {
+    const balance = ledgerBalance("customer", localString(customer.id))
+    const expected = money(localNumber(customer.opening_balance) + balance.debit - balance.credit)
+    const actual = money(localNumber(customer.current_balance))
+    return Math.abs(expected - actual) > 0.01 ? [{ customer_id: customer.id, customer_name: customer.name, expected, actual }] : []
+  })
+  const supplierLedgerMismatches = activeRows(suppliers).flatMap((supplier) => {
+    const balance = ledgerBalance("supplier", localString(supplier.id))
+    const expected = money(localNumber(supplier.opening_balance) + balance.credit - balance.debit)
+    const actual = money(localNumber(supplier.current_balance))
+    return Math.abs(expected - actual) > 0.01 ? [{ supplier_id: supplier.id, supplier_name: supplier.name, expected, actual }] : []
+  })
+  const cashBalance = ledgerBalance("cash")
+  const bankBalance = ledgerBalance("bank")
+  const gstOutputLedger = ledgerBalance("gst_output")
+  const gstInputLedger = ledgerBalance("gst_input")
+  const expectedOutputGst = money(
+    activeRows(invoices)
+      .filter((row) => row.invoice_type !== "proforma")
+      .reduce((sum, row) => sum + localNumber(row.tax_total, localNumber(row.tax_amount)), 0) -
+      activeRows(creditNotes).reduce((sum, row) => sum + localNumber(row.tax_total, localNumber(row.tax_amount)), 0)
+  )
+  const expectedInputGst = money(
+    activeRows(purchases).reduce((sum, row) => sum + localNumber(row.tax_total, localNumber(row.tax_amount)), 0) +
+      activeRows(expenses).reduce((sum, row) => sum + localNumber(row.tax_amount), 0) -
+      activeRows(debitNotes).reduce((sum, row) => sum + localNumber(row.tax_total, localNumber(row.tax_amount)), 0)
+  )
+  const actualOutputGst = money(gstOutputLedger.credit - gstOutputLedger.debit)
+  const actualInputGst = money(gstInputLedger.debit - gstInputLedger.credit)
+  const gstMismatches = [
+    ...(Math.abs(expectedOutputGst - actualOutputGst) > 0.01 ? [{ account: "gst_output", expected: expectedOutputGst, actual: actualOutputGst }] : []),
+    ...(Math.abs(expectedInputGst - actualInputGst) > 0.01 ? [{ account: "gst_input", expected: expectedInputGst, actual: actualInputGst }] : []),
+  ]
 
   return {
     ok:
@@ -1470,8 +1545,14 @@ export async function runProfessionalIntegrityChecks(organizationId: string) {
       purchaseItems.every((row) => purchaseIds.has(String(row.purchase_invoice_id || ""))) &&
       voucherEntries.every((row) => voucherIds.has(String(row.voucher_id || ""))) &&
       voucherEntries.every((row) => !row.account_id || accountIds.has(String(row.account_id || ""))) &&
+      ledgerSignatures.length === 0 &&
+      unbalancedDocuments.length === 0 &&
       unbalancedVouchers.length === 0 &&
-      products.every((row) => localNumber(row.stock) >= 0),
+      products.every((row) => localNumber(row.stock) >= 0) &&
+      stockBalanceMismatches.length === 0 &&
+      customerLedgerMismatches.length === 0 &&
+      supplierLedgerMismatches.length === 0 &&
+      gstMismatches.length === 0,
     dbIntegrity,
     duplicate_invoice_numbers: duplicates(invoices, ["organization_id", "invoice_number"]),
     duplicate_purchase_numbers: duplicates(purchases, ["organization_id", "bill_number"]),
@@ -1481,6 +1562,18 @@ export async function runProfessionalIntegrityChecks(organizationId: string) {
     orphan_voucher_entries: voucherEntries.filter((row) => !voucherIds.has(String(row.voucher_id || ""))).length,
     orphan_voucher_accounts: voucherEntries.filter((row) => row.account_id && !accountIds.has(String(row.account_id || ""))).length,
     negative_stock_products: products.filter((row) => localNumber(row.stock) < 0),
+    stock_balance_mismatches: stockBalanceMismatches,
+    customer_ledger_mismatches: customerLedgerMismatches,
+    supplier_ledger_mismatches: supplierLedgerMismatches,
+    cash_bank_ledger: {
+      cash: { ...cashBalance, balance: money(cashBalance.debit - cashBalance.credit) },
+      bank: { ...bankBalance, balance: money(bankBalance.debit - bankBalance.credit) },
+    },
+    gst_summary_check: {
+      output_gst: { expected: expectedOutputGst, actual: actualOutputGst },
+      input_gst: { expected: expectedInputGst, actual: actualInputGst },
+      mismatches: gstMismatches,
+    },
     duplicate_ledger_entries: ledgerSignatures,
     unbalanced_documents: unbalancedDocuments,
     unbalanced_vouchers: unbalancedVouchers,

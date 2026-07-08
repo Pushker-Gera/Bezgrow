@@ -190,8 +190,8 @@ function arrayBuffer(bytes: Uint8Array) {
   return copy.buffer
 }
 
-function licensePublicKey(parsed: ParsedLicenseKey, publicKeyPem?: string | null) {
-  return normalizePem(parsed.payload.issuer_public_key || publicKeyPem || "")
+function licensePublicKey(publicKeyPem?: string | null) {
+  return normalizePem(publicKeyPem || "")
 }
 
 async function verifyEd25519(parsed: ParsedLicenseKey, publicKeyPem: string) {
@@ -233,7 +233,7 @@ async function verifyRsaPssSha256(parsed: ParsedLicenseKey, publicKeyPem: string
 }
 
 export async function verifyLicenseSignature(parsed: ParsedLicenseKey, publicKeyPem?: string | null) {
-  const publicKey = licensePublicKey(parsed, publicKeyPem)
+  const publicKey = licensePublicKey(publicKeyPem)
   if (!publicKey) throw new Error("License public key is not configured.")
 
   const algorithm = String(parsed.payload.signature_algorithm || "rsa-pss-sha256").toLowerCase()
