@@ -40,7 +40,7 @@ function readExistingManifest() {
   }
 }
 
-function buildInstaller(prefix, trustKey) {
+function buildInstaller(prefix, trustKey, version) {
   const url = readArg(`--${prefix}-url`);
   const file = readArg(`--${prefix}-file`);
   const existingPath = file ? (isAbsolute(file) ? file : join(root, file)) : "";
@@ -53,6 +53,7 @@ function buildInstaller(prefix, trustKey) {
   return {
     url,
     file: url ? undefined : file.replace(/^public\//, "/"),
+    version,
     size,
     sha256: hash || undefined,
     [trustKey]: readBooleanArg(`--${prefix}-${trustKey}`),
@@ -62,8 +63,8 @@ function buildInstaller(prefix, trustKey) {
 
 const existingManifest = readExistingManifest();
 const version = readArg("--version") || existingManifest.version || packageJson.version;
-const mac = buildInstaller("mac", "notarized");
-const windows = buildInstaller("windows", "signed");
+const mac = buildInstaller("mac", "notarized", version);
+const windows = buildInstaller("windows", "signed", version);
 
 const nextManifest = {
   ...existingManifest,

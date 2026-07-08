@@ -2,6 +2,7 @@
 
 import Link from "next/link"
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
+import AppUpdateBanner from "@/components/AppUpdateBanner"
 import { getCachedWorkspaceBootstrap, getOfflineData } from "@/lib/offline/db"
 
 type AnyRow = Record<string, unknown>
@@ -408,6 +409,7 @@ export default function Dashboard() {
                         </div>
                     </div>
                 )}
+                <AppUpdateBanner />
 
                 <section className="relative overflow-hidden rounded-lg border border-white/10 bg-black/70 p-6 shadow-2xl backdrop-blur-xl inventory-sheen lg:p-8">
                     <div className="relative z-10 grid gap-8 2xl:grid-cols-[1.1fr_0.9fr] 2xl:items-end">

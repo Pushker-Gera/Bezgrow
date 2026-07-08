@@ -6,6 +6,7 @@ export type DesktopReleaseManifest = {
   mac?: {
     url?: string
     file?: string
+    version?: string
     size?: number
     notarized?: boolean
     generatedAt?: string
@@ -13,10 +14,32 @@ export type DesktopReleaseManifest = {
   windows?: {
     url?: string
     file?: string
+    version?: string
     size?: number
     signed?: boolean
     generatedAt?: string
   }
+}
+
+export type AppUpdateStatus =
+  | "idle"
+  | "checking"
+  | "available"
+  | "downloading"
+  | "ready"
+  | "success"
+  | "failed"
+  | "offline"
+
+export const appUpdateStatusLabel: Record<AppUpdateStatus, string> = {
+  idle: "Ready to check",
+  checking: "Checking for updates",
+  available: "Update available",
+  downloading: "Downloading",
+  ready: "Ready to install",
+  success: "Updated successfully",
+  failed: "Update failed, try again",
+  offline: "Offline",
 }
 
 export function compareVersions(left: string, right: string) {
@@ -33,6 +56,10 @@ export function compareVersions(left: string, right: string) {
   }
 
   return 0
+}
+
+export function isOnline() {
+  return typeof navigator === "undefined" ? true : navigator.onLine
 }
 
 export function normalizeReleaseNotes(manifest: DesktopReleaseManifest | null) {
@@ -64,32 +91,65 @@ function newestManifest(left: DesktopReleaseManifest | null, right: DesktopRelea
   return releaseGeneratedAt(left) >= releaseGeneratedAt(right) ? left : right
 }
 
-export function installerHrefForCurrentPlatform(manifest: DesktopReleaseManifest | null) {
-  if (typeof navigator === "undefined" || !manifest) return ""
+function currentPlatform() {
+  if (typeof navigator === "undefined") return "mac"
 
   const platform = navigator.platform.toLowerCase()
   const userAgent = navigator.userAgent.toLowerCase()
-  const isWindows = platform.includes("win") || userAgent.includes("windows")
-  const release = isWindows ? manifest.windows : manifest.mac
+  return platform.includes("win") || userAgent.includes("windows") ? "windows" : "mac"
+}
+
+export function releaseForCurrentPlatform(manifest: DesktopReleaseManifest | null) {
+  if (!manifest) return null
+  return currentPlatform() === "windows" ? manifest.windows || null : manifest.mac || null
+}
+
+export function latestVersionForCurrentPlatform(manifest: DesktopReleaseManifest | null) {
+  const release = releaseForCurrentPlatform(manifest)
+  return release?.version || manifest?.version || ""
+}
+
+export function isDesktopUpdateAvailable(manifest: DesktopReleaseManifest | null, currentVersion: string) {
+  const latestVersion = latestVersionForCurrentPlatform(manifest)
+  return Boolean(latestVersion && compareVersions(latestVersion, currentVersion) > 0)
+}
+
+export function installerHrefForCurrentPlatform(manifest: DesktopReleaseManifest | null) {
+  const release = releaseForCurrentPlatform(manifest)
   const href = release?.url || release?.file
 
   return href || "/download"
 }
 
-async function readManifest(url: string) {
-  const response = await fetch(url, { cache: "no-store" }).catch(() => null)
+export function absoluteInstallerUrl(href: string) {
+  const siteUrl = (process.env.NEXT_PUBLIC_SITE_URL || "https://www.bezgrow.com").replace(/\/$/, "")
+  if (!href) return `${siteUrl}/download`
+  if (/^https?:\/\//i.test(href)) return href
+  return `${siteUrl}${href.startsWith("/") ? href : `/${href}`}`
+}
+
+export function formatUpdateSize(size: number | undefined) {
+  if (!size || !Number.isFinite(size)) return ""
+  const mb = size / (1024 * 1024)
+  return `${mb.toFixed(mb >= 100 ? 0 : 1)} MB`
+}
+
+async function readManifest(url: string, signal?: AbortSignal) {
+  const response = await fetch(url, { cache: "no-store", signal }).catch(() => null)
   if (!response?.ok) return null
 
   return (await response.json().catch(() => null)) as DesktopReleaseManifest | null
 }
 
-export async function fetchDesktopReleaseManifest() {
-  const localManifestPromise = readManifest("/downloads/desktop-release.json")
-  const proxiedRemoteManifestPromise = readManifest("/api/desktop-release")
+export async function fetchDesktopReleaseManifest(signal?: AbortSignal) {
+  if (!isOnline()) return null
+
+  const localManifestPromise = readManifest("/downloads/desktop-release.json", signal)
+  const proxiedRemoteManifestPromise = readManifest("/api/desktop-release", signal)
 
   const siteUrl = process.env.NEXT_PUBLIC_SITE_URL || "https://www.bezgrow.com"
   const remoteUrl = `${siteUrl.replace(/\/$/, "")}/downloads/desktop-release.json`
-  const directRemoteManifestPromise = readManifest(remoteUrl)
+  const directRemoteManifestPromise = readManifest(remoteUrl, signal)
 
   const manifests = await Promise.all([
     localManifestPromise,
