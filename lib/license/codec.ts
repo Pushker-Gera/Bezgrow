@@ -16,6 +16,9 @@ export type LicensePayload = {
   allowed_features: string[]
   issued_by_admin: string
   issued_at: string
+  signature_algorithm?: "ed25519" | "rsa-pss-sha256" | string | null
+  issuer_key_id?: string | null
+  issuer_public_key?: string | null
   notes?: string | null
 }
 
@@ -131,6 +134,9 @@ function assertPayload(value: unknown): LicensePayload {
     allowed_features: payload.allowed_features.map(String).filter(Boolean).sort(),
     issued_by_admin: String(payload.issued_by_admin),
     issued_at: String(payload.issued_at),
+    signature_algorithm: payload.signature_algorithm ? String(payload.signature_algorithm) : undefined,
+    issuer_key_id: payload.issuer_key_id ? String(payload.issuer_key_id) : undefined,
+    issuer_public_key: payload.issuer_public_key ? String(payload.issuer_public_key) : undefined,
     notes: payload.notes ? String(payload.notes) : null,
   }
 }
@@ -184,8 +190,30 @@ function arrayBuffer(bytes: Uint8Array) {
   return copy.buffer
 }
 
-export async function verifyLicenseSignature(parsed: ParsedLicenseKey, publicKeyPem: string) {
-  if (!publicKeyPem.trim()) throw new Error("License public key is not configured.")
+function licensePublicKey(parsed: ParsedLicenseKey, publicKeyPem?: string | null) {
+  return normalizePem(parsed.payload.issuer_public_key || publicKeyPem || "")
+}
+
+async function verifyEd25519(parsed: ParsedLicenseKey, publicKeyPem: string) {
+  if (typeof crypto === "undefined" || !crypto.subtle) throw new Error("License verification is not available in this runtime.")
+
+  const publicKey = await crypto.subtle.importKey(
+    "spki",
+    arrayBuffer(pemToBytes(publicKeyPem)),
+    { name: "Ed25519" },
+    false,
+    ["verify"]
+  )
+
+  return crypto.subtle.verify(
+    { name: "Ed25519" },
+    publicKey,
+    arrayBuffer(parsed.signature),
+    arrayBuffer(encodeUtf8(parsed.payloadText))
+  )
+}
+
+async function verifyRsaPssSha256(parsed: ParsedLicenseKey, publicKeyPem: string) {
   if (typeof crypto === "undefined" || !crypto.subtle) throw new Error("License verification is not available in this runtime.")
 
   const publicKey = await crypto.subtle.importKey(
@@ -202,4 +230,14 @@ export async function verifyLicenseSignature(parsed: ParsedLicenseKey, publicKey
     arrayBuffer(parsed.signature),
     arrayBuffer(encodeUtf8(parsed.payloadText))
   )
+}
+
+export async function verifyLicenseSignature(parsed: ParsedLicenseKey, publicKeyPem?: string | null) {
+  const publicKey = licensePublicKey(parsed, publicKeyPem)
+  if (!publicKey) throw new Error("License public key is not configured.")
+
+  const algorithm = String(parsed.payload.signature_algorithm || "rsa-pss-sha256").toLowerCase()
+  if (algorithm === "ed25519") return verifyEd25519(parsed, publicKey)
+  if (algorithm === "rsa-pss-sha256") return verifyRsaPssSha256(parsed, publicKey)
+  throw new Error(`Unsupported license signature algorithm: ${algorithm}.`)
 }

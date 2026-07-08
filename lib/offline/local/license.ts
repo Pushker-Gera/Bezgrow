@@ -12,6 +12,12 @@ const DEVICE_META_KEY = "bezgrow_device_id"
 const DEVICE_STORAGE_KEY = "bezgrow:device-id"
 const PUBLIC_KEY = normalizePem(process.env.NEXT_PUBLIC_BEZGROW_LICENSE_PUBLIC_KEY || "")
 
+type LicenseVerificationResponse = {
+  success: boolean
+  error?: string
+  valid?: boolean
+}
+
 function nowIso() {
   return new Date().toISOString()
 }
@@ -79,6 +85,9 @@ function licenseRowFromPayload(payload: LicensePayload, licenseKey: string, sign
     grace_period_days: payload.grace_period_days,
     allowed_features: JSON.stringify(payload.allowed_features),
     issued_by_admin: payload.issued_by_admin,
+    signature_algorithm: payload.signature_algorithm || "rsa-pss-sha256",
+    issuer_key_id: payload.issuer_key_id || null,
+    issuer_public_key: payload.issuer_public_key || null,
     issued_at: payload.issued_at,
     expires_at: payload.expiry_date,
     grace_until: graceUntil,
@@ -191,6 +200,24 @@ async function createLocalWorkspaceFromLicense(payload: LicensePayload) {
   setDesktopAuthMarker()
 }
 
+async function verifyLicenseForActivation(input: unknown, parsed: ReturnType<typeof parseLicenseInput>) {
+  try {
+    return await verifyLicenseSignature(parsed, PUBLIC_KEY)
+  } catch (error) {
+    if (typeof fetch === "undefined") throw error
+    const response = await fetch("/api/license/verify", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ license: input, public_key: PUBLIC_KEY || undefined }),
+    })
+    const result = (await response.json().catch(() => null)) as LicenseVerificationResponse | null
+    if (!response.ok || !result?.success || !result.valid) {
+      throw new Error(result?.error || (error instanceof Error ? error.message : "License signature is invalid."))
+    }
+    return true
+  }
+}
+
 export async function activateOfflineLicense(input: unknown) {
   const parsed = parseLicenseInput(input)
   const deviceId = await getOrCreateDeviceId()
@@ -199,7 +226,7 @@ export async function activateOfflineLicense(input: unknown) {
     throw new Error("This license was issued for another device.")
   }
 
-  const validSignature = await verifyLicenseSignature(parsed, PUBLIC_KEY)
+  const validSignature = await verifyLicenseForActivation(input, parsed)
   if (!validSignature) {
     await logLicenseEvent("global", "LICENSE_TAMPERED", "Rejected tampered or unsigned license.", parsed.payload.license_id)
     throw new Error("License signature is invalid.")

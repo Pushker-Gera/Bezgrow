@@ -2,7 +2,7 @@ import { z } from "zod"
 import { requireAdmin, writeAdminLog } from "@/lib/api/auth"
 import { fail, ok, serverFail } from "@/lib/api/responses"
 import { LICENSE_SCHEMA_VERSION, type LicensePayload } from "@/lib/license/codec"
-import { createLicenseId, hasLicenseSigningKey, licenseSigningStatus, signLicensePayload } from "@/lib/license/server"
+import { createLicenseId, hasLicenseSigningKey, licenseSigningStatus, regenerateLicenseSigningKeys, signLicensePayload } from "@/lib/license/server"
 
 export const dynamic = "force-dynamic"
 
@@ -18,6 +18,10 @@ const licenseSchema = z.object({
   grace_period_days: z.coerce.number().int().min(0).max(365).default(7),
   allowed_features: z.array(z.string().trim().min(1).max(80)).min(1).max(80),
   notes: z.string().trim().max(1000).optional(),
+})
+
+const regenerateSchema = z.object({
+  confirmation: z.literal("REGENERATE"),
 })
 
 function slug(value: string) {
@@ -42,7 +46,7 @@ export async function POST(request: Request) {
 
   if (!hasLicenseSigningKey()) {
     const status = licenseSigningStatus()
-    return fail(status.message, status.production ? 500 : 503, { licenseSigning: status })
+    return fail(status.message, 503, { licenseSigning: status })
   }
 
   const parsed = licenseSchema.safeParse(await request.json().catch(() => null))
@@ -78,7 +82,9 @@ export async function POST(request: Request) {
       type: "offline_license",
       generated_at: now,
       license_key: signed.license_key,
-      payload,
+      issuer_key_id: signed.payload.issuer_key_id,
+      signature_algorithm: signed.payload.signature_algorithm,
+      payload: signed.payload,
     }
 
     await writeAdminLog({
@@ -96,11 +102,40 @@ export async function POST(request: Request) {
       },
     })
 
-    return ok({ license_key: signed.license_key, license_file: licenseFile })
+    return ok({ license_key: signed.license_key, license_file: licenseFile, licenseSigning: licenseSigningStatus() })
   } catch (error) {
-    if (error instanceof Error && error.message.includes("BEZGROW_LICENSE_PRIVATE_KEY")) {
+    if (error instanceof Error && /license|signing|key/i.test(error.message)) {
       return fail(error.message, 500, { licenseSigning: licenseSigningStatus() })
     }
     return serverFail()
+  }
+}
+
+export async function PATCH(request: Request) {
+  const admin = await requireAdmin(request)
+  if (!admin.ok) return fail(admin.error, admin.status)
+
+  const parsed = regenerateSchema.safeParse(await request.json().catch(() => null))
+  if (!parsed.success) return fail("Type REGENERATE to confirm license key regeneration.", 422)
+
+  const before = licenseSigningStatus()
+  if (before.integrity === "ok") {
+    return fail("Healthy license signing keys cannot be regenerated.", 409, { licenseSigning: before })
+  }
+
+  try {
+    const result = regenerateLicenseSigningKeys()
+    await writeAdminLog({
+      action: "LICENSE_KEYS_REGENERATED",
+      description: "Offline license signing keys were regenerated after admin confirmation.",
+      adminUserId: admin.context.adminUserId,
+      metadata: {
+        previous_integrity: before.integrity,
+        key_id: result.status.keyId,
+      },
+    })
+    return ok({ licenseSigning: result.status, regenerated: result.regenerated })
+  } catch (error) {
+    return fail(error instanceof Error ? error.message : "License signing keys could not be regenerated.", 500, { licenseSigning: licenseSigningStatus() })
   }
 }

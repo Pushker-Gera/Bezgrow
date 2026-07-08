@@ -43,8 +43,17 @@ type LicenseSigningStatus = {
   production: boolean
   privateKeyEnv: string
   publicKeyEnv: string
+  keyStorePathEnv?: string
+  keyStoreDirEnv?: string
+  algorithm: string
+  keyId: string | null
+  keyStorePath: string
+  integrity: "ok" | "missing" | "corrupted" | "unavailable"
+  canRegenerate: boolean
   message: string
   setupInstructions: string[]
+  source?: string
+  warning?: string
 }
 
 type AdminLicenseResponse = {
@@ -59,6 +68,7 @@ type AdminLicenseStatusResponse = {
   success: boolean
   error?: string
   licenseSigning?: LicenseSigningStatus
+  regenerated?: boolean
 }
 
 type LicenseForm = {
@@ -114,8 +124,13 @@ const defaultLicenseSigningStatus: LicenseSigningStatus = {
   production: false,
   privateKeyEnv: "BEZGROW_LICENSE_PRIVATE_KEY",
   publicKeyEnv: "NEXT_PUBLIC_BEZGROW_LICENSE_PUBLIC_KEY",
-  message: "License signing key status has not been checked yet.",
-  setupInstructions: ["Run `npm run license:keys` and add the generated keys to your environment."],
+  algorithm: "ed25519",
+  keyId: null,
+  keyStorePath: "",
+  integrity: "missing",
+  canRegenerate: false,
+  message: "Licensing will initialize automatically when admin settings load.",
+  setupInstructions: ["Reload admin settings. Bezgrow will create and secure signing keys automatically."],
 }
 
 function ToggleCard({
@@ -165,6 +180,7 @@ export default function AdminSettingsPage() {
   const [generatedLicenseKey, setGeneratedLicenseKey] = useState("")
   const [generatedLicenseFile, setGeneratedLicenseFile] = useState<Record<string, unknown> | null>(null)
   const [licenseSigning, setLicenseSigning] = useState<LicenseSigningStatus>(defaultLicenseSigningStatus)
+  const [regeneratingKeys, setRegeneratingKeys] = useState(false)
 
   async function fetchSettings() {
     setLoading(true)
@@ -383,6 +399,35 @@ export default function AdminSettingsPage() {
     }
   }
 
+  async function regenerateSigningKeys() {
+    if (!licenseSigning.canRegenerate) return
+    const confirmed = window.confirm("Regenerate Bezgrow license signing keys? Use this only when the stored signing keys are corrupted and no valid backup exists.")
+    if (!confirmed) return
+
+    setRegeneratingKeys(true)
+    setNotice("")
+    try {
+      const {
+        data: { session },
+      } = await supabase.auth.getSession()
+      const response = await fetch("/api/admin/license/generate", {
+        method: "PATCH",
+        headers: {
+          "Content-Type": "application/json",
+          ...(session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : {}),
+        },
+        body: JSON.stringify({ confirmation: "REGENERATE" }),
+      })
+      const result = (await response.json()) as AdminLicenseStatusResponse
+      if (result.licenseSigning) setLicenseSigning(result.licenseSigning)
+      setNotice(response.ok && result.success ? "License signing keys regenerated successfully." : result.error || "License signing keys could not be regenerated.")
+    } catch {
+      setNotice("License signing keys could not be regenerated.")
+    } finally {
+      setRegeneratingKeys(false)
+    }
+  }
+
   async function copyGeneratedLicense() {
     if (!generatedLicenseKey) return
     await navigator.clipboard.writeText(generatedLicenseKey)
@@ -534,20 +579,29 @@ export default function AdminSettingsPage() {
           <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
             <div>
               <p className={`text-lg font-black ${licenseSigning.configured ? "text-emerald-100" : "text-red-100"}`}>
-                {licenseSigning.configured ? "License signing configured ✅" : "License signing key missing ❌"}
+                {licenseSigning.configured ? "✅ Licensing configured" : licenseSigning.integrity === "corrupted" ? "License signing keys corrupted ❌" : "Licensing initialization failed ❌"}
               </p>
               <p className="mt-2 text-sm leading-6 text-neutral-300">{licenseSigning.message}</p>
+              {licenseSigning.warning && <p className="mt-2 text-sm leading-6 text-amber-200">{licenseSigning.warning}</p>}
               <p className="mt-2 text-xs leading-5 text-neutral-500">
-                Server env: {licenseSigning.privateKeyEnv} · Client env: {licenseSigning.publicKeyEnv}
+                Algorithm: {licenseSigning.algorithm.toUpperCase()} · Key ID: {licenseSigning.keyId || "pending"} · Integrity: {licenseSigning.integrity}
               </p>
+              {licenseSigning.keyStorePath && <p className="mt-1 text-xs leading-5 text-neutral-500">Server keystore: {licenseSigning.keyStorePath}</p>}
             </div>
-            <span className={`w-fit rounded-full px-3 py-1 text-xs font-black ${licenseSigning.publicKeyConfigured ? "bg-emerald-400 text-black" : "bg-amber-400 text-black"}`}>
-              {licenseSigning.publicKeyConfigured ? "Public key ready" : "Public key missing"}
-            </span>
+            <div className="flex flex-wrap gap-2">
+              <span className={`w-fit rounded-full px-3 py-1 text-xs font-black ${licenseSigning.publicKeyConfigured ? "bg-emerald-400 text-black" : "bg-amber-400 text-black"}`}>
+                {licenseSigning.publicKeyConfigured ? "Public key ready" : "Public key pending"}
+              </span>
+              {licenseSigning.canRegenerate && (
+                <button type="button" disabled={regeneratingKeys} onClick={() => void regenerateSigningKeys()} className="h-8 rounded-full border border-white/15 bg-white/10 px-3 text-xs font-black disabled:cursor-not-allowed disabled:opacity-50">
+                  {regeneratingKeys ? "Regenerating..." : "Regenerate Keys"}
+                </button>
+              )}
+            </div>
           </div>
           {!licenseSigning.configured && (
             <div className="mt-4 rounded-2xl border border-white/10 bg-black/35 p-4">
-              <p className="text-xs font-black uppercase tracking-[0.18em] text-neutral-500">Setup</p>
+              <p className="text-xs font-black uppercase tracking-[0.18em] text-neutral-500">{licenseSigning.canRegenerate ? "Recovery" : "Setup"}</p>
               <ul className="mt-3 space-y-2 text-sm leading-6 text-neutral-300">
                 {licenseSigning.setupInstructions.map((instruction) => (
                   <li key={instruction}>{instruction}</li>

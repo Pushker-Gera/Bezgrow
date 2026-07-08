@@ -1,6 +1,6 @@
 # Bezgrow SaaS ERP
 
-Production Next.js + Supabase workspace for admin approval, multi-tenant ERP dashboards, inventory, customers, invoices, and orders.
+Production Next.js + Supabase workspace for admin controls, multi-tenant ERP dashboards, inventory, customers, invoices, orders, and offline desktop licensing.
 
 ## Local Development
 
@@ -20,10 +20,6 @@ NEXT_PUBLIC_SITE_URL=https://bezgrow.com
 NEXT_PUBLIC_SUPABASE_URL=https://your-project.supabase.co
 NEXT_PUBLIC_SUPABASE_ANON_KEY=your-anon-key
 SUPABASE_SERVICE_ROLE_KEY=your-service-role-key
-# Required for admin-issued offline license generation.
-# Generate with: npm run license:keys
-BEZGROW_LICENSE_PRIVATE_KEY="-----BEGIN PRIVATE KEY-----\nserver-only-private-key\n-----END PRIVATE KEY-----"
-NEXT_PUBLIC_BEZGROW_LICENSE_PUBLIC_KEY="-----BEGIN PUBLIC KEY-----\nclient-public-key\n-----END PUBLIC KEY-----"
 # Optional for desktop builds. Defaults to NEXT_PUBLIC_SITE_URL.
 NEXT_PUBLIC_DESKTOP_API_ORIGIN=https://www.bezgrow.com
 ```
@@ -34,18 +30,25 @@ Never expose `SUPABASE_SERVICE_ROLE_KEY` or `BEZGROW_LICENSE_PRIVATE_KEY` to cli
 
 ### Offline License Keys
 
-Admin license generation requires an RSA signing key pair:
+Admin license generation initializes a secure Ed25519 signing key pair automatically on first admin launch. The private key is stored only in the server keystore at `.bezgrow/license-signing-key.json` by default, with restricted file permissions. The public key is included in generated license payloads so desktop activation can verify licenses offline without manual `.env` edits.
+
+Optional server-only overrides:
+
+- `BEZGROW_LICENSE_KEYSTORE_DIR`: custom directory for the generated server keystore.
+- `BEZGROW_LICENSE_KEYSTORE_PATH`: exact server keystore file path.
+
+Legacy/manual key environment variables are still recognized for migration or emergency recovery, but normal admins should not edit `.env` files for licensing:
+
+- `BEZGROW_LICENSE_PRIVATE_KEY`: legacy server/admin private key.
+- `NEXT_PUBLIC_BEZGROW_LICENSE_PUBLIC_KEY`: legacy public verification key.
+
+For emergency/manual deployments only, generate an Ed25519 key pair with:
 
 ```bash
 npm run license:keys
 ```
 
-Copy the generated values into your environment:
-
-- `BEZGROW_LICENSE_PRIVATE_KEY`: server/admin environment only. This signs licenses.
-- `NEXT_PUBLIC_BEZGROW_LICENSE_PUBLIC_KEY`: app/client environment. This verifies licenses locally after activation.
-
-Production must not run the admin license generator without `BEZGROW_LICENSE_PRIVATE_KEY`. After changing either key, restart the admin server and rebuild the desktop app so the public verification key is bundled.
+If the server keystore becomes corrupted, `/admin/settings` shows a recovery action. Bezgrow never regenerates healthy signing keys automatically.
 
 ## Supabase Setup
 
