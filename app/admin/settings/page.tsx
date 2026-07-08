@@ -37,11 +37,28 @@ type AdminSettingsResponse = {
   settings?: Partial<PlatformSettings> | null
 }
 
+type LicenseSigningStatus = {
+  configured: boolean
+  publicKeyConfigured: boolean
+  production: boolean
+  privateKeyEnv: string
+  publicKeyEnv: string
+  message: string
+  setupInstructions: string[]
+}
+
 type AdminLicenseResponse = {
   success: boolean
   error?: string
   license_key?: string
   license_file?: Record<string, unknown>
+  licenseSigning?: LicenseSigningStatus
+}
+
+type AdminLicenseStatusResponse = {
+  success: boolean
+  error?: string
+  licenseSigning?: LicenseSigningStatus
 }
 
 type LicenseForm = {
@@ -91,6 +108,16 @@ const licenseFeatures = [
   "settings",
 ]
 
+const defaultLicenseSigningStatus: LicenseSigningStatus = {
+  configured: false,
+  publicKeyConfigured: false,
+  production: false,
+  privateKeyEnv: "BEZGROW_LICENSE_PRIVATE_KEY",
+  publicKeyEnv: "NEXT_PUBLIC_BEZGROW_LICENSE_PUBLIC_KEY",
+  message: "License signing key status has not been checked yet.",
+  setupInstructions: ["Run `npm run license:keys` and add the generated keys to your environment."],
+}
+
 function ToggleCard({
   title,
   description,
@@ -137,6 +164,7 @@ export default function AdminSettingsPage() {
   const [generatingLicense, setGeneratingLicense] = useState(false)
   const [generatedLicenseKey, setGeneratedLicenseKey] = useState("")
   const [generatedLicenseFile, setGeneratedLicenseFile] = useState<Record<string, unknown> | null>(null)
+  const [licenseSigning, setLicenseSigning] = useState<LicenseSigningStatus>(defaultLicenseSigningStatus)
 
   async function fetchSettings() {
     setLoading(true)
@@ -152,7 +180,7 @@ export default function AdminSettingsPage() {
         setNotice("Admin session could not be checked. Retrying with secure cookies.")
       }
 
-      const [settingsResponse, metricsResponse] = await Promise.all([
+      const [settingsResponse, metricsResponse, licenseStatusResponse] = await Promise.all([
         fetch("/api/admin/settings", {
           headers: session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : undefined,
           cache: "no-store",
@@ -161,10 +189,15 @@ export default function AdminSettingsPage() {
           headers: session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : undefined,
           cache: "no-store",
         }),
+        fetch("/api/admin/license/generate", {
+          headers: session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : undefined,
+          cache: "no-store",
+        }),
       ])
 
       const settingsPayload = (await settingsResponse.json()) as AdminSettingsResponse
       const metrics = (await metricsResponse.json()) as AdminMetricsResponse
+      const licenseStatus = (await licenseStatusResponse.json()) as AdminLicenseStatusResponse
 
       if (!settingsResponse.ok || !settingsPayload.success) {
         setNotice(settingsPayload.error || "Platform settings failed to load.")
@@ -172,6 +205,15 @@ export default function AdminSettingsPage() {
 
       if (!metricsResponse.ok || !metrics.success) {
         setNotice(metrics.error || "Admin settings metrics failed to load.")
+      }
+
+      if (licenseStatusResponse.ok && licenseStatus.success && licenseStatus.licenseSigning) {
+        setLicenseSigning(licenseStatus.licenseSigning)
+      } else {
+        setLicenseSigning({
+          ...defaultLicenseSigningStatus,
+          message: licenseStatus.error || "License signing status could not be checked.",
+        })
       }
 
       const pendingProfiles = (metrics.profiles || []).filter((profile) => profile.approved === false && !profile.is_suspended)
@@ -206,11 +248,11 @@ export default function AdminSettingsPage() {
       ["Billing automation", settings.billing_automation],
       ["Inventory tracking", settings.inventory_tracking],
       ["Notification channel", settings.email_notifications],
-      ["License issue control", true],
+      ["License signing configured", licenseSigning.configured],
       ["Legacy access queue clear", pendingCount === 0],
       ["Live customer workspaces", organizationsCount > 0],
     ],
-    [organizationsCount, pendingCount, settings]
+    [licenseSigning.configured, organizationsCount, pendingCount, settings]
   )
 
   const launchScore = Math.round((launchChecks.filter(([, ready]) => ready).length / launchChecks.length) * 100)
@@ -326,6 +368,7 @@ export default function AdminSettingsPage() {
       })
       const result = (await response.json()) as AdminLicenseResponse
       if (!response.ok || !result.success || !result.license_key) {
+        if (result.licenseSigning) setLicenseSigning(result.licenseSigning)
         setNotice(result.error || "License could not be generated.")
         return
       }
@@ -482,9 +525,36 @@ export default function AdminSettingsPage() {
             <h2 className="text-3xl font-black">Offline License Generator</h2>
             <p className="mt-2 max-w-3xl text-sm text-neutral-400">Create admin-issued licenses for customer devices. The customer activates by pasting the key or importing the file on the offline screen.</p>
           </div>
-          <button type="button" disabled={generatingLicense || loading} onClick={() => void generateLicense()} className="h-12 rounded-2xl bg-white px-6 text-sm font-black text-black disabled:cursor-not-allowed disabled:opacity-50">
+          <button type="button" disabled={generatingLicense || loading || !licenseSigning.configured} onClick={() => void generateLicense()} className="h-12 rounded-2xl bg-white px-6 text-sm font-black text-black disabled:cursor-not-allowed disabled:opacity-50">
             {generatingLicense ? "Generating..." : "Generate License"}
           </button>
+        </div>
+
+        <div className={`mt-6 rounded-3xl border p-5 ${licenseSigning.configured ? "border-emerald-400/25 bg-emerald-500/10" : "border-red-400/25 bg-red-500/10"}`}>
+          <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+            <div>
+              <p className={`text-lg font-black ${licenseSigning.configured ? "text-emerald-100" : "text-red-100"}`}>
+                {licenseSigning.configured ? "License signing configured ✅" : "License signing key missing ❌"}
+              </p>
+              <p className="mt-2 text-sm leading-6 text-neutral-300">{licenseSigning.message}</p>
+              <p className="mt-2 text-xs leading-5 text-neutral-500">
+                Server env: {licenseSigning.privateKeyEnv} · Client env: {licenseSigning.publicKeyEnv}
+              </p>
+            </div>
+            <span className={`w-fit rounded-full px-3 py-1 text-xs font-black ${licenseSigning.publicKeyConfigured ? "bg-emerald-400 text-black" : "bg-amber-400 text-black"}`}>
+              {licenseSigning.publicKeyConfigured ? "Public key ready" : "Public key missing"}
+            </span>
+          </div>
+          {!licenseSigning.configured && (
+            <div className="mt-4 rounded-2xl border border-white/10 bg-black/35 p-4">
+              <p className="text-xs font-black uppercase tracking-[0.18em] text-neutral-500">Setup</p>
+              <ul className="mt-3 space-y-2 text-sm leading-6 text-neutral-300">
+                {licenseSigning.setupInstructions.map((instruction) => (
+                  <li key={instruction}>{instruction}</li>
+                ))}
+              </ul>
+            </div>
+          )}
         </div>
 
         <div className="mt-6 grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">

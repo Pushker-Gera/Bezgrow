@@ -7,6 +7,7 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
+    "license:keys": "node scripts/generate-license-keys.mjs",
     "tauri": "tauri",
     "desktop:prepare": "node scripts/prepare-desktop-build.mjs",
     "desktop:dev": "tauri dev",

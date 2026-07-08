@@ -2,7 +2,7 @@ import { z } from "zod"
 import { requireAdmin, writeAdminLog } from "@/lib/api/auth"
 import { fail, ok, serverFail } from "@/lib/api/responses"
 import { LICENSE_SCHEMA_VERSION, type LicensePayload } from "@/lib/license/codec"
-import { createLicenseId, hasLicenseSigningKey, signLicensePayload } from "@/lib/license/server"
+import { createLicenseId, hasLicenseSigningKey, licenseSigningStatus, signLicensePayload } from "@/lib/license/server"
 
 export const dynamic = "force-dynamic"
 
@@ -29,12 +29,20 @@ function slug(value: string) {
     .slice(0, 64)
 }
 
+export async function GET(request: Request) {
+  const admin = await requireAdmin(request)
+  if (!admin.ok) return fail(admin.error, admin.status)
+
+  return ok({ licenseSigning: licenseSigningStatus() }, { headers: { "Cache-Control": "no-store" } })
+}
+
 export async function POST(request: Request) {
   const admin = await requireAdmin(request)
   if (!admin.ok) return fail(admin.error, admin.status)
 
   if (!hasLicenseSigningKey()) {
-    return fail("License signing key is not configured on this admin server.", 500)
+    const status = licenseSigningStatus()
+    return fail(status.message, status.production ? 500 : 503, { licenseSigning: status })
   }
 
   const parsed = licenseSchema.safeParse(await request.json().catch(() => null))
@@ -90,7 +98,9 @@ export async function POST(request: Request) {
 
     return ok({ license_key: signed.license_key, license_file: licenseFile })
   } catch (error) {
-    if (error instanceof Error && error.message.includes("PRIVATE_KEY")) return fail(error.message, 500)
+    if (error instanceof Error && error.message.includes("BEZGROW_LICENSE_PRIVATE_KEY")) {
+      return fail(error.message, 500, { licenseSigning: licenseSigningStatus() })
+    }
     return serverFail()
   }
 }

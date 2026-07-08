@@ -20,13 +20,32 @@ NEXT_PUBLIC_SITE_URL=https://bezgrow.com
 NEXT_PUBLIC_SUPABASE_URL=https://your-project.supabase.co
 NEXT_PUBLIC_SUPABASE_ANON_KEY=your-anon-key
 SUPABASE_SERVICE_ROLE_KEY=your-service-role-key
+# Required for admin-issued offline license generation.
+# Generate with: npm run license:keys
+BEZGROW_LICENSE_PRIVATE_KEY="-----BEGIN PRIVATE KEY-----\nserver-only-private-key\n-----END PRIVATE KEY-----"
+NEXT_PUBLIC_BEZGROW_LICENSE_PUBLIC_KEY="-----BEGIN PUBLIC KEY-----\nclient-public-key\n-----END PUBLIC KEY-----"
 # Optional for desktop builds. Defaults to NEXT_PUBLIC_SITE_URL.
 NEXT_PUBLIC_DESKTOP_API_ORIGIN=https://www.bezgrow.com
 ```
 
-Payments are not enabled for the current launch. Access is approval-based through admin approval, suspension, business creation, and organization membership checks.
+Payments are not enabled for the current launch. Desktop access is license-based through admin-issued offline licenses, with suspension, business creation, and organization membership checks still available for cloud/admin workflows.
 
-Never expose `SUPABASE_SERVICE_ROLE_KEY` to client-side code.
+Never expose `SUPABASE_SERVICE_ROLE_KEY` or `BEZGROW_LICENSE_PRIVATE_KEY` to client-side code.
+
+### Offline License Keys
+
+Admin license generation requires an RSA signing key pair:
+
+```bash
+npm run license:keys
+```
+
+Copy the generated values into your environment:
+
+- `BEZGROW_LICENSE_PRIVATE_KEY`: server/admin environment only. This signs licenses.
+- `NEXT_PUBLIC_BEZGROW_LICENSE_PUBLIC_KEY`: app/client environment. This verifies licenses locally after activation.
+
+Production must not run the admin license generator without `BEZGROW_LICENSE_PRIVATE_KEY`. After changing either key, restart the admin server and rebuild the desktop app so the public verification key is bundled.
 
 ## Supabase Setup
 
