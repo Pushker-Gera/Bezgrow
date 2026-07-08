@@ -25,7 +25,7 @@ type BootstrapResponse = {
 
 const navItems = [
     ["Dashboard", "/admin"],
-    ["User Approvals", "/admin/users"],
+    ["Users", "/admin/users"],
     ["Businesses", "/admin/businesses"],
     ["Analytics", "/admin/analytics"],
     ["Settings", "/admin/settings"],

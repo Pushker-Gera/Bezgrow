@@ -80,6 +80,12 @@ export function clearWorkspaceBootstrapCache() {
 }
 
 export async function getWorkspaceBootstrap(options: { forceFresh?: boolean } = {}) {
+  const desktopRuntime = await isTauriRuntimeAsync()
+  if (desktopRuntime) {
+    const localWorkspace = getCachedWorkspaceBootstrap()
+    if (localWorkspace?.success) return localWorkspace
+  }
+
   if (typeof navigator !== "undefined" && !navigator.onLine) {
     const offlineCached = getCachedWorkspaceBootstrap()
     if (offlineCached) return offlineCached
@@ -94,7 +100,6 @@ export async function getWorkspaceBootstrap(options: { forceFresh?: boolean } = 
   const fetchBootstrap = async () => {
     const accessToken = await getCachedAccessToken()
     const apiPath = "/api/workspace/bootstrap"
-    const desktopRuntime = await isTauriRuntimeAsync()
     const url = desktopRuntime ? `/api/desktop-proxy?path=${encodeURIComponent(apiPath)}` : apiPath
 
     return fetch(url, {

@@ -2,7 +2,9 @@
 
 import { parseLicenseInput, verifyLicenseSignature, normalizePem, type LicensePayload } from "@/lib/license/codec"
 import { evaluateStoredLicense, type LicensePolicyResult, type StoredLicenseRow } from "@/lib/license/policy"
-import { createOfflineId, getCachedWorkspaceBootstrap, getOfflineData, getOfflineMeta, putOfflineData, setOfflineMeta } from "@/lib/offline/db"
+import { setDesktopAuthMarker } from "@/lib/desktop/session"
+import { createOfflineId, cacheWorkspaceBootstrap, getCachedWorkspaceBootstrap, getOfflineData, getOfflineMeta, putOfflineData, setOfflineMeta } from "@/lib/offline/db"
+import type { WorkspaceBootstrapPayload } from "@/lib/workspaceBootstrapClient"
 
 type DataRow = Record<string, unknown> & { id?: string }
 
@@ -141,6 +143,54 @@ async function writeActivatedLicense(payload: LicensePayload, licenseKey: string
   }
 }
 
+function workspaceFromLicense(payload: LicensePayload): WorkspaceBootstrapPayload {
+  return {
+    success: true,
+    user: {
+      id: payload.customer_id,
+      email: payload.customer_email || null,
+    },
+    profile: {
+      id: payload.customer_id,
+      role: "user",
+      approved: true,
+      is_suspended: false,
+      business_created: true,
+    },
+    organization: {
+      id: payload.business_id,
+      name: payload.business_name,
+      currency: "INR",
+      timezone: "Asia/Kolkata",
+      locale: "en-IN",
+      business_type: null,
+      business_category: null,
+    },
+    membership: {
+      organization_id: payload.business_id,
+      role: "owner",
+    },
+    features: payload.allowed_features,
+    currency: "INR",
+    timezone: "Asia/Kolkata",
+    locale: "en-IN",
+    permissions: {
+      admin: false,
+      canAccessDashboard: true,
+      canManageBilling: true,
+    },
+  }
+}
+
+async function createLocalWorkspaceFromLicense(payload: LicensePayload) {
+  const workspace = workspaceFromLicense(payload)
+  await cacheWorkspaceBootstrap(workspace)
+  if (typeof window !== "undefined") {
+    sessionStorage.setItem("bezgrow:organization-id", JSON.stringify({ value: payload.business_id, cachedAt: Date.now() }))
+  }
+  setDesktopAuthMarker()
+}
+
 export async function activateOfflineLicense(input: unknown) {
   const parsed = parseLicenseInput(input)
   const deviceId = await getOrCreateDeviceId()
@@ -161,6 +211,7 @@ export async function activateOfflineLicense(input: unknown) {
   }
 
   await writeActivatedLicense(parsed.payload, parsed.licenseKey, parsed.signatureText)
+  await createLocalWorkspaceFromLicense(parsed.payload)
   return {
     license: parsed.payload,
     status: "active",

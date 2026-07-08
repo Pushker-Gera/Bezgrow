@@ -158,7 +158,7 @@ export const seoLandingPages: SeoLandingPage[] = [
     metaTitle: "ERP Software | Bezgrow",
     metaDescription: "Bezgrow ERP software combines inventory, GST billing, customers, orders, analytics, admin workflows, and business management in one cloud platform.",
     eyebrow: "Cloud ERP",
-    summary: "Bring inventory, billing, customers, orders, analytics, user approvals, and administration into one professional ERP workspace.",
+    summary: "Bring inventory, billing, customers, orders, analytics, license-based access, and administration into one professional ERP workspace.",
     primaryKeyword: "ERP software",
     sections: [
       {
@@ -167,10 +167,10 @@ export const seoLandingPages: SeoLandingPage[] = [
       },
       {
         heading: "Admin and Team Control",
-        body: "Approval-based access, organization membership, and admin workflows help businesses manage teams with better control.",
+        body: "License-based access, organization membership, and admin workflows help businesses manage teams with better control.",
       },
     ],
-    benefits: ["Inventory ERP", "Billing ERP", "Customer records", "Admin approvals", ...commonBenefits],
+    benefits: ["Inventory ERP", "Billing ERP", "Customer records", "Offline licenses", ...commonBenefits],
     useCases: ["SMBs", "Retail chains", "Wholesale businesses", "Service teams"],
     faqs: [
       {

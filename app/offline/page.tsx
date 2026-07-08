@@ -1,6 +1,7 @@
 "use client"
 
 import Link from "next/link"
+import { useRouter } from "next/navigation"
 import { useEffect, useRef, useState } from "react"
 import { activateOfflineLicense, localLicenseSnapshot } from "@/lib/offline/local/license"
 import type { LicensePolicyResult } from "@/lib/license/policy"
@@ -9,13 +10,20 @@ type LicenseSnapshot = LicensePolicyResult & {
   device_id: string
 }
 
+function safeNextPath(value: string | null) {
+  if (!value || !value.startsWith("/") || value.startsWith("//")) return "/dashboard"
+  return value
+}
+
 export default function OfflinePage() {
+  const router = useRouter()
   const fileInputRef = useRef<HTMLInputElement | null>(null)
   const [deviceId, setDeviceId] = useState("")
   const [licenseKey, setLicenseKey] = useState("")
   const [status, setStatus] = useState<LicenseSnapshot | null>(null)
   const [notice, setNotice] = useState("")
   const [activating, setActivating] = useState(false)
+  const [nextPath, setNextPath] = useState("/dashboard")
 
   async function refreshStatus() {
     const snapshot = await localLicenseSnapshot()
@@ -27,6 +35,15 @@ export default function OfflinePage() {
     queueMicrotask(() => {
       void refreshStatus().catch(() => setNotice("Device activation status could not be loaded."))
     })
+    const params = new URLSearchParams(window.location.search)
+    setNextPath(safeNextPath(params.get("next")))
+    const storedMessage = sessionStorage.getItem("bezgrow:license-message")
+    if (storedMessage) {
+      setNotice(storedMessage)
+      sessionStorage.removeItem("bezgrow:license-message")
+    } else if (params.get("reason") === "license_required") {
+      setNotice("Please activate Bezgrow using your license key.")
+    }
   }, [])
 
   async function copyDeviceId() {
@@ -43,6 +60,7 @@ export default function OfflinePage() {
       setLicenseKey("")
       setNotice(`License activated for ${result.license.business_name}.`)
       await refreshStatus()
+      router.replace(nextPath)
     } catch (error) {
       setNotice(error instanceof Error ? error.message : "License could not be activated.")
     } finally {
@@ -63,12 +81,22 @@ export default function OfflinePage() {
 
   const valid = status?.allowed
   const expiryText = status?.expiresAt ? new Date(status.expiresAt).toLocaleDateString() : "Not activated"
+  const statusText = valid
+    ? status?.reason?.toLowerCase().includes("grace")
+      ? "Trial Active"
+      : "License Active"
+    : status?.status === "expired"
+      ? "License Expired"
+      : status?.status === "missing"
+        ? "Activation Required"
+        : "Update License Required"
+  const heading = status?.status === "expired" ? "Update Bezgrow license." : "Bezgrow license activation."
 
   return (
     <main className="flex min-h-dvh items-center justify-center bg-black px-5 py-8 text-white">
       <section className="w-full max-w-2xl rounded-[32px] border border-cyan-400/20 bg-cyan-500/10 p-8 text-center shadow-2xl">
         <p className="text-xs font-black uppercase tracking-[0.24em] text-cyan-200">Offline Activation</p>
-        <h1 className="mt-4 text-4xl font-black">Bezgrow offline license.</h1>
+        <h1 className="mt-4 text-4xl font-black">{heading}</h1>
         <p className="mt-4 text-neutral-300">
           Send this Device ID to the admin, then paste the license key or import the license file received from admin.
         </p>
@@ -88,8 +116,9 @@ export default function OfflinePage() {
         <div className="mt-5 rounded-3xl border border-white/10 bg-black/35 p-5 text-left">
           <p className="text-xs font-black uppercase tracking-[0.18em] text-neutral-500">License Status</p>
           <p className={`mt-3 text-lg font-black ${valid ? "text-emerald-200" : "text-amber-200"}`}>
-            {valid ? "Activated" : status?.reason || "Activation required"}
+            {statusText}
           </p>
+          {!valid && <p className="mt-2 text-sm text-neutral-400">{status?.reason || "Please activate Bezgrow using your license key."}</p>}
           <p className="mt-2 text-sm text-neutral-400">Expiry: {expiryText}</p>
         </div>
 

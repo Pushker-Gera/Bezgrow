@@ -37,9 +37,6 @@ async function getProfileRedirect(userId: string, email: string | null | undefin
   } else if (profileError || !profile) {
     destination = "/login?error=profile_missing"
     reason = profileError ? "profile_lookup_error" : "profile_missing"
-  } else if (!profile.approved) {
-    destination = "/pending-approval"
-    reason = "pending_approval"
   } else if (!profile.business_created) {
     const [{ data: membership }, { data: ownedOrganization }] = await Promise.all([
       adminSupabase

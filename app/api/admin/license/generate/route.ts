@@ -8,6 +8,7 @@ export const dynamic = "force-dynamic"
 
 const licenseSchema = z.object({
   customer_name: z.string().trim().min(2).max(160),
+  customer_email: z.string().trim().email().max(254).optional().or(z.literal("")),
   customer_id: z.string().trim().min(1).max(120).optional(),
   business_name: z.string().trim().min(2).max(160),
   business_id: z.string().trim().min(1).max(120).optional(),
@@ -50,6 +51,7 @@ export async function POST(request: Request) {
       license_id: licenseId,
       customer_id: data.customer_id || `cust_${slug(data.customer_name) || "customer"}`,
       customer_name: data.customer_name,
+      customer_email: data.customer_email || null,
       business_id: data.business_id || `biz_${slug(data.business_name) || "business"}`,
       business_name: data.business_name,
       device_id: data.device_id,
@@ -79,6 +81,7 @@ export async function POST(request: Request) {
       metadata: {
         license_id: licenseId,
         customer_id: payload.customer_id,
+        customer_email: payload.customer_email || null,
         plan_name: payload.plan_name,
         expiry_date: payload.expiry_date,
         grace_period_days: payload.grace_period_days,

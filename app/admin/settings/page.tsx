@@ -46,6 +46,7 @@ type AdminLicenseResponse = {
 
 type LicenseForm = {
   customer_name: string
+  customer_email: string
   business_name: string
   device_id: string
   plan_name: string
@@ -67,6 +68,7 @@ const defaultSettings: PlatformSettings = {
 
 const defaultLicenseForm: LicenseForm = {
   customer_name: "",
+  customer_email: "",
   business_name: "",
   device_id: "",
   plan_name: "Offline ERP",
@@ -204,8 +206,8 @@ export default function AdminSettingsPage() {
       ["Billing automation", settings.billing_automation],
       ["Inventory tracking", settings.inventory_tracking],
       ["Notification channel", settings.email_notifications],
-      ["Manual approval control", !settings.auto_approvals],
-      ["No pending approvals", pendingCount === 0],
+      ["License issue control", true],
+      ["Legacy access queue clear", pendingCount === 0],
       ["Live customer workspaces", organizationsCount > 0],
     ],
     [organizationsCount, pendingCount, settings]
@@ -362,7 +364,7 @@ export default function AdminSettingsPage() {
           <div>
             <p className="mb-4 text-xs font-bold uppercase tracking-[0.24em] text-cyan-200">Platform Configuration</p>
             <h1 className="max-w-5xl text-4xl font-black leading-tight md:text-6xl">Global SaaS settings, launch controls, and audit operations.</h1>
-            <p className="mt-5 max-w-3xl text-neutral-400">Control platform identity, approval behavior, customer notifications, billing, inventory, maintenance mode, and admin audit actions.</p>
+            <p className="mt-5 max-w-3xl text-neutral-400">Control platform identity, license issuance, customer notifications, billing, inventory, maintenance mode, and admin audit actions.</p>
           </div>
           <button type="button" onClick={saveSettings} disabled={saving || loading} className="h-14 rounded-2xl bg-white px-7 font-black text-black disabled:cursor-not-allowed disabled:opacity-50">
             {saving ? "Saving..." : "Save Settings"}
@@ -382,7 +384,7 @@ export default function AdminSettingsPage() {
         {[
           ["Organizations", organizationsCount, "text-white", "Customer workspaces"],
           ["Users", usersCount, "text-cyan-200", "Registered profiles"],
-          ["Pending", pendingCount, "text-amber-200", "Approval queue"],
+          ["Legacy Queue", pendingCount, "text-amber-200", "Old access requests"],
           ["Launch Score", `${launchScore}%`, launchScore >= 85 ? "text-emerald-200" : "text-amber-200", "Admin readiness"],
         ].map(([label, value, color, helper]) => (
           <div key={label} className="rounded-[32px] border border-white/10 bg-gradient-to-br from-zinc-950 via-black to-zinc-950 p-7">
@@ -417,14 +419,14 @@ export default function AdminSettingsPage() {
             />
             <ToggleCard
               title="Email Notifications"
-              description="Send approval, billing, and operational notifications from the platform."
+              description="Send license, billing, and operational notifications from the platform."
               enabled={settings.email_notifications}
               disabled={saving || loading}
               onClick={() => updateSetting("email_notifications", !settings.email_notifications)}
             />
             <ToggleCard
-              title="Auto Approvals"
-              description="Automatically approve verified businesses without manual admin review."
+              title="Legacy Auto Access"
+              description="Kept for older cloud accounts only. Offline desktop access uses admin-issued licenses."
               enabled={settings.auto_approvals}
               disabled={saving || loading}
               onClick={() => updateSetting("auto_approvals", !settings.auto_approvals)}
@@ -489,6 +491,10 @@ export default function AdminSettingsPage() {
           <label>
             <span className="mb-2 block text-xs font-black uppercase tracking-[0.18em] text-neutral-500">Customer Name</span>
             <input value={licenseForm.customer_name} onChange={(event) => updateLicenseForm("customer_name", event.target.value)} className="h-14 w-full rounded-2xl border border-white/10 bg-black/50 px-5 outline-none" />
+          </label>
+          <label>
+            <span className="mb-2 block text-xs font-black uppercase tracking-[0.18em] text-neutral-500">Customer Email</span>
+            <input type="email" value={licenseForm.customer_email} onChange={(event) => updateLicenseForm("customer_email", event.target.value.trim())} className="h-14 w-full rounded-2xl border border-white/10 bg-black/50 px-5 outline-none" />
           </label>
           <label>
             <span className="mb-2 block text-xs font-black uppercase tracking-[0.18em] text-neutral-500">Business Name</span>

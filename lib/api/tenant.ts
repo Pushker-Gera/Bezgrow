@@ -73,10 +73,6 @@ export async function requireWorkspace(request: Request): Promise<
     return { ok: false, status: 403, error: "This account is suspended." }
   }
 
-  if (profile.approved === false) {
-    return { ok: false, status: 403, error: "Account approval is pending." }
-  }
-
   let membershipQuery = adminSupabase
     .from("organization_members")
     .select("organization_id, role")

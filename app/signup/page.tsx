@@ -55,7 +55,7 @@ export default function SignupPage() {
             setErrorMessage("")
 
             if (!navigator.onLine) {
-                setErrorMessage("Internet required to submit an access request.")
+                setErrorMessage("Internet required to create your account. You can activate the desktop app with a license after setup.")
                 setLoading(false)
                 return
             }
@@ -99,16 +99,15 @@ export default function SignupPage() {
             const result = await response.json()
 
             if (!response.ok) {
-                setErrorMessage(result.error || result.message || "Application could not be submitted.")
+                setErrorMessage(result.error || result.message || "Account could not be created.")
                 setLoading(false)
                 return
             }
 
-            setStatusMessage("Application submitted successfully. Please wait for admin approval.")
+            setStatusMessage("Account created. Activate Bezgrow with your license key.")
 
             setTimeout(() => {
-                window.sessionStorage.setItem("bezgrow_pending_signup", "1")
-                router.push("/pending-approval")
+                router.push("/offline")
             }, 1500)
 
         } catch {
@@ -148,10 +147,10 @@ export default function SignupPage() {
                     <span className="text-base font-black">Bezgrow</span>
                 </div>
 
-                <h1 className="mb-2 text-2xl font-bold sm:text-3xl">Apply for Access</h1>
+                <h1 className="mb-2 text-2xl font-bold sm:text-3xl">Create Account</h1>
 
                 <p className="mb-5 text-sm leading-6 text-gray-400 sm:mb-6">
-                    Create your business account and submit your application for approval.
+                    Create your business account. Your admin-issued license unlocks Bezgrow on this device.
                 </p>
 
                 {statusMessage && (
@@ -216,7 +215,7 @@ export default function SignupPage() {
                         onChange={(e) => setTermsAccepted(e.target.checked)}
                         className="mt-1"
                     />
-                    <span>I agree to the terms, privacy policy, and approval-based access process.</span>
+                    <span>I agree to the terms, privacy policy, and license-based access process.</span>
                 </label>
 
                 <button
@@ -224,11 +223,11 @@ export default function SignupPage() {
                     disabled={loading}
                     className="min-h-12 w-full rounded-lg bg-white py-3 font-semibold text-black disabled:opacity-50"
                 >
-                    {loading ? "Submitting Application..." : "Request Admin Approval"}
+                    {loading ? "Creating Account..." : "Create Account"}
                 </button>
 
                 <p className="mt-4 text-center text-sm text-gray-500">
-                    Your account will open after an admin approves your request.
+                    Already have a license key? Open the activation page after creating your account.
                 </p>
 
             </div>

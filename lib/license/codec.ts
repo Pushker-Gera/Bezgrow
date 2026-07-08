@@ -6,6 +6,7 @@ export type LicensePayload = {
   license_id: string
   customer_id: string
   customer_name: string
+  customer_email?: string | null
   business_id: string
   business_name: string
   device_id: string
@@ -120,6 +121,7 @@ function assertPayload(value: unknown): LicensePayload {
     license_id: String(payload.license_id),
     customer_id: String(payload.customer_id),
     customer_name: String(payload.customer_name),
+    customer_email: payload.customer_email ? String(payload.customer_email) : null,
     business_id: String(payload.business_id),
     business_name: String(payload.business_name),
     device_id: String(payload.device_id),

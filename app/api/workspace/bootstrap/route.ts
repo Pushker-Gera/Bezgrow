@@ -180,7 +180,7 @@ export async function GET(request: Request) {
       profile: {
         id: profile?.id ?? user.id,
         role: isAdmin ? "admin" : profile?.role || "user",
-        approved: isAdmin || Boolean(profile?.approved),
+        approved: true,
         is_suspended: Boolean(profile?.is_suspended),
         business_created: hasCompletedBusiness,
       },
@@ -199,8 +199,8 @@ export async function GET(request: Request) {
       locale,
       permissions: {
         admin: isAdmin,
-        canAccessDashboard: Boolean((isAdmin || profile?.approved) && hasCompletedBusiness && !profile?.is_suspended),
-        canManageBilling: isAdmin || Boolean(profile?.approved && !profile.is_suspended),
+        canAccessDashboard: Boolean(hasCompletedBusiness && !profile?.is_suspended),
+        canManageBilling: isAdmin || Boolean(!profile?.is_suspended),
       },
     })
   } catch {

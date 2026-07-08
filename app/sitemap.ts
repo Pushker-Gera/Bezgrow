@@ -45,11 +45,6 @@ const publicRoutes = [
     changeFrequency: "yearly" as const,
   },
   {
-    path: "/pending-approval",
-    priority: 0.2,
-    changeFrequency: "yearly" as const,
-  },
-  {
     path: "/rejected",
     priority: 0.1,
     changeFrequency: "yearly" as const,

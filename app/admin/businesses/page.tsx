@@ -307,7 +307,7 @@ export default function AdminBusinessesPage() {
       <section className="grid grid-cols-1 gap-5 md:grid-cols-2 2xl:grid-cols-4">
         {[
           ["Total Businesses", stats.total, "text-white", "Customer workspaces"],
-          ["Active", stats.active, "text-emerald-200", "Approved and live"],
+          ["Active", stats.active, "text-emerald-200", "Licensed and live"],
           ["Action Needed", stats.action, "text-red-200", "Risk or suspended"],
           ["Platform Revenue", money(stats.revenue), "text-cyan-200", "Invoice total"],
           ["Gross Profit", money(stats.grossProfit), "text-emerald-200", "After product cost"],

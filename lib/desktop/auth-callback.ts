@@ -24,7 +24,6 @@ function desktopRedirectFromWorkspace(payload: WorkspaceBootstrapPayload | null,
   if (!payload?.success) return "/login"
   if (payload.permissions?.admin || payload.profile?.role === "admin") return "/admin"
   if (payload.profile?.is_suspended) return "/login?error=account_suspended"
-  if (!payload.profile?.approved) return "/pending-approval"
 
   const hasBusiness = Boolean(payload.profile?.business_created || payload.organization?.id || payload.membership?.organization_id)
   if (!hasBusiness) return "/create-business"

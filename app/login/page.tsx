@@ -6,9 +6,10 @@ import type { Session } from "@supabase/supabase-js"
 import { useRouter } from "next/navigation"
 import { BezgrowLogoMark } from "@/components/brand/BezgrowLogoMark"
 import { completeDesktopAuthCallback } from "@/lib/desktop/auth-callback"
-import { hasCachedDesktopSession, persistDesktopSession, readCachedDesktopSession } from "@/lib/desktop/session"
+import { hasCachedDesktopSession, persistDesktopSession } from "@/lib/desktop/session"
 import { isTauriRuntimeAsync, openExternalUrl } from "@/lib/desktop/tauri"
 import { getCachedWorkspaceBootstrap } from "@/lib/offline/db"
+import { localLicenseSnapshot } from "@/lib/offline/local/license"
 import { supabase } from "@/lib/supabase"
 
 type BootstrapResponse = {
@@ -173,6 +174,15 @@ export default function LoginPage() {
             }
 
             const desktopRuntime = (await withTimeout(isTauriRuntimeAsync(), 2500)) || false
+            if (desktopRuntime) {
+                const license = await withTimeout(localLicenseSnapshot(), 3000)
+                if (license?.allowed) {
+                    navigate(getSafeNextPath("/dashboard"))
+                    return
+                }
+                navigate(`/offline?next=${encodeURIComponent(getSafeNextPath("/dashboard"))}`)
+                return
+            }
 
             if (!navigator.onLine) {
                 const [hasSession, cachedWorkspace] = await withTimeout(Promise.all([
@@ -185,30 +195,7 @@ export default function LoginPage() {
                     return
                 }
 
-                setErrorMessage("Internet required for first login. Reconnect once, then Bezgrow can open offline.")
-                return
-            }
-
-            if (desktopRuntime) {
-                const cachedSession = await withTimeout(readCachedDesktopSession(), 3000)
-
-                if (cachedSession?.access_token && cachedSession.refresh_token) {
-                    const sessionResult = await withTimeout(supabase.auth.setSession({
-                        access_token: cachedSession.access_token,
-                        refresh_token: cachedSession.refresh_token,
-                    }), SESSION_CHECK_TIMEOUT_MS)
-
-                    if (sessionResult && !sessionResult.error) {
-                        const redirectPath = await withTimeout(completeDesktopAuthCallback(
-                            cachedSession.access_token,
-                            cachedSession.refresh_token,
-                            getSafeNextPath("/dashboard")
-                        ), SESSION_CHECK_TIMEOUT_MS)
-                        if (redirectPath) navigate(redirectPath)
-                        return
-                    }
-                }
-
+                setErrorMessage("Please activate Bezgrow using your license key.")
                 return
             }
 
@@ -223,11 +210,7 @@ export default function LoginPage() {
                         navigate("/admin")
                         return
                     }
-                    if (!payload.profile?.approved) {
-                        navigate("/pending-approval")
-                        return
-                    }
-                    const hasBusiness = Boolean(payload.profile.business_created || payload.organization?.id)
+                    const hasBusiness = Boolean(payload.profile?.business_created || payload.organization?.id)
                     navigate(hasBusiness ? "/dashboard" : "/create-business")
                     return
                 }

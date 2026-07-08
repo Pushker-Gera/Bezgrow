@@ -109,7 +109,7 @@ export default function AdminPage() {
         })
     }, [checkAdmin])
 
-    const approvalHealth = useMemo(() => {
+    const accessHealth = useMemo(() => {
         if (totalUsers === 0) return 100
         return Math.round((approvedUsers / totalUsers) * 100)
     }, [approvedUsers, totalUsers])
@@ -132,11 +132,11 @@ export default function AdminPage() {
         setActionLoading(null)
 
         if (!payload.success) {
-            setNotice(payload.error || "Unable to approve user.")
+            setNotice(payload.error || "Unable to activate legacy user.")
             return
         }
 
-        setNotice(payload.message || `${user.email || "User"} approved successfully.`)
+        setNotice(payload.message || `${user.email || "User"} activated successfully.`)
         await loadUsers()
     }
 
@@ -149,18 +149,18 @@ export default function AdminPage() {
                             Platform Command Center
                         </div>
                         <h1 className="max-w-5xl text-4xl font-black leading-tight tracking-tight md:text-6xl">
-                            Admin operations for approvals, organizations, and SaaS growth.
+                            Admin operations for licenses, organizations, and SaaS growth.
                         </h1>
                         <p className="mt-5 max-w-3xl text-base leading-8 text-neutral-400">
-                            Monitor platform health, approve businesses, track workspace growth,
+                            Monitor platform health, issue offline licenses, track workspace growth,
                             and keep the ERP launch pipeline clean.
                         </p>
                     </div>
                     <div className="rounded-[32px] border border-emerald-400/20 bg-emerald-500/10 p-6">
                         <p className="text-xs font-bold uppercase tracking-[0.2em] text-emerald-200">
-                            Approval Health
+                            Access Health
                         </p>
-                        <p className="mt-3 text-5xl font-black text-emerald-200">{approvalHealth}%</p>
+                        <p className="mt-3 text-5xl font-black text-emerald-200">{accessHealth}%</p>
                     </div>
                 </div>
             </section>
@@ -174,8 +174,8 @@ export default function AdminPage() {
             <section className="grid grid-cols-1 gap-5 md:grid-cols-2 2xl:grid-cols-4">
                 {[
                     ["Total Users", totalUsers, "text-white", "Registered profiles"],
-                    ["Approved Users", approvedUsers, "text-emerald-200", "Active platform access"],
-                    ["Pending Approvals", pendingCount, "text-amber-200", "Requires admin action"],
+                    ["Active Users", approvedUsers, "text-emerald-200", "Active platform access"],
+                    ["Legacy Queue", pendingCount, "text-amber-200", "Old access requests"],
                     ["Organizations", totalBusinesses, "text-cyan-200", "Business workspaces"],
                 ].map(([label, value, color, helper]) => (
                     <div key={label} className="rounded-[32px] border border-white/10 bg-gradient-to-br from-zinc-950 via-black to-zinc-950 p-7">
@@ -189,8 +189,8 @@ export default function AdminPage() {
             <section className="overflow-hidden rounded-[36px] border border-white/10 bg-gradient-to-br from-zinc-950/95 to-black shadow-[0_0_80px_rgba(0,0,0,0.4)]">
                 <div className="flex flex-col gap-3 border-b border-white/10 p-6 md:flex-row md:items-center md:justify-between">
                     <div>
-                        <h2 className="text-3xl font-black">Pending User Approvals</h2>
-                        <p className="mt-2 text-sm text-neutral-500">Review and approve business owners before workspace creation.</p>
+                        <h2 className="text-3xl font-black">Legacy Access Queue</h2>
+                        <p className="mt-2 text-sm text-neutral-500">Review older cloud access requests. Desktop customers should use admin-issued licenses.</p>
                     </div>
                     <button onClick={() => void loadUsers()} className="h-12 rounded-2xl border border-white/10 px-5 text-sm font-bold text-white hover:border-cyan-400/30">
                         Refresh
@@ -202,7 +202,7 @@ export default function AdminPage() {
                 ) : users.length === 0 ? (
                     <div className="p-12 text-center">
                         <h3 className="text-2xl font-black">No Pending Users</h3>
-                        <p className="mt-3 text-neutral-500">All signup requests have been approved.</p>
+                        <p className="mt-3 text-neutral-500">There are no old access requests waiting.</p>
                     </div>
                 ) : (
                     <div className="divide-y divide-white/5">
@@ -219,7 +219,7 @@ export default function AdminPage() {
                                     onClick={() => void approveUser(user)}
                                     className="h-12 rounded-2xl bg-white px-5 font-black text-black hover:bg-cyan-100 disabled:cursor-not-allowed disabled:opacity-60"
                                 >
-                                    {actionLoading === user.id ? "Approving..." : "Approve"}
+                                    {actionLoading === user.id ? "Activating..." : "Activate"}
                                 </button>
                             </div>
                         ))}

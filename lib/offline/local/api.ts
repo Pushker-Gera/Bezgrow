@@ -100,6 +100,10 @@ function fail(message: string, status = 400) {
   return jsonResponse({ success: false, error: message }, status)
 }
 
+function isLicenseError(message: string) {
+  return /activation required|license|another device|reactivation/i.test(message)
+}
+
 function csvResponse(filename: string, rows: DataRow[]) {
   return new Response(rowsToCsv(rows), {
     status: 200,
@@ -1544,7 +1548,7 @@ export async function localApiFetch(input: RequestInfo | URL, init: RequestInit 
     if (method === "POST" && url.pathname === "/api/settings/toggle-feature") return { handled: true, response: await toggleFeature(body || {}, organizationId) }
   } catch (error) {
     const message = error instanceof Error ? error.message : "Local database request failed."
-    return { handled: true, response: fail(message, 500) }
+    return { handled: true, response: fail(message, isLicenseError(message) ? 403 : 500) }
   }
 
   return { handled: false, response: null }

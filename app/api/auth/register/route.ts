@@ -45,16 +45,6 @@ export async function POST(request: Request) {
     const payload = parsed.data
     const email = payload.email.toLowerCase()
 
-    const { data: existingPending } = await adminSupabase
-      .from("pending_users")
-      .select("id,status")
-      .eq("email", email)
-      .maybeSingle()
-
-    if (existingPending?.status === "pending") {
-      return fail("This email already has a pending approval request.", 409)
-    }
-
     const { data: authData, error: authError } = await adminSupabase.auth.admin.createUser({
       email,
       password: payload.password,
@@ -80,7 +70,7 @@ export async function POST(request: Request) {
       email,
       full_name: payload.fullName,
       role: "user",
-      approved: false,
+      approved: true,
       business_created: false,
       is_suspended: false,
       updated_at: new Date().toISOString(),
@@ -91,21 +81,9 @@ export async function POST(request: Request) {
       return fail("Account profile could not be created. Please contact support.", 500)
     }
 
-    const { error: pendingError } = await adminSupabase.from("pending_users").upsert({
-      id: userId,
-      full_name: payload.fullName,
-      business_name: payload.businessName,
-      phone: payload.phone,
-      email,
-      status: "pending",
-    })
+    await adminSupabase.from("pending_users").delete().eq("email", email)
 
-    if (pendingError) {
-      await adminSupabase.auth.admin.deleteUser(userId)
-      return fail("Approval request could not be created. Please contact support.", 500)
-    }
-
-    return ok({ status: "pending", message: "Application submitted for admin approval." })
+    return ok({ status: "active", message: "Account created. Activate Bezgrow with your license key to continue." })
   } catch {
     return serverFail()
   }

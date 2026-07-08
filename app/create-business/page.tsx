@@ -97,12 +97,12 @@ export default function CreateBusiness() {
                 return
             }
 
-            if (!payload.success || !payload.profile?.approved) {
-                router.push("/pending-approval")
+            if (!payload.success) {
+                router.push("/offline?next=/create-business")
                 return
             }
 
-            if (payload.profile.business_created || payload.organization?.id) {
+            if (payload.profile?.business_created || payload.organization?.id) {
                 router.push("/dashboard")
                 return
             }

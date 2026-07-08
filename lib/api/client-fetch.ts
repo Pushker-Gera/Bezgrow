@@ -70,7 +70,17 @@ export async function authHeaders(headersInit?: HeadersInit) {
 
 export async function apiFetch(input: RequestInfo | URL, init: RequestInit = {}) {
   const localResult = await localApiFetch(input, init)
-  if (localResult.handled && localResult.response) return localResult.response
+  if (localResult.handled && localResult.response) {
+    if (localResult.response.status === 403 && typeof window !== "undefined") {
+      const payload = (await localResult.response.clone().json().catch(() => null)) as { error?: string } | null
+      if (payload?.error && /activation required|license|another device|reactivation/i.test(payload.error)) {
+        sessionStorage.setItem("bezgrow:license-message", "Please activate Bezgrow using your license key.")
+        const next = `${window.location.pathname}${window.location.search}${window.location.hash}`
+        window.location.assign(`/offline?reason=license_required&next=${encodeURIComponent(next)}`)
+      }
+    }
+    return localResult.response
+  }
 
   return fetch(input, {
     ...init,

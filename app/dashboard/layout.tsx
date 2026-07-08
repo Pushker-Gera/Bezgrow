@@ -8,8 +8,8 @@ import { BezgrowLogoMark } from "@/components/brand/BezgrowLogoMark"
 import DesktopBackButton from "@/components/desktop/DesktopBackButton"
 import OfflineStatusBar from "@/components/offline/OfflineStatusBar"
 import { clearDesktopSession } from "@/lib/desktop/session"
-import { clearOfflineData } from "@/lib/offline/db"
 import { prepareOfflineWorkspace } from "@/lib/offline/bootstrap"
+import { localLicenseSnapshot } from "@/lib/offline/local/license"
 import { supabase } from "@/lib/supabase"
 import { clearWorkspaceBootstrapCache, getWorkspaceBootstrap } from "@/lib/workspaceBootstrapClient"
 
@@ -79,7 +79,8 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
                 if (cancelled) return
 
                 if (!payload?.success) {
-                    router.replace("/login")
+                    const license = await localLicenseSnapshot().catch(() => null)
+                    router.replace(license?.allowed ? "/dashboard" : "/offline?next=/dashboard")
                     return
                 }
 
@@ -169,7 +170,6 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
     async function handleLogout() {
         clearWorkspaceBootstrapCache()
         await clearDesktopSession()
-        await clearOfflineData()
         await supabase.auth.signOut()
         router.replace("/login")
     }

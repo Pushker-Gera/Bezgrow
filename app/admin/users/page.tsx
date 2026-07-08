@@ -29,7 +29,7 @@ type MembershipRow = {
 
 type UserView = ProfileRow & {
   business: string
-  status: "Approved" | "Pending" | "Suspended"
+  status: "Active" | "Pending" | "Suspended"
 }
 
 type AdminMetricsResponse = {
@@ -160,7 +160,7 @@ export default function AdminUsersPage() {
 
   const users = useMemo<UserView[]>(() => {
     return profiles.map((profile) => {
-      const status = profile.is_suspended ? "Suspended" : profile.approved ? "Approved" : "Pending"
+      const status = profile.is_suspended ? "Suspended" : profile.approved ? "Active" : "Pending"
 
       return {
         ...profile,
@@ -218,8 +218,8 @@ export default function AdminUsersPage() {
         <div className="flex flex-col gap-6 xl:flex-row xl:items-end xl:justify-between">
           <div>
             <p className="mb-4 text-xs font-bold uppercase tracking-[0.24em] text-cyan-200">User Governance</p>
-            <h1 className="max-w-5xl text-4xl font-black leading-tight md:text-6xl">Users, approvals, roles, and access control.</h1>
-            <p className="mt-5 max-w-3xl text-neutral-400">Operate a scalable SaaS user layer with real profiles, organization mapping, status control, and approval workflows.</p>
+            <h1 className="max-w-5xl text-4xl font-black leading-tight md:text-6xl">Users, roles, and access control.</h1>
+            <p className="mt-5 max-w-3xl text-neutral-400">Operate a scalable SaaS user layer with real profiles, organization mapping, status control, and license-based desktop access.</p>
           </div>
           <button onClick={() => void fetchUsers()} className="h-14 rounded-2xl bg-white px-7 font-black text-black">Refresh Users</button>
         </div>
@@ -230,7 +230,7 @@ export default function AdminUsersPage() {
       <section className="grid grid-cols-1 gap-5 md:grid-cols-2 2xl:grid-cols-4">
         {[
           ["Total Users", stats.total, "text-white"],
-          ["Approved", stats.approved, "text-emerald-200"],
+          ["Active", stats.approved, "text-emerald-200"],
           ["Pending", stats.pending, "text-amber-200"],
           ["Suspended", stats.suspended, "text-red-200"],
         ].map(([label, value, color]) => (
@@ -246,7 +246,7 @@ export default function AdminUsersPage() {
           <input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search user, email, role, organization..." className="h-14 rounded-2xl border border-white/10 bg-black/50 px-5 outline-none" />
           <select value={statusFilter} onChange={(event) => setStatusFilter(event.target.value)} className="h-14 rounded-2xl border border-white/10 bg-black/50 px-5 outline-none">
             <option value="all">All status</option>
-            <option value="approved">Approved</option>
+            <option value="active">Active</option>
             <option value="pending">Pending</option>
             <option value="suspended">Suspended</option>
           </select>
@@ -277,7 +277,7 @@ export default function AdminUsersPage() {
                     onClick={() => void updateUser(user, "approve")}
                     className="rounded-xl bg-white px-4 py-2 text-sm font-black text-black disabled:cursor-not-allowed disabled:opacity-60"
                   >
-                    {actionLoading === `approve:${user.id}` ? "Approving..." : "Approve"}
+                    {actionLoading === `approve:${user.id}` ? "Activating..." : "Mark Active"}
                   </button>
                   <button
                     disabled={actionLoading === `${user.status === "Suspended" ? "activate" : "suspend"}:${user.id}`}

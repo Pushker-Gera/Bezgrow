@@ -11,10 +11,10 @@ const capabilityGroups = [
   ["Inventory", "Stock, batches, suppliers, warehouses"],
   ["Billing", "GST, no-GST, A4, thermal, collections"],
   ["Retail POS", "Barcode scan, quick sale, customer message"],
-  ["Admin", "Approvals, businesses, analytics, launch controls"],
+  ["Admin", "Licenses, businesses, analytics, launch controls"],
 ]
 
-const signals = ["Realtime stock", "Smart invoices", "Approval workflow", "Mobile ready", "Global operations", "Thermal POS"]
+const signals = ["Realtime stock", "Smart invoices", "License access", "Mobile ready", "Global operations", "Thermal POS"]
 
 const seoSections = [
   [
@@ -237,7 +237,7 @@ export default function HomeClient() {
           {[
             ["Sell faster", "Barcode scan, quick invoice, thermal bill, and customer bill sharing."],
             ["Control stock", "Batch, supplier, warehouse, low-stock, expiry, and stock audit trails."],
-            ["Scale cleanly", "Admin approvals, business monitoring, analytics, and launch controls."],
+            ["Scale cleanly", "Admin licenses, business monitoring, analytics, and launch controls."],
           ].map(([title, copy]) => (
             <article key={title} className="rounded-[24px] border border-white/10 bg-white/[0.035] p-6 text-center transition hover:-translate-y-1 hover:border-cyan-300/25">
               <h2 className="text-2xl font-black">{title}</h2>

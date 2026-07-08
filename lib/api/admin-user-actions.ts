@@ -17,9 +17,9 @@ const actionConfig: Record<
   { action: string; success: string; log: string }
 > = {
   approve: {
-    action: "USER_APPROVED",
-    success: "User approved successfully.",
-    log: "Admin approved user access.",
+    action: "USER_ACTIVATED",
+    success: "User activated successfully.",
+    log: "Admin activated legacy user access.",
   },
   reject: {
     action: "USER_REJECTED",
@@ -96,7 +96,7 @@ export async function runAdminUserAction(request: Request, action: AdminUserActi
         suspended_by: null,
         updated_at: now,
       })
-      if (error) return fail("Unable to approve user.", 400)
+      if (error) return fail("Unable to activate user.", 400)
 
       await adminSupabase
         .from("pending_users")

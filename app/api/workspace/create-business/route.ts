@@ -86,7 +86,6 @@ export async function POST(request: Request) {
     if (profileError || !profile) return fail("Profile is not ready.", 403)
     if (profile.role === "admin") return fail("Admins do not create customer workspaces here.", 403)
     if (profile.is_suspended) return fail("This account is suspended.", 403)
-    if (!profile.approved) return fail("Account approval is pending.", 403)
     if (profile.business_created) return fail("Business is already connected.", 409)
 
     const { data: existingMembership } = await adminSupabase

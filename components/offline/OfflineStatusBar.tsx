@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react"
 import { exportOfflineBackup, listOfflineActions, pendingOfflineCount, restoreOfflineBackup } from "@/lib/offline/db"
+import { localLicenseSnapshot } from "@/lib/offline/local/license"
 import { syncOfflineQueue } from "@/lib/offline/sync"
 
 export default function OfflineStatusBar() {
@@ -10,16 +11,27 @@ export default function OfflineStatusBar() {
   const [needsReview, setNeedsReview] = useState(0)
   const [syncing, setSyncing] = useState(false)
   const [message, setMessage] = useState("")
+  const [licenseLabel, setLicenseLabel] = useState("License Active")
   const syncingRef = useRef(false)
   const fileInputRef = useRef<HTMLInputElement | null>(null)
 
   const refreshCount = useCallback(async () => {
-    const [pendingCount, reviewActions] = await Promise.all([
+    const [pendingCount, reviewActions, license] = await Promise.all([
       pendingOfflineCount(),
       listOfflineActions(["error", "conflict"]),
+      localLicenseSnapshot().catch(() => null),
     ])
     setPending(pendingCount)
     setNeedsReview(reviewActions.length)
+    if (!license) {
+      setLicenseLabel("Update License Required")
+    } else if (license.allowed) {
+      setLicenseLabel(license.reason.toLowerCase().includes("grace") ? "Trial Active" : "License Active")
+    } else if (license.status === "expired") {
+      setLicenseLabel("License Expired")
+    } else {
+      setLicenseLabel("Update License Required")
+    }
   }, [])
 
   const runSync = useCallback(async () => {
@@ -108,7 +120,7 @@ export default function OfflineStatusBar() {
     <div className={`border-b px-3 py-2 text-sm ${online ? "border-amber-400/20 bg-amber-500/10 text-amber-100" : "border-cyan-400/20 bg-cyan-500/10 text-cyan-100"}`}>
       <div className="mx-auto flex max-w-[1800px] flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
         <div className="font-semibold">
-          {online ? "Protected" : "Offline"} {pending > 0 ? `- ${pending} pending update${pending === 1 ? "" : "s"}` : ""}
+          {online ? licenseLabel : "Offline"} {pending > 0 ? `- ${pending} pending update${pending === 1 ? "" : "s"}` : ""}
           {needsReview > 0 ? <span className="ml-2 text-red-100">{needsReview} need review</span> : null}
           {message ? <span className="ml-2 font-normal opacity-80">{message}</span> : null}
         </div>
