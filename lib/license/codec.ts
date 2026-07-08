@@ -26,6 +26,7 @@ export type LicensePayload = {
 export type ParsedLicenseKey = {
   payload: LicensePayload
   payloadText: string
+  decodedPayloadText: string
   signature: Uint8Array
   signatureText: string
   licenseKey: string
@@ -121,6 +122,10 @@ export function encodeLicenseKey(payload: LicensePayload, signature: Uint8Array)
   return `${LICENSE_KEY_PREFIX}.${bytesToBase64Url(encodeUtf8(canonicalLicenseText(payload)))}.${bytesToBase64Url(signature)}`
 }
 
+export function normalizeLicenseKeyInput(value: string) {
+  return value.trim().replace(/\s+/g, "")
+}
+
 function assertPayload(value: unknown): LicensePayload {
   if (!value || typeof value !== "object") throw new Error("License payload is missing.")
   const payload = value as Partial<LicensePayload>
@@ -172,7 +177,7 @@ function assertPayload(value: unknown): LicensePayload {
 }
 
 export function parseLicenseInput(input: unknown): ParsedLicenseKey {
-  const raw = typeof input === "string" ? input.trim() : input
+  const raw = typeof input === "string" ? normalizeLicenseKeyInput(input) : input
   if (!raw) throw new Error("License key is required.")
 
   if (typeof raw === "object") {
@@ -185,14 +190,14 @@ export function parseLicenseInput(input: unknown): ParsedLicenseKey {
   const parts = raw.split(".")
   if (parts.length !== 3 || parts[0] !== LICENSE_KEY_PREFIX) throw new Error("License key format is invalid.")
 
-  const payloadText = decodeUtf8(base64UrlToBytes(parts[1]))
-  const payload = assertPayload(JSON.parse(payloadText))
-  const canonicalText = canonicalLicenseText(payload)
-  if (payloadText !== canonicalText) throw new Error("License payload was not canonical.")
+  const decodedPayloadText = decodeUtf8(base64UrlToBytes(parts[1]))
+  const payload = assertPayload(JSON.parse(decodedPayloadText))
+  const payloadText = canonicalLicenseText(payload)
 
   return {
     payload,
     payloadText,
+    decodedPayloadText,
     signature: base64UrlToBytes(parts[2]),
     signatureText: parts[2],
     licenseKey: raw,
