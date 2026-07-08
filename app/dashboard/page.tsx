@@ -3,6 +3,7 @@
 import Link from "next/link"
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import AppUpdateBanner from "@/components/AppUpdateBanner"
+import { apiFetch } from "@/lib/api/client-fetch"
 import { getCachedWorkspaceBootstrap, getOfflineData } from "@/lib/offline/db"
 
 type AnyRow = Record<string, unknown>
@@ -146,7 +147,7 @@ export default function Dashboard() {
 
         try {
             if (!options.silent) setLoading(true)
-            const response = await fetch("/api/dashboard/summary", {
+            const response = await apiFetch("/api/dashboard/summary", {
                 credentials: "include",
                 cache: "no-store",
                 signal: controller.signal,

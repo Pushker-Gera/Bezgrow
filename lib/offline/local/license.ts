@@ -191,6 +191,66 @@ function workspaceFromLicense(payload: LicensePayload): WorkspaceBootstrapPayloa
   }
 }
 
+function featuresFromStoredLicense(row: StoredLicenseRow | null | undefined) {
+  const raw = row?.allowed_features
+  if (!raw) return []
+  try {
+    const parsed = JSON.parse(String(raw)) as unknown
+    return Array.isArray(parsed) ? parsed.map(String).filter(Boolean).sort() : []
+  } catch {
+    return String(raw)
+      .split(",")
+      .map((item) => item.trim())
+      .filter(Boolean)
+      .sort()
+  }
+}
+
+function workspaceFromStoredLicense(row: StoredLicenseRow): WorkspaceBootstrapPayload {
+  const record = row as Record<string, unknown>
+  const businessId = stringValue(record.business_id, stringValue(record.organization_id, "global"))
+  const businessName = stringValue(record.business_name, "Licensed Business")
+  const customerId = stringValue(record.customer_id, "licensed-user")
+  const customerEmail = typeof record.customer_email === "string" && record.customer_email.trim() ? record.customer_email.trim() : null
+
+  return {
+    success: true,
+    user: {
+      id: customerId,
+      email: customerEmail || null,
+    },
+    profile: {
+      id: customerId,
+      role: "user",
+      approved: true,
+      is_suspended: false,
+      business_created: true,
+    },
+    organization: {
+      id: businessId,
+      name: businessName,
+      currency: "INR",
+      timezone: "Asia/Kolkata",
+      locale: "en-IN",
+      business_type: null,
+      business_category: null,
+    },
+    membership: {
+      organization_id: businessId,
+      role: "owner",
+    },
+    features: featuresFromStoredLicense(row),
+    currency: "INR",
+    timezone: "Asia/Kolkata",
+    locale: "en-IN",
+    permissions: {
+      admin: false,
+      canAccessDashboard: true,
+      canManageBilling: true,
+    },
+  }
+}
+
 async function createLocalWorkspaceFromLicense(payload: LicensePayload) {
   const workspace = workspaceFromLicense(payload)
   await cacheWorkspaceBootstrap(workspace)
@@ -198,6 +258,21 @@ async function createLocalWorkspaceFromLicense(payload: LicensePayload) {
     sessionStorage.setItem("bezgrow:organization-id", JSON.stringify({ value: payload.business_id, cachedAt: Date.now() }))
   }
   setDesktopAuthMarker()
+}
+
+export async function restoreLicensedWorkspaceContext() {
+  const deviceId = await getOrCreateDeviceId()
+  const rows = await readLicenseRows("global")
+  const status = evaluateStoredLicense(rows, { deviceId })
+  if (!status.allowed || !status.license) return null
+
+  const workspace = workspaceFromStoredLicense(status.license)
+  await cacheWorkspaceBootstrap(workspace)
+  if (typeof window !== "undefined") {
+    sessionStorage.setItem("bezgrow:organization-id", JSON.stringify({ value: workspace.organization?.id || "global", cachedAt: Date.now() }))
+  }
+  setDesktopAuthMarker()
+  return workspace
 }
 
 async function verifyLicenseForActivation(input: unknown, parsed: ReturnType<typeof parseLicenseInput>) {

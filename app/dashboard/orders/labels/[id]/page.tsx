@@ -5,6 +5,7 @@ import { useParams } from "next/navigation"
 
 import ShippingLabel from "@/components/ShippingLabel"
 
+import { getCachedWorkspaceBootstrap, getOfflineData } from "@/lib/offline/db"
 import { supabase } from "@/lib/supabase"
 
 type OrderLabelRow = {
@@ -28,6 +29,17 @@ export default function LabelPage() {
     const [loading, setLoading] = useState(true)
 
     const fetchOrder = useCallback(async () => {
+        const cachedWorkspace = getCachedWorkspaceBootstrap()
+        const organizationId = cachedWorkspace?.organization?.id || cachedWorkspace?.membership?.organization_id || ""
+        if (organizationId) {
+            const cachedOrders = await getOfflineData<Array<OrderLabelRow & { id?: string }>>(organizationId, "orders", [])
+            const cachedOrder = cachedOrders.find((row) => row.id === orderId)
+            if (cachedOrder) {
+                setOrder(cachedOrder)
+                setLoading(false)
+                return
+            }
+        }
 
         const { data, error } =
             await supabase

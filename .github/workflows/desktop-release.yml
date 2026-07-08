@@ -39,6 +39,8 @@ jobs:
           node-version: 24
           cache: npm
 
+      - uses: dtolnay/rust-toolchain@stable
+
       - run: npm ci
 
       - run: npm run lint
@@ -70,6 +72,8 @@ jobs:
           node-version: 24
           cache: npm
 
+      - uses: dtolnay/rust-toolchain@stable
+
       - run: npm ci
 
       - run: npm run lint
@@ -80,6 +84,9 @@ jobs:
         run: |
           New-Item -ItemType Directory -Force release-artifacts | Out-Null
           Copy-Item public/downloads/Bezgrow-windows.exe release-artifacts/Bezgrow-windows.exe
+          Copy-Item public/downloads/Bezgrow-windows.exe.release.json release-artifacts/Bezgrow-windows.exe.release.json
+          Copy-Item public/downloads/Bezgrow-windows.msi release-artifacts/Bezgrow-windows.msi
+          Copy-Item public/downloads/Bezgrow-windows.msi.release.json release-artifacts/Bezgrow-windows.msi.release.json
 
       - uses: actions/upload-artifact@v4
         with:
@@ -133,6 +140,9 @@ jobs:
             release-artifacts/mac/Bezgrow-mac.dmg \
             release-artifacts/mac/Bezgrow-mac.dmg.release.json \
             release-artifacts/windows/Bezgrow-windows.exe \
+            release-artifacts/windows/Bezgrow-windows.exe.release.json \
+            release-artifacts/windows/Bezgrow-windows.msi \
+            release-artifacts/windows/Bezgrow-windows.msi.release.json \
             --clobber
 
       - name: Write download manifest
@@ -148,7 +158,10 @@ jobs:
             --mac-notarized true \
             --windows-url "$BASE_URL/Bezgrow-windows.exe" \
             --windows-file "release-artifacts/windows/Bezgrow-windows.exe" \
-            --windows-signed "${{ secrets.BEZGROW_WINDOWS_SIGNED }}"
+            --windows-signed "${{ secrets.BEZGROW_WINDOWS_SIGNED }}" \
+            --windows-msi-url "$BASE_URL/Bezgrow-windows.msi" \
+            --windows-msi-file "release-artifacts/windows/Bezgrow-windows.msi" \
+            --windows-msi-signed "${{ secrets.BEZGROW_WINDOWS_SIGNED }}"
 
       - name: Commit manifest
         shell: bash

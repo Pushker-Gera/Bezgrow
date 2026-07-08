@@ -2,6 +2,8 @@
 
 import { cacheWorkspaceBootstrap, getOfflineMeta, putOfflineData, setOfflineMeta } from "@/lib/offline/db"
 import { getCachedAccessToken } from "@/lib/api/client-fetch"
+import { isTauriRuntimeAsync } from "@/lib/desktop/tauri"
+import { localLicenseSnapshot } from "@/lib/offline/local/license"
 import { supabase } from "@/lib/supabase"
 import type { WorkspaceBootstrapPayload } from "@/lib/workspaceBootstrapClient"
 
@@ -79,6 +81,26 @@ export async function prepareOfflineWorkspace(
   const organizationId = organizationIdFrom(payload)
   if (!payload.success || !organizationId || typeof navigator === "undefined" || !navigator.onLine) {
     return { prepared: false, reason: "offline-or-missing-workspace" }
+  }
+
+  const desktopRuntime = await isTauriRuntimeAsync().catch(() => false)
+  if (desktopRuntime) {
+    const license = await localLicenseSnapshot(organizationId).catch(() => null)
+    if (license?.allowed) {
+      await cacheWorkspaceBootstrap(payload)
+      await putOfflineData(organizationId, "settings", {
+        id: `settings:${organizationId}`,
+        organization_id: organizationId,
+        organization: payload.organization || null,
+        membership: payload.membership || null,
+        features: payload.features || [],
+        currency: payload.currency,
+        timezone: payload.timezone,
+        locale: payload.locale,
+        updated_at: new Date().toISOString(),
+      })
+      return { prepared: false, reason: "licensed-local-workspace" }
+    }
   }
 
   const lastPreparedAt = await getOfflineMeta<number>("offline_workspace_prepared_at", 0, organizationId)

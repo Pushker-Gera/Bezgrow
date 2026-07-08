@@ -15,6 +15,8 @@ const publicMacDmg = join(publicDownloadsDir, "Bezgrow-mac.dmg");
 const publicMacReleaseManifest = join(root, "public", "downloads", "Bezgrow-mac.dmg.release.json");
 const publicWindowsExe = join(publicDownloadsDir, "Bezgrow-windows.exe");
 const publicWindowsMsi = join(publicDownloadsDir, "Bezgrow-windows.msi");
+const publicWindowsExeReleaseManifest = join(publicDownloadsDir, "Bezgrow-windows.exe.release.json");
+const publicWindowsMsiReleaseManifest = join(publicDownloadsDir, "Bezgrow-windows.msi.release.json");
 const desktopReleaseManifest = join(publicDownloadsDir, "desktop-release.json");
 
 const passthroughArgs = process.argv.slice(2);
@@ -23,6 +25,11 @@ const publicWindowsFlag = "--public-windows";
 const publicMacBuild = process.env.BEZGROW_MAC_PUBLIC_BUILD === "1" || passthroughArgs.includes(publicMacFlag);
 const publicWindowsBuild = process.env.BEZGROW_WINDOWS_PUBLIC_BUILD === "1" || passthroughArgs.includes(publicWindowsFlag);
 const tauriArgs = passthroughArgs.filter((arg) => arg !== publicMacFlag && arg !== publicWindowsFlag);
+
+function envBoolean(name) {
+  const value = (process.env[name] || "").toLowerCase();
+  return value === "1" || value === "true" || value === "yes";
+}
 
 function hasAppleIdNotaryCredentials() {
   return Boolean(process.env.APPLE_ID && process.env.APPLE_PASSWORD && process.env.APPLE_TEAM_ID);
@@ -129,6 +136,7 @@ function verifyPublicMacDmg() {
     JSON.stringify(
       {
         file: "/downloads/Bezgrow-mac.dmg",
+        downloadUrl: "/downloads/Bezgrow-mac.dmg",
         version: packageVersion,
         sha256,
         size: bytes.length,
@@ -142,6 +150,7 @@ function verifyPublicMacDmg() {
   writeDesktopReleaseManifest({
     mac: {
       file: "/downloads/Bezgrow-mac.dmg",
+      downloadUrl: "/downloads/Bezgrow-mac.dmg",
       version: packageVersion,
       sha256,
       size: bytes.length,
@@ -171,6 +180,10 @@ function writeDesktopReleaseManifest(partialManifest) {
   );
 }
 
+function writeInstallerReleaseManifest(path, payload) {
+  writeFileSync(path, `${JSON.stringify(payload, null, 2)}\n`);
+}
+
 function verifyPublicWindowsInstaller() {
   if (!publicWindowsBuild) return;
 
@@ -179,25 +192,64 @@ function verifyPublicWindowsInstaller() {
   }
 
   const nsisDir = join(root, "src-tauri", "target", "release", "bundle", "nsis");
+  const msiDir = join(root, "src-tauri", "target", "release", "bundle", "msi");
   const windowsPath = latestBundleFile(nsisDir, (file) => file.startsWith("Bezgrow_") && file.endsWith(".exe"));
+  const windowsMsiPath = latestBundleFile(msiDir, (file) => file.startsWith("Bezgrow_") && file.endsWith(".msi"));
 
   if (!existsSync(windowsPath)) {
     throw new Error(`Expected Windows installer was not found in ${nsisDir}`);
   }
+  if (!existsSync(windowsMsiPath)) {
+    throw new Error(`Expected Windows MSI was not found in ${msiDir}`);
+  }
 
   mkdirSync(publicDownloadsDir, { recursive: true });
   copyFileSync(windowsPath, publicWindowsExe);
+  copyFileSync(windowsMsiPath, publicWindowsMsi);
 
-  const bytes = readFileSync(publicWindowsExe);
-  const sha256 = createHash("sha256").update(bytes).digest("hex");
+  const exeBytes = readFileSync(publicWindowsExe);
+  const msiBytes = readFileSync(publicWindowsMsi);
+  const exeSha256 = createHash("sha256").update(exeBytes).digest("hex");
+  const msiSha256 = createHash("sha256").update(msiBytes).digest("hex");
+  const generatedAt = new Date().toISOString();
+  const signed = envBoolean("BEZGROW_WINDOWS_SIGNED");
+
+  writeInstallerReleaseManifest(publicWindowsExeReleaseManifest, {
+    file: "/downloads/Bezgrow-windows.exe",
+    downloadUrl: "/downloads/Bezgrow-windows.exe",
+    version: packageVersion,
+    sha256: exeSha256,
+    size: exeBytes.length,
+    signed,
+    generatedAt,
+  });
+  writeInstallerReleaseManifest(publicWindowsMsiReleaseManifest, {
+    file: "/downloads/Bezgrow-windows.msi",
+    downloadUrl: "/downloads/Bezgrow-windows.msi",
+    version: packageVersion,
+    sha256: msiSha256,
+    size: msiBytes.length,
+    signed,
+    generatedAt,
+  });
   writeDesktopReleaseManifest({
     windows: {
       file: "/downloads/Bezgrow-windows.exe",
+      downloadUrl: "/downloads/Bezgrow-windows.exe",
       version: packageVersion,
-      sha256,
-      size: bytes.length,
-      signed: Boolean(process.env.BEZGROW_WINDOWS_SIGNED === "1"),
-      generatedAt: new Date().toISOString(),
+      sha256: exeSha256,
+      size: exeBytes.length,
+      signed,
+      generatedAt,
+    },
+    windowsMsi: {
+      file: "/downloads/Bezgrow-windows.msi",
+      downloadUrl: "/downloads/Bezgrow-windows.msi",
+      version: packageVersion,
+      sha256: msiSha256,
+      size: msiBytes.length,
+      signed,
+      generatedAt,
     },
   });
 }
@@ -224,24 +276,22 @@ function copyGeneratedInstallersForDownloads() {
     const sha256 = createHash("sha256").update(bytes).digest("hex");
     const generatedAt = new Date().toISOString();
     const notarized = Boolean(publicMacBuild);
-    writeFileSync(
+    writeInstallerReleaseManifest(
       publicMacReleaseManifest,
-      JSON.stringify(
-        {
-          file: "/downloads/Bezgrow-mac.dmg",
-          version: packageVersion,
-          sha256,
-          size: bytes.length,
-          notarized,
-          generatedAt,
-        },
-        null,
-        2
-      )
+      {
+        file: "/downloads/Bezgrow-mac.dmg",
+        downloadUrl: "/downloads/Bezgrow-mac.dmg",
+        version: packageVersion,
+        sha256,
+        size: bytes.length,
+        notarized,
+        generatedAt,
+      }
     );
     writeDesktopReleaseManifest({
       mac: {
         file: "/downloads/Bezgrow-mac.dmg",
+        downloadUrl: "/downloads/Bezgrow-mac.dmg",
         version: packageVersion,
         sha256,
         size: bytes.length,
@@ -256,14 +306,26 @@ function copyGeneratedInstallersForDownloads() {
     copyFileSync(windowsExePath, publicWindowsExe);
     const bytes = readFileSync(publicWindowsExe);
     const sha256 = createHash("sha256").update(bytes).digest("hex");
+    const generatedAt = new Date().toISOString();
+    const signed = envBoolean("BEZGROW_WINDOWS_SIGNED");
+    writeInstallerReleaseManifest(publicWindowsExeReleaseManifest, {
+      file: "/downloads/Bezgrow-windows.exe",
+      downloadUrl: "/downloads/Bezgrow-windows.exe",
+      version: packageVersion,
+      sha256,
+      size: bytes.length,
+      signed,
+      generatedAt,
+    });
     writeDesktopReleaseManifest({
       windows: {
         file: "/downloads/Bezgrow-windows.exe",
+        downloadUrl: "/downloads/Bezgrow-windows.exe",
         version: packageVersion,
         sha256,
         size: bytes.length,
-        signed: Boolean(process.env.BEZGROW_WINDOWS_SIGNED === "1"),
-        generatedAt: new Date().toISOString(),
+        signed,
+        generatedAt,
       },
     });
     console.log(`Copied ${windowsExePath} to ${publicWindowsExe}`);
@@ -273,14 +335,26 @@ function copyGeneratedInstallersForDownloads() {
     copyFileSync(windowsMsiPath, publicWindowsMsi);
     const bytes = readFileSync(publicWindowsMsi);
     const sha256 = createHash("sha256").update(bytes).digest("hex");
+    const generatedAt = new Date().toISOString();
+    const signed = envBoolean("BEZGROW_WINDOWS_SIGNED");
+    writeInstallerReleaseManifest(publicWindowsMsiReleaseManifest, {
+      file: "/downloads/Bezgrow-windows.msi",
+      downloadUrl: "/downloads/Bezgrow-windows.msi",
+      version: packageVersion,
+      sha256,
+      size: bytes.length,
+      signed,
+      generatedAt,
+    });
     writeDesktopReleaseManifest({
-      windows: {
+      windowsMsi: {
         file: "/downloads/Bezgrow-windows.msi",
+        downloadUrl: "/downloads/Bezgrow-windows.msi",
         version: packageVersion,
         sha256,
         size: bytes.length,
-        signed: Boolean(process.env.BEZGROW_WINDOWS_SIGNED === "1"),
-        generatedAt: new Date().toISOString(),
+        signed,
+        generatedAt,
       },
     });
     console.log(`Copied ${windowsMsiPath} to ${publicWindowsMsi}`);

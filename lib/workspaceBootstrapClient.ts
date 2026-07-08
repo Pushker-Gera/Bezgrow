@@ -4,6 +4,7 @@ import { cacheWorkspaceBootstrap, getCachedWorkspaceBootstrap } from "@/lib/offl
 import { getCachedAccessToken } from "@/lib/api/client-fetch"
 import { syncCachedDesktopSessionWithServer } from "@/lib/desktop/auth-callback"
 import { isTauriRuntimeAsync } from "@/lib/desktop/tauri"
+import { restoreLicensedWorkspaceContext } from "@/lib/offline/local/license"
 
 export type WorkspaceBootstrapPayload = {
   success: boolean
@@ -84,6 +85,8 @@ export async function getWorkspaceBootstrap(options: { forceFresh?: boolean } = 
   if (desktopRuntime) {
     const localWorkspace = getCachedWorkspaceBootstrap()
     if (localWorkspace?.success) return localWorkspace
+    const restoredWorkspace = await restoreLicensedWorkspaceContext().catch(() => null)
+    if (restoredWorkspace?.success) return restoredWorkspace
   }
 
   if (typeof navigator !== "undefined" && !navigator.onLine) {

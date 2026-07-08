@@ -6,10 +6,10 @@ import AppUpdatesPanel from "@/components/AppUpdatesPanel"
 import { readStoredPrintSettings, saveStoredPrintSettings } from "@/components/print/settings/defaults"
 import type { PrintFormat, PrintSettings } from "@/components/print/types"
 import { apiFetch } from "@/lib/api/client-fetch"
-import { isTauriRuntimeAsync } from "@/lib/desktop/tauri"
 import { getOrganizationId } from "@/lib/getOrganization"
 import { createOfflineId, exportOfflineBackup, getOfflineData, putOfflineData, queueOfflineAction, restoreOfflineBackup } from "@/lib/offline/db"
 import { shouldSaveOffline } from "@/lib/offline/network"
+import { getWorkspaceBootstrap } from "@/lib/workspaceBootstrapClient"
 
 type Organization = Record<string, unknown> & {
   id: string
@@ -218,22 +218,18 @@ export default function SettingsPage() {
       return
     }
 
-    const bootstrapPath = "/api/workspace/bootstrap"
-    const desktopRuntime = await isTauriRuntimeAsync()
-    const bootstrapUrl = desktopRuntime ? `/api/desktop-proxy?path=${encodeURIComponent(bootstrapPath)}` : bootstrapPath
     try {
-      const [workspaceResponse, invoiceResponse] = await Promise.all([
-        fetch(bootstrapUrl, { cache: "no-store" }),
+      const [workspace, invoiceResponse] = await Promise.all([
+        getWorkspaceBootstrap(),
         apiFetch(`/api/invoices/list?${new URLSearchParams({ limit: "100", organization_id: orgId }).toString()}`, { cache: "no-store" }),
       ])
-      const workspace = (await workspaceResponse.json()) as WorkspaceResponse
       const invoices = (await invoiceResponse.json()) as ListResponse<InvoiceCorrectionRow>
 
-      if (!workspaceResponse.ok) setNotice(workspace.error || "Business settings failed to load.")
+      if (!workspace?.success) setNotice(workspace?.error || "Business settings failed to load.")
       if (!invoiceResponse.ok) setNotice(invoices.error || `Invoices failed to load. HTTP ${invoiceResponse.status}`)
 
-      if (workspace.organization) {
-        const org = workspace.organization
+      if (workspace?.organization) {
+        const org = { ...workspace.organization, id: workspace.organization.id || orgId } as Organization
         setOrganization(org)
         setForm({
           name: valueText(org.name || org.business_name),
@@ -250,13 +246,13 @@ export default function SettingsPage() {
           branchName: valueText(org.branch_name) || "Main Branch",
         })
       }
-      const nextFeatures = normalizeFeatures(workspace.features, orgId)
+      const nextFeatures = normalizeFeatures(workspace?.features, orgId)
       setFeatures(nextFeatures)
       setRecentInvoices(invoices.data || [])
       await putOfflineData(orgId, "settings", {
         id: `settings:${orgId}`,
         organization_id: orgId,
-        organization: workspace.organization || null,
+        organization: workspace?.organization || null,
         features: nextFeatures,
         updated_at: new Date().toISOString(),
       })

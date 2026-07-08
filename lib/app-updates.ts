@@ -4,18 +4,32 @@ export type DesktopReleaseManifest = {
   releaseNotes?: string[] | string
   notes?: string[] | string
   mac?: {
+    downloadUrl?: string
     url?: string
     file?: string
     version?: string
     size?: number
+    sha256?: string
     notarized?: boolean
     generatedAt?: string
   }
   windows?: {
+    downloadUrl?: string
     url?: string
     file?: string
     version?: string
     size?: number
+    sha256?: string
+    signed?: boolean
+    generatedAt?: string
+  }
+  windowsMsi?: {
+    downloadUrl?: string
+    url?: string
+    file?: string
+    version?: string
+    size?: number
+    sha256?: string
     signed?: boolean
     generatedAt?: string
   }
@@ -73,7 +87,7 @@ export function normalizeReleaseNotes(manifest: DesktopReleaseManifest | null) {
 
 export function releaseGeneratedAt(manifest: DesktopReleaseManifest | null) {
   if (!manifest) return 0
-  const timestamps = [manifest.generatedAt, manifest.mac?.generatedAt, manifest.windows?.generatedAt]
+  const timestamps = [manifest.generatedAt, manifest.mac?.generatedAt, manifest.windows?.generatedAt, manifest.windowsMsi?.generatedAt]
     .map((value) => (value ? Date.parse(value) : 0))
     .filter((value) => Number.isFinite(value))
 
@@ -101,7 +115,11 @@ function currentPlatform() {
 
 export function releaseForCurrentPlatform(manifest: DesktopReleaseManifest | null) {
   if (!manifest) return null
-  return currentPlatform() === "windows" ? manifest.windows || null : manifest.mac || null
+  return currentPlatform() === "windows" ? manifest.windows || manifest.windowsMsi || null : manifest.mac || null
+}
+
+function releaseHref(release: ReturnType<typeof releaseForCurrentPlatform>) {
+  return release?.downloadUrl || release?.url || release?.file || ""
 }
 
 export function latestVersionForCurrentPlatform(manifest: DesktopReleaseManifest | null) {
@@ -111,12 +129,12 @@ export function latestVersionForCurrentPlatform(manifest: DesktopReleaseManifest
 
 export function isDesktopUpdateAvailable(manifest: DesktopReleaseManifest | null, currentVersion: string) {
   const latestVersion = latestVersionForCurrentPlatform(manifest)
-  return Boolean(latestVersion && compareVersions(latestVersion, currentVersion) > 0)
+  return Boolean(latestVersion && releaseHref(releaseForCurrentPlatform(manifest)) && compareVersions(latestVersion, currentVersion) > 0)
 }
 
 export function installerHrefForCurrentPlatform(manifest: DesktopReleaseManifest | null) {
   const release = releaseForCurrentPlatform(manifest)
-  const href = release?.url || release?.file
+  const href = releaseHref(release)
 
   return href || "/download"
 }

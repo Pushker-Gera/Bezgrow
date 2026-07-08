@@ -30,15 +30,30 @@ type InstallerInfo = {
 type DesktopReleaseManifest = {
   version?: string
   mac?: {
+    downloadUrl?: string
     url?: string
     file?: string
+    version?: string
     size?: number
+    sha256?: string
     notarized?: boolean
   }
   windows?: {
+    downloadUrl?: string
     url?: string
     file?: string
+    version?: string
     size?: number
+    sha256?: string
+    signed?: boolean
+  }
+  windowsMsi?: {
+    downloadUrl?: string
+    url?: string
+    file?: string
+    version?: string
+    size?: number
+    sha256?: string
     signed?: boolean
   }
 }
@@ -85,12 +100,14 @@ function getInstallerInfo(
   releaseInfo?: DesktopReleaseManifest["mac"] | DesktopReleaseManifest["windows"] | null,
   releaseVersion?: string
 ): InstallerInfo {
-  if (releaseInfo?.url) {
+  const releaseUrl = releaseInfo?.downloadUrl || releaseInfo?.url
+
+  if (releaseUrl) {
     const sizeLabel = releaseInfo.size ? formatFileSize(releaseInfo.size) : null
-    const version = releaseVersion || packageJson.version
+    const version = releaseInfo.version || releaseVersion || packageJson.version
     return {
       available: true,
-      href: releaseInfo.url,
+      href: releaseUrl,
       sizeLabel,
       notarized: "notarized" in releaseInfo ? releaseInfo.notarized : undefined,
       signed: "signed" in releaseInfo ? releaseInfo.signed : undefined,
@@ -158,14 +175,18 @@ function InstallerCard({
   href,
   info,
   label,
+  platform,
 }: {
   href: string
   info: InstallerInfo
   label: string
+  platform: "mac" | "windows"
 }) {
+  const downloadHref = info.available ? `/api/downloads/desktop?platform=${platform}` : info.href || href
+
   return (
     <div className="min-w-0">
-      <DownloadButton href={info.href || href} available={info.available}>
+      <DownloadButton href={downloadHref} available={info.available}>
         {label}
       </DownloadButton>
       <p className="mt-2 text-center text-xs font-bold text-white/45">
@@ -207,7 +228,7 @@ export default function DownloadPage() {
   const windowsInstaller = getInstallerInfo(
     windowsInstallerPaths,
     "Windows installer not found on this build.",
-    releaseManifest?.windows,
+    releaseManifest?.windows || releaseManifest?.windowsMsi,
     releaseManifest?.version
   )
   const installersReady = macInstaller.available || windowsInstaller.available
@@ -245,8 +266,8 @@ export default function DownloadPage() {
           )}
 
           <div className="mt-7 grid gap-3 sm:grid-cols-2">
-            <InstallerCard href={macInstallerPath} info={macInstaller} label="Download for Mac" />
-            <InstallerCard href={windowsInstallerPaths[0]} info={windowsInstaller} label="Download for Windows" />
+            <InstallerCard href={macInstallerPath} info={macInstaller} label="Download for Mac" platform="mac" />
+            <InstallerCard href={windowsInstallerPaths[0]} info={windowsInstaller} label="Download for Windows" platform="windows" />
           </div>
 
           <div className="mt-5 grid gap-3 sm:grid-cols-2">

@@ -42,17 +42,19 @@ function readExistingManifest() {
 
 function buildInstaller(prefix, trustKey, version) {
   const url = readArg(`--${prefix}-url`);
+  const downloadUrl = readArg(`--${prefix}-download-url`) || url;
   const file = readArg(`--${prefix}-file`);
   const existingPath = file ? (isAbsolute(file) ? file : join(root, file)) : "";
   const hasLocalFile = existingPath && existsSync(existingPath);
   const size = hasLocalFile ? statSync(existingPath).size : readNumberArg(`--${prefix}-size`);
   const hash = hasLocalFile ? sha256(existingPath) : readArg(`--${prefix}-sha256`);
 
-  if (!url && !file) return null;
+  if (!downloadUrl && !file) return null;
 
   return {
-    url,
-    file: url ? undefined : file.replace(/^public\//, "/"),
+    downloadUrl,
+    url: downloadUrl,
+    file: downloadUrl ? undefined : file.replace(/^public\//, "/"),
     version,
     size,
     sha256: hash || undefined,
@@ -65,12 +67,14 @@ const existingManifest = readExistingManifest();
 const version = readArg("--version") || existingManifest.version || packageJson.version;
 const mac = buildInstaller("mac", "notarized", version);
 const windows = buildInstaller("windows", "signed", version);
+const windowsMsi = buildInstaller("windows-msi", "signed", version);
 
 const nextManifest = {
   ...existingManifest,
   version,
   ...(mac ? { mac } : {}),
   ...(windows ? { windows } : {}),
+  ...(windowsMsi ? { windowsMsi } : {}),
 };
 
 mkdirSync(dirname(manifestPath), { recursive: true });

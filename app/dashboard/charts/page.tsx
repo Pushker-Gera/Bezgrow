@@ -16,8 +16,8 @@ import {
     XAxis,
     YAxis,
 } from "recharts"
+import { apiFetch } from "@/lib/api/client-fetch"
 import { getOrganizationId } from "@/lib/getOrganization"
-import { supabase } from "@/lib/supabase"
 
 type AnyRow = Record<string, unknown>
 
@@ -38,6 +38,11 @@ type AnalyticsState = {
     invoices: AnyRow[]
     customers: AnyRow[]
     orders: AnyRow[]
+}
+
+type ListResponse<T> = {
+    data?: T[]
+    error?: string
 }
 
 const emptyState: AnalyticsState = {
@@ -101,49 +106,33 @@ export default function AnalyticsPage() {
                 return
             }
 
-            const productsQuery = supabase
-                .from("products")
-                .select("id,name,category,stock,min_stock,sale_rate,purchase_rate,price,expiry_date")
-                .eq("organization_id", orgId)
-                .is("deleted_at", null)
-                .limit(1000)
+            const [productsResponse, invoicesResponse, customersResponse, ordersResponse] = await Promise.all([
+                apiFetch(`/api/products/list?${new URLSearchParams({ organization_id: orgId, limit: "500", sort: "created_at", direction: "desc" }).toString()}`, { cache: "no-store" }),
+                apiFetch(`/api/invoices/list?${new URLSearchParams({ organization_id: orgId, limit: "500", sort: "created_at", direction: "desc" }).toString()}`, { cache: "no-store" }),
+                apiFetch(`/api/customers/list?${new URLSearchParams({ organization_id: orgId, limit: "500", sort: "created_at", direction: "desc" }).toString()}`, { cache: "no-store" }),
+                apiFetch(`/api/orders/list?${new URLSearchParams({ organization_id: orgId, limit: "500" }).toString()}`, { cache: "no-store" }),
+            ])
 
-            const invoicesQuery = supabase
-                .from("invoices")
-                .select("*")
-                .eq("organization_id", orgId)
-                .order("created_at", { ascending: false })
-                .limit(1000)
-
-            const customersQuery = supabase
-                .from("customers")
-                .select("*")
-                .eq("organization_id", orgId)
-                .is("deleted_at", null)
-                .limit(1000)
-
-            const ordersQuery = supabase
-                .from("orders")
-                .select("*")
-                .eq("organization_id", orgId)
-                .limit(1000)
-
-            const [productsResult, invoicesResult, customersResult, ordersResult] =
-                await Promise.all([productsQuery, invoicesQuery, customersQuery, ordersQuery])
+            const [productsResult, invoicesResult, customersResult, ordersResult] = await Promise.all([
+                productsResponse.json() as Promise<ListResponse<ProductRow>>,
+                invoicesResponse.json() as Promise<ListResponse<AnyRow>>,
+                customersResponse.json() as Promise<ListResponse<AnyRow>>,
+                ordersResponse.json() as Promise<ListResponse<AnyRow>>,
+            ])
 
             const firstError =
-                productsResult.error ||
-                invoicesResult.error ||
-                customersResult.error ||
-                ordersResult.error
+                (!productsResponse.ok && productsResult.error) ||
+                (!invoicesResponse.ok && invoicesResult.error) ||
+                (!customersResponse.ok && customersResult.error) ||
+                (!ordersResponse.ok && ordersResult.error)
 
-            if (firstError) setNotice(firstError.message)
+            if (firstError) setNotice(firstError)
 
             setState({
-                products: (productsResult.data || []) as unknown as ProductRow[],
-                invoices: (invoicesResult.data || []) as AnyRow[],
-                customers: (customersResult.data || []) as AnyRow[],
-                orders: (ordersResult.data || []) as AnyRow[],
+                products: productsResult.data || [],
+                invoices: invoicesResult.data || [],
+                customers: customersResult.data || [],
+                orders: ordersResult.data || [],
             })
         } catch (error) {
             setNotice(error instanceof Error ? error.message : "Analytics failed to load.")

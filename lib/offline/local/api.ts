@@ -20,7 +20,7 @@ import {
   supplierLedgerSummary,
   verifyLocalBackup,
 } from "@/lib/offline/local/erp"
-import { assertLocalWriteAllowed } from "@/lib/offline/local/license"
+import { assertLocalWriteAllowed, localLicenseSnapshot, restoreLicensedWorkspaceContext } from "@/lib/offline/local/license"
 import { putNormalizedCollectionsInTransaction } from "@/lib/offline/local/repositories"
 
 type DataRow = Record<string, unknown> & { id?: string }
@@ -31,6 +31,9 @@ type LocalApiResult = {
 }
 
 const dailyEndpoints = new Set([
+  "/api/workspace/bootstrap",
+  "/api/dashboard/summary",
+  "/api/dashboard/billing/summary",
   "/api/products/list",
   "/api/products/create",
   "/api/products/update",
@@ -104,6 +107,31 @@ function isLicenseError(message: string) {
   return /activation required|license|another device|reactivation/i.test(message)
 }
 
+function sumRows(rows: DataRow[], fields: string[]) {
+  return rows.reduce((sum, row) => {
+    for (const field of fields) {
+      const value = row[field]
+      if (value !== null && value !== undefined && value !== "") return sum + Number(value || 0)
+    }
+    return sum
+  }, 0)
+}
+
+function paymentStatus(row: DataRow) {
+  return localString(row.payment_status || row.status).toLowerCase()
+}
+
+function createdAt(row: DataRow) {
+  return localString(row.created_at || row.date || row.invoice_date)
+}
+
+function isThisMonth(value: string) {
+  if (!value) return false
+  const date = new Date(value)
+  const now = new Date()
+  return date.getFullYear() === now.getFullYear() && date.getMonth() === now.getMonth()
+}
+
 function csvResponse(filename: string, rows: DataRow[]) {
   return new Response(rowsToCsv(rows), {
     status: 200,
@@ -150,11 +178,16 @@ function readCachedOrganizationId() {
 }
 
 async function organizationIdFor(url: URL, body?: DataRow | null) {
-  return (
+  const cachedId =
     url.searchParams.get("organization_id") ||
     (typeof body?.organization_id === "string" ? body.organization_id : "") ||
     readCachedOrganizationId()
-  )
+  if (cachedId) return cachedId
+
+  const license = await localLicenseSnapshot().catch(() => null)
+  if (!license?.allowed) return ""
+  const row = license.license as DataRow | null | undefined
+  return localString(row?.business_id || row?.organization_id)
 }
 
 async function requestBody(init: RequestInit = {}) {
@@ -1439,6 +1472,164 @@ async function databaseIntegrity(organizationId: string) {
   return jsonResponse({ success: true, integrity: await runProfessionalIntegrityChecks(organizationId) })
 }
 
+async function localWorkspaceBootstrap() {
+  const workspace = getCachedWorkspaceBootstrap() || (await restoreLicensedWorkspaceContext().catch(() => null))
+  if (!workspace?.success) return fail("Activation required. Enter a valid Bezgrow license to use desktop mode.", 403)
+  return ok(workspace as unknown as Record<string, unknown>)
+}
+
+async function dashboardSummary(organizationId: string) {
+  const workspace = getCachedWorkspaceBootstrap()
+  const [productsRaw, invoicesRaw, ordersRaw, customersRaw, warehousesRaw, movementsRaw] = await Promise.all([
+    readCollection<DataRow>(organizationId, "products"),
+    readCollection<DataRow>(organizationId, "invoices"),
+    readCollection<DataRow>(organizationId, "orders"),
+    readCollection<DataRow>(organizationId, "customers"),
+    readCollection<DataRow>(organizationId, "warehouses"),
+    readCollection<DataRow>(organizationId, "stock_movements"),
+  ])
+
+  const products = filterDeleted(productsRaw)
+  const invoices = filterDeleted(invoicesRaw)
+  const orders = filterDeleted(ordersRaw)
+  const customers = filterDeleted(customersRaw)
+  const warehouses = filterDeleted(warehousesRaw)
+  const today = new Date().toISOString().slice(0, 10)
+  const weekLabels = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
+  const totalRevenue = sumRows(invoices, ["grand_total", "total_amount", "total"])
+  const todayRevenue = sumRows(invoices.filter((invoice) => createdAt(invoice).startsWith(today)), ["grand_total", "total_amount", "total"])
+  const paidRevenue = sumRows(invoices.filter((invoice) => ["paid", "completed", "success"].includes(paymentStatus(invoice))), ["grand_total", "total_amount", "total"])
+  const pendingInvoices = invoices.filter((invoice) => ["unpaid", "pending", "overdue", ""].includes(paymentStatus(invoice))).length
+  const lowStockProducts = products.filter((product) => localNumber(product.stock) <= localNumber(product.min_stock, 5))
+  const outOfStockProducts = products.filter((product) => localNumber(product.stock) <= 0)
+  const inventoryValue = products.reduce((sum, product) => sum + localNumber(product.stock) * localNumber(product.sale_rate || product.price || product.mrp || product.purchase_rate), 0)
+  const costValue = products.reduce((sum, product) => sum + localNumber(product.stock) * localNumber(product.purchase_rate), 0)
+  const pendingOrders = orders.filter((order) => ["pending", "processing", "created"].includes(localString(order.order_status || order.status).toLowerCase())).length
+  const fulfillmentRate = orders.length ? Math.round(((orders.length - pendingOrders) / orders.length) * 100) : 0
+  const inventoryHealth = products.length ? Math.round(((products.length - lowStockProducts.length) / products.length) * 100) : 100
+  const collectionRate = totalRevenue > 0 ? Math.round((paidRevenue / totalRevenue) * 100) : 0
+  const erpHealth = Math.max(0, Math.min(100, Math.round(inventoryHealth * 0.35 + fulfillmentRate * 0.25 + collectionRate * 0.25 + (pendingInvoices === 0 ? 15 : Math.max(0, 15 - pendingInvoices * 2)))))
+  const weeklyRevenue = weekLabels.map((label) => ({ label, value: 0 }))
+
+  invoices.forEach((invoice) => {
+    const value = createdAt(invoice)
+    if (!value) return
+    const day = new Date(value).getDay()
+    const index = [6, 0, 1, 2, 3, 4, 5][day]
+    weeklyRevenue[index].value += sumRows([invoice], ["grand_total", "total_amount", "total"])
+  })
+
+  return jsonResponse({
+    workspace: {
+      organizationId,
+      organizationName: workspace?.organization?.name || workspace?.organization?.id || "Business",
+      currency: workspace?.currency || workspace?.organization?.currency || "INR",
+      timezone: workspace?.timezone || workspace?.organization?.timezone || "Asia/Kolkata",
+      locale: workspace?.locale || workspace?.organization?.locale || "en-IN",
+      features: workspace?.features || [],
+    },
+    metrics: {
+      totalRevenue,
+      todayRevenue,
+      paidRevenue,
+      pendingInvoices,
+      productCount: products.length,
+      lowStockCount: lowStockProducts.length,
+      outOfStockCount: outOfStockProducts.length,
+      inventoryValue,
+      costValue,
+      potentialProfit: inventoryValue - costValue,
+      orderCount: orders.length,
+      pendingOrders,
+      fulfillmentRate,
+      inventoryHealth,
+      collectionRate,
+      erpHealth,
+      customerCount: customers.length,
+      warehouseCount: warehouses.length,
+      invoiceCount: invoices.length,
+      weeklyRevenue,
+    },
+    recentProducts: sortRows(products, "created_at", "desc").slice(0, 5),
+    lowStockProducts: lowStockProducts.slice(0, 5),
+    recentInvoices: sortRows(invoices, "created_at", "desc").slice(0, 5),
+    recentMovements: sortRows(movementsRaw, "created_at", "desc").slice(0, 12),
+    warnings: [],
+  })
+}
+
+async function billingSummary(organizationId: string) {
+  const [invoicesRaw, customersRaw, productsRaw, ordersRaw] = await Promise.all([
+    readCollection<DataRow>(organizationId, "invoices"),
+    readCollection<DataRow>(organizationId, "customers"),
+    readCollection<DataRow>(organizationId, "products"),
+    readCollection<DataRow>(organizationId, "orders"),
+  ])
+  const invoices = sortRows(filterDeleted(invoicesRaw), "created_at", "desc")
+  const customers = filterDeleted(customersRaw)
+  const products = filterDeleted(productsRaw)
+  const orders = filterDeleted(ordersRaw)
+  const customerMap = new Map(customers.map((customer) => [customer.id, customer]))
+  const enrichedInvoices = invoices.map((invoice) => {
+    const customer = customerMap.get(invoice.customer_id as string)
+    return {
+      ...invoice,
+      customer_name: invoice.customer_name || customer?.name || null,
+      customer_phone: invoice.customer_phone || customer?.phone || null,
+      customer_email: invoice.customer_email || customer?.email || null,
+    }
+  })
+  const paid = enrichedInvoices.filter((invoice) => ["paid", "completed", "success"].includes(paymentStatus(invoice)))
+  const unpaid = enrichedInvoices.filter((invoice) => ["unpaid", "pending", "overdue", ""].includes(paymentStatus(invoice)))
+  const partial = enrichedInvoices.filter((invoice) => paymentStatus(invoice) === "partial")
+  const open = enrichedInvoices.filter((invoice) => ["unpaid", "pending", "overdue", "partial", ""].includes(paymentStatus(invoice)))
+  const weeklyRevenue = Array.from({ length: 7 }, (_, index) => {
+    const date = new Date()
+    date.setDate(date.getDate() - (6 - index))
+    const dayKey = date.toDateString()
+    return {
+      label: date.toLocaleDateString(undefined, { weekday: "short" }),
+      total: enrichedInvoices
+        .filter((invoice) => {
+          const value = createdAt(invoice)
+          return value && new Date(value).toDateString() === dayKey
+        })
+        .reduce((sum, invoice) => sum + sumRows([invoice], ["grand_total", "total_amount", "total"]), 0),
+    }
+  })
+  const inventoryValue = products.reduce((sum, product) => sum + localNumber(product.stock) * localNumber(product.sale_rate || product.price || product.mrp), 0)
+  const lowStock = products.filter((product) => localNumber(product.stock) <= localNumber(product.min_stock, 5))
+  const revenue = sumRows(enrichedInvoices, ["grand_total", "total_amount", "total"])
+  const paidRevenue = sumRows(paid, ["grand_total", "total_amount", "total"])
+
+  return jsonResponse({
+    currency: "INR",
+    locale: "en-IN",
+    timezone: "Asia/Kolkata",
+    metrics: {
+      invoiceCount: enrichedInvoices.length,
+      revenue,
+      monthlyRevenue: enrichedInvoices.filter((invoice) => isThisMonth(createdAt(invoice))).reduce((sum, invoice) => sum + sumRows([invoice], ["grand_total", "total_amount", "total"]), 0),
+      paidRevenue,
+      outstanding: open.reduce((sum, invoice) => sum + sumRows([invoice], ["grand_total", "total_amount", "total"]), 0),
+      tax: enrichedInvoices.reduce((sum, invoice) => sum + sumRows([invoice], ["tax_amount", "tax_total"]), 0),
+      inventoryValue,
+      averageInvoice: enrichedInvoices.length ? revenue / enrichedInvoices.length : 0,
+      collectionRate: revenue ? Math.round((paidRevenue / revenue) * 100) : 0,
+      openInvoices: open.length,
+      paidCount: paid.length,
+      unpaidCount: unpaid.length,
+      partialCount: partial.length,
+      lowStockCount: lowStock.length,
+      customerCount: customers.length,
+      productCount: products.length,
+      orderCount: orders.length,
+    },
+    weeklyRevenue,
+    recentInvoices: enrichedInvoices.slice(0, 10),
+  })
+}
+
 async function updateOrganization(body: DataRow, organizationId: string) {
   const currentSettings = await getOfflineData<DataRow>(organizationId, "settings", {})
   const currentOrganization = (currentSettings.organization && typeof currentSettings.organization === "object" ? currentSettings.organization : {}) as DataRow
@@ -1491,12 +1682,17 @@ export async function localApiFetch(input: RequestInfo | URL, init: RequestInit 
   try {
     const method = (init.method || "GET").toUpperCase()
     const body = await requestBody(init)
+
+    if (method === "GET" && url.pathname === "/api/workspace/bootstrap") return { handled: true, response: await localWorkspaceBootstrap() }
+
     const organizationId = await organizationIdFor(url, body)
     if (!organizationId) return { handled: false, response: null }
     if (isLicenseRestrictedEndpoint(url.pathname, method)) {
       await assertLocalWriteAllowed(organizationId, url.pathname)
     }
 
+    if (method === "GET" && url.pathname === "/api/dashboard/summary") return { handled: true, response: await dashboardSummary(organizationId) }
+    if (method === "GET" && url.pathname === "/api/dashboard/billing/summary") return { handled: true, response: await billingSummary(organizationId) }
     if (method === "GET" && url.pathname === "/api/products/list") return { handled: true, response: await listProducts(url, organizationId) }
     if (method === "POST" && url.pathname === "/api/products/create") return { handled: true, response: await saveProduct(url, body || {}, false, organizationId) }
     if (method === "POST" && url.pathname === "/api/products/update") return { handled: true, response: await saveProduct(url, body || {}, true, organizationId) }
