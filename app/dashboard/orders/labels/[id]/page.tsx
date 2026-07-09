@@ -49,7 +49,7 @@ export default function LabelPage() {
                 .single()
 
         if (error) {
-            console.error(error)
+            console.warn(error)
         }
 
         setOrder(data as OrderLabelRow | null)

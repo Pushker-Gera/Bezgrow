@@ -31,7 +31,7 @@ export async function getOrganizationFeatures(
         .eq("is_enabled", true)
 
     if (error) {
-        console.error(error)
+        console.warn(error)
         return []
     }
 

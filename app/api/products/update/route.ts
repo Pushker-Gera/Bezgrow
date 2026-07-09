@@ -43,7 +43,7 @@ export async function POST(request: Request) {
       .single()
 
     if (error || !data) {
-      console.error("[products/update] update failed", {
+      console.warn("[products/update] update failed", {
         code: error?.code,
         message: error?.message,
         details: error?.details,

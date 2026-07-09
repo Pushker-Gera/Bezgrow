@@ -80,7 +80,7 @@ async function fetchOrganizationWithSchemaFallback(filters: { id?: string; owner
 
     const missingColumn = missingColumnFromError(result.error)
     if (!missingColumn || requiredColumns.has(missingColumn) || !activeColumns.includes(missingColumn)) {
-      console.error("[workspace/bootstrap] organization lookup failed", {
+      console.warn("[workspace/bootstrap] organization lookup failed", {
         code: result.error.code,
         message: result.error.message,
         details: result.error.details,

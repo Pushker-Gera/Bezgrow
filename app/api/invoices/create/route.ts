@@ -190,7 +190,7 @@ export async function POST(request: Request) {
     }
 
     if (invoiceError || !invoice) {
-      console.error("Invoice create insert failed", {
+      console.warn("Invoice create insert failed", {
         code: invoiceError?.code,
         message: invoiceError?.message,
         details: invoiceError?.details,
@@ -268,7 +268,7 @@ export async function POST(request: Request) {
       }
 
       if (movementError) {
-        console.error("[invoices/create] movement insert failed after invoice/stock update", {
+        console.warn("[invoices/create] movement insert failed after invoice/stock update", {
           code: movementError.code,
           message: movementError.message,
           details: movementError.details,

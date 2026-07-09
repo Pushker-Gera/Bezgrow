@@ -256,7 +256,7 @@ export default function CreateInvoicePage() {
   useEffect(() => {
     queueMicrotask(() => {
       void initialize().catch((error) => {
-        console.error("Initialize error:", error)
+        console.warn("Initialize warning:", error)
 
         setNotice({
           title: "Billing Could Not Open",

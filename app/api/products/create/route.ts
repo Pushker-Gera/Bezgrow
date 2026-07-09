@@ -35,7 +35,7 @@ export async function POST(request: Request) {
       .single()
 
     if (error || !data) {
-      console.error("[products/create] insert failed", {
+      console.warn("[products/create] insert failed", {
         code: error?.code,
         message: error?.message,
         details: error?.details,

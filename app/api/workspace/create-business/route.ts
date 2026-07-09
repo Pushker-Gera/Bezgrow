@@ -125,7 +125,7 @@ export async function POST(request: Request) {
     }
 
     if (orgError || !organization) {
-      console.error("[workspace/create-business] organization insert failed", {
+      console.warn("[workspace/create-business] organization insert failed", {
         code: orgError?.code,
         message: orgError?.message,
         details: orgError?.details,

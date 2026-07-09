@@ -85,7 +85,7 @@ export async function GET(request: Request) {
 
   const { data, error, count } = result
   if (error) {
-    console.error("[orders/list] query failed", {
+    console.warn("[orders/list] query failed", {
       code: error.code,
       message: error.message,
       details: error.details,

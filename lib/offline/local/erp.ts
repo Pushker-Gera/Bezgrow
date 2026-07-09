@@ -1,6 +1,6 @@
 "use client"
 
-import { createOfflineId, getOfflineData, type OfflineCollection } from "@/lib/offline/db"
+import { createOfflineId, getOfflineData, putOfflineData, type OfflineCollection } from "@/lib/offline/db"
 import { exportNormalizedBackup, putNormalizedCollectionsInTransaction } from "@/lib/offline/local/repositories"
 import { getLocalDatabaseService } from "@/lib/offline/local/service"
 
@@ -64,7 +64,19 @@ async function readRows(organizationId: string, collection: OfflineCollection) {
 }
 
 async function writeCollections(organizationId: string, updates: CollectionUpdate[]) {
-  await putNormalizedCollectionsInTransaction(organizationId, updates)
+  const wroteToSqlite = await putNormalizedCollectionsInTransaction(organizationId, updates)
+    .then(() => true)
+    .catch((error) => {
+      console.warn("[offline/local-erp] SQLite batch write unavailable; using IndexedDB fallback.", error)
+      return false
+    })
+
+  if (!wroteToSqlite) {
+    for (const update of updates) {
+      await putOfflineData(organizationId, update.collection, update.value)
+    }
+  }
+
   if (typeof window !== "undefined") window.dispatchEvent(new Event("bezgrow:offline-data-changed"))
 }
 

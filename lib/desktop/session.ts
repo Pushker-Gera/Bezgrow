@@ -17,6 +17,10 @@ function storageAvailable() {
   return typeof window !== "undefined"
 }
 
+function cookieAvailable() {
+  return typeof document !== "undefined" && typeof document.cookie === "string"
+}
+
 function serializeSession(session: Session) {
   const stored: StoredSession = {
     access_token: session.access_token,
@@ -103,12 +107,12 @@ function untrackStorageKey(key: string) {
 }
 
 export function setDesktopAuthMarker() {
-  if (!storageAvailable()) return
+  if (!cookieAvailable()) return
   document.cookie = `${DESKTOP_AUTH_MARKER_COOKIE}=1; Max-Age=${60 * 60 * 24 * 180}; Path=/; SameSite=Lax`
 }
 
 export function clearDesktopAuthMarker() {
-  if (!storageAvailable()) return
+  if (!cookieAvailable()) return
   document.cookie = `${DESKTOP_AUTH_MARKER_COOKIE}=; Max-Age=0; Path=/; SameSite=Lax`
 }
 

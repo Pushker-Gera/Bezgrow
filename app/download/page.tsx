@@ -9,6 +9,7 @@ import packageJson from "@/package.json"
 const macInstallerPath = "/downloads/Bezgrow-mac.dmg"
 const windowsInstallerPaths = ["/downloads/Bezgrow-windows.exe", "/downloads/Bezgrow-windows.msi"]
 const webAppUrl = "https://www.bezgrow.com"
+const githubReleaseBaseUrl = (process.env.NEXT_PUBLIC_DESKTOP_RELEASE_BASE_URL || `https://github.com/Pushker-Gera/Bezgrow/releases/download/v${packageJson.version}`).replace(/\/$/, "")
 
 export const metadata: Metadata = {
   title: "Download Bezgrow Desktop App",
@@ -91,6 +92,14 @@ function readReleaseManifest(path: string) {
     return JSON.parse(readFileSync(manifestPath, "utf8")) as { notarized?: boolean; signed?: boolean; version?: string }
   } catch {
     return null
+  }
+}
+
+function defaultWindowsRelease(): NonNullable<DesktopReleaseManifest["windows"]> {
+  return {
+    downloadUrl: `${githubReleaseBaseUrl}/Bezgrow-windows.exe`,
+    url: `${githubReleaseBaseUrl}/Bezgrow-windows.exe`,
+    version: packageJson.version,
   }
 }
 
@@ -228,7 +237,7 @@ export default function DownloadPage() {
   const windowsInstaller = getInstallerInfo(
     windowsInstallerPaths,
     "Windows installer not found on this build.",
-    releaseManifest?.windows || releaseManifest?.windowsMsi,
+    releaseManifest?.windows || releaseManifest?.windowsMsi || defaultWindowsRelease(),
     releaseManifest?.version
   )
   const installersReady = macInstaller.available || windowsInstaller.available

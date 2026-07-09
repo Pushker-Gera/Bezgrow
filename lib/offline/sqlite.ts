@@ -18,7 +18,11 @@ const service = getLocalDatabaseService()
 let dbPromise: Promise<SqlExecutor | null> | null = null
 
 async function ensureSqliteReady() {
-  if (dbPromise) return dbPromise
+  if (dbPromise) {
+    const db = await dbPromise
+    if (db) return db
+    dbPromise = null
+  }
 
   dbPromise = service
     .connection("read")
@@ -34,7 +38,9 @@ async function ensureSqliteReady() {
       return null
     })
 
-  return dbPromise
+  const db = await dbPromise
+  if (!db) dbPromise = null
+  return db
 }
 
 export async function getSqliteDb() {

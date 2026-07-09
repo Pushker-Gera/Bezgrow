@@ -129,7 +129,7 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
                     })
                 })
             } catch (error) {
-                console.error("Dashboard access error:", error)
+                console.warn("Dashboard access warning:", error)
             }
         })
 

@@ -11,7 +11,7 @@ import {
 } from "@/lib/offline/local/repositories"
 import type { OfflineAction, OfflineActionStatus, OfflineCollection } from "@/lib/offline/db"
 
-export type DataSourceMode = "sqlite" | "supabase" | "auto"
+export type DataSourceMode = "sqlite" | "indexeddb" | "supabase" | "auto"
 
 export type CloudAdapter = {
   mode: "supabase"
@@ -25,7 +25,8 @@ export class LocalFirstRepositoryAdapter {
   ) {}
 
   async mode(): Promise<DataSourceMode> {
-    if (await this.localDb.isAvailable()) return "sqlite"
+    if (await this.localDb.connection("read").catch(() => null)) return "sqlite"
+    if (typeof window !== "undefined" && "indexedDB" in window) return "indexeddb"
     return this.cloudAdapter && (await this.cloudAdapter.isAvailable()) ? "supabase" : "auto"
   }
 

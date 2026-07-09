@@ -77,7 +77,7 @@ export async function POST(request: Request) {
     }
 
     if (movementError) {
-      console.error("[inventory/simple-movement] movement insert failed after stock update", {
+      console.warn("[inventory/simple-movement] movement insert failed after stock update", {
         code: movementError.code,
         message: movementError.message,
         details: movementError.details,

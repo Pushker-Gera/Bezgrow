@@ -72,7 +72,7 @@ export default function AdminLayout({ children }: { children: ReactNode }) {
                     router.replace(response.status === 401 ? "/login" : "/dashboard")
                 }
             } catch (error) {
-                console.error("Admin auth error:", error)
+                console.warn("Admin auth warning:", error)
             }
         })
     }, [router])

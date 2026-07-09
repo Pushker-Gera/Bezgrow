@@ -1,6 +1,7 @@
 "use client"
 
-import { createOfflineId, getCachedWorkspaceBootstrap, getOfflineData, queueOfflineAction, type OfflineAction, type OfflineCollection } from "@/lib/offline/db"
+import { isTauriRuntimeAsync } from "@/lib/desktop/tauri"
+import { createOfflineId, getCachedWorkspaceBootstrap, getOfflineData, putOfflineData, queueOfflineAction, type OfflineAction, type OfflineCollection } from "@/lib/offline/db"
 import { isLicenseRestrictedEndpoint } from "@/lib/license/policy"
 import { localFirstRepositoryAdapter } from "@/lib/offline/local/adapters"
 import {
@@ -240,7 +241,19 @@ async function writeCollections(
   organizationId: string,
   updates: Array<{ collection: OfflineCollection; value: unknown }>
 ) {
-  await putNormalizedCollectionsInTransaction(organizationId, updates)
+  const wroteToSqlite = await putNormalizedCollectionsInTransaction(organizationId, updates)
+    .then(() => true)
+    .catch((error) => {
+      console.warn("[offline/local-api] SQLite batch write unavailable; using IndexedDB fallback.", error)
+      return false
+    })
+
+  if (!wroteToSqlite) {
+    for (const update of updates) {
+      await putOfflineData(organizationId, update.collection, update.value)
+    }
+  }
+
   if (typeof window !== "undefined") window.dispatchEvent(new Event("bezgrow:offline-data-changed"))
 }
 
@@ -1674,10 +1687,40 @@ async function toggleFeature(body: DataRow, organizationId: string) {
   return ok({ feature_key: featureKey, is_enabled: body.is_enabled === true })
 }
 
+async function shouldHandleLocalApi() {
+  const mode = await localFirstRepositoryAdapter.mode()
+  if (mode === "sqlite") return true
+  if (await isTauriRuntimeAsync().catch(() => false)) return true
+  if (typeof window === "undefined") return false
+
+  try {
+    const localDesktopHost = ["localhost", "127.0.0.1", "[::1]"].includes(window.location.hostname)
+    const hasDesktopAuthMarker = document.cookie
+      .split(";")
+      .map((cookie) => cookie.trim())
+      .includes("bezgrow_desktop_auth=1")
+    if (!localDesktopHost || !hasDesktopAuthMarker) return false
+    if (!localStorage.getItem("bezgrow:device-id") && !localStorage.getItem("bezgrow:offline-workspace")) return false
+  } catch {
+    return false
+  }
+
+  const license = await localLicenseSnapshot().catch(() => null)
+  return Boolean(license?.allowed)
+}
+
+function userSafeLocalError(error: unknown) {
+  const message = error instanceof Error ? error.message : "Local database request failed."
+  if (/sqlite is not available|sqlite unavailable/i.test(message)) {
+    return "Local offline storage is available in fallback mode. Please retry the action."
+  }
+  return message
+}
+
 export async function localApiFetch(input: RequestInfo | URL, init: RequestInit = {}): Promise<LocalApiResult> {
   const url = normalizeUrl(input)
   if (!dailyEndpoints.has(url.pathname)) return { handled: false, response: null }
-  if ((await localFirstRepositoryAdapter.mode()) !== "sqlite") return { handled: false, response: null }
+  if (!(await shouldHandleLocalApi())) return { handled: false, response: null }
 
   try {
     const method = (init.method || "GET").toUpperCase()
@@ -1743,7 +1786,7 @@ export async function localApiFetch(input: RequestInfo | URL, init: RequestInit 
     if (method === "POST" && url.pathname === "/api/settings/update-organization") return { handled: true, response: await updateOrganization(body || {}, organizationId) }
     if (method === "POST" && url.pathname === "/api/settings/toggle-feature") return { handled: true, response: await toggleFeature(body || {}, organizationId) }
   } catch (error) {
-    const message = error instanceof Error ? error.message : "Local database request failed."
+    const message = userSafeLocalError(error)
     return { handled: true, response: fail(message, isLicenseError(message) ? 403 : 500) }
   }
 

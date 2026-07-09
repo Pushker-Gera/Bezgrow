@@ -20,6 +20,7 @@ type PlatformRelease = {
 }
 
 type DesktopReleaseManifest = {
+  version?: string
   mac?: InstallerRelease
   windows?: InstallerRelease
   windowsMsi?: InstallerRelease
@@ -45,16 +46,34 @@ function jsonError(message: string, status = 404) {
   return NextResponse.json({ success: false, error: message }, { status, headers: { "Cache-Control": "no-store" } })
 }
 
+function releaseBaseUrl(manifest: DesktopReleaseManifest | null) {
+  const version = manifest?.version || process.env.npm_package_version || "0.1.1"
+  return (process.env.NEXT_PUBLIC_DESKTOP_RELEASE_BASE_URL || `https://github.com/Pushker-Gera/Bezgrow/releases/download/v${version}`).replace(/\/$/, "")
+}
+
+function remoteRelease(manifest: DesktopReleaseManifest | null, fileName: string): InstallerRelease {
+  const href = `${releaseBaseUrl(manifest)}/${fileName}`
+  return { downloadUrl: href, url: href, version: manifest?.version }
+}
+
 function releasesForPlatform(platform: string, manifest: DesktopReleaseManifest | null): PlatformRelease {
   if (platform === "mac") {
     return {
-      releases: [manifest?.mac || { file: "/downloads/Bezgrow-mac.dmg" }],
+      releases: [manifest?.mac, { file: "/downloads/Bezgrow-mac.dmg" }, remoteRelease(manifest, "Bezgrow-mac.dmg")]
+        .filter(Boolean) as InstallerRelease[],
       missing: "Mac installer is unavailable.",
     }
   }
 
   return {
-    releases: [manifest?.windows, manifest?.windowsMsi, { file: "/downloads/Bezgrow-windows.exe" }, { file: "/downloads/Bezgrow-windows.msi" }]
+    releases: [
+      manifest?.windows,
+      manifest?.windowsMsi,
+      remoteRelease(manifest, "Bezgrow-windows.exe"),
+      remoteRelease(manifest, "Bezgrow-windows.msi"),
+      { file: "/downloads/Bezgrow-windows.exe" },
+      { file: "/downloads/Bezgrow-windows.msi" },
+    ]
       .filter(Boolean) as InstallerRelease[],
     missing: "Windows installer is unavailable.",
   }
@@ -71,10 +90,15 @@ export async function GET(request: Request) {
   if (hrefs.length === 0) return jsonError(missing)
 
   let sawRemote = false
+  const verifyRemoteDownloads = process.env.BEZGROW_VERIFY_REMOTE_DOWNLOADS === "1"
 
   for (const href of hrefs) {
     if (/^https?:\/\//i.test(href)) {
       sawRemote = true
+      if (!verifyRemoteDownloads) {
+        return NextResponse.redirect(href, { headers: { "Cache-Control": "no-store" } })
+      }
+
       const head = await fetch(href, { method: "HEAD", cache: "no-store", redirect: "follow" }).catch(() => null)
       if (head?.ok) return NextResponse.redirect(href, { headers: { "Cache-Control": "no-store" } })
       continue

@@ -43,7 +43,10 @@ export class LocalDatabaseService {
     }
 
     const db = await this.pool[slot]
-    if (!db) return null
+    if (!db) {
+      this.pool[slot] = null
+      return null
+    }
     await this.ensureReady()
     return db
   }
@@ -79,7 +82,10 @@ export class LocalDatabaseService {
 
   async ensureReady() {
     if (!this.migrationPromise) {
-      this.migrationPromise = this.runMigrationsAndRepair()
+      this.migrationPromise = this.runMigrationsAndRepair().catch((error) => {
+        this.migrationPromise = null
+        throw error
+      })
     }
     await this.migrationPromise
   }
