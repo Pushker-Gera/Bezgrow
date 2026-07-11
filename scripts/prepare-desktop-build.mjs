@@ -6,8 +6,12 @@ import { fileURLToPath } from "node:url";
 const root = dirname(dirname(fileURLToPath(import.meta.url)));
 const npmCommand = process.platform === "win32" ? "npm.cmd" : "npm";
 const standaloneDir = join(root, ".next", "standalone");
+const desktopServerDir = join(root, "desktop-runtime", "next-server");
+const desktopNodeDir = join(root, "desktop-runtime", "node");
 
 rmSync(standaloneDir, { recursive: true, force: true });
+rmSync(desktopServerDir, { recursive: true, force: true });
+rmSync(desktopNodeDir, { recursive: true, force: true });
 
 const build = spawnSync(npmCommand, ["run", "build"], {
   cwd: root,
@@ -24,8 +28,6 @@ if (build.status !== 0) {
   process.exit(build.status ?? 1);
 }
 
-const desktopServerDir = join(root, "desktop-runtime", "next-server");
-const desktopNodeDir = join(root, "desktop-runtime", "node");
 const staticSource = join(root, ".next", "static");
 const staticTarget = join(standaloneDir, ".next", "static");
 const publicSource = join(root, "public");

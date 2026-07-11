@@ -125,7 +125,7 @@ export default function AppUpdateBanner() {
             Current version {currentVersion} · Latest version {latestVersion}{releaseSize ? ` · ${releaseSize}` : ""}
           </p>
           {status === "ready" && (
-            <p className="mt-2 text-sm font-semibold text-emerald-200">Installer opened. Your local SQLite data and license remain on this device.</p>
+            <p className="mt-2 text-sm font-semibold text-emerald-200">Installer opened. Your local database and license remain on this device.</p>
           )}
           {status === "failed" && <p className="mt-2 text-sm font-semibold text-red-200">Update failed, try again.</p>}
         </div>

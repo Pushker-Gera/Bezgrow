@@ -13,6 +13,8 @@ const eslintConfig = defineConfig([
     "out/**",
     "build/**",
     "dist/**",
+    "desktop-runtime/.next-stale-*/**",
+    "desktop-runtime/.standalone-stale-*/**",
     "desktop-runtime/next-server/**",
     "src-tauri/target/**",
     "pushker-dashboard/dist/**",

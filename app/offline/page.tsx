@@ -3,6 +3,7 @@
 import Link from "next/link"
 import { useRouter } from "next/navigation"
 import { useEffect, useRef, useState } from "react"
+import { isTauriRuntimeAsync } from "@/lib/desktop/tauri"
 import { activateOfflineLicense, localLicenseSnapshot } from "@/lib/offline/local/license"
 import type { LicensePolicyResult } from "@/lib/license/policy"
 
@@ -22,6 +23,7 @@ export default function OfflinePage() {
   const [licenseKey, setLicenseKey] = useState("")
   const [status, setStatus] = useState<LicenseSnapshot | null>(null)
   const [notice, setNotice] = useState("")
+  const [browserStorageNotice, setBrowserStorageNotice] = useState("")
   const [activating, setActivating] = useState(false)
   const [nextPath, setNextPath] = useState("/dashboard")
 
@@ -34,6 +36,11 @@ export default function OfflinePage() {
   useEffect(() => {
     queueMicrotask(() => {
       void refreshStatus().catch(() => setNotice("Device activation status could not be loaded."))
+      void isTauriRuntimeAsync().then((desktopRuntime) => {
+        if (!desktopRuntime) {
+          setBrowserStorageNotice("Browser and Safari use separate license storage. A desktop license is stored inside the desktop app only; activate this browser separately if you want to use it here.")
+        }
+      })
     })
     const params = new URLSearchParams(window.location.search)
     setNextPath(safeNextPath(params.get("next")))
@@ -100,6 +107,7 @@ export default function OfflinePage() {
         <p className="mt-4 text-neutral-300">
           Send this Device ID to the admin, then paste the license key or import the license file received from admin.
         </p>
+        {browserStorageNotice && <p className="mt-3 text-sm text-amber-100">{browserStorageNotice}</p>}
 
         <div className="mt-7 rounded-3xl border border-white/10 bg-black/35 p-5 text-left">
           <p className="text-xs font-black uppercase tracking-[0.18em] text-neutral-500">Device ID</p>

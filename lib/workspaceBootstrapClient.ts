@@ -4,7 +4,7 @@ import { cacheWorkspaceBootstrap, getCachedWorkspaceBootstrap } from "@/lib/offl
 import { getCachedAccessToken } from "@/lib/api/client-fetch"
 import { syncCachedDesktopSessionWithServer } from "@/lib/desktop/auth-callback"
 import { isTauriRuntimeAsync } from "@/lib/desktop/tauri"
-import { restoreLicensedWorkspaceContext } from "@/lib/offline/local/license"
+import { localLicenseSnapshot, restoreLicensedWorkspaceContext } from "@/lib/offline/local/license"
 
 export type WorkspaceBootstrapPayload = {
   success: boolean
@@ -82,15 +82,22 @@ export function clearWorkspaceBootstrapCache() {
 
 export async function getWorkspaceBootstrap(options: { forceFresh?: boolean } = {}) {
   const desktopRuntime = await isTauriRuntimeAsync()
+  const localWorkspace = getCachedWorkspaceBootstrap()
   if (desktopRuntime) {
-    const localWorkspace = getCachedWorkspaceBootstrap()
     if (localWorkspace?.success) return localWorkspace
     const restoredWorkspace = await restoreLicensedWorkspaceContext().catch(() => null)
     if (restoredWorkspace?.success) return restoredWorkspace
+  } else if (!options.forceFresh) {
+    const license = await localLicenseSnapshot().catch(() => null)
+    if (license?.allowed && localWorkspace?.success) return localWorkspace
+    if (license?.allowed) {
+      const restoredWorkspace = await restoreLicensedWorkspaceContext().catch(() => null)
+      if (restoredWorkspace?.success) return restoredWorkspace
+    }
   }
 
   if (typeof navigator !== "undefined" && !navigator.onLine) {
-    const offlineCached = getCachedWorkspaceBootstrap()
+    const offlineCached = localWorkspace
     if (offlineCached) return offlineCached
   }
 

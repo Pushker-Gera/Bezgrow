@@ -53,7 +53,7 @@ export class LocalDatabaseService {
 
   async requireConnection(mode: "read" | "write" = "read") {
     const db = await this.connection(mode)
-    if (!db) throw new Error("SQLite is not available in this runtime.")
+    if (!db) throw new Error("Local offline storage is using fallback mode.")
     return db
   }
 
@@ -108,7 +108,7 @@ export class LocalDatabaseService {
       await this.configureConnection(db)
       return db
     } catch (error) {
-      console.warn("[offline/local-db] SQLite unavailable; IndexedDB fallback may be used.", error)
+      console.warn("[offline/local-db] local database plugin unavailable; IndexedDB fallback may be used.", error)
       return null
     }
   }

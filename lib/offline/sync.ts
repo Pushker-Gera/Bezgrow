@@ -495,7 +495,7 @@ export async function syncOfflineQueue(onProgress?: (progress: SyncProgress) => 
       if (action.type === "create_order") await syncOrder(action, headers)
       if (action.type === "save_settings") await syncSettings(action, headers)
       if (isLocalOnlyPhase4Action(action.type)) {
-        throw new Error(`${action.type.replace(/_/g, " ")} is stored in local SQLite. Cloud sync for this Phase 4 module is not configured yet.`)
+        throw new Error(`${action.type.replace(/_/g, " ")} is stored in the local offline database. Cloud sync for this Phase 4 module is not configured yet.`)
       }
       await updateOfflineAction(action.id, { status: "synced", error: undefined })
       await writeSqliteSyncLog({

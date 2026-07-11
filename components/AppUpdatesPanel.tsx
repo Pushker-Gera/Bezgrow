@@ -110,7 +110,7 @@ export default function AppUpdatesPanel() {
     try {
       await openExternalUrl(absoluteInstallerUrl(installerHref))
       setStatus("ready")
-      setMessage("Ready to install. Finish the installer when it opens; your local SQLite data and license stay on this device.")
+      setMessage("Ready to install. Finish the installer when it opens; your local database and license stay on this device.")
     } catch {
       setStatus("failed")
       setMessage("Update failed, try again.")

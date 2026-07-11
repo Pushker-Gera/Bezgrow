@@ -363,6 +363,7 @@ export default function ProductsPage() {
             setAnalytics(buildAnalytics(rows))
             writeCachedProducts(rows)
             setProducts(rows)
+            setNotice("")
         } catch (error) {
             const cachedProducts = await getOfflineData<ProductRow[]>(orgId, "products", [])
             setAnalytics(buildAnalytics(cachedProducts))

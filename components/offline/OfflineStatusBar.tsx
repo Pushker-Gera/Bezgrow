@@ -1,6 +1,7 @@
 "use client"
 
 import { useCallback, useEffect, useRef, useState } from "react"
+import { getCachedAccessToken } from "@/lib/api/client-fetch"
 import { exportOfflineBackup, listOfflineActions, pendingOfflineCount, restoreOfflineBackup } from "@/lib/offline/db"
 import { localLicenseSnapshot } from "@/lib/offline/local/license"
 import { syncOfflineQueue } from "@/lib/offline/sync"
@@ -38,6 +39,15 @@ export default function OfflineStatusBar() {
     if (syncingRef.current) return
     const pendingCount = await pendingOfflineCount()
     if (pendingCount === 0) return
+
+    const [license, accessToken] = await Promise.all([
+      localLicenseSnapshot().catch(() => null),
+      getCachedAccessToken().catch(() => null),
+    ])
+    if (license?.allowed && !accessToken) {
+      setMessage("Saved locally on this device.")
+      return
+    }
 
     syncingRef.current = true
     setSyncing(true)

@@ -3,6 +3,7 @@
 import { normalizeLicenseEnvKey, parseLicenseInput, verifyLicenseSignature, type LicensePayload } from "@/lib/license/codec"
 import { evaluateStoredLicense, type LicensePolicyResult, type StoredLicenseRow } from "@/lib/license/policy"
 import { setDesktopAuthMarker } from "@/lib/desktop/session"
+import { invokeTauri, isTauriRuntimeAsync } from "@/lib/desktop/tauri"
 import { createOfflineId, cacheWorkspaceBootstrap, getCachedWorkspaceBootstrap, getOfflineData, getOfflineMeta, putOfflineData, setOfflineMeta } from "@/lib/offline/db"
 import type { WorkspaceBootstrapPayload } from "@/lib/workspaceBootstrapClient"
 
@@ -10,6 +11,8 @@ type DataRow = Record<string, unknown> & { id?: string }
 
 const DEVICE_META_KEY = "bezgrow_device_id"
 const DEVICE_STORAGE_KEY = "bezgrow:device-id"
+const DEVICE_SECRET_KEY = "bezgrow-device-id"
+const LICENSE_SECRET_KEY = "bezgrow-offline-license-key"
 const PUBLIC_KEY = normalizeLicenseEnvKey(process.env.NEXT_PUBLIC_BEZGROW_LICENSE_PUBLIC_KEY || "")
 
 type LicenseVerificationResponse = {
@@ -42,21 +45,56 @@ function randomDeviceId() {
   return `BZG-${random.replace(/-/g, "").slice(0, 24).toUpperCase()}`
 }
 
+async function readDesktopSecret(key: string) {
+  if (!(await isTauriRuntimeAsync().catch(() => false))) return null
+
+  try {
+    return await invokeTauri<string | null>("read_secret", { key })
+  } catch {
+    return null
+  }
+}
+
+async function writeDesktopSecret(key: string, value: string) {
+  if (!(await isTauriRuntimeAsync().catch(() => false))) return false
+
+  try {
+    await invokeTauri<void>("store_secret", { key, value })
+    return true
+  } catch {
+    return false
+  }
+}
+
+async function persistDeviceId(deviceId: string) {
+  if (typeof window !== "undefined") localStorage.setItem(DEVICE_STORAGE_KEY, deviceId)
+  await writeDesktopSecret(DEVICE_SECRET_KEY, deviceId)
+  await setOfflineMeta(DEVICE_META_KEY, deviceId, "global").catch(() => undefined)
+}
+
 export async function getOrCreateDeviceId() {
   const cached = await getOfflineMeta<string>(DEVICE_META_KEY, "", "global").catch(() => "")
-  if (cached) return cached
+  if (cached) {
+    await persistDeviceId(cached)
+    return cached
+  }
+
+  const secureDeviceId = await readDesktopSecret(DEVICE_SECRET_KEY)
+  if (secureDeviceId) {
+    await persistDeviceId(secureDeviceId)
+    return secureDeviceId
+  }
 
   if (typeof window !== "undefined") {
     const stored = localStorage.getItem(DEVICE_STORAGE_KEY)
     if (stored) {
-      await setOfflineMeta(DEVICE_META_KEY, stored, "global").catch(() => undefined)
+      await persistDeviceId(stored)
       return stored
     }
   }
 
   const next = randomDeviceId()
-  if (typeof window !== "undefined") localStorage.setItem(DEVICE_STORAGE_KEY, next)
-  await setOfflineMeta(DEVICE_META_KEY, next, "global").catch(() => undefined)
+  await persistDeviceId(next)
   return next
 }
 
@@ -149,6 +187,22 @@ async function writeActivatedLicense(payload: LicensePayload, licenseKey: string
       ...activationRows.filter((item) => item.id !== activation.id),
     ])
     await logLicenseEvent(organizationId, "LICENSE_ACTIVATED", `License ${payload.license_id} activated for ${payload.business_name}.`, payload.license_id)
+  }
+}
+
+async function restoreLicenseRowsFromDesktopSecret(deviceId: string) {
+  const licenseKey = await readDesktopSecret(LICENSE_SECRET_KEY)
+  if (!licenseKey) return []
+
+  try {
+    const parsed = parseLicenseInput(licenseKey)
+    if (parsed.payload.device_id !== deviceId) return []
+    if (Date.now() > dateEnd(parsed.payload.expiry_date, parsed.payload.grace_period_days).getTime()) return []
+
+    await writeActivatedLicense(parsed.payload, parsed.licenseKey, parsed.signatureText)
+    return [licenseRowFromPayload(parsed.payload, parsed.licenseKey, parsed.signatureText) as StoredLicenseRow]
+  } catch {
+    return []
   }
 }
 
@@ -262,8 +316,12 @@ async function createLocalWorkspaceFromLicense(payload: LicensePayload) {
 
 export async function restoreLicensedWorkspaceContext() {
   const deviceId = await getOrCreateDeviceId()
-  const rows = await readLicenseRows("global")
-  const status = evaluateStoredLicense(rows, { deviceId })
+  let rows = await readLicenseRows("global")
+  let status = evaluateStoredLicense(rows, { deviceId })
+  if (!status.allowed && status.status === "missing") {
+    rows = await restoreLicenseRowsFromDesktopSecret(deviceId)
+    status = evaluateStoredLicense(rows, { deviceId })
+  }
   if (!status.allowed || !status.license) return null
 
   const workspace = workspaceFromStoredLicense(status.license)
@@ -313,6 +371,7 @@ export async function activateOfflineLicense(input: unknown) {
   }
 
   await writeActivatedLicense(parsed.payload, parsed.licenseKey, parsed.signatureText)
+  await writeDesktopSecret(LICENSE_SECRET_KEY, parsed.licenseKey)
   await createLocalWorkspaceFromLicense(parsed.payload)
   return {
     license: parsed.payload,
@@ -335,8 +394,13 @@ async function touchLicense(organizationId: string, result: LicensePolicyResult)
 
 export async function getLocalLicenseStatus(organizationId = workspaceOrganizationId() || "global") {
   const deviceId = await getOrCreateDeviceId()
-  const rows = await readLicenseRows(organizationId)
-  return evaluateStoredLicense(rows, { deviceId })
+  let rows = await readLicenseRows(organizationId)
+  let status = evaluateStoredLicense(rows, { deviceId })
+  if (!status.allowed && status.status === "missing") {
+    rows = await restoreLicenseRowsFromDesktopSecret(deviceId)
+    status = evaluateStoredLicense([...rows, ...(organizationId === "global" ? [] : await readLicenseRows(organizationId))], { deviceId })
+  }
+  return status
 }
 
 export async function assertLocalWriteAllowed(organizationId: string, actionName: string) {

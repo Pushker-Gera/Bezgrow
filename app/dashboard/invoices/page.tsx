@@ -202,6 +202,7 @@ export default function InvoicesPage() {
       setCustomers(nextCustomers)
       setItems([])
       setServerTotal(invoiceResult.pagination?.total || nextInvoices.length)
+      if (customerResponse.ok) setNotice("")
     } catch (error) {
       const [cachedInvoices, cachedCustomers, cachedItems] = await Promise.all([
         getOfflineData<InvoiceRow[]>(orgId, "invoices", []),

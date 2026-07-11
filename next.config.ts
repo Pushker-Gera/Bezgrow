@@ -28,6 +28,9 @@ const nextConfig: NextConfig = {
     unoptimized: isDesktopBuild,
   },
   outputFileTracingRoot: process.cwd(),
+  outputFileTracingExcludes: {
+    "/*": ["./.next/**/*", "./desktop-runtime/**/*", "./src-tauri/target/**/*"],
+  },
   turbopack: {
     root: process.cwd(),
   },

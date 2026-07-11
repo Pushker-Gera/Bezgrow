@@ -1711,7 +1711,7 @@ async function shouldHandleLocalApi() {
 
 function userSafeLocalError(error: unknown) {
   const message = error instanceof Error ? error.message : "Local database request failed."
-  if (/sqlite is not available|sqlite unavailable/i.test(message)) {
+  if (/fallback mode|local offline storage/i.test(message)) {
     return "Local offline storage is available in fallback mode. Please retry the action."
   }
   return message

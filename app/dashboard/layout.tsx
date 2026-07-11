@@ -90,7 +90,8 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
 
                 if (!payload?.success) {
                     const license = await localLicenseSnapshot().catch(() => null)
-                    router.replace(license?.allowed ? "/dashboard" : "/offline?next=/dashboard")
+                    if (license?.allowed) return
+                    router.replace("/offline?next=/dashboard")
                     return
                 }
 

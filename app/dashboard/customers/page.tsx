@@ -232,6 +232,7 @@ export default function CustomersPage() {
       if (statusFilter === "inactive") nextCustomers = nextCustomers.filter((customer) => !customer.is_active)
       setCustomers(nextCustomers)
       setInvoices(invoicesResult.data || [])
+      setNotice("")
     } catch (error) {
       let cachedCustomers = await getOfflineData<Customer[]>(orgId, "customers", [])
       const cachedInvoices = await getOfflineData<InvoiceRow[]>(orgId, "invoices", [])

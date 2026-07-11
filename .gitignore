@@ -28,6 +28,8 @@
 !/desktop-runtime/next-server/.gitkeep
 /desktop-runtime/node/*
 !/desktop-runtime/node/.gitkeep
+/desktop-runtime/.next-stale-*/
+/desktop-runtime/.standalone-stale-*/
 
 # misc
 .DS_Store
