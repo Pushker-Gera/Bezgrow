@@ -1,0 +1,124 @@
+
+> saas-project@0.1.1 desktop:prepare
+> node scripts/prepare-desktop-build.mjs
+
+
+> saas-project@0.1.1 build
+> node scripts/build-next.mjs
+
+▲ Next.js 16.2.9 (webpack)
+- Environments: .env.local
+
+  Creating an optimized production build ...
+✓ Compiled successfully in 8.2s
+  Running TypeScript ...
+  Finished TypeScript in 3.9s ...
+  Collecting page data using 9 workers ...
+  Generating static pages using 9 workers (0/45) ...
+  Generating static pages using 9 workers (11/45) 
+  Generating static pages using 9 workers (22/45) 
+  Generating static pages using 9 workers (33/45) 
+✓ Generating static pages using 9 workers (45/45) in 597ms
+  Finalizing page optimization ...
+  Collecting build traces ...
+
+Route (app)
+┌ ○ /
+├ ○ /_not-found
+├ ● /[slug]
+│ ├ /inventory-management-software
+│ ├ /gst-billing-software
+│ ├ /retail-pos-software
+│ └ [+7 more paths]
+├ ○ /admin
+├ ○ /admin/analytics
+├ ○ /admin/businesses
+├ ○ /admin/settings
+├ ○ /admin/users
+├ ƒ /api/[...erp]
+├ ƒ /api/admin/business-lifecycle
+├ ƒ /api/admin/businesses
+├ ƒ /api/admin/license/generate
+├ ƒ /api/admin/logs
+├ ƒ /api/admin/metrics
+├ ƒ /api/admin/overview
+├ ƒ /api/admin/settings
+├ ƒ /api/admin/users
+├ ƒ /api/admin/users/activate
+├ ƒ /api/admin/users/approve
+├ ƒ /api/admin/users/reject
+├ ƒ /api/admin/users/suspend
+├ ƒ /api/approve-user
+├ ƒ /api/auth/register
+├ ƒ /api/customers/list
+├ ƒ /api/customers/save
+├ ƒ /api/customers/status
+├ ƒ /api/dashboard/analytics
+├ ƒ /api/dashboard/billing/summary
+├ ƒ /api/dashboard/inventory/summary
+├ ƒ /api/dashboard/summary
+├ ƒ /api/desktop-auth/exchange
+├ ƒ /api/desktop-proxy
+├ ƒ /api/desktop-release
+├ ƒ /api/downloads/desktop
+├ ƒ /api/inventory/adjust-stock
+├ ƒ /api/inventory/simple-movement
+├ ƒ /api/inventory/transfer
+├ ƒ /api/invoices/analytics
+├ ƒ /api/invoices/create
+├ ƒ /api/invoices/delete-with-stock-restore
+├ ƒ /api/invoices/list
+├ ƒ /api/invoices/update-status
+├ ƒ /api/license/verify
+├ ƒ /api/orders/create
+├ ƒ /api/orders/list
+├ ƒ /api/products/archive
+├ ƒ /api/products/create
+├ ƒ /api/products/list
+├ ƒ /api/products/update
+├ ƒ /api/reject-user
+├ ƒ /api/settings/toggle-feature
+├ ƒ /api/settings/update-organization
+├ ƒ /api/workspace/bootstrap
+├ ƒ /api/workspace/create-business
+├ ƒ /auth/callback
+├ ○ /billing
+├ ○ /create-business
+├ ○ /dashboard
+├ ○ /dashboard/billing
+├ ○ /dashboard/charts
+├ ○ /dashboard/customers
+├ ○ /dashboard/inventory
+├ ○ /dashboard/invoices
+├ ƒ /dashboard/invoices/[id]
+├ ƒ /dashboard/invoices/[id]/print
+├ ○ /dashboard/invoices/create
+├ ○ /dashboard/orders
+├ ƒ /dashboard/orders/labels/[id]
+├ ○ /dashboard/products
+├ ○ /dashboard/settings
+├ ○ /desktop-auth-complete
+├ ○ /download
+├ ○ /erp
+├ ○ /inventory
+├ ○ /login
+├ ○ /offline
+├ ○ /opengraph-image
+├ ○ /pending-approval
+├ ○ /pos
+├ ○ /profile
+├ ƒ /public/invoices/[id]
+├ ƒ /public/invoices/[id]/pdf
+├ ○ /rejected
+├ ○ /reset-password
+├ ○ /robots.txt
+├ ○ /signup
+└ ○ /sitemap.xml
+
+
+ƒ Proxy (Middleware)
+
+○  (Static)   prerendered as static content
+●  (SSG)      prerendered as static HTML (uses generateStaticParams)
+ƒ  (Dynamic)  server-rendered on demand
+

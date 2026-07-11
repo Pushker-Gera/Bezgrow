@@ -21,7 +21,8 @@
     "desktop:build:mac": "node scripts/build-desktop.mjs --bundles dmg",
     "desktop:build:mac:public": "node scripts/build-desktop.mjs --public-mac --bundles dmg",
     "desktop:build:windows": "node scripts/build-desktop.mjs --bundles msi,nsis",
-    "desktop:build:windows:public": "node scripts/build-desktop.mjs --public-windows --bundles msi,nsis"
+    "desktop:build:windows:public": "node scripts/build-desktop.mjs --public-windows --bundles msi,nsis",
+    "preflight:final": "node scripts/preflight-final-hardening.mjs"
   },
   "dependencies": {
     "@supabase/ssr": "^0.10.3",

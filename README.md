@@ -17,9 +17,9 @@ Set these in `.env.local` and in Vercel production:
 
 ```bash
 NEXT_PUBLIC_SITE_URL=https://bezgrow.com
-NEXT_PUBLIC_SUPABASE_URL=https://your-project.supabase.co
-NEXT_PUBLIC_SUPABASE_ANON_KEY=your-anon-key
-SUPABASE_SERVICE_ROLE_KEY=your-service-role-key
+NEXT_PUBLIC_SUPABASE_URL=
+NEXT_PUBLIC_SUPABASE_ANON_KEY=
+SUPABASE_SERVICE_ROLE_KEY=
 # Optional for desktop builds. Defaults to NEXT_PUBLIC_SITE_URL.
 NEXT_PUBLIC_DESKTOP_API_ORIGIN=https://www.bezgrow.com
 ```
@@ -41,8 +41,8 @@ npm run generate-license-keys
 The command prints two raw base64url Ed25519 values with no PEM headers:
 
 ```bash
-BEZGROW_LICENSE_PRIVATE_KEY=<raw-base64url-private-key>
-NEXT_PUBLIC_BEZGROW_LICENSE_PUBLIC_KEY=<raw-base64url-public-key>
+BEZGROW_LICENSE_PRIVATE_KEY=
+NEXT_PUBLIC_BEZGROW_LICENSE_PUBLIC_KEY=
 ```
 
 Set the printed values exactly, without quotes:

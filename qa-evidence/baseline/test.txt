@@ -1,0 +1,19 @@
+
+> saas-project@0.1.1 test
+> npm run test:license && npm run test:api-routes && npm run test:release-artifacts
+
+
+> saas-project@0.1.1 test:license
+> node scripts/test-license-flow.mjs
+
+license-flow-ok
+
+> saas-project@0.1.1 test:api-routes
+> node scripts/test-api-route-coverage.mjs
+
+api-route-coverage-ok endpoints=52
+
+> saas-project@0.1.1 test:release-artifacts
+> node scripts/test-release-artifacts.mjs
+
+release-artifacts-ok
