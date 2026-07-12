@@ -6,10 +6,12 @@ import type { ReactNode } from "react"
 import { useEffect, useMemo, useState } from "react"
 import { BezgrowLogoMark } from "@/components/brand/BezgrowLogoMark"
 import DesktopBackButton from "@/components/desktop/DesktopBackButton"
+import LocalDatabaseRecovery from "@/components/offline/LocalDatabaseRecovery"
 import OfflineStatusBar from "@/components/offline/OfflineStatusBar"
 import { clearDesktopSession } from "@/lib/desktop/session"
 import { isTauriRuntimeAsync } from "@/lib/desktop/tauri"
 import { prepareOfflineWorkspace } from "@/lib/offline/bootstrap"
+import { getLocalDatabaseService } from "@/lib/offline/local/service"
 import { localLicenseSnapshot } from "@/lib/offline/local/license"
 import { supabase } from "@/lib/supabase"
 import { clearWorkspaceBootstrapCache, getWorkspaceBootstrap } from "@/lib/workspaceBootstrapClient"
@@ -47,6 +49,11 @@ const priorityPrefetchRoutes = [
     "/dashboard/customers",
 ]
 
+type DesktopDatabaseState = {
+    status: "checking" | "ready" | "failed"
+    message?: string
+}
+
 function scheduleIdleTask(callback: () => void, timeout = 3000) {
     if (typeof window === "undefined") return () => undefined
 
@@ -69,6 +76,7 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
     const [online, setOnline] = useState(true)
     const [canShowAdmin, setCanShowAdmin] = useState(false)
     const [offlinePrepMessage, setOfflinePrepMessage] = useState("")
+    const [desktopDatabase, setDesktopDatabase] = useState<DesktopDatabaseState>({ status: "checking" })
 
     useEffect(() => {
         let cancelled = false
@@ -78,11 +86,26 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
             try {
                 const desktopRuntime = await isTauriRuntimeAsync().catch(() => false)
                 if (desktopRuntime) {
+                    try {
+                        await getLocalDatabaseService().integrityReport()
+                        if (!cancelled) setDesktopDatabase({ status: "ready" })
+                    } catch (error) {
+                        if (!cancelled) {
+                            setDesktopDatabase({
+                                status: "failed",
+                                message: error instanceof Error ? error.message : "Bezgrow local database could not start.",
+                            })
+                        }
+                        return
+                    }
+
                     const license = await localLicenseSnapshot().catch(() => null)
                     if (!license?.allowed) {
                         router.replace(`/offline?next=${encodeURIComponent(pathname || "/dashboard")}`)
                         return
                     }
+                } else if (!cancelled) {
+                    setDesktopDatabase({ status: "ready" })
                 }
 
                 const payload = await getWorkspaceBootstrap()
@@ -131,6 +154,7 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
                 })
             } catch (error) {
                 console.warn("Dashboard access warning:", error)
+                if (!cancelled) setDesktopDatabase({ status: "ready" })
             }
         })
 
@@ -183,6 +207,14 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
         await clearDesktopSession()
         await supabase.auth.signOut()
         router.replace("/login")
+    }
+
+    if (desktopDatabase.status === "checking") {
+        return <LocalDatabaseRecovery checking />
+    }
+
+    if (desktopDatabase.status === "failed") {
+        return <LocalDatabaseRecovery errorMessage={desktopDatabase.message} />
     }
 
     return (

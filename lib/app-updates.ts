@@ -45,8 +45,6 @@ export type AppUpdateStatus =
   | "failed"
   | "offline"
 
-type WindowsRelease = NonNullable<DesktopReleaseManifest["windows"]>
-
 export const appUpdateStatusLabel: Record<AppUpdateStatus, string> = {
   idle: "Ready to check",
   checking: "Checking for updates",
@@ -115,20 +113,9 @@ function currentPlatform() {
   return platform.includes("win") || userAgent.includes("windows") ? "windows" : "mac"
 }
 
-function releaseBaseUrl(version: string) {
-  return (process.env.NEXT_PUBLIC_DESKTOP_RELEASE_BASE_URL || `https://github.com/Pushker-Gera/Bezgrow/releases/download/v${version}`).replace(/\/$/, "")
-}
-
-function fallbackWindowsRelease(manifest: DesktopReleaseManifest | null): WindowsRelease | null {
-  const version = manifest?.version
-  if (!version) return null
-  const href = `${releaseBaseUrl(version)}/Bezgrow-windows.exe`
-  return { downloadUrl: href, url: href, version }
-}
-
 export function releaseForCurrentPlatform(manifest: DesktopReleaseManifest | null) {
   if (!manifest) return null
-  return currentPlatform() === "windows" ? manifest.windows || manifest.windowsMsi || fallbackWindowsRelease(manifest) : manifest.mac || null
+  return currentPlatform() === "windows" ? manifest.windows || manifest.windowsMsi || null : manifest.mac || null
 }
 
 function releaseHref(release: ReturnType<typeof releaseForCurrentPlatform>) {

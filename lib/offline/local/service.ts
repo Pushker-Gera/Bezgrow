@@ -1,6 +1,6 @@
 "use client"
 
-import { isTauriRuntimeAsync } from "@/lib/desktop/tauri"
+import { detectRuntimeMode, isDesktopRuntime } from "@/lib/desktop/tauri"
 import { LOCAL_DB_URL, localMigrations } from "@/lib/offline/local/schema"
 
 export type SqlValue = string | number | null
@@ -18,6 +18,13 @@ type SqlModule = {
 
 const POOL_SIZE = 4
 
+export class LocalDatabaseUnavailableError extends Error {
+  constructor(message: string, readonly causeMessage?: string) {
+    super(message)
+    this.name = "LocalDatabaseUnavailableError"
+  }
+}
+
 function nowIso() {
   return new Date().toISOString()
 }
@@ -29,14 +36,38 @@ function isOkStatus(value: unknown) {
 export class LocalDatabaseService {
   private readonly pool: Array<Promise<SqlExecutor | null> | null> = Array.from({ length: POOL_SIZE }, () => null)
   private migrationPromise: Promise<void> | null = null
+  private lastInitializationError: string | null = null
   private poolCursor = 0
 
   async isAvailable() {
-    return isTauriRuntimeAsync()
+    return isDesktopRuntime()
+  }
+
+  async diagnostics() {
+    return {
+      runtimeMode: await detectRuntimeMode().catch(() => "browser" as const),
+      databaseUrl: LOCAL_DB_URL,
+      migrationVersion: localMigrations[localMigrations.length - 1]?.version || 0,
+      lastInitializationError: this.lastInitializationError,
+    }
+  }
+
+  private unavailableMessage() {
+    return [
+      "Bezgrow local database could not start.",
+      "Restart the desktop app and try again.",
+      "If this continues, export diagnostics from the offline recovery screen before making more changes.",
+    ].join(" ")
+  }
+
+  private unavailableError() {
+    return new LocalDatabaseUnavailableError(this.unavailableMessage(), this.lastInitializationError || undefined)
   }
 
   async connection(mode: "read" | "write" = "read") {
-    if (!(await this.isAvailable())) return null
+    const desktopRuntime = await this.isAvailable()
+    if (!desktopRuntime) return null
+
     const slot = mode === "write" ? 0 : (this.poolCursor = (this.poolCursor + 1) % POOL_SIZE)
     if (!this.pool[slot]) {
       this.pool[slot] = this.openConnection()
@@ -45,7 +76,7 @@ export class LocalDatabaseService {
     const db = await this.pool[slot]
     if (!db) {
       this.pool[slot] = null
-      return null
+      throw this.unavailableError()
     }
     await this.ensureReady()
     return db
@@ -53,7 +84,7 @@ export class LocalDatabaseService {
 
   async requireConnection(mode: "read" | "write" = "read") {
     const db = await this.connection(mode)
-    if (!db) throw new Error("Local offline storage is using fallback mode.")
+    if (!db) throw this.unavailableError()
     return db
   }
 
@@ -106,9 +137,11 @@ export class LocalDatabaseService {
       const sqlPlugin = (await import("@tauri-apps/plugin-sql")) as SqlModule
       const db = await sqlPlugin.default.load(LOCAL_DB_URL)
       await this.configureConnection(db)
+      this.lastInitializationError = null
       return db
     } catch (error) {
-      console.warn("[offline/local-db] local database plugin unavailable; IndexedDB fallback may be used.", error)
+      this.lastInitializationError = error instanceof Error ? error.message : String(error)
+      console.warn("[offline/local-db] local database plugin unavailable.", error)
       return null
     }
   }
@@ -125,7 +158,7 @@ export class LocalDatabaseService {
   private async runMigrationsAndRepair() {
     if (!this.pool[0]) this.pool[0] = this.openConnection()
     const db = await this.pool[0]
-    if (!db) return
+    if (!db) throw this.unavailableError()
 
     await this.configureConnection(db)
     await db.execute("BEGIN IMMEDIATE")

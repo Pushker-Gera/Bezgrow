@@ -3,8 +3,10 @@
 import Link from "next/link"
 import { useRouter } from "next/navigation"
 import { useEffect, useRef, useState } from "react"
+import LocalDatabaseRecovery from "@/components/offline/LocalDatabaseRecovery"
 import { isTauriRuntimeAsync } from "@/lib/desktop/tauri"
 import { activateOfflineLicense, localLicenseSnapshot } from "@/lib/offline/local/license"
+import { getLocalDatabaseService } from "@/lib/offline/local/service"
 import type { LicensePolicyResult } from "@/lib/license/policy"
 
 type LicenseSnapshot = LicensePolicyResult & {
@@ -26,6 +28,8 @@ export default function OfflinePage() {
   const [browserStorageNotice, setBrowserStorageNotice] = useState("")
   const [activating, setActivating] = useState(false)
   const [nextPath, setNextPath] = useState("/dashboard")
+  const [checkingLocalDatabase, setCheckingLocalDatabase] = useState(true)
+  const [localDatabaseError, setLocalDatabaseError] = useState("")
 
   async function refreshStatus() {
     const snapshot = await localLicenseSnapshot()
@@ -34,13 +38,23 @@ export default function OfflinePage() {
   }
 
   useEffect(() => {
-    queueMicrotask(() => {
-      void refreshStatus().catch(() => setNotice("Device activation status could not be loaded."))
-      void isTauriRuntimeAsync().then((desktopRuntime) => {
-        if (!desktopRuntime) {
+    queueMicrotask(async () => {
+      try {
+        const desktopRuntime = await isTauriRuntimeAsync().catch(() => false)
+        if (desktopRuntime) {
+          try {
+            await getLocalDatabaseService().integrityReport()
+          } catch (error) {
+            setLocalDatabaseError(error instanceof Error ? error.message : "Bezgrow local database could not start.")
+            return
+          }
+        } else {
           setBrowserStorageNotice("Browser and Safari use separate license storage. A desktop license is stored inside the desktop app only; activate this browser separately if you want to use it here.")
         }
-      })
+        await refreshStatus().catch(() => setNotice("Device activation status could not be loaded."))
+      } finally {
+        setCheckingLocalDatabase(false)
+      }
     })
     const params = new URLSearchParams(window.location.search)
     setNextPath(safeNextPath(params.get("next")))
@@ -98,6 +112,9 @@ export default function OfflinePage() {
         ? "Activation Required"
         : "Update License Required"
   const heading = status?.status === "expired" ? "Update Bezgrow license." : "Bezgrow license activation."
+
+  if (checkingLocalDatabase) return <LocalDatabaseRecovery checking />
+  if (localDatabaseError) return <LocalDatabaseRecovery errorMessage={localDatabaseError} />
 
   return (
     <main className="flex min-h-dvh items-center justify-center bg-black px-5 py-8 text-white">

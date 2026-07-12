@@ -1,5 +1,6 @@
 "use client"
 
+import { isDesktopRuntime } from "@/lib/desktop/tauri"
 import { getLocalDatabaseService, type SqlExecutor } from "@/lib/offline/local/service"
 import {
   exportNormalizedBackup,
@@ -25,7 +26,13 @@ export class LocalFirstRepositoryAdapter {
   ) {}
 
   async mode(): Promise<DataSourceMode> {
-    if (await this.localDb.connection("read").catch(() => null)) return "sqlite"
+    const desktopRuntime = await isDesktopRuntime().catch(() => false)
+    const db = await this.localDb.connection("read").catch((error) => {
+      if (desktopRuntime) throw error
+      return null
+    })
+    if (db) return "sqlite"
+    if (desktopRuntime) throw new Error("Bezgrow local database is required in desktop mode.")
     if (typeof window !== "undefined" && "indexedDB" in window) return "indexeddb"
     return this.cloudAdapter && (await this.cloudAdapter.isAvailable()) ? "supabase" : "auto"
   }

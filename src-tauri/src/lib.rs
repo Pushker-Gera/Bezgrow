@@ -287,6 +287,14 @@ fn start_next_server(app: &mut tauri::App) -> Result<u16, Box<dyn std::error::Er
 
 fn create_main_window(app: &mut tauri::App, port: u16) -> Result<(), Box<dyn std::error::Error>> {
     let url = tauri::Url::parse(&format!("http://127.0.0.1:{port}"))?;
+    let runtime_mode = if cfg!(debug_assertions) {
+        "tauri-dev"
+    } else {
+        "tauri-packaged"
+    };
+    let runtime_script = format!(
+        "window.__BEZGROW_DESKTOP__ = true; window.__BEZGROW_RUNTIME__ = \"{runtime_mode}\"; window.isTauri = true;"
+    );
 
     tauri::WebviewWindowBuilder::new(app, "main", WebviewUrl::External(url))
         .title("Bezgrow ERP")
@@ -294,7 +302,7 @@ fn create_main_window(app: &mut tauri::App, port: u16) -> Result<(), Box<dyn std
         .min_inner_size(1100.0, 720.0)
         .resizable(true)
         .fullscreen(false)
-        .initialization_script("window.__BEZGROW_DESKTOP__ = true; window.isTauri = true;")
+        .initialization_script(runtime_script)
         .build()?;
 
     Ok(())

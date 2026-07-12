@@ -1,6 +1,6 @@
 "use client"
 
-import { isTauriRuntimeAsync } from "@/lib/desktop/tauri"
+import { isDesktopRuntime, isTauriRuntimeAsync } from "@/lib/desktop/tauri"
 import { createOfflineId, getCachedWorkspaceBootstrap, getOfflineData, putOfflineData, queueOfflineAction, type OfflineAction, type OfflineCollection } from "@/lib/offline/db"
 import { isLicenseRestrictedEndpoint } from "@/lib/license/policy"
 import { localFirstRepositoryAdapter } from "@/lib/offline/local/adapters"
@@ -241,10 +241,12 @@ async function writeCollections(
   organizationId: string,
   updates: Array<{ collection: OfflineCollection; value: unknown }>
 ) {
+  const desktopRuntime = await isDesktopRuntime().catch(() => false)
   const wroteToSqlite = await putNormalizedCollectionsInTransaction(organizationId, updates)
     .then(() => true)
     .catch((error) => {
-      console.warn("[offline/local-api] SQLite batch write unavailable; using IndexedDB fallback.", error)
+      console.warn("[offline/local-api] SQLite batch write unavailable.", error)
+      if (desktopRuntime) throw error
       return false
     })
 
@@ -1711,8 +1713,8 @@ async function shouldHandleLocalApi() {
 
 function userSafeLocalError(error: unknown) {
   const message = error instanceof Error ? error.message : "Local database request failed."
-  if (/fallback mode|local offline storage/i.test(message)) {
-    return "Local offline storage is available in fallback mode. Please retry the action."
+  if (/local database|local offline storage|sqlite|sql plugin|fallback mode/i.test(message)) {
+    return "Bezgrow local database could not start. Restart the desktop app and try again. If this continues, export diagnostics before making more changes."
   }
   return message
 }
@@ -1720,9 +1722,10 @@ function userSafeLocalError(error: unknown) {
 export async function localApiFetch(input: RequestInfo | URL, init: RequestInit = {}): Promise<LocalApiResult> {
   const url = normalizeUrl(input)
   if (!dailyEndpoints.has(url.pathname)) return { handled: false, response: null }
-  if (!(await shouldHandleLocalApi())) return { handled: false, response: null }
 
   try {
+    if (!(await shouldHandleLocalApi())) return { handled: false, response: null }
+
     const method = (init.method || "GET").toUpperCase()
     const body = await requestBody(init)
 

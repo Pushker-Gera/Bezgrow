@@ -30,6 +30,8 @@ if (build.status !== 0) {
 
 const staticSource = join(root, ".next", "static");
 const staticTarget = join(standaloneDir, ".next", "static");
+const serverSource = join(root, ".next", "server");
+const serverTarget = join(standaloneDir, ".next", "server");
 const publicSource = join(root, "public");
 const publicTarget = join(standaloneDir, "public");
 
@@ -45,6 +47,16 @@ if (!existsSync(join(standaloneDir, "server.js"))) {
 rmSync(staticTarget, { recursive: true, force: true });
 mkdirSync(dirname(staticTarget), { recursive: true });
 cpSync(staticSource, staticTarget, { recursive: true });
+
+for (const requiredServerAsset of ["chunks", "interception-route-rewrite-manifest.js"]) {
+  const source = join(serverSource, requiredServerAsset);
+  const target = join(serverTarget, requiredServerAsset);
+  if (existsSync(source)) {
+    rmSync(target, { recursive: true, force: true });
+    mkdirSync(dirname(target), { recursive: true });
+    cpSync(source, target, { recursive: true });
+  }
+}
 
 rmSync(publicTarget, { recursive: true, force: true });
 if (existsSync(publicSource)) {

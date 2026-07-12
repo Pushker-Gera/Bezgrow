@@ -133,6 +133,9 @@ const e2eMissing = e2eRequired.filter((key) => !e2eLocal[key])
 if (e2eMissing.length) fail(`MANUAL ACTION REQUIRED: add missing E2E secret variables: ${e2eMissing.join(", ")}`)
 
 const e2eExample = envFile(".env.e2e.example")
+for (const key of e2eRequired) {
+  if (e2eExample[key]) fail(`E2E example must not contain a real value for ${key}.`)
+}
 if (e2eExample.BEZGROW_E2E_TEST_BUSINESS_PREFIX !== "E2E-TEST-") fail("E2E test business prefix must be E2E-TEST-.")
 if (e2eExample.BEZGROW_E2E_ALLOW_DESTRUCTIVE_TESTS !== "false") fail("Destructive E2E tests must be disabled by default.")
 
@@ -143,7 +146,20 @@ for (const key of ["BEZGROW_LICENSE_PRIVATE_KEY", "NEXT_PUBLIC_BEZGROW_LICENSE_P
   if (!process.env[key]) fail(`MANUAL ACTION REQUIRED: configure or preserve existing license key env var: ${key}`)
 }
 
-for (const script of ["lint", "typecheck", "test", "build", "desktop:prepare", "desktop:build", "preflight:final"]) {
+for (const script of [
+  "lint",
+  "typecheck",
+  "test",
+  "test:e2e",
+  "test:integration",
+  "test:offline",
+  "test:backup",
+  "test:performance",
+  "build",
+  "desktop:prepare",
+  "desktop:build",
+  "preflight:final",
+]) {
   if (!packageJson.scripts?.[script]) fail(`Package script missing: ${script}`)
 }
 

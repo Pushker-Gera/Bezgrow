@@ -1,5 +1,6 @@
 "use client"
 
+import { isDesktopRuntime } from "@/lib/desktop/tauri"
 import { getLocalDatabaseService, type SqlExecutor } from "@/lib/offline/local/service"
 import { localFirstRepositoryAdapter } from "@/lib/offline/local/adapters"
 import {
@@ -24,22 +25,30 @@ async function ensureSqliteReady() {
     dbPromise = null
   }
 
+  const desktopRuntime = await isDesktopRuntime().catch(() => false)
   dbPromise = service
     .connection("read")
     .then(async (db) => {
-      if (!db) return null
+      if (!db) {
+        if (desktopRuntime) throw new Error("Bezgrow local database is not available in the desktop runtime.")
+        return null
+      }
       await importLegacyJsonCollectionsOnce().catch((error) => {
         console.warn("[offline/sqlite] legacy SQLite import skipped", error)
       })
       return db
     })
     .catch((error) => {
-      console.warn("[offline/sqlite] falling back to IndexedDB", error)
+      console.warn("[offline/sqlite] SQLite initialization failed.", error)
+      if (desktopRuntime) throw error
       return null
     })
 
   const db = await dbPromise
-  if (!db) dbPromise = null
+  if (!db) {
+    dbPromise = null
+    if (desktopRuntime) throw new Error("Bezgrow local database is not available in the desktop runtime.")
+  }
   return db
 }
 

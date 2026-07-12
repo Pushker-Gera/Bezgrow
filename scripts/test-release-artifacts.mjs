@@ -16,6 +16,18 @@ assert.ok(existsSync(desktopManifestPath), "Desktop release manifest is missing.
 const manifest = readJson(desktopManifestPath);
 assert.ok(manifest.version, "Desktop release manifest version is missing.");
 
+const desktopReleaseRoute = readFileSync("app/api/desktop-release/route.ts", "utf8");
+assert.match(desktopReleaseRoute, /public",\s*"downloads",\s*"desktop-release\.json"/, "Desktop release API must read the local manifest.");
+assert.match(desktopReleaseRoute, /localManifest\(\)/, "Desktop release API must prefer local release metadata.");
+
+const desktopDownloadRoute = readFileSync("app/api/downloads/desktop/route.ts", "utf8");
+const downloadPage = readFileSync("app/download/page.tsx", "utf8");
+const appUpdates = readFileSync("lib/app-updates.ts", "utf8");
+assert.doesNotMatch(desktopDownloadRoute, /github\.com\/Pushker-Gera\/Bezgrow|remoteRelease/, "Download API must not invent unverified remote installer URLs.");
+assert.match(desktopDownloadRoute, /method:\s*"HEAD"/, "Download API must verify explicit remote installer URLs before redirecting.");
+assert.doesNotMatch(downloadPage, /defaultWindowsRelease|githubReleaseBaseUrl/, "Download page must not mark missing Windows installers as available.");
+assert.doesNotMatch(appUpdates, /fallbackWindowsRelease|github\.com\/Pushker-Gera\/Bezgrow/, "Update checks must not invent missing Windows installer URLs.");
+
 if (manifest.mac?.file) {
   const macPath = `public${manifest.mac.file}`;
   assert.ok(existsSync(macPath), "Mac installer listed in manifest is missing.");

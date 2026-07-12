@@ -1,6 +1,7 @@
 "use client"
 
 import { createOfflineId, getOfflineData, putOfflineData, type OfflineCollection } from "@/lib/offline/db"
+import { isDesktopRuntime } from "@/lib/desktop/tauri"
 import { exportNormalizedBackup, putNormalizedCollectionsInTransaction } from "@/lib/offline/local/repositories"
 import { getLocalDatabaseService } from "@/lib/offline/local/service"
 
@@ -64,10 +65,12 @@ async function readRows(organizationId: string, collection: OfflineCollection) {
 }
 
 async function writeCollections(organizationId: string, updates: CollectionUpdate[]) {
+  const desktopRuntime = await isDesktopRuntime().catch(() => false)
   const wroteToSqlite = await putNormalizedCollectionsInTransaction(organizationId, updates)
     .then(() => true)
     .catch((error) => {
-      console.warn("[offline/local-erp] SQLite batch write unavailable; using IndexedDB fallback.", error)
+      console.warn("[offline/local-erp] SQLite batch write unavailable.", error)
+      if (desktopRuntime) throw error
       return false
     })
 
