@@ -1,9 +1,7 @@
-import { existsSync, readFileSync } from "node:fs"
-import { join } from "node:path"
 import { NextResponse } from "next/server"
+import desktopReleaseManifest from "@/public/downloads/desktop-release.json"
 
 export const dynamic = "force-dynamic"
-export const runtime = "nodejs"
 
 type InstallerRelease = {
   downloadUrl?: string
@@ -24,22 +22,6 @@ type DesktopReleaseManifest = {
   mac?: InstallerRelease
   windows?: InstallerRelease
   windowsMsi?: InstallerRelease
-}
-
-function readManifest() {
-  const path = join(process.cwd(), "public", "downloads", "desktop-release.json")
-  if (!existsSync(path)) return null
-
-  try {
-    return JSON.parse(readFileSync(path, "utf8")) as DesktopReleaseManifest
-  } catch {
-    return null
-  }
-}
-
-function publicFileExists(path: string) {
-  const fullPath = join(process.cwd(), "public", path.replace(/^\/+/, ""))
-  return existsSync(fullPath)
 }
 
 function jsonError(message: string, status = 404) {
@@ -67,10 +49,22 @@ function releasesForPlatform(platform: string, manifest: DesktopReleaseManifest 
   }
 }
 
+function redirectToInstaller(href: string, request: Request) {
+  const response = NextResponse.redirect(new URL(href, request.url))
+  response.headers.set("Cache-Control", "no-store")
+  return response
+}
+
+function redirectToRemoteInstaller(href: string) {
+  const response = NextResponse.redirect(href)
+  response.headers.set("Cache-Control", "no-store")
+  return response
+}
+
 export async function GET(request: Request) {
   const url = new URL(request.url)
   const platform = url.searchParams.get("platform") === "mac" ? "mac" : "windows"
-  const { releases, missing } = releasesForPlatform(platform, readManifest())
+  const { releases, missing } = releasesForPlatform(platform, desktopReleaseManifest as DesktopReleaseManifest)
   const hrefs = releases
     .map((release) => release.downloadUrl || release.url || release.file || "")
     .filter(Boolean)
@@ -82,12 +76,12 @@ export async function GET(request: Request) {
     if (/^https?:\/\//i.test(href)) {
       sawRemote = true
       const head = await fetch(href, { method: "HEAD", cache: "no-store", redirect: "follow" }).catch(() => null)
-      if (head?.ok) return NextResponse.redirect(href, { headers: { "Cache-Control": "no-store" } })
+      if (head?.ok) return redirectToRemoteInstaller(href)
       continue
     }
 
-    if (publicFileExists(href)) {
-      return NextResponse.redirect(new URL(href, request.url), { headers: { "Cache-Control": "no-store" } })
+    if (href.startsWith("/downloads/") && !href.includes("..")) {
+      return redirectToInstaller(href, request)
     }
   }
 

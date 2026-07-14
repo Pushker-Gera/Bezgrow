@@ -66,6 +66,17 @@ async function writeDesktopSecret(key: string, value: string) {
   }
 }
 
+async function readDeviceIdFromStoredLicense() {
+  const licenseKey = await readDesktopSecret(LICENSE_SECRET_KEY)
+  if (!licenseKey) return ""
+
+  try {
+    return parseLicenseInput(licenseKey).payload.device_id || ""
+  } catch {
+    return ""
+  }
+}
+
 async function persistDeviceId(deviceId: string) {
   if (typeof window !== "undefined") localStorage.setItem(DEVICE_STORAGE_KEY, deviceId)
   await writeDesktopSecret(DEVICE_SECRET_KEY, deviceId)
@@ -73,16 +84,22 @@ async function persistDeviceId(deviceId: string) {
 }
 
 export async function getOrCreateDeviceId() {
-  const cached = await getOfflineMeta<string>(DEVICE_META_KEY, "", "global").catch(() => "")
-  if (cached) {
-    await persistDeviceId(cached)
-    return cached
-  }
-
   const secureDeviceId = await readDesktopSecret(DEVICE_SECRET_KEY)
   if (secureDeviceId) {
     await persistDeviceId(secureDeviceId)
     return secureDeviceId
+  }
+
+  const licensedDeviceId = await readDeviceIdFromStoredLicense()
+  if (licensedDeviceId) {
+    await persistDeviceId(licensedDeviceId)
+    return licensedDeviceId
+  }
+
+  const cached = await getOfflineMeta<string>(DEVICE_META_KEY, "", "global").catch(() => "")
+  if (cached) {
+    await persistDeviceId(cached)
+    return cached
   }
 
   if (typeof window !== "undefined") {
@@ -318,9 +335,12 @@ export async function restoreLicensedWorkspaceContext() {
   const deviceId = await getOrCreateDeviceId()
   let rows = await readLicenseRows("global")
   let status = evaluateStoredLicense(rows, { deviceId })
-  if (!status.allowed && status.status === "missing") {
-    rows = await restoreLicenseRowsFromDesktopSecret(deviceId)
-    status = evaluateStoredLicense(rows, { deviceId })
+  if (!status.allowed) {
+    const restoredRows = await restoreLicenseRowsFromDesktopSecret(deviceId)
+    if (restoredRows.length) {
+      rows = [...restoredRows, ...rows]
+      status = evaluateStoredLicense(rows, { deviceId })
+    }
   }
   if (!status.allowed || !status.license) return null
 
@@ -396,9 +416,12 @@ export async function getLocalLicenseStatus(organizationId = workspaceOrganizati
   const deviceId = await getOrCreateDeviceId()
   let rows = await readLicenseRows(organizationId)
   let status = evaluateStoredLicense(rows, { deviceId })
-  if (!status.allowed && status.status === "missing") {
-    rows = await restoreLicenseRowsFromDesktopSecret(deviceId)
-    status = evaluateStoredLicense([...rows, ...(organizationId === "global" ? [] : await readLicenseRows(organizationId))], { deviceId })
+  if (!status.allowed) {
+    const restoredRows = await restoreLicenseRowsFromDesktopSecret(deviceId)
+    if (restoredRows.length) {
+      rows = [...restoredRows, ...rows]
+      status = evaluateStoredLicense(rows, { deviceId })
+    }
   }
   return status
 }

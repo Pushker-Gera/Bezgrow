@@ -17,6 +17,7 @@ const recovery = read("components/offline/LocalDatabaseRecovery.tsx");
 const proxy = read("proxy.ts");
 const startupRedirect = read("lib/auth/startup-redirect.ts");
 const loginPage = read("app/login/page.tsx");
+const license = read("lib/offline/local/license.ts");
 
 assert.match(service, /class LocalDatabaseUnavailableError extends Error/, "Desktop database failures need a typed error.");
 assert.match(service, /isDesktopRuntime/, "Local database availability must be tied to desktop runtime detection.");
@@ -57,5 +58,8 @@ assert.match(startupRedirect, /integrityReport\(\)/, "Startup redirect must wait
 assert.match(startupRedirect, /restoreLicensedWorkspaceContext\(\)/, "Startup redirect must restore licensed workspace before deciding.");
 assert.match(loginPage, /integrityReport\(\)/, "Login startup check must wait for local database readiness.");
 assert.match(loginPage, /restoreLicensedWorkspaceContext\(\)/, "Login startup check must restore licensed workspace before deciding.");
+assert.match(license, /readDeviceIdFromStoredLicense/, "Desktop device ID recovery must use the stored license when secure device metadata is missing.");
+assert.match(license, /const secureDeviceId = await readDesktopSecret\(DEVICE_SECRET_KEY\)[\s\S]*readDeviceIdFromStoredLicense\(\)[\s\S]*getOfflineMeta/, "Secure desktop device storage must be checked before SQLite/localStorage metadata.");
+assert.doesNotMatch(license, /status\.status === "missing"[\s\S]*restoreLicenseRowsFromDesktopSecret/, "Secure license restoration must run for invalid local rows, not only missing rows.");
 
 console.log("offline-contract-ok");

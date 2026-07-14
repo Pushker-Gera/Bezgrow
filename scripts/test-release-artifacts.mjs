@@ -17,14 +17,17 @@ const manifest = readJson(desktopManifestPath);
 assert.ok(manifest.version, "Desktop release manifest version is missing.");
 
 const desktopReleaseRoute = readFileSync("app/api/desktop-release/route.ts", "utf8");
-assert.match(desktopReleaseRoute, /public",\s*"downloads",\s*"desktop-release\.json"/, "Desktop release API must read the local manifest.");
-assert.match(desktopReleaseRoute, /localManifest\(\)/, "Desktop release API must prefer local release metadata.");
+assert.match(desktopReleaseRoute, /@\/public\/downloads\/desktop-release\.json/, "Desktop release API must bundle the checked-in manifest.");
+assert.doesNotMatch(desktopReleaseRoute, /node:fs|readFileSync|existsSync/, "Desktop release API must not depend on serverless filesystem reads.");
 
 const desktopDownloadRoute = readFileSync("app/api/downloads/desktop/route.ts", "utf8");
 const downloadPage = readFileSync("app/download/page.tsx", "utf8");
 const appUpdates = readFileSync("lib/app-updates.ts", "utf8");
 assert.doesNotMatch(desktopDownloadRoute, /github\.com\/Pushker-Gera\/Bezgrow|remoteRelease/, "Download API must not invent unverified remote installer URLs.");
 assert.match(desktopDownloadRoute, /method:\s*"HEAD"/, "Download API must verify explicit remote installer URLs before redirecting.");
+assert.match(desktopDownloadRoute, /@\/public\/downloads\/desktop-release\.json/, "Download API must bundle the checked-in desktop release manifest.");
+assert.doesNotMatch(desktopDownloadRoute, /node:fs|readFileSync|existsSync|statSync/, "Download API must not depend on serverless filesystem reads.");
+assert.match(desktopDownloadRoute, /href\.startsWith\("\/downloads\/"\)/, "Download API must only redirect local installer paths under /downloads.");
 assert.doesNotMatch(downloadPage, /defaultWindowsRelease|githubReleaseBaseUrl/, "Download page must not mark missing Windows installers as available.");
 assert.doesNotMatch(appUpdates, /fallbackWindowsRelease|github\.com\/Pushker-Gera\/Bezgrow/, "Update checks must not invent missing Windows installer URLs.");
 

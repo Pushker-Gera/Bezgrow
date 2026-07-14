@@ -106,6 +106,7 @@ export default function LoginPage() {
         callbackUrl.searchParams.set("next", getSafeNextPath("/dashboard"))
         if (desktopOAuthState) {
             callbackUrl.searchParams.set("desktop_oauth_state", desktopOAuthState)
+            callbackUrl.searchParams.set("desktop_callback_origin", window.location.origin)
         }
         return callbackUrl.toString()
     }

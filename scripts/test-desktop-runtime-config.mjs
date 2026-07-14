@@ -16,6 +16,9 @@ const cargo = read("src-tauri/Cargo.toml");
 const rust = read("src-tauri/src/lib.rs");
 const prepare = read("scripts/prepare-desktop-build.mjs");
 const runtime = read("lib/desktop/tauri.ts");
+const loginPage = read("app/login/page.tsx");
+const authCallback = read("app/auth/callback/route.ts");
+const desktopAuthCallbackRoute = read("app/api/desktop-auth/callback/route.ts");
 
 for (const script of [
   "desktop:prepare",
@@ -46,6 +49,11 @@ assert.match(prepare, /BEZGROW_DESKTOP_BUILD/, "Desktop prepare must build with 
 assert.match(prepare, /serverSource\s*=\s*join\(root,\s*"\.next",\s*"server"\)/, "Desktop prepare must read .next/server assets.");
 assert.match(prepare, /"chunks"/, "Desktop prepare must copy server chunks into standalone output.");
 assert.match(prepare, /"interception-route-rewrite-manifest\.js"/, "Desktop prepare must copy required server manifests into standalone output.");
+assert.match(loginPage, /desktop_callback_origin/, "Desktop OAuth must tell the web callback where the local desktop app is listening.");
+assert.match(authCallback, /trustedDesktopCallbackOrigin/, "Web auth callback must validate the local desktop callback origin.");
+assert.match(authCallback, /\/api\/desktop-auth\/callback/, "Web auth callback must hand desktop OAuth sessions back to the local app.");
+assert.match(desktopAuthCallbackRoute, /isLocalDesktopRequest/, "Desktop OAuth callback receiver must be localhost-only.");
+assert.match(desktopAuthCallbackRoute, /storeDesktopOAuthExchange/, "Desktop OAuth callback receiver must store the session in the local app process.");
 
 if (existsSync(".next/standalone/server.js")) {
   assert.ok(existsSync(".next/standalone/.next/static"), "Standalone output is missing static assets.");

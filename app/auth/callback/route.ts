@@ -15,6 +15,19 @@ function getSafeNextPath(next: string | null) {
   return next?.startsWith("/") && !next.startsWith("//") ? next : "/dashboard"
 }
 
+function trustedDesktopCallbackOrigin(value: string | null) {
+  if (!value) return null
+
+  try {
+    const url = new URL(value)
+    const trustedHost = url.hostname === "127.0.0.1" || url.hostname === "localhost"
+    if (url.protocol !== "http:" || !trustedHost) return null
+    return url.origin
+  } catch {
+    return null
+  }
+}
+
 async function getProfileRedirect(userId: string, email: string | null | undefined, requestedNext: string) {
   const { data: profile, error: profileError } = await adminSupabase
     .from("profiles")
@@ -80,6 +93,7 @@ export async function GET(request: Request) {
   const refreshToken = url.searchParams.get("refresh_token")
   const safeNext = getSafeNextPath(url.searchParams.get("next"))
   const desktopOAuthState = url.searchParams.get("desktop_oauth_state")
+  const desktopCallbackOrigin = trustedDesktopCallbackOrigin(url.searchParams.get("desktop_callback_origin"))
   const supabase = await createServerSupabase()
   let authSession: Awaited<ReturnType<typeof supabase.auth.exchangeCodeForSession>>["data"]["session"] | null = null
 
@@ -89,6 +103,7 @@ export async function GET(request: Request) {
     hasRefreshToken: Boolean(refreshToken),
     next: safeNext,
     desktopOAuth: isValidDesktopOAuthState(desktopOAuthState),
+    desktopCallback: Boolean(desktopCallbackOrigin),
   })
 
   if (code) {
@@ -124,6 +139,18 @@ export async function GET(request: Request) {
   console.info("[auth/callback] redirect destination", { userId: user.id, redirectPath })
 
   if (isValidDesktopOAuthState(desktopOAuthState) && authSession?.access_token && authSession.refresh_token) {
+    if (desktopCallbackOrigin) {
+      const localCallback = new URL("/api/desktop-auth/callback", desktopCallbackOrigin)
+      localCallback.searchParams.set("state", desktopOAuthState!)
+      localCallback.searchParams.set("access_token", authSession.access_token)
+      localCallback.searchParams.set("refresh_token", authSession.refresh_token)
+      if (authSession.expires_at) localCallback.searchParams.set("expires_at", String(authSession.expires_at))
+      if (authSession.expires_in) localCallback.searchParams.set("expires_in", String(authSession.expires_in))
+      if (authSession.token_type) localCallback.searchParams.set("token_type", authSession.token_type)
+      localCallback.searchParams.set("redirect_to", new URL(redirectPath, siteUrl).toString())
+      return NextResponse.redirect(localCallback)
+    }
+
     storeDesktopOAuthExchange(desktopOAuthState!, {
       access_token: authSession.access_token,
       refresh_token: authSession.refresh_token,
