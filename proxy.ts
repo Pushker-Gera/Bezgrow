@@ -5,6 +5,7 @@ import { authCookieOptions } from "@/lib/supabase/session"
 const protectedPrefixes = ["/dashboard", "/profile"]
 const adminPrefixes = ["/admin"]
 const desktopAuthMarkerCookie = "bezgrow_desktop_auth"
+const desktopServerBuild = process.env.BEZGROW_DESKTOP_BUILD === "1"
 
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL?.trim()
 const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY?.trim()
@@ -104,6 +105,10 @@ export async function proxy(request: NextRequest) {
   }
 
   if (localDesktopHost && request.cookies.get(desktopAuthMarkerCookie)?.value === "1") {
+    return NextResponse.next()
+  }
+
+  if (localDesktopHost && desktopServerBuild && protectedRoute) {
     return NextResponse.next()
   }
 

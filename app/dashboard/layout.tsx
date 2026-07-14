@@ -3,7 +3,7 @@
 import Link from "next/link"
 import { usePathname, useRouter } from "next/navigation"
 import type { ReactNode } from "react"
-import { useEffect, useMemo, useState } from "react"
+import { useEffect, useMemo, useRef, useState } from "react"
 import { BezgrowLogoMark } from "@/components/brand/BezgrowLogoMark"
 import DesktopBackButton from "@/components/desktop/DesktopBackButton"
 import LocalDatabaseRecovery from "@/components/offline/LocalDatabaseRecovery"
@@ -12,7 +12,7 @@ import { clearDesktopSession } from "@/lib/desktop/session"
 import { isTauriRuntimeAsync } from "@/lib/desktop/tauri"
 import { prepareOfflineWorkspace } from "@/lib/offline/bootstrap"
 import { getLocalDatabaseService } from "@/lib/offline/local/service"
-import { localLicenseSnapshot } from "@/lib/offline/local/license"
+import { localLicenseSnapshot, restoreLicensedWorkspaceContext } from "@/lib/offline/local/license"
 import { supabase } from "@/lib/supabase"
 import { clearWorkspaceBootstrapCache, getWorkspaceBootstrap } from "@/lib/workspaceBootstrapClient"
 
@@ -50,7 +50,7 @@ const priorityPrefetchRoutes = [
 ]
 
 type DesktopDatabaseState = {
-    status: "checking" | "ready" | "failed"
+    status: "initializing" | "database-ready" | "license-valid" | "business-ready" | "ready" | "failed"
     message?: string
 }
 
@@ -76,9 +76,13 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
     const [online, setOnline] = useState(true)
     const [canShowAdmin, setCanShowAdmin] = useState(false)
     const [offlinePrepMessage, setOfflinePrepMessage] = useState("")
-    const [desktopDatabase, setDesktopDatabase] = useState<DesktopDatabaseState>({ status: "checking" })
+    const [desktopDatabase, setDesktopDatabase] = useState<DesktopDatabaseState>({ status: "initializing" })
+    const startupStartedRef = useRef(false)
+    const initialPathRef = useRef(pathname || "/dashboard")
 
     useEffect(() => {
+        if (startupStartedRef.current) return
+        startupStartedRef.current = true
         let cancelled = false
         let cancelOfflinePrep: () => void = () => undefined
 
@@ -88,7 +92,7 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
                 if (desktopRuntime) {
                     try {
                         await getLocalDatabaseService().integrityReport()
-                        if (!cancelled) setDesktopDatabase({ status: "ready" })
+                        if (!cancelled) setDesktopDatabase({ status: "database-ready" })
                     } catch (error) {
                         if (!cancelled) {
                             setDesktopDatabase({
@@ -99,9 +103,30 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
                         return
                     }
 
-                    const license = await localLicenseSnapshot().catch(() => null)
+                    const restoredWorkspace = await restoreLicensedWorkspaceContext().catch((error) => {
+                        console.warn("Desktop license workspace restore warning:", error)
+                        return null
+                    })
+                    const organizationId = restoredWorkspace?.organization?.id || restoredWorkspace?.membership?.organization_id || undefined
+                    const license = await localLicenseSnapshot(organizationId).catch((error) => {
+                        console.warn("Desktop license validation warning:", error)
+                        return null
+                    })
                     if (!license?.allowed) {
-                        router.replace(`/offline?next=${encodeURIComponent(pathname || "/dashboard")}`)
+                        router.replace(`/offline?next=${encodeURIComponent(initialPathRef.current)}`)
+                        return
+                    }
+                    if (!cancelled) setDesktopDatabase({ status: "license-valid" })
+
+                    if (restoredWorkspace?.success) {
+                        if (restoredWorkspace.organization?.name) setBusinessName(restoredWorkspace.organization.name)
+                        setOwnerEmail(restoredWorkspace.user?.email || "licensed@bezgrow.local")
+                        setCanShowAdmin(false)
+                        if (!cancelled) setDesktopDatabase({ status: "business-ready" })
+                        cancelOfflinePrep = scheduleIdleTask(() => {
+                            if (cancelled) return
+                            void prepareOfflineWorkspace(restoredWorkspace).catch(() => undefined)
+                        })
                         return
                     }
                 } else if (!cancelled) {
@@ -152,6 +177,7 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
                         }
                     })
                 })
+                if (!cancelled && desktopRuntime) setDesktopDatabase({ status: "business-ready" })
             } catch (error) {
                 console.warn("Dashboard access warning:", error)
                 if (!cancelled) setDesktopDatabase({ status: "ready" })
@@ -162,7 +188,7 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
             cancelled = true
             cancelOfflinePrep()
         }
-    }, [pathname, router])
+    }, [router])
 
     useEffect(() => {
         const handleOnline = () => setOnline(true)
@@ -209,7 +235,7 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
         router.replace("/login")
     }
 
-    if (desktopDatabase.status === "checking") {
+    if (desktopDatabase.status === "initializing" || desktopDatabase.status === "database-ready" || desktopDatabase.status === "license-valid") {
         return <LocalDatabaseRecovery checking />
     }
 

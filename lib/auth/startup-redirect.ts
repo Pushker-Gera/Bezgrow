@@ -4,7 +4,8 @@ import { completeDesktopAuthCallback } from "@/lib/desktop/auth-callback"
 import { hasCachedDesktopSession } from "@/lib/desktop/session"
 import { isTauriRuntimeAsync } from "@/lib/desktop/tauri"
 import { getCachedWorkspaceBootstrap } from "@/lib/offline/db"
-import { localLicenseSnapshot } from "@/lib/offline/local/license"
+import { localLicenseSnapshot, restoreLicensedWorkspaceContext } from "@/lib/offline/local/license"
+import { getLocalDatabaseService } from "@/lib/offline/local/service"
 import { supabase } from "@/lib/supabase"
 import type { WorkspaceBootstrapPayload } from "@/lib/workspaceBootstrapClient"
 
@@ -37,7 +38,10 @@ export async function resolveStartupRedirect(fallback = "/dashboard") {
 
   const desktopRuntime = await isTauriRuntimeAsync()
   if (desktopRuntime) {
-    const license = await localLicenseSnapshot().catch(() => null)
+    await getLocalDatabaseService().integrityReport()
+    const workspace = await restoreLicensedWorkspaceContext().catch(() => null)
+    const organizationId = workspace?.organization?.id || workspace?.membership?.organization_id || undefined
+    const license = await localLicenseSnapshot(organizationId).catch(() => null)
     if (license?.allowed) return fallback === "/admin" ? "/dashboard" : fallback
     return `/offline?next=${encodeURIComponent(fallback)}`
   }

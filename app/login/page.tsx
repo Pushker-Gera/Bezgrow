@@ -9,7 +9,8 @@ import { completeDesktopAuthCallback } from "@/lib/desktop/auth-callback"
 import { hasCachedDesktopSession, persistDesktopSession } from "@/lib/desktop/session"
 import { isTauriRuntimeAsync, openExternalUrl } from "@/lib/desktop/tauri"
 import { getCachedWorkspaceBootstrap } from "@/lib/offline/db"
-import { localLicenseSnapshot } from "@/lib/offline/local/license"
+import { localLicenseSnapshot, restoreLicensedWorkspaceContext } from "@/lib/offline/local/license"
+import { getLocalDatabaseService } from "@/lib/offline/local/service"
 import { supabase } from "@/lib/supabase"
 
 type BootstrapResponse = {
@@ -175,7 +176,10 @@ export default function LoginPage() {
 
             const desktopRuntime = (await withTimeout(isTauriRuntimeAsync(), 2500)) || false
             if (desktopRuntime) {
-                const license = await withTimeout(localLicenseSnapshot(), 3000)
+                await withTimeout(getLocalDatabaseService().integrityReport(), 5000)
+                const workspace = await withTimeout(restoreLicensedWorkspaceContext().catch(() => null), 5000)
+                const organizationId = workspace?.organization?.id || workspace?.membership?.organization_id || undefined
+                const license = await withTimeout(localLicenseSnapshot(organizationId), 5000)
                 if (license?.allowed) {
                     navigate(getSafeNextPath("/dashboard"))
                     return
