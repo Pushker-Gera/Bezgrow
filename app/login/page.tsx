@@ -29,6 +29,15 @@ type BootstrapResponse = {
     }
 }
 
+type LoginResponse = {
+    success?: boolean
+    redirectTo?: string
+    error?: string
+    code?: string
+    stage?: string
+    requestId?: string
+}
+
 const SESSION_CHECK_TIMEOUT_MS = 6000
 
 async function withTimeout<T>(promise: Promise<T>, timeoutMs = SESSION_CHECK_TIMEOUT_MS) {
@@ -90,25 +99,14 @@ export default function LoginPage() {
         return (isLocalDesktopOrigin ? configuredSiteUrl : origin).replace(/\/$/, "")
     }, [])
 
-    const redirectToCallback = useCallback(async (accessToken: string, refreshToken: string, nextPath = getSafeNextPath("/dashboard")) => {
-        const redirectPath = await completeDesktopAuthCallback(accessToken, refreshToken, nextPath)
-        router.replace(redirectPath)
-        return redirectPath
-    }, [getSafeNextPath, router])
-
-    function authErrorFromRedirectPath(path: string) {
+    function toLocalPath(path: string | undefined, fallback: string) {
+        if (!path) return fallback
         try {
-            const redirectUrl = new URL(path, window.location.origin)
-            if (redirectUrl.pathname !== "/login") return ""
-
-            const error = redirectUrl.searchParams.get("error")
-            if (error === "profile_missing") {
-                return "Your login succeeded, but no profile was found for this account. Contact support to repair the admin profile."
-            }
-            if (error === "account_suspended") return "This account is suspended."
-            return "Unable to open this account."
+            const parsed = new URL(path, window.location.origin)
+            if (parsed.origin !== window.location.origin) return fallback
+            return `${parsed.pathname}${parsed.search}${parsed.hash}`
         } catch {
-            return ""
+            return fallback
         }
     }
 
@@ -237,24 +235,6 @@ export default function LoginPage() {
                 }
             }
 
-            const sessionResult = await withTimeout(supabase.auth.getSession(), SESSION_CHECK_TIMEOUT_MS)
-            if (!sessionResult) return
-
-            const {
-                data: { session },
-                error,
-            } = sessionResult
-
-            if (error) {
-                showAuthError(error.message)
-                return
-            }
-
-            if (session?.access_token && session.refresh_token) {
-                await redirectToCallback(session.access_token, session.refresh_token)
-                navigating = true
-            }
-
             if (active && !navigating) setCheckingSession(false)
         }
 
@@ -269,7 +249,7 @@ export default function LoginPage() {
         return () => {
             active = false
         }
-    }, [getSafeNextPath, redirectToCallback, router])
+    }, [getSafeNextPath, router])
 
     async function login(event?: FormEvent<HTMLFormElement>) {
         event?.preventDefault()
@@ -292,48 +272,33 @@ export default function LoginPage() {
                 return
             }
 
-            const {
-                data,
-                error
-            } = await supabase.auth.signInWithPassword({
-                email,
-                password
+            const response = await fetch("/api/auth/login", {
+                method: "POST",
+                credentials: "include",
+                cache: "no-store",
+                headers: {
+                    "content-type": "application/json",
+                },
+                body: JSON.stringify({
+                    email,
+                    password,
+                    next: getSafeNextPath("/dashboard"),
+                }),
             })
 
-            if (error) {
+            const payload = (await response.json().catch(() => ({}))) as LoginResponse
 
-                if (error.message.includes("Invalid login credentials")) {
+            if (!response.ok || !payload.success) {
+                if (payload.code === "INVALID_CREDENTIALS") {
                     setErrorMessage("Incorrect email or password")
+                } else {
+                    setErrorMessage(payload.error || "Unable to complete login.")
                 }
-                else if (error.message.toLowerCase().includes("invalid api key")) {
-                    showAuthError(error.message)
-                }
-                else if (error.message.includes("Email not confirmed")) {
-                    setErrorMessage("Please verify your email before logging in")
-                }
-                else {
-                    showAuthError(error.message)
-                }
-
                 setLoading(false)
                 return
             }
 
-            if (data.session?.access_token && data.session.refresh_token) {
-                const desktopRuntime = await isTauriRuntimeAsync().catch(() => false)
-                if (desktopRuntime) await persistDesktopSession(data.session)
-                const redirectPath = await redirectToCallback(data.session.access_token, data.session.refresh_token)
-                const redirectError = authErrorFromRedirectPath(redirectPath)
-                if (redirectError) {
-                    setSuccessMessage("")
-                    setErrorMessage(redirectError)
-                    await supabase.auth.signOut().catch(() => undefined)
-                    return
-                }
-                setSuccessMessage("Login successful")
-            } else {
-                throw new Error("Login did not return a valid session.")
-            }
+            router.replace(toLocalPath(payload.redirectTo, getSafeNextPath("/dashboard")))
 
         } catch (error) {
 

@@ -6,4 +6,5 @@ export const authCookieOptions: CookieOptionsWithName = {
   path: "/",
   sameSite: "lax",
   maxAge: AUTH_COOKIE_MAX_AGE,
+  secure: process.env.NODE_ENV === "production",
 }
