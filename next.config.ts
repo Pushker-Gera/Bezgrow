@@ -29,7 +29,7 @@ const nextConfig: NextConfig = {
   },
   outputFileTracingRoot: process.cwd(),
   outputFileTracingExcludes: {
-    "/*": ["./.next/**/*", "./desktop-runtime/**/*", "./src-tauri/target/**/*"],
+    "/*": ["./desktop-runtime/**/*", "./src-tauri/target/**/*"],
   },
   turbopack: {
     root: process.cwd(),
