@@ -1,7 +1,8 @@
 import { NextResponse } from "next/server"
-import desktopReleaseManifest from "@/public/downloads/desktop-release.json"
 
 export const dynamic = "force-dynamic"
+
+const macInstallerPath = "/downloads/Bezgrow-mac.dmg"
 
 type InstallerRelease = {
   downloadUrl?: string
@@ -29,9 +30,13 @@ function jsonError(message: string, status = 404) {
 }
 
 function redirectToInstaller(href: string, request: Request) {
-  return NextResponse.redirect(new URL(href, request.url), {
+  const location = new URL(href, request.url)
+  return new NextResponse(null, {
     status: 302,
-    headers: { "Cache-Control": "no-store" },
+    headers: {
+      "Cache-Control": "no-store",
+      Location: location.toString(),
+    },
   })
 }
 
@@ -57,9 +62,12 @@ function releasesForPlatform(platform: string, manifest: DesktopReleaseManifest 
 }
 
 function redirectToRemoteInstaller(href: string) {
-  return NextResponse.redirect(href, {
+  return new NextResponse(null, {
     status: 302,
-    headers: { "Cache-Control": "no-store" },
+    headers: {
+      "Cache-Control": "no-store",
+      Location: href,
+    },
   })
 }
 
@@ -67,11 +75,10 @@ export async function GET(request: Request) {
   const url = new URL(request.url)
   const platform = url.searchParams.get("platform") === "mac" ? "mac" : "windows"
   if (platform === "mac") {
-    const href = desktopReleaseManifest.mac?.downloadUrl || desktopReleaseManifest.mac?.file || "/downloads/Bezgrow-mac.dmg"
-    return redirectToInstaller(href, request)
+    return redirectToInstaller(macInstallerPath, request)
   }
 
-  const { releases, missing } = releasesForPlatform(platform, desktopReleaseManifest as DesktopReleaseManifest)
+  const { releases, missing } = releasesForPlatform(platform, null)
   const hrefs = releases
     .map((release) => release.downloadUrl || release.url || release.file || "")
     .filter(Boolean)

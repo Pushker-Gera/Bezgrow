@@ -25,9 +25,10 @@ const downloadPage = readFileSync("app/download/page.tsx", "utf8");
 const appUpdates = readFileSync("lib/app-updates.ts", "utf8");
 assert.doesNotMatch(desktopDownloadRoute, /github\.com\/Pushker-Gera\/Bezgrow|remoteRelease/, "Download API must not invent unverified remote installer URLs.");
 assert.match(desktopDownloadRoute, /method:\s*"HEAD"/, "Download API must verify explicit remote installer URLs before redirecting.");
-assert.match(desktopDownloadRoute, /@\/public\/downloads\/desktop-release\.json/, "Download API must bundle the checked-in desktop release manifest.");
+assert.match(desktopDownloadRoute, /const macInstallerPath = "\/downloads\/Bezgrow-mac\.dmg"/, "Download API must use a deterministic Mac installer path.");
 assert.doesNotMatch(desktopDownloadRoute, /node:fs|readFileSync|existsSync|statSync/, "Download API must not depend on serverless filesystem reads.");
 assert.match(desktopDownloadRoute, /href\.startsWith\("\/downloads\/"\)/, "Download API must only redirect local installer paths under /downloads.");
+assert.match(desktopDownloadRoute, /Location: location\.toString\(\)/, "Download API must return a plain redirect response for serverless compatibility.");
 assert.doesNotMatch(downloadPage, /defaultWindowsRelease|githubReleaseBaseUrl/, "Download page must not mark missing Windows installers as available.");
 assert.doesNotMatch(appUpdates, /fallbackWindowsRelease|github\.com\/Pushker-Gera\/Bezgrow/, "Update checks must not invent missing Windows installer URLs.");
 
