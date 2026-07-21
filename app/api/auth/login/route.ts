@@ -4,7 +4,6 @@ import type { PostgrestError, User } from "@supabase/supabase-js"
 import { cookies } from "next/headers"
 import { z } from "zod"
 import { isConfiguredAdmin } from "@/lib/admin-role"
-import { getBearerToken, validateMutationOrigin } from "@/lib/api/auth"
 import { fail } from "@/lib/api/responses"
 import { checkRateLimit, rateLimitKey } from "@/lib/security/rate-limit"
 import { authCookieOptions } from "@/lib/supabase/session"
@@ -45,6 +44,7 @@ type LoginLogMeta = {
 
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL?.trim()
 const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY?.trim()
+const bearerSchema = z.string().min(20)
 
 function runtimeName(): LoginLogMeta["runtime"] {
   if (process.env.VERCEL) return "vercel"
@@ -55,6 +55,24 @@ function runtimeName(): LoginLogMeta["runtime"] {
 function safeNextPath(value: unknown) {
   if (typeof value !== "string") return "/dashboard"
   return value.startsWith("/") && !value.startsWith("//") ? value : "/dashboard"
+}
+
+function getBearerToken(request: Request) {
+  const header = request.headers.get("authorization") || ""
+  const token = header.replace(/^Bearer\s+/i, "").trim()
+  const parsed = bearerSchema.safeParse(token)
+  return parsed.success ? parsed.data : null
+}
+
+function validateMutationOrigin(request: Request) {
+  const origin = request.headers.get("origin")
+  if (!origin) return false
+
+  try {
+    return new URL(origin).origin === new URL(request.url).origin
+  } catch {
+    return false
+  }
 }
 
 function publicOrigin(request: Request) {
