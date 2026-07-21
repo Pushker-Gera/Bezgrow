@@ -18,6 +18,14 @@ const service = getLocalDatabaseService()
 
 let dbPromise: Promise<SqlExecutor | null> | null = null
 
+async function strictDesktopStorage() {
+  return isDesktopRuntime().catch(() => false)
+}
+
+async function rethrowInDesktop(error: unknown) {
+  if (await strictDesktopStorage()) throw error
+}
+
 async function ensureSqliteReady() {
   if (dbPromise) {
     const db = await dbPromise
@@ -65,6 +73,7 @@ export async function putSqliteCollection<T>(organizationId: string, collection:
     return true
   } catch (error) {
     console.warn("[offline/sqlite] normalized collection write failed", error)
+    await rethrowInDesktop(error)
     return false
   }
 }
@@ -80,6 +89,7 @@ export async function getSqliteCollection<T>(organizationId: string, collection:
     return { hit: true, value: (values[0] ?? fallback) as T }
   } catch (error) {
     console.warn("[offline/sqlite] normalized collection read failed", error)
+    await rethrowInDesktop(error)
     return { hit: false, value: fallback }
   }
 }
@@ -93,6 +103,7 @@ export async function queueSqliteAction(action: OfflineAction) {
     return true
   } catch (error) {
     console.warn("[offline/sqlite] normalized queue write failed", error)
+    await rethrowInDesktop(error)
     return false
   }
 }
@@ -105,6 +116,7 @@ export async function listSqliteActions(statuses?: OfflineActionStatus[]) {
     return await localFirstRepositoryAdapter.listActions(statuses)
   } catch (error) {
     console.warn("[offline/sqlite] normalized queue read failed", error)
+    await rethrowInDesktop(error)
     return null
   }
 }
@@ -117,6 +129,7 @@ export async function updateSqliteAction(id: string, patch: Partial<OfflineActio
     return await updateNormalizedAction(id, patch)
   } catch (error) {
     console.warn("[offline/sqlite] normalized queue update failed", error)
+    await rethrowInDesktop(error)
     return null
   }
 }
@@ -137,6 +150,7 @@ export async function writeSqliteSyncLog(input: {
     return true
   } catch (error) {
     console.warn("[offline/sqlite] normalized sync log write failed", error)
+    await rethrowInDesktop(error)
     return false
   }
 }
@@ -159,6 +173,7 @@ export async function writeSqliteConflict(input: {
     return true
   } catch (error) {
     console.warn("[offline/sqlite] normalized conflict write failed", error)
+    await rethrowInDesktop(error)
     return false
   }
 }
@@ -172,6 +187,7 @@ export async function setSqliteMeta(key: string, value: unknown, organizationId 
     return true
   } catch (error) {
     console.warn("[offline/sqlite] normalized meta write failed", error)
+    await rethrowInDesktop(error)
     return false
   }
 }
@@ -184,6 +200,7 @@ export async function getSqliteMeta<T>(key: string, fallback: T, organizationId 
     return await getNormalizedMeta(key, fallback, organizationId)
   } catch (error) {
     console.warn("[offline/sqlite] normalized meta read failed", error)
+    await rethrowInDesktop(error)
     return fallback
   }
 }
@@ -197,6 +214,7 @@ export async function clearSqliteOfflineData() {
     return true
   } catch (error) {
     console.warn("[offline/sqlite] normalized clear failed", error)
+    await rethrowInDesktop(error)
     return false
   }
 }
@@ -209,6 +227,7 @@ export async function exportSqliteBackup() {
     return await localFirstRepositoryAdapter.exportBackup()
   } catch (error) {
     console.warn("[offline/sqlite] normalized backup export failed", error)
+    await rethrowInDesktop(error)
     return null
   }
 }

@@ -82,10 +82,20 @@ function configureMacSigning(config) {
   return config;
 }
 
+function tauriBuildEnv() {
+  const env = { ...process.env };
+
+  if (process.platform === "darwin" && !env.CI) {
+    env.CI = "true";
+  }
+
+  return env;
+}
+
 function run(command, args) {
   const result = spawnSync(command, args, {
     cwd: root,
-    env: process.env,
+    env: tauriBuildEnv(),
     shell: process.platform === "win32",
     stdio: "inherit",
   });

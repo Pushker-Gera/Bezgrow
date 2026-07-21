@@ -1,6 +1,6 @@
 use std::{
     fs::{self, OpenOptions},
-    io::Write,
+    io::{Read, Write},
     path::PathBuf,
     process::{Child, Command},
     sync::Mutex,
@@ -15,9 +15,12 @@ use std::{
     time::Duration,
 };
 
+use serde::Serialize;
+use sha2::{Digest, Sha256};
 use tauri::{Manager, WebviewUrl};
 
 const KEYCHAIN_SERVICE: &str = "com.bezgrow.erp";
+const LOCAL_DATABASE_NAME: &str = "bezgrow-offline.db";
 #[cfg(not(debug_assertions))]
 const DESKTOP_SERVER_PORT: u16 = 43124;
 
@@ -78,6 +81,146 @@ fn create_startup_error_window(
 
 fn keychain_entry(key: &str) -> Result<keyring::Entry, String> {
     keyring::Entry::new(KEYCHAIN_SERVICE, key).map_err(|error| error.to_string())
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct DesktopDatabaseDiagnostics {
+    app_config_dir: String,
+    app_data_dir: String,
+    database_path: String,
+    parent_exists: bool,
+    parent_created: bool,
+    parent_writable: bool,
+    database_exists: bool,
+    database_bytes: u64,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct DesktopDatabaseBackup {
+    backup_path: String,
+    checksum_sha256: String,
+    bytes: u64,
+    created_at: String,
+}
+
+fn unix_timestamp() -> String {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_secs().to_string())
+        .unwrap_or_else(|_| "unknown-time".to_string())
+}
+
+fn local_database_path<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> Result<PathBuf, String> {
+    app.path()
+        .app_config_dir()
+        .map(|path| path.join(LOCAL_DATABASE_NAME))
+        .map_err(|error| format!("Unable to resolve desktop app data directory: {error}"))
+}
+
+fn sha256_file(path: &PathBuf) -> Result<String, String> {
+    let mut file = fs::File::open(path)
+        .map_err(|error| format!("Unable to open backup for checksum: {error}"))?;
+    let mut hasher = Sha256::new();
+    let mut buffer = [0_u8; 64 * 1024];
+
+    loop {
+        let bytes = file
+            .read(&mut buffer)
+            .map_err(|error| format!("Unable to read backup for checksum: {error}"))?;
+        if bytes == 0 {
+            break;
+        }
+        hasher.update(&buffer[..bytes]);
+    }
+
+    Ok(format!("{:x}", hasher.finalize()))
+}
+
+#[tauri::command]
+fn desktop_database_diagnostics<R: tauri::Runtime>(
+    app: tauri::AppHandle<R>,
+) -> Result<DesktopDatabaseDiagnostics, String> {
+    let app_config_dir = app
+        .path()
+        .app_config_dir()
+        .map_err(|error| format!("Unable to resolve desktop app config directory: {error}"))?;
+    let app_data_dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|error| format!("Unable to resolve desktop app data directory: {error}"))?;
+    let database_path = app_config_dir.join(LOCAL_DATABASE_NAME);
+    let parent_existed = app_config_dir.exists();
+
+    fs::create_dir_all(&app_config_dir)
+        .map_err(|error| format!("Unable to create desktop database directory: {error}"))?;
+
+    let probe_path = app_config_dir.join(".bezgrow-write-probe");
+    let parent_writable = OpenOptions::new()
+        .create(true)
+        .write(true)
+        .truncate(true)
+        .open(&probe_path)
+        .and_then(|mut file| file.write_all(b"ok"))
+        .is_ok();
+    let _ = fs::remove_file(&probe_path);
+
+    let metadata = fs::metadata(&database_path).ok();
+
+    Ok(DesktopDatabaseDiagnostics {
+        app_config_dir: app_config_dir.to_string_lossy().to_string(),
+        app_data_dir: app_data_dir.to_string_lossy().to_string(),
+        database_path: database_path.to_string_lossy().to_string(),
+        parent_exists: app_config_dir.exists(),
+        parent_created: !parent_existed && app_config_dir.exists(),
+        parent_writable,
+        database_exists: metadata.is_some(),
+        database_bytes: metadata.map(|value| value.len()).unwrap_or(0),
+    })
+}
+
+#[tauri::command]
+fn desktop_database_backup<R: tauri::Runtime>(
+    app: tauri::AppHandle<R>,
+    reason: Option<String>,
+) -> Result<Option<DesktopDatabaseBackup>, String> {
+    let database_path = local_database_path(&app)?;
+    if !database_path.exists() {
+        return Ok(None);
+    }
+
+    let parent = database_path
+        .parent()
+        .ok_or_else(|| "Desktop database parent directory could not be resolved.".to_string())?;
+    let backup_dir = parent.join("backups");
+    fs::create_dir_all(&backup_dir)
+        .map_err(|error| format!("Unable to create desktop backup directory: {error}"))?;
+
+    let safe_reason = reason
+        .unwrap_or_else(|| "migration".to_string())
+        .chars()
+        .map(|ch| if ch.is_ascii_alphanumeric() { ch } else { '-' })
+        .collect::<String>();
+    let created_at = unix_timestamp();
+    let backup_path = backup_dir.join(format!(
+        "bezgrow-offline-{}-{}.db",
+        safe_reason.trim_matches('-'),
+        created_at
+    ));
+
+    fs::copy(&database_path, &backup_path)
+        .map_err(|error| format!("Unable to create desktop database backup: {error}"))?;
+    let metadata = fs::metadata(&backup_path)
+        .map_err(|error| format!("Unable to inspect desktop database backup: {error}"))?;
+    let checksum_sha256 = sha256_file(&backup_path)?;
+
+    Ok(Some(DesktopDatabaseBackup {
+        backup_path: backup_path.to_string_lossy().to_string(),
+        checksum_sha256,
+        bytes: metadata.len(),
+        created_at,
+    }))
 }
 
 #[tauri::command]
@@ -353,6 +496,8 @@ pub fn run() {
             }
         })
         .invoke_handler(tauri::generate_handler![
+            desktop_database_diagnostics,
+            desktop_database_backup,
             store_secret,
             read_secret,
             delete_secret,

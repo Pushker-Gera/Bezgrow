@@ -1,6 +1,7 @@
 "use client"
 
 import type { WorkspaceBootstrapPayload } from "@/lib/workspaceBootstrapClient"
+import { isDesktopRuntime } from "@/lib/desktop/tauri"
 import { evaluateStoredLicense, isLicenseRestrictedAction, isLicenseRestrictedCollection, type StoredLicenseRow } from "@/lib/license/policy"
 import {
   clearSqliteOfflineData,
@@ -168,6 +169,14 @@ const singleRecordCollections = new Set<OfflineCollection>(["workspace", "organi
 
 let dbPromise: Promise<IDBDatabase> | null = null
 
+async function strictDesktopStorage() {
+  return isDesktopRuntime().catch(() => false)
+}
+
+function desktopSqliteRequiredError(operation: string) {
+  return new Error(`SQLite is required in the Bezgrow desktop runtime for ${operation}.`)
+}
+
 function isBrowser() {
   return typeof window !== "undefined" && "indexedDB" in window
 }
@@ -243,6 +252,7 @@ async function readLicenseRowsForGuard(organizationId: string) {
     if (result.hit && Array.isArray(result.value)) sqliteRows.push(...result.value)
   }
   if (sqliteRows.length) return sqliteRows
+  if (await strictDesktopStorage()) return sqliteRows
 
   if (!isBrowser()) return []
   const { store } = await storeTransaction("data", "readonly")
@@ -279,6 +289,7 @@ export async function putOfflineData<T>(organizationId: string, collection: Offl
     window.dispatchEvent(new Event("bezgrow:offline-data-changed"))
     return
   }
+  if (await strictDesktopStorage()) throw desktopSqliteRequiredError(`writing ${collection}`)
 
   const { store, transaction } = await storeTransaction("data", "readwrite")
   const record: OfflineDataRecord<T> = {
@@ -297,6 +308,7 @@ export async function getOfflineData<T>(organizationId: string, collection: Offl
   if (!organizationId || !isBrowser()) return fallback
   const sqliteResult = await getSqliteCollection(organizationId, collection, fallback)
   if (sqliteResult.hit) return sqliteResult.value
+  if (await strictDesktopStorage()) return fallback
 
   const { store } = await storeTransaction("data", "readonly")
   const record = await requestToPromise<OfflineDataRecord<T> | undefined>(store.get(dataKey(organizationId, collection)))
@@ -371,6 +383,7 @@ export async function queueOfflineAction(action: Omit<OfflineAction, "status" | 
     window.dispatchEvent(new Event("bezgrow:offline-actions-changed"))
     return record
   }
+  if (await strictDesktopStorage()) throw desktopSqliteRequiredError(`queuing ${action.type}`)
 
   const { store, transaction } = await storeTransaction("actions", "readwrite")
   store.put(record)
@@ -383,6 +396,7 @@ export async function listOfflineActions(statuses?: OfflineActionStatus[]) {
   if (!isBrowser()) return []
   const sqliteActions = await listSqliteActions(statuses)
   if (sqliteActions) return sqliteActions
+  if (await strictDesktopStorage()) throw desktopSqliteRequiredError("listing pending actions")
 
   const { store } = await storeTransaction("actions", "readonly")
   const actions = await requestToPromise<OfflineAction[]>(store.getAll())
@@ -395,6 +409,7 @@ export async function updateOfflineAction(id: string, patch: Partial<OfflineActi
     window.dispatchEvent(new Event("bezgrow:offline-actions-changed"))
     return sqliteAction
   }
+  if (await strictDesktopStorage()) return null
 
   const { store: readStore } = await storeTransaction("actions", "readonly")
   const current = await requestToPromise<OfflineAction | undefined>(readStore.get(id))
@@ -415,6 +430,7 @@ export async function pendingOfflineCount() {
 export async function setOfflineMeta(key: string, value: unknown, organizationId?: string) {
   const sqliteHandled = await setSqliteMeta(key, value, organizationId)
   if (sqliteHandled) return
+  if (await strictDesktopStorage()) throw desktopSqliteRequiredError(`writing metadata ${key}`)
   if (!isBrowser()) return
 
   const { store, transaction } = await storeTransaction("meta", "readwrite")
@@ -425,6 +441,7 @@ export async function setOfflineMeta(key: string, value: unknown, organizationId
 export async function getOfflineMeta<T>(key: string, fallback: T, organizationId?: string) {
   const sqliteValue = await getSqliteMeta(key, fallback, organizationId)
   if (sqliteValue !== fallback) return sqliteValue
+  if (await strictDesktopStorage()) return fallback
   if (!isBrowser()) return fallback
 
   const { store } = await storeTransaction("meta", "readonly")
@@ -434,7 +451,16 @@ export async function getOfflineMeta<T>(key: string, fallback: T, organizationId
 
 export async function clearOfflineData() {
   if (!isBrowser()) return
-  await clearSqliteOfflineData()
+  const sqliteHandled = await clearSqliteOfflineData()
+  if (await strictDesktopStorage()) {
+    if (!sqliteHandled) throw desktopSqliteRequiredError("clearing local data")
+    localStorage.removeItem("bezgrow:offline-workspace")
+    sessionStorage.removeItem("bezgrow:workspace-bootstrap")
+    sessionStorage.removeItem("bezgrow:organization-id")
+    window.dispatchEvent(new Event("bezgrow:offline-actions-changed"))
+    window.dispatchEvent(new Event("bezgrow:offline-data-changed"))
+    return
+  }
 
   const db = await openDb()
   const transaction = db.transaction(["data", "actions", "meta"], "readwrite")
@@ -454,6 +480,7 @@ export async function exportOfflineBackup() {
   if (!isBrowser()) return null
   const sqliteBackup = await exportSqliteBackup()
   if (sqliteBackup) return sqliteBackup
+  if (await strictDesktopStorage()) throw desktopSqliteRequiredError("exporting backup")
 
   const [data, actions] = await Promise.all([
     getAllFromStore<OfflineDataRecord<unknown>>("data"),
