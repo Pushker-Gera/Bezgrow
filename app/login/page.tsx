@@ -93,7 +93,24 @@ export default function LoginPage() {
     const redirectToCallback = useCallback(async (accessToken: string, refreshToken: string, nextPath = getSafeNextPath("/dashboard")) => {
         const redirectPath = await completeDesktopAuthCallback(accessToken, refreshToken, nextPath)
         router.replace(redirectPath)
+        return redirectPath
     }, [getSafeNextPath, router])
+
+    function authErrorFromRedirectPath(path: string) {
+        try {
+            const redirectUrl = new URL(path, window.location.origin)
+            if (redirectUrl.pathname !== "/login") return ""
+
+            const error = redirectUrl.searchParams.get("error")
+            if (error === "profile_missing") {
+                return "Your login succeeded, but no profile was found for this account. Contact support to repair the admin profile."
+            }
+            if (error === "account_suspended") return "This account is suspended."
+            return "Unable to open this account."
+        } catch {
+            return ""
+        }
+    }
 
     function createDesktopOAuthState() {
         const bytes = new Uint8Array(32)
@@ -145,9 +162,8 @@ export default function LoginPage() {
             })
 
             if (error) throw error
-            if (data.session) await persistDesktopSession(data.session)
-
             const redirectPath = await completeDesktopAuthCallback(session.access_token, session.refresh_token, getSafeNextPath("/dashboard"))
+            if (data.session) await persistDesktopSession(data.session)
             router.replace(redirectPath)
             return
         }
@@ -303,15 +319,25 @@ export default function LoginPage() {
                 return
             }
 
-            setSuccessMessage("Login successful")
-
             if (data.session?.access_token && data.session.refresh_token) {
-                await persistDesktopSession(data.session)
-                await redirectToCallback(data.session.access_token, data.session.refresh_token)
+                const desktopRuntime = await isTauriRuntimeAsync().catch(() => false)
+                if (desktopRuntime) await persistDesktopSession(data.session)
+                const redirectPath = await redirectToCallback(data.session.access_token, data.session.refresh_token)
+                const redirectError = authErrorFromRedirectPath(redirectPath)
+                if (redirectError) {
+                    setSuccessMessage("")
+                    setErrorMessage(redirectError)
+                    await supabase.auth.signOut().catch(() => undefined)
+                    return
+                }
+                setSuccessMessage("Login successful")
+            } else {
+                throw new Error("Login did not return a valid session.")
             }
 
         } catch (error) {
 
+            setSuccessMessage("")
             setErrorMessage(error instanceof Error ? error.message : "Something went wrong")
 
         } finally {
@@ -345,6 +371,7 @@ export default function LoginPage() {
             })
 
             if (error) {
+                setSuccessMessage("")
                 showAuthError(error.message)
                 setGoogleLoading(false)
                 return
@@ -358,7 +385,9 @@ export default function LoginPage() {
                     }
                     setSuccessMessage("Complete Google sign-in in your browser. Bezgrow will continue automatically.")
                     void waitForDesktopGoogleSignIn(desktopOAuthState).catch((error) => {
+                        setSuccessMessage("")
                         showAuthError(error instanceof Error ? error.message : "Google login failed")
+                        void supabase.auth.signOut().catch(() => undefined)
                         setGoogleLoading(false)
                     })
                     return
@@ -370,6 +399,7 @@ export default function LoginPage() {
 
         } catch (error) {
 
+            setSuccessMessage("")
             setErrorMessage(error instanceof Error ? error.message : "Google login failed")
             setGoogleLoading(false)
 

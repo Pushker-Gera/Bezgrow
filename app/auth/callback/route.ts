@@ -1,10 +1,19 @@
 import { NextResponse } from "next/server"
+import type { PostgrestError } from "@supabase/supabase-js"
 import { isConfiguredAdmin } from "@/lib/admin-role"
 import { isValidDesktopOAuthState, storeDesktopOAuthExchange } from "@/lib/desktop/oauth-store"
-import { adminSupabase } from "@/lib/supabase/admin"
 import { createServerSupabase } from "@/lib/supabase/server"
 
 export const dynamic = "force-dynamic"
+
+type SupabaseQueryClient = Pick<Awaited<ReturnType<typeof createServerSupabase>>, "from">
+
+type ProfileGate = {
+  role: string | null
+  approved: boolean | null
+  business_created: boolean | null
+  is_suspended: boolean | null
+}
 
 function getSiteUrl(origin: string) {
   const configuredUrl = process.env.NEXT_PUBLIC_SITE_URL?.trim()
@@ -28,12 +37,50 @@ function trustedDesktopCallbackOrigin(value: string | null) {
   }
 }
 
-async function getProfileRedirect(userId: string, email: string | null | undefined, requestedNext: string) {
-  const { data: profile, error: profileError } = await adminSupabase
+async function getOptionalAdminSupabase(): Promise<SupabaseQueryClient | null> {
+  try {
+    const { adminSupabase } = await import("@/lib/supabase/admin")
+    return adminSupabase as SupabaseQueryClient
+  } catch (error) {
+    console.warn("[auth/callback] admin client unavailable; using authenticated session lookup", {
+      message: error instanceof Error ? error.message : String(error),
+    })
+    return null
+  }
+}
+
+async function readProfile(client: SupabaseQueryClient, userId: string) {
+  return client
     .from("profiles")
     .select("role, approved, business_created, is_suspended")
     .eq("id", userId)
     .maybeSingle()
+}
+
+async function getProfileRedirect(
+  client: SupabaseQueryClient,
+  userId: string,
+  email: string | null | undefined,
+  requestedNext: string
+) {
+  let lookupClient = client
+  let { data: profile, error: profileError } = (await readProfile(client, userId)) as {
+    data: ProfileGate | null
+    error: PostgrestError | null
+  }
+
+  if (profileError || !profile) {
+    const adminClient = await getOptionalAdminSupabase()
+    if (adminClient) {
+      const adminProfile = (await readProfile(adminClient, userId)) as {
+        data: ProfileGate | null
+        error: PostgrestError | null
+      }
+      profile = adminProfile.data
+      profileError = adminProfile.error
+      lookupClient = adminClient
+    }
+  }
 
   let destination = "/dashboard"
   let reason = "approved_user"
@@ -50,15 +97,18 @@ async function getProfileRedirect(userId: string, email: string | null | undefin
   } else if (profileError || !profile) {
     destination = "/login?error=profile_missing"
     reason = profileError ? "profile_lookup_error" : "profile_missing"
+  } else if (profile.approved === false) {
+    destination = "/pending-approval"
+    reason = "pending_approval"
   } else if (!profile.business_created) {
     const [{ data: membership }, { data: ownedOrganization }] = await Promise.all([
-      adminSupabase
+      lookupClient
         .from("organization_members")
         .select("organization_id")
         .eq("user_id", userId)
         .limit(1)
         .maybeSingle(),
-      adminSupabase
+      lookupClient
         .from("organizations")
         .select("id")
         .eq("owner_id", userId)
@@ -135,7 +185,7 @@ export async function GET(request: Request) {
   }
 
   console.info("[auth/callback] session user", { userId: user.id })
-  const redirectPath = await getProfileRedirect(user.id, user.email, safeNext)
+  const redirectPath = await getProfileRedirect(supabase, user.id, user.email, safeNext)
   console.info("[auth/callback] redirect destination", { userId: user.id, redirectPath })
 
   if (isValidDesktopOAuthState(desktopOAuthState) && authSession?.access_token && authSession.refresh_token) {
@@ -178,7 +228,7 @@ export async function POST(request: Request) {
   } | null
 
   if (!body?.access_token || !body.refresh_token) {
-    return NextResponse.json({ redirectTo: `${siteUrl}/login` }, { status: 400 })
+    return NextResponse.json({ redirectTo: `${siteUrl}/login`, error: "Missing login session." }, { status: 400 })
   }
 
   const desktopValidated = body.desktop === true && process.env.BEZGROW_DESKTOP_BUILD === "1"
@@ -192,7 +242,7 @@ export async function POST(request: Request) {
       })
 
   if (error) {
-    return NextResponse.json({ redirectTo: `${siteUrl}/login` }, { status: 401 })
+    return NextResponse.json({ redirectTo: `${siteUrl}/login`, error: "Unable to verify login session." }, { status: 401 })
   }
 
   const {
@@ -200,7 +250,7 @@ export async function POST(request: Request) {
   } = desktopValidated ? await supabase.auth.getUser(body.access_token) : await supabase.auth.getUser()
 
   if (!user) {
-    return NextResponse.json({ redirectTo: `${siteUrl}/login` }, { status: 401 })
+    return NextResponse.json({ redirectTo: `${siteUrl}/login`, error: "Unable to verify login session." }, { status: 401 })
   }
 
   if (desktopValidated) {
@@ -215,7 +265,7 @@ export async function POST(request: Request) {
   }
 
   console.info("[auth/callback] post session user", { userId: user.id })
-  const redirectPath = await getProfileRedirect(user.id, user.email, getSafeNextPath(body.next || null))
+  const redirectPath = await getProfileRedirect(supabase, user.id, user.email, getSafeNextPath(body.next || null))
   console.info("[auth/callback] post redirect destination", { userId: user.id, redirectPath })
   return NextResponse.json({ redirectTo: new URL(redirectPath, siteUrl).toString() })
 }

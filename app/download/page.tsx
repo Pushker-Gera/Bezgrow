@@ -1,10 +1,9 @@
-import { existsSync, readFileSync, statSync } from "node:fs"
-import { join } from "node:path"
 import Link from "next/link"
 import type { Metadata } from "next"
 import type { ReactNode } from "react"
 import { BezgrowLogoMark } from "@/components/brand/BezgrowLogoMark"
 import packageJson from "@/package.json"
+import desktopReleaseManifest from "@/public/downloads/desktop-release.json"
 
 const macInstallerPath = "/downloads/Bezgrow-mac.dmg"
 const windowsInstallerPaths = ["/downloads/Bezgrow-windows.exe", "/downloads/Bezgrow-windows.msi"]
@@ -58,6 +57,8 @@ type DesktopReleaseManifest = {
   }
 }
 
+const releaseManifest = desktopReleaseManifest as DesktopReleaseManifest
+
 function formatFileSize(bytes: number) {
   const units = ["B", "KB", "MB", "GB"]
   let size = bytes
@@ -71,27 +72,8 @@ function formatFileSize(bytes: number) {
   return `${size >= 10 || unitIndex === 0 ? size.toFixed(0) : size.toFixed(1)} ${units[unitIndex]}`
 }
 
-function readDesktopReleaseManifest() {
-  const manifestPath = join(process.cwd(), "public", "downloads", "desktop-release.json")
-  if (!existsSync(manifestPath)) return null
-
-  try {
-    return JSON.parse(readFileSync(manifestPath, "utf8")) as DesktopReleaseManifest
-  } catch {
-    return null
-  }
-}
-
-function readReleaseManifest(path: string) {
-  const fullPath = join(process.cwd(), "public", path.replace(/^\/+/, ""))
-  const manifestPath = `${fullPath}.release.json`
-  if (!existsSync(manifestPath)) return null
-
-  try {
-    return JSON.parse(readFileSync(manifestPath, "utf8")) as { notarized?: boolean; signed?: boolean; version?: string }
-  } catch {
-    return null
-  }
+function isSafeInstallerHref(href: string) {
+  return /^https?:\/\//i.test(href) || (href.startsWith("/downloads/") && !href.includes(".."))
 }
 
 function getInstallerInfo(
@@ -100,14 +82,14 @@ function getInstallerInfo(
   releaseInfo?: DesktopReleaseManifest["mac"] | DesktopReleaseManifest["windows"] | null,
   releaseVersion?: string
 ): InstallerInfo {
-  const releaseUrl = releaseInfo?.downloadUrl || releaseInfo?.url
+  const releaseHref = releaseInfo?.downloadUrl || releaseInfo?.url || releaseInfo?.file
 
-  if (releaseUrl) {
+  if (releaseHref && isSafeInstallerHref(releaseHref)) {
     const sizeLabel = releaseInfo.size ? formatFileSize(releaseInfo.size) : null
     const version = releaseInfo.version || releaseVersion || packageJson.version
     return {
       available: true,
-      href: releaseUrl,
+      href: releaseHref,
       sizeLabel,
       notarized: "notarized" in releaseInfo ? releaseInfo.notarized : undefined,
       signed: "signed" in releaseInfo ? releaseInfo.signed : undefined,
@@ -116,32 +98,7 @@ function getInstallerInfo(
   }
 
   const candidates = Array.isArray(paths) ? paths : [paths]
-  const releaseFile = releaseInfo?.file && releaseInfo.file.startsWith("/") ? releaseInfo.file : null
-  const releaseCandidates = releaseFile ? [releaseFile, ...candidates] : candidates
-  const path = candidates.find((candidate) => {
-    const fullPath = join(process.cwd(), "public", candidate.replace(/^\/+/, ""))
-    return existsSync(fullPath) && statSync(fullPath).isFile()
-  }) || releaseCandidates.find((candidate) => {
-    const fullPath = join(process.cwd(), "public", candidate.replace(/^\/+/, ""))
-    return existsSync(fullPath) && statSync(fullPath).isFile()
-  })
-
-  if (!path) {
-    return { available: false, href: candidates[0], sizeLabel: null, statusLabel: missingStatusLabel }
-  }
-
-  const fullPath = join(process.cwd(), "public", path.replace(/^\/+/, ""))
-  const sizeLabel = formatFileSize(statSync(fullPath).size)
-  const manifest = readReleaseManifest(path)
-
-  return {
-    available: true,
-    href: path,
-    sizeLabel,
-    notarized: releaseInfo && "notarized" in releaseInfo ? releaseInfo.notarized : manifest?.notarized,
-    signed: releaseInfo && "signed" in releaseInfo ? releaseInfo.signed : manifest?.signed,
-    statusLabel: `Version ${releaseVersion || manifest?.version || packageJson.version} | ${sizeLabel}`,
-  }
+  return { available: false, href: candidates[0], sizeLabel: null, statusLabel: missingStatusLabel }
 }
 
 function DownloadButton({
@@ -175,14 +132,12 @@ function InstallerCard({
   href,
   info,
   label,
-  platform,
 }: {
   href: string
   info: InstallerInfo
   label: string
-  platform: "mac" | "windows"
 }) {
-  const downloadHref = info.available ? `/api/downloads/desktop?platform=${platform}` : info.href || href
+  const downloadHref = info.available ? info.href : info.href || href
 
   return (
     <div className="min-w-0">
@@ -223,7 +178,6 @@ function MobileInstallCard({
 }
 
 export default function DownloadPage() {
-  const releaseManifest = readDesktopReleaseManifest()
   const macInstaller = getInstallerInfo(macInstallerPath, "Mac installer not found.", releaseManifest?.mac, releaseManifest?.version)
   const windowsInstaller = getInstallerInfo(
     windowsInstallerPaths,
@@ -266,8 +220,8 @@ export default function DownloadPage() {
           )}
 
           <div className="mt-7 grid gap-3 sm:grid-cols-2">
-            <InstallerCard href={macInstallerPath} info={macInstaller} label="Download for Mac" platform="mac" />
-            <InstallerCard href={windowsInstallerPaths[0]} info={windowsInstaller} label="Download for Windows" platform="windows" />
+            <InstallerCard href={macInstallerPath} info={macInstaller} label="Download for Mac" />
+            <InstallerCard href={windowsInstallerPaths[0]} info={windowsInstaller} label="Download for Windows" />
           </div>
 
           <div className="mt-5 grid gap-3 sm:grid-cols-2">

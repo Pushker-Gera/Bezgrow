@@ -68,7 +68,8 @@ async function completeDesktopAuthViaCloud(accessToken: string, nextPath: string
 }
 
 export async function completeDesktopAuthCallback(accessToken: string, refreshToken: string, nextPath = "/dashboard") {
-  if (await isTauriRuntimeAsync()) {
+  const desktopRuntime = await isTauriRuntimeAsync()
+  if (desktopRuntime) {
     return completeDesktopAuthViaCloud(accessToken, nextPath)
   }
 
@@ -89,7 +90,7 @@ export async function completeDesktopAuthCallback(accessToken: string, refreshTo
   const payload = (await response.json().catch(() => ({}))) as DesktopCallbackResponse
 
   if (!response.ok) {
-    throw new Error(payload.error || "Unable to complete desktop login.")
+    throw new Error(payload.error || "Unable to complete login.")
   }
 
   return toLocalPath(payload.redirectTo, nextPath)
