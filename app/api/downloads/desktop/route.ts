@@ -28,6 +28,13 @@ function jsonError(message: string, status = 404) {
   return NextResponse.json({ success: false, error: message }, { status, headers: { "Cache-Control": "no-store" } })
 }
 
+function redirectToInstaller(href: string, request: Request) {
+  return NextResponse.redirect(new URL(href, request.url), {
+    status: 302,
+    headers: { "Cache-Control": "no-store" },
+  })
+}
+
 function releasesForPlatform(platform: string, manifest: DesktopReleaseManifest | null): PlatformRelease {
   if (platform === "mac") {
     return {
@@ -49,21 +56,21 @@ function releasesForPlatform(platform: string, manifest: DesktopReleaseManifest 
   }
 }
 
-function redirectToInstaller(href: string, request: Request) {
-  const response = NextResponse.redirect(new URL(href, request.url))
-  response.headers.set("Cache-Control", "no-store")
-  return response
-}
-
 function redirectToRemoteInstaller(href: string) {
-  const response = NextResponse.redirect(href)
-  response.headers.set("Cache-Control", "no-store")
-  return response
+  return NextResponse.redirect(href, {
+    status: 302,
+    headers: { "Cache-Control": "no-store" },
+  })
 }
 
 export async function GET(request: Request) {
   const url = new URL(request.url)
   const platform = url.searchParams.get("platform") === "mac" ? "mac" : "windows"
+  if (platform === "mac") {
+    const href = desktopReleaseManifest.mac?.downloadUrl || desktopReleaseManifest.mac?.file || "/downloads/Bezgrow-mac.dmg"
+    return redirectToInstaller(href, request)
+  }
+
   const { releases, missing } = releasesForPlatform(platform, desktopReleaseManifest as DesktopReleaseManifest)
   const hrefs = releases
     .map((release) => release.downloadUrl || release.url || release.file || "")
