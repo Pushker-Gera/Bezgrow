@@ -40,6 +40,7 @@ type LoginLogMeta = {
   profileLookupSucceeded?: boolean
   workspaceLookupSucceeded?: boolean
   redirectTo?: string | null
+  exceptionName?: string
 }
 
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL?.trim()
@@ -55,6 +56,10 @@ function runtimeName(): LoginLogMeta["runtime"] {
 function safeNextPath(value: unknown) {
   if (typeof value !== "string") return "/dashboard"
   return value.startsWith("/") && !value.startsWith("//") ? value : "/dashboard"
+}
+
+function newRequestId() {
+  return globalThis.crypto?.randomUUID?.() ?? Math.random().toString(36).slice(2)
 }
 
 function getBearerToken(request: Request) {
@@ -224,9 +229,13 @@ async function resolveDestination(client: SupabaseQueryClient, user: User, reque
 }
 
 export async function POST(request: Request) {
-  const requestId = crypto.randomUUID()
+  const requestId = newRequestId()
   const route = new URL(request.url).pathname
   const runtime = runtimeName()
+  let stage = "start"
+
+  try {
+  stage = "validate_origin"
 
   if (!validateMutationOrigin(request)) {
     logLogin("warn", {
@@ -245,6 +254,7 @@ export async function POST(request: Request) {
     return safeError("Invalid request origin.", 403, "INVALID_ORIGIN", "validate_origin", requestId)
   }
 
+  stage = "rate_limit"
   const limit = checkRateLimit({
     key: rateLimitKey(request, "auth.login"),
     limit: 20,
@@ -268,6 +278,7 @@ export async function POST(request: Request) {
     return safeError("Too many login attempts. Please try again later.", 429, "RATE_LIMITED", "rate_limit", requestId)
   }
 
+  stage = "parse_request"
   const parsed = loginSchema.safeParse(await request.json().catch(() => null))
   if (!parsed.success) {
     logLogin("warn", {
@@ -286,6 +297,7 @@ export async function POST(request: Request) {
     return safeError("Please enter a valid email and password.", 400, "INVALID_REQUEST", "parse_request", requestId)
   }
 
+  stage = "environment"
   if (!supabaseUrl || !supabaseAnonKey) {
     logLogin("error", {
       requestId,
@@ -303,6 +315,7 @@ export async function POST(request: Request) {
     return safeError("Login is not configured on this deployment.", 500, "AUTH_ENV_MISSING", "environment", requestId)
   }
 
+  stage = "server_client"
   const cookieStore = await cookies()
   let sessionCookieWrites = 0
   const supabase = createServerClient(supabaseUrl, supabaseAnonKey, {
@@ -320,6 +333,7 @@ export async function POST(request: Request) {
     },
   })
 
+  stage = "supabase_password_auth"
   const { data, error } = await supabase.auth.signInWithPassword({
     email: parsed.data.email,
     password: parsed.data.password,
@@ -351,6 +365,7 @@ export async function POST(request: Request) {
     )
   }
 
+  stage = "server_session_confirm"
   const {
     data: { user },
     error: userError,
@@ -373,6 +388,7 @@ export async function POST(request: Request) {
     return safeError("Login session could not be confirmed.", 401, "SESSION_NOT_CONFIRMED", "server_session_confirm", requestId)
   }
 
+  stage = "destination_authorization"
   const destination = await resolveDestination(supabase as SupabaseQueryClient, user, safeNextPath(parsed.data.next))
 
   if (!destination.ok) {
@@ -392,6 +408,7 @@ export async function POST(request: Request) {
     return safeError(destination.message, destination.status, destination.code, "destination_authorization", requestId)
   }
 
+  stage = "destination_authorized"
   logLogin("info", {
     requestId,
     stage: "destination_authorized",
@@ -414,4 +431,28 @@ export async function POST(request: Request) {
     },
     { headers: { "Cache-Control": "no-store" } }
   )
+  } catch (error) {
+    const exceptionName = error instanceof Error ? error.name : typeof error
+    logLogin("error", {
+      requestId,
+      stage,
+      status: stage === "supabase_password_auth" ? 502 : 500,
+      code: "LOGIN_STAGE_EXCEPTION",
+      route,
+      runtime,
+      supabaseAuthSucceeded: false,
+      sessionCookiesWritten: false,
+      profileLookupSucceeded: false,
+      workspaceLookupSucceeded: false,
+      redirectTo: null,
+      exceptionName,
+    })
+    return safeError(
+      "Login failed while processing this request.",
+      stage === "supabase_password_auth" ? 502 : 500,
+      "LOGIN_STAGE_EXCEPTION",
+      stage,
+      requestId
+    )
+  }
 }
