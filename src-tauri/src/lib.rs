@@ -26,6 +26,24 @@ const DESKTOP_SERVER_PORT: u16 = 43124;
 
 struct NextServerState(Mutex<Option<Child>>);
 
+fn stop_next_server<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
+    let Some(state) = app.try_state::<NextServerState>() else {
+        return;
+    };
+
+    let Some(mut child) = state
+        .0
+        .lock()
+        .expect("next server state poisoned")
+        .take()
+    else {
+        return;
+    };
+
+    let _ = child.kill();
+    let _ = child.wait();
+}
+
 fn startup_log_path(app: &tauri::App) -> PathBuf {
     app.path()
         .app_log_dir()
@@ -486,13 +504,7 @@ pub fn run() {
             }
 
             if let tauri::WindowEvent::Destroyed = event {
-                if let Some(state) = window.try_state::<NextServerState>() {
-                    if let Some(mut child) =
-                        state.0.lock().expect("next server state poisoned").take()
-                    {
-                        let _ = child.kill();
-                    }
-                }
+                stop_next_server(&window.app_handle());
             }
         })
         .invoke_handler(tauri::generate_handler![
@@ -503,6 +515,11 @@ pub fn run() {
             delete_secret,
             open_external_url
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running Bezgrow ERP");
+        .build(tauri::generate_context!())
+        .expect("error while building Bezgrow ERP")
+        .run(|app, event| {
+            if matches!(event, tauri::RunEvent::Exit | tauri::RunEvent::ExitRequested { .. }) {
+                stop_next_server(app);
+            }
+        });
 }

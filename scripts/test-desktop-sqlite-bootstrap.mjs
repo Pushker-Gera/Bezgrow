@@ -56,6 +56,9 @@ assert.match(rust, /fn desktop_database_diagnostics/, "Native database diagnosti
 assert.match(rust, /fn desktop_database_backup/, "Native migration backup command is missing.");
 assert.match(rust, /sha256_file/, "Native migration backups must include a checksum.");
 assert.match(rust, /desktop_database_diagnostics,[\s\S]*desktop_database_backup,/, "Native database commands must be registered with Tauri.");
+assert.match(rust, /fn stop_next_server/, "Desktop shutdown must have a single bundled-server cleanup path.");
+assert.match(rust, /child\.kill\(\);[\s\S]*child\.wait\(\);/, "Desktop shutdown must terminate and reap the bundled server process.");
+assert.match(rust, /RunEvent::Exit[\s\S]*RunEvent::ExitRequested/, "Desktop app exit must clean up the bundled server even when window destruction is skipped.");
 assert.match(buildDesktop, /function tauriBuildEnv\(\)/, "Desktop build wrapper must control the Tauri bundler environment.");
 assert.match(buildDesktop, /process\.platform === "darwin"[\s\S]*env\.CI = "true"/, "macOS DMG packaging must run in CI mode to skip fragile Finder automation.");
 
