@@ -15,6 +15,8 @@ const buildDesktop = read("scripts/build-desktop.mjs");
 
 assert.doesNotMatch(service, /POOL_SIZE|private readonly pool|poolCursor/, "Desktop SQLite startup must not use a connection pool before bootstrap completes.");
 assert.match(service, /primaryConnectionPromise/, "Desktop SQLite must share one primary connection during startup.");
+assert.match(service, /sqlPlugin\.default\.get\(LOCAL_DB_URL\)/, "Desktop SQLite must reuse the Tauri-preloaded connection instead of loading it twice.");
+assert.doesNotMatch(service, /sqlPlugin\.default\.load\(LOCAL_DB_URL\)/, "Desktop SQLite must not duplicate the preloaded database connection.");
 assert.match(service, /startupPromise/, "Concurrent desktop SQLite callers must await one startup promise.");
 assert.match(service, /startupFailure/, "Permanent startup failures must be retained until an explicit retry or relaunch.");
 assert.match(service, /desktop_database_diagnostics/, "Desktop SQLite bootstrap must collect native path and permission diagnostics.");

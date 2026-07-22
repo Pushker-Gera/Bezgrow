@@ -71,6 +71,32 @@ fn append_startup_log(app: &tauri::App, message: impl AsRef<str>) {
     let _ = writeln!(file, "[{timestamp}] {}", message.as_ref());
 }
 
+#[tauri::command]
+fn desktop_startup_log<R: tauri::Runtime>(app: tauri::AppHandle<R>, message: String) {
+    let sanitized = message.replace(['\r', '\n'], " ");
+    append_startup_log_handle(&app, sanitized);
+}
+
+fn append_startup_log_handle<R: tauri::Runtime>(app: &tauri::AppHandle<R>, message: impl AsRef<str>) {
+    let path = app
+        .path()
+        .app_log_dir()
+        .or_else(|_| app.path().app_data_dir())
+        .unwrap_or_else(|_| std::env::temp_dir().join("Bezgrow"))
+        .join("bezgrow-startup.log");
+
+    if let Some(parent) = path.parent() {
+        let _ = fs::create_dir_all(parent);
+    }
+
+    let Ok(mut file) = OpenOptions::new().create(true).append(true).open(&path) else {
+        return;
+    };
+
+    let timestamp = unix_timestamp();
+    let _ = writeln!(file, "[{timestamp}] {}", message.as_ref());
+}
+
 fn create_startup_error_window(
     app: &mut tauri::App,
     startup_error: &str,
@@ -160,6 +186,7 @@ fn sha256_file(path: &PathBuf) -> Result<String, String> {
 fn desktop_database_diagnostics<R: tauri::Runtime>(
     app: tauri::AppHandle<R>,
 ) -> Result<DesktopDatabaseDiagnostics, String> {
+    append_startup_log_handle(&app, "SQLite native diagnostics invoked");
     let app_config_dir = app
         .path()
         .app_config_dir()
@@ -447,7 +474,7 @@ fn start_next_server(app: &mut tauri::App) -> Result<u16, Box<dyn std::error::Er
 }
 
 fn create_main_window(app: &mut tauri::App, port: u16) -> Result<(), Box<dyn std::error::Error>> {
-    let url = tauri::Url::parse(&format!("http://127.0.0.1:{port}"))?;
+    let url = tauri::Url::parse(&format!("http://127.0.0.1:{port}/login"))?;
     let runtime_mode = if cfg!(debug_assertions) {
         "tauri-dev"
     } else {
@@ -510,6 +537,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             desktop_database_diagnostics,
             desktop_database_backup,
+            desktop_startup_log,
             store_secret,
             read_secret,
             delete_secret,

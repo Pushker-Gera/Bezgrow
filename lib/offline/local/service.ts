@@ -12,7 +12,7 @@ export type SqlExecutor = {
 
 type SqlModule = {
   default: {
-    load(url: string): Promise<SqlExecutor>
+    get(url: string): SqlExecutor
   }
 }
 
@@ -263,6 +263,7 @@ export class LocalDatabaseService {
       entry.status = "ok"
       entry.durationMs = Date.now() - started
       if (typeof result === "string") entry.detail = result
+      await this.logStartupStage(entry)
       return result
     } catch (error) {
       entry.status = "failed"
@@ -271,8 +272,16 @@ export class LocalDatabaseService {
       entry.errorMessage = safeErrorMessage(error)
       this.lastFailedStage = stage
       this.lastInitializationError = entry.errorMessage
+      await this.logStartupStage(entry)
       throw this.unavailableError(error, stage)
     }
+  }
+
+  private async logStartupStage(entry: StartupStage) {
+    const detail = entry.errorMessage || entry.detail || ""
+    await invokeTauri("desktop_startup_log", {
+      message: `SQLite startup stage=${entry.stage} status=${entry.status} duration_ms=${entry.durationMs || 0}${detail ? ` detail=${detail}` : ""}`,
+    }).catch(() => undefined)
   }
 
   private async withTemporaryLockRetry<T>(work: () => Promise<T>) {
@@ -294,7 +303,7 @@ export class LocalDatabaseService {
 
     this.primaryConnectionPromise = this.withTemporaryLockRetry(async () => {
       const sqlPlugin = (await import("@tauri-apps/plugin-sql")) as SqlModule
-      return sqlPlugin.default.load(LOCAL_DB_URL)
+      return sqlPlugin.default.get(LOCAL_DB_URL)
     }).catch((error) => {
       this.primaryConnectionPromise = null
       throw error
