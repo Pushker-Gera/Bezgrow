@@ -1498,6 +1498,48 @@ export async function clearNormalizedData() {
   })
 }
 
+export async function mergeNormalizedOrganization(sourceOrganizationId: string, targetOrganizationId: string) {
+  if (!sourceOrganizationId || !targetOrganizationId || sourceOrganizationId === targetOrganizationId) return
+  const businessTables = [
+    "products",
+    "inventory_items",
+    "stock_batches",
+    "stock_movements",
+    "customers",
+    "suppliers",
+    "sales_invoices",
+    "sales_invoice_items",
+    "purchase_invoices",
+    "purchase_invoice_items",
+    "orders",
+    "order_items",
+    "quotations",
+    "quotation_items",
+    "delivery_challans",
+    "delivery_challan_items",
+    "credit_notes",
+    "credit_note_items",
+    "debit_notes",
+    "debit_note_items",
+    "expenses",
+    "payments",
+    "payment_receipts",
+    "ledger_entries",
+    "accounting_vouchers",
+    "accounting_voucher_entries",
+    "bank_accounts",
+    "print_templates",
+    "backup_manifest",
+  ]
+  await service.transaction(async (db) => {
+    await ensureOrganization(db, targetOrganizationId)
+    await db.execute("PRAGMA defer_foreign_keys = ON")
+    for (const table of businessTables) {
+      await db.execute(`UPDATE ${table} SET organization_id = ? WHERE organization_id = ?`, [targetOrganizationId, sourceOrganizationId])
+    }
+  })
+}
+
 export async function exportNormalizedBackup() {
   const db = await service.requireConnection("read")
   const data: Partial<Record<OfflineCollection, DataRow[]>> = {}

@@ -372,8 +372,14 @@ fn wait_for_local_server(child: &mut Child, port: u16) -> Result<(), String> {
 
 #[cfg(not(debug_assertions))]
 fn reserve_local_port() -> Result<u16, Box<dyn std::error::Error>> {
-    let listener = TcpListener::bind(("127.0.0.1", DESKTOP_SERVER_PORT))
-        .or_else(|_| TcpListener::bind(("127.0.0.1", 0)))?;
+    // WebKit storage is origin-scoped, so changing this port selects a different
+    // localStorage/legacy IndexedDB workspace. Never silently fall back to a
+    // random port and present an empty business.
+    let listener = TcpListener::bind(("127.0.0.1", DESKTOP_SERVER_PORT)).map_err(|error| {
+        format!(
+            "Bezgrow desktop port {DESKTOP_SERVER_PORT} is unavailable. Close the other Bezgrow instance and reopen the app: {error}"
+        )
+    })?;
     let port = listener.local_addr()?.port();
     drop(listener);
     Ok(port)

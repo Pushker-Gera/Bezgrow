@@ -1,7 +1,7 @@
 "use client"
 
 import type { WorkspaceBootstrapPayload } from "@/lib/workspaceBootstrapClient"
-import { isDesktopRuntime } from "@/lib/desktop/tauri"
+import { invokeTauri, isDesktopRuntime } from "@/lib/desktop/tauri"
 import { evaluateStoredLicense, isLicenseRestrictedAction, isLicenseRestrictedCollection, type StoredLicenseRow } from "@/lib/license/policy"
 import {
   clearSqliteOfflineData,
@@ -9,6 +9,7 @@ import {
   getSqliteCollection,
   getSqliteMeta,
   listSqliteActions,
+  mergeSqliteOrganizations,
   putSqliteCollection,
   queueSqliteAction,
   setSqliteMeta,
@@ -122,6 +123,14 @@ type OfflineDataRecord<T> = {
   updatedAt: string
 }
 
+type LegacyIndexedDbMigrationResult = {
+  migrated: boolean
+  importedCollections: number
+  importedRecords: number
+  skippedNonEmptyCollections: number
+  workspace: WorkspaceBootstrapPayload | null
+}
+
 const DB_NAME = "bezgrow-offline"
 const DB_VERSION = 1
 const offlineCollections: OfflineCollection[] = [
@@ -166,8 +175,10 @@ const offlineCollections: OfflineCollection[] = [
   "backup_manifest",
 ]
 const singleRecordCollections = new Set<OfflineCollection>(["workspace", "organization", "settings"])
+const LEGACY_SQLITE_MIGRATION_MARKER = "legacy_indexeddb_to_sqlite_v7"
 
 let dbPromise: Promise<IDBDatabase> | null = null
+let legacyMigrationPromise: Promise<LegacyIndexedDbMigrationResult> | null = null
 
 async function strictDesktopStorage() {
   return isDesktopRuntime().catch(() => false)
@@ -230,6 +241,208 @@ function waitForTransaction(transaction: IDBTransaction) {
 
 function dataKey(organizationId: string, collection: OfflineCollection) {
   return `${organizationId}:${collection}`
+}
+
+function legacyRows(value: unknown) {
+  return Array.isArray(value) ? value : value == null ? [] : [value]
+}
+
+function workspacePayloadFromLegacyRecord(record: OfflineDataRecord<unknown>) {
+  if (record.collection !== "workspace" || !record.value || typeof record.value !== "object") return null
+  const value = record.value as { payload?: WorkspaceBootstrapPayload }
+  return value.payload?.success ? value.payload : null
+}
+
+/**
+ * One-time bridge from the WebKit store used by older desktop releases into the
+ * authoritative SQLite database. This is deliberately not a read fallback:
+ * existing SQLite collections win, the source is retained, and a native SQLite
+ * backup is made before the first write.
+ */
+async function runLegacyIndexedDbToSqliteMigration(): Promise<LegacyIndexedDbMigrationResult> {
+  const empty: LegacyIndexedDbMigrationResult = {
+    migrated: false,
+    importedCollections: 0,
+    importedRecords: 0,
+    skippedNonEmptyCollections: 0,
+    workspace: null,
+  }
+  if (!isBrowser() || !(await strictDesktopStorage())) return empty
+
+  const marker = await getSqliteMeta(LEGACY_SQLITE_MIGRATION_MARKER, false, "global")
+  if (marker) return empty
+
+  const records = await getAllFromStore<OfflineDataRecord<unknown>>("data").catch(() => [])
+  const validRecords = records
+    .filter(
+      (record) =>
+        record &&
+        typeof record.organizationId === "string" &&
+        record.organizationId.length > 0 &&
+        offlineCollections.includes(record.collection)
+    )
+    .sort((left, right) => offlineCollections.indexOf(left.collection) - offlineCollections.indexOf(right.collection))
+  if (validRecords.length === 0) {
+    await setSqliteMeta(LEGACY_SQLITE_MIGRATION_MARKER, true, "global")
+    return empty
+  }
+
+  const activityByOrganization = new Map<string, number>()
+  for (const record of validRecords) {
+    if (["products", "customers", "invoices", "invoice_items", "stock_movements", "warehouses"].includes(record.collection)) {
+      activityByOrganization.set(record.organizationId, (activityByOrganization.get(record.organizationId) || 0) + legacyRows(record.value).length)
+    }
+  }
+  const workspace =
+    validRecords
+      .map((record) => ({ payload: workspacePayloadFromLegacyRecord(record), score: activityByOrganization.get(record.organizationId) || 0 }))
+      .filter((candidate): candidate is { payload: WorkspaceBootstrapPayload; score: number } => Boolean(candidate.payload))
+      .sort((a, b) => b.score - a.score)[0]?.payload || null
+  const selectedOrganizationId = workspace?.organization?.id || workspace?.membership?.organization_id || null
+  const selectedBusinessName = workspace?.organization?.name?.trim().toLowerCase() || ""
+  const selectedUserEmail = workspace?.user?.email?.trim().toLowerCase() || ""
+  const equivalentOrganizations = new Set(
+    validRecords
+      .map((record) => ({ organizationId: record.organizationId, payload: workspacePayloadFromLegacyRecord(record) }))
+      .filter(({ payload }) => {
+        if (!payload) return false
+        const businessName = payload.organization?.name?.trim().toLowerCase() || ""
+        const userEmail = payload.user?.email?.trim().toLowerCase() || ""
+        return Boolean(
+          (selectedBusinessName && businessName === selectedBusinessName) ||
+            (selectedUserEmail && userEmail === selectedUserEmail)
+        )
+      })
+      .map(({ organizationId }) => organizationId)
+  )
+  if (selectedOrganizationId) equivalentOrganizations.add(selectedOrganizationId)
+
+  // Historical releases could change workspace IDs while retaining records that
+  // reference each other. Treat those linked IDs as one business so a product is
+  // not left in one workspace while its invoice lives in another.
+  const idOwners = new Map<string, string>()
+  for (const record of validRecords) {
+    for (const row of legacyRows(record.value)) {
+      if (!row || typeof row !== "object") continue
+      const id = "id" in row ? String((row as { id?: unknown }).id || "") : ""
+      if (id) idOwners.set(id, record.organizationId)
+    }
+  }
+  let expanded = true
+  while (expanded) {
+    expanded = false
+    for (const record of validRecords) {
+      for (const row of legacyRows(record.value)) {
+        if (!row || typeof row !== "object") continue
+        for (const [key, value] of Object.entries(row)) {
+          if (!key.endsWith("_id") || typeof value !== "string") continue
+          const owner = idOwners.get(value)
+          if (!owner || owner === record.organizationId) continue
+          if (equivalentOrganizations.has(record.organizationId) && !equivalentOrganizations.has(owner)) {
+            equivalentOrganizations.add(owner)
+            expanded = true
+          } else if (equivalentOrganizations.has(owner) && !equivalentOrganizations.has(record.organizationId)) {
+            equivalentOrganizations.add(record.organizationId)
+            expanded = true
+          }
+        }
+      }
+    }
+  }
+
+  let backupMade = false
+  let importedCollections = 0
+  let importedRecords = 0
+  let skippedNonEmptyCollections = 0
+  const failures: string[] = []
+
+  for (const record of validRecords) {
+    const targetOrganizationId =
+      selectedOrganizationId && equivalentOrganizations.has(record.organizationId) ? selectedOrganizationId : record.organizationId
+    const current = await getSqliteCollection<unknown[]>(targetOrganizationId, record.collection, [])
+    const currentRows = legacyRows(current.value)
+    let importValue = record.value
+    if (current.hit && currentRows.length > 0) {
+      const incomingRows = legacyRows(record.value)
+      if (singleRecordCollections.has(record.collection)) {
+        skippedNonEmptyCollections += 1
+        continue
+      }
+      const existingIds = new Set(
+        currentRows
+          .map((row) => (row && typeof row === "object" && "id" in row ? String((row as { id?: unknown }).id || "") : ""))
+          .filter(Boolean)
+      )
+      const missingRows = incomingRows.filter((row) => {
+        const id = row && typeof row === "object" && "id" in row ? String((row as { id?: unknown }).id || "") : ""
+        return !id || !existingIds.has(id)
+      })
+      if (missingRows.length === 0) {
+        skippedNonEmptyCollections += 1
+        continue
+      }
+      importValue = [...currentRows, ...missingRows]
+    }
+    try {
+      if (!backupMade) {
+        await invokeTauri("desktop_database_backup", { reason: "pre-legacy-indexeddb-import" })
+        backupMade = true
+      }
+      if (await putSqliteCollection(targetOrganizationId, record.collection, importValue)) {
+        importedCollections += 1
+        importedRecords += legacyRows(record.value).length
+      }
+    } catch (error) {
+      const message = `${record.organizationId}->${targetOrganizationId}:${record.collection}: ${error instanceof Error ? error.message : String(error)}`
+      failures.push(message)
+      await invokeTauri("desktop_startup_log", { message: `[offline/migration] failed ${message}` }).catch(() => undefined)
+    }
+  }
+
+  if (selectedOrganizationId && failures.length === 0) {
+    for (const sourceOrganizationId of equivalentOrganizations) {
+      if (sourceOrganizationId === selectedOrganizationId || sourceOrganizationId === "global") continue
+      try {
+        await mergeSqliteOrganizations(sourceOrganizationId, selectedOrganizationId)
+      } catch (error) {
+        const message = `${sourceOrganizationId}->${selectedOrganizationId}:workspace-merge: ${error instanceof Error ? error.message : String(error)}`
+        failures.push(message)
+        await invokeTauri("desktop_startup_log", { message: `[offline/migration] failed ${message}` }).catch(() => undefined)
+      }
+    }
+  }
+
+  await setSqliteMeta(LEGACY_SQLITE_MIGRATION_MARKER, failures.length === 0, "global")
+  if (workspace) {
+    localStorage.setItem(
+      "bezgrow:offline-workspace",
+      JSON.stringify({
+        payload: workspace,
+        organizationId: workspace.organization?.id || workspace.membership?.organization_id,
+        cachedAt: Date.now(),
+      })
+    )
+  }
+  console.info("[offline/migration] legacy IndexedDB import complete", {
+    importedCollections,
+    importedRecords,
+    skippedNonEmptyCollections,
+    failures: failures.length,
+    selectedOrganizationId: workspace?.organization?.id || null,
+  })
+  await invokeTauri("desktop_startup_log", {
+    message: `[offline/migration] source=${validRecords.length} imported_collections=${importedCollections} imported_records=${importedRecords} skipped_nonempty=${skippedNonEmptyCollections} failures=${failures.length} selected_org=${workspace?.organization?.id || "none"} equivalent_orgs=${[...equivalentOrganizations].join(",") || "none"}`,
+  }).catch(() => undefined)
+  return { migrated: importedCollections > 0, importedCollections, importedRecords, skippedNonEmptyCollections, workspace }
+}
+
+export async function migrateLegacyIndexedDbToSqlite(): Promise<LegacyIndexedDbMigrationResult> {
+  if (!legacyMigrationPromise) {
+    legacyMigrationPromise = runLegacyIndexedDbToSqliteMigration().finally(() => {
+      legacyMigrationPromise = null
+    })
+  }
+  return legacyMigrationPromise
 }
 
 function deviceIdForGuard() {

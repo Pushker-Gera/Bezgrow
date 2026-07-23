@@ -11,9 +11,12 @@ const publicBrandDir = join(publicDir, "brand");
 const desktopShellDir = join(root, "desktop-shell");
 const tauriIconsDir = join(root, "src-tauri", "icons");
 const sourceLogo = join(publicBrandDir, "bezgrow-growth-logo.png");
+const nativeSourceLogo = join(publicBrandDir, "bezgrow-logo-3d.png");
 
-if (!existsSync(sourceLogo)) {
-  throw new Error(`Missing official Bezgrow source logo at ${sourceLogo}`);
+for (const requiredLogo of [sourceLogo, nativeSourceLogo]) {
+  if (!existsSync(requiredLogo)) {
+    throw new Error(`Missing official Bezgrow source logo at ${requiredLogo}`);
+  }
 }
 
 function ensureDirectories() {
@@ -22,8 +25,8 @@ function ensureDirectories() {
   }
 }
 
-function resizePng(size, outputPath) {
-  const result = spawnSync("sips", ["-z", String(size), String(size), sourceLogo, "--out", outputPath], {
+function resizePng(size, outputPath, inputPath = sourceLogo) {
+  const result = spawnSync("sips", ["-z", String(size), String(size), inputPath, "--out", outputPath], {
     encoding: "utf8",
   });
 
@@ -248,6 +251,7 @@ const pngTargets = [
   [96, join(publicIconsDir, "shortcut-products.png")],
   [96, join(publicIconsDir, "shortcut-invoices.png")],
   [512, join(desktopShellDir, "logo.png")],
+  [16, join(tauriIconsDir, "16x16.png")],
   [32, join(tauriIconsDir, "32x32.png")],
   [64, join(tauriIconsDir, "64x64.png")],
   [128, join(tauriIconsDir, "128x128.png")],
@@ -258,7 +262,8 @@ const pngTargets = [
 ];
 
 for (const [size, path] of pngTargets) {
-  resizePng(size, path);
+  const nativeIcon = path.startsWith(tauriIconsDir);
+  resizePng(size, path, nativeIcon ? nativeSourceLogo : sourceLogo);
 }
 
 writeIco(join(publicDir, "favicon.ico"), [
@@ -274,14 +279,14 @@ writeIco(join(desktopShellDir, "favicon.ico"), [
 ]);
 
 writeIco(join(tauriIconsDir, "icon.ico"), [
-  { size: 16, path: join(publicDir, "favicon-16x16.png") },
+  { size: 16, path: join(tauriIconsDir, "16x16.png") },
   { size: 32, path: join(tauriIconsDir, "32x32.png") },
-  { size: 48, path: join(publicDir, "favicon-48x48.png") },
+  { size: 64, path: join(tauriIconsDir, "64x64.png") },
   { size: 256, path: join(tauriIconsDir, "256x256.png") },
 ]);
 
 writeIcns(join(tauriIconsDir, "icon.icns"), [
-  ["icp4", join(publicDir, "favicon-16x16.png")],
+  ["icp4", join(tauriIconsDir, "16x16.png")],
   ["icp5", join(tauriIconsDir, "32x32.png")],
   ["icp6", join(tauriIconsDir, "64x64.png")],
   ["ic07", join(tauriIconsDir, "128x128.png")],
@@ -292,4 +297,4 @@ writeIcns(join(tauriIconsDir, "icon.icns"), [
 
 rmSync(join(tauriIconsDir, "icon.iconset"), { recursive: true, force: true });
 
-console.log("Generated Bezgrow Growth Chart app, browser, and PWA icons.");
+console.log("Generated Bezgrow browser/PWA icons and official native desktop icons.");

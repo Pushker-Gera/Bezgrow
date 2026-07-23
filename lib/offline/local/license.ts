@@ -4,7 +4,16 @@ import { normalizeLicenseEnvKey, parseLicenseInput, verifyLicenseSignature, type
 import { evaluateStoredLicense, type LicensePolicyResult, type StoredLicenseRow } from "@/lib/license/policy"
 import { setDesktopAuthMarker } from "@/lib/desktop/session"
 import { invokeTauri, isTauriRuntimeAsync } from "@/lib/desktop/tauri"
-import { createOfflineId, cacheWorkspaceBootstrap, getCachedWorkspaceBootstrap, getOfflineData, getOfflineMeta, putOfflineData, setOfflineMeta } from "@/lib/offline/db"
+import {
+  createOfflineId,
+  cacheWorkspaceBootstrap,
+  getCachedWorkspaceBootstrap,
+  getOfflineData,
+  getOfflineMeta,
+  migrateLegacyIndexedDbToSqlite,
+  putOfflineData,
+  setOfflineMeta,
+} from "@/lib/offline/db"
 import type { WorkspaceBootstrapPayload } from "@/lib/workspaceBootstrapClient"
 
 type DataRow = Record<string, unknown> & { id?: string }
@@ -332,6 +341,10 @@ async function createLocalWorkspaceFromLicense(payload: LicensePayload) {
 }
 
 export async function restoreLicensedWorkspaceContext() {
+  const migrated = await migrateLegacyIndexedDbToSqlite().catch((error) => {
+    console.error("[offline/license] legacy business-data migration failed", error)
+    return null
+  })
   const deviceId = await getOrCreateDeviceId()
   let rows = await readLicenseRows("global")
   let status = evaluateStoredLicense(rows, { deviceId })
@@ -344,7 +357,8 @@ export async function restoreLicensedWorkspaceContext() {
   }
   if (!status.allowed || !status.license) return null
 
-  const workspace = workspaceFromStoredLicense(status.license)
+  const cachedWorkspace = migrated?.workspace || getCachedWorkspaceBootstrap()
+  const workspace = cachedWorkspace?.success ? cachedWorkspace : workspaceFromStoredLicense(status.license)
   await cacheWorkspaceBootstrap(workspace)
   if (typeof window !== "undefined") {
     sessionStorage.setItem("bezgrow:organization-id", JSON.stringify({ value: workspace.organization?.id || "global", cachedAt: Date.now() }))

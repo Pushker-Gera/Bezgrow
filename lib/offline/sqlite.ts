@@ -7,6 +7,7 @@ import {
   clearNormalizedData,
   getNormalizedMeta,
   importLegacyJsonCollectionsOnce,
+  mergeNormalizedOrganization,
   setNormalizedMeta,
   updateNormalizedAction,
   writeNormalizedConflict,
@@ -62,6 +63,13 @@ async function ensureSqliteReady() {
 
 export async function getSqliteDb() {
   return ensureSqliteReady()
+}
+
+export async function mergeSqliteOrganizations(sourceOrganizationId: string, targetOrganizationId: string) {
+  const db = await ensureSqliteReady()
+  if (!db) return false
+  await mergeNormalizedOrganization(sourceOrganizationId, targetOrganizationId)
+  return true
 }
 
 export async function putSqliteCollection<T>(organizationId: string, collection: OfflineCollection, value: T) {
