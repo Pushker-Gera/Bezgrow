@@ -177,6 +177,90 @@
       "description": "Permission identifier",
       "oneOf": [
         {
+          "description": "Enables the delete_secret command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-delete-secret",
+          "markdownDescription": "Enables the delete_secret command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the desktop_database_backup command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-desktop-database-backup",
+          "markdownDescription": "Enables the desktop_database_backup command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the desktop_database_diagnostics command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-desktop-database-diagnostics",
+          "markdownDescription": "Enables the desktop_database_diagnostics command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the desktop_startup_log command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-desktop-startup-log",
+          "markdownDescription": "Enables the desktop_startup_log command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the open_external_url command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-open-external-url",
+          "markdownDescription": "Enables the open_external_url command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the read_secret command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-read-secret",
+          "markdownDescription": "Enables the read_secret command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the store_secret command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-store-secret",
+          "markdownDescription": "Enables the store_secret command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the delete_secret command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-delete-secret",
+          "markdownDescription": "Denies the delete_secret command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the desktop_database_backup command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-desktop-database-backup",
+          "markdownDescription": "Denies the desktop_database_backup command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the desktop_database_diagnostics command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-desktop-database-diagnostics",
+          "markdownDescription": "Denies the desktop_database_diagnostics command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the desktop_startup_log command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-desktop-startup-log",
+          "markdownDescription": "Denies the desktop_startup_log command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the open_external_url command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-open-external-url",
+          "markdownDescription": "Denies the open_external_url command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the read_secret command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-read-secret",
+          "markdownDescription": "Denies the read_secret command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the store_secret command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-store-secret",
+          "markdownDescription": "Denies the store_secret command without any pre-configured scope."
+        },
+        {
           "description": "Default core plugins set.\n#### This default permission set includes:\n\n- `core:path:default`\n- `core:event:default`\n- `core:window:default`\n- `core:webview:default`\n- `core:app:default`\n- `core:image:default`\n- `core:resources:default`\n- `core:menu:default`\n- `core:tray:default`",
           "type": "string",
           "const": "core:default",

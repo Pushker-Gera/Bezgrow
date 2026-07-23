@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-desktop-database-backup"
+description = "Enables the desktop_database_backup command without any pre-configured scope."
+commands.allow = ["desktop_database_backup"]
+
+[[permission]]
+identifier = "deny-desktop-database-backup"
+description = "Denies the desktop_database_backup command without any pre-configured scope."
+commands.deny = ["desktop_database_backup"]

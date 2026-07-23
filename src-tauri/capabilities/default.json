@@ -6,5 +6,16 @@
     "urls": ["http://127.0.0.1:*", "http://localhost:*"]
   },
   "windows": ["main", "startup-error"],
-  "permissions": ["core:default", "sql:default", "sql:allow-execute"]
+  "permissions": [
+    "core:default",
+    "sql:default",
+    "sql:allow-execute",
+    "allow-desktop-database-diagnostics",
+    "allow-desktop-database-backup",
+    "allow-desktop-startup-log",
+    "allow-store-secret",
+    "allow-read-secret",
+    "allow-delete-secret",
+    "allow-open-external-url"
+  ]
 }

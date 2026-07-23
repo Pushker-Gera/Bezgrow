@@ -1,5 +1,5 @@
 {
-  "version": "0.1.2",
+  "version": "0.1.3",
   "releaseNotes": [
     "License signing now uses environment keys only and no longer writes serverless filesystem key files.",
     "Desktop startup now routes missing or expired licenses to activation/update instead of approval or login loops.",
@@ -8,10 +8,10 @@
   "mac": {
     "file": "/downloads/Bezgrow-mac.dmg",
     "downloadUrl": "/downloads/Bezgrow-mac.dmg",
-    "version": "0.1.2",
-    "sha256": "0a8c4a4b2667df9d6aad59fe38c69d07958c22dd807e481e2c72c44fe14d53d2",
-    "size": 104421021,
+    "version": "0.1.3",
+    "sha256": "f8bc36d3944573bfe263ae4621001e359f02c4958249381c52b1fcdf9b91410a",
+    "size": 104416416,
     "notarized": false,
-    "generatedAt": "2026-07-22T00:28:46.319Z"
+    "generatedAt": "2026-07-23T20:16:10.365Z"
   }
 }

@@ -13,6 +13,7 @@ const packageJson = readJson("package.json");
 const tauriConfig = readJson("src-tauri/tauri.conf.json");
 const capability = readJson("src-tauri/capabilities/default.json");
 const cargo = read("src-tauri/Cargo.toml");
+const tauriBuild = read("src-tauri/build.rs");
 const rust = read("src-tauri/src/lib.rs");
 const prepare = read("scripts/prepare-desktop-build.mjs");
 const runtime = read("lib/desktop/tauri.ts");
@@ -39,6 +40,19 @@ assert.match(runtime, /tauri-packaged/, "Client runtime detection must distingui
 assert.match(runtime, /isPackagedDesktopRuntime/, "Packaged desktop runtime helper is missing.");
 
 assert.deepEqual(tauriConfig.plugins?.sql?.preload, ["sqlite:bezgrow-offline.db"], "SQLite database must be preloaded by Tauri.");
+for (const command of [
+  "desktop_database_diagnostics",
+  "desktop_database_backup",
+  "desktop_startup_log",
+  "store_secret",
+  "read_secret",
+  "delete_secret",
+  "open_external_url",
+]) {
+  const permission = `allow-${command.replaceAll("_", "-")}`;
+  assert.ok(tauriBuild.includes(`"${command}"`), `Tauri app manifest must declare ${command}.`);
+  assert.ok(capability.permissions.includes(permission), `Desktop capability must grant ${permission}.`);
+}
 assert.equal(tauriConfig.bundle?.resources?.["../desktop-runtime/node/"], "node", "Bundled Node runtime resource is missing.");
 assert.equal(tauriConfig.bundle?.resources?.["../desktop-runtime/next-server/"], "next-server", "Bundled Next server resource is missing.");
 assert.ok(capability.permissions.includes("sql:default"), "Tauri capability must allow SQL defaults.");
