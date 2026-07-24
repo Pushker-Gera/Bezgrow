@@ -26,6 +26,7 @@ assert.match(service, /desktop_database_backup/, "Desktop SQLite migrations must
 assert.match(service, /PRAGMA journal_mode = WAL/, "Desktop SQLite must request WAL mode.");
 assert.match(service, /PRAGMA foreign_keys = ON/, "Desktop SQLite must enable foreign keys.");
 assert.match(service, /PRAGMA busy_timeout = 5000/, "Desktop SQLite must configure a bounded busy timeout.");
+assert.match(service, /desktop_select/, "Repository reads must cross the authoritative native SQLite read boundary.");
 assert.match(service, /desktop_execute_transaction/, "SQLite writes must cross one native transaction boundary.");
 assert.doesNotMatch(service, /db\.execute\("BEGIN IMMEDIATE"\)/, "JavaScript must not split a transaction across pooled Tauri SQL calls.");
 assert.match(service, /closeForAppShutdown\(\)/, "Desktop SQLite must expose a clean shutdown flush.");
@@ -61,10 +62,11 @@ assert.match(cargo, /sha2\s*=\s*"0\.10"/, "Native desktop backup checksums requi
 assert.match(rust, /LOCAL_DATABASE_NAME: &str = "bezgrow-offline\.db"/, "Native diagnostics must target the Tauri SQL database name.");
 assert.match(rust, /fn desktop_database_diagnostics/, "Native database diagnostics command is missing.");
 assert.match(rust, /fn desktop_database_backup/, "Native migration backup command is missing.");
+assert.match(rust, /async fn desktop_select/, "Native authoritative read command is missing.");
 assert.match(rust, /async fn desktop_execute_transaction/, "Native single-connection transaction command is missing.");
 assert.match(rust, /BEGIN IMMEDIATE[\s\S]*ROLLBACK[\s\S]*COMMIT/s, "Native writes must begin, roll back, and commit on one connection.");
 assert.match(rust, /sha256_file/, "Native migration backups must include a checksum.");
-assert.match(rust, /desktop_database_diagnostics,[\s\S]*desktop_database_backup,[\s\S]*desktop_execute_transaction,/, "Native database commands must be registered with Tauri.");
+assert.match(rust, /desktop_database_diagnostics,[\s\S]*desktop_database_backup,[\s\S]*desktop_select,[\s\S]*desktop_execute_transaction,/, "Native database commands must be registered with Tauri.");
 assert.match(rust, /fn stop_next_server/, "Desktop shutdown must have a single bundled-server cleanup path.");
 assert.match(rust, /child\.kill\(\);[\s\S]*child\.wait\(\);/, "Desktop shutdown must terminate and reap the bundled server process.");
 assert.match(rust, /RunEvent::Exit[\s\S]*RunEvent::ExitRequested/, "Desktop app exit must clean up the bundled server even when window destruction is skipped.");

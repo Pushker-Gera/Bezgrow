@@ -111,12 +111,15 @@ function safeErrorMessage(error: unknown) {
 
 function safeErrorCode(error: unknown) {
   const message = safeErrorMessage(error)
+  if (/unique constraint/i.test(message)) return "sqlite_unique_constraint"
+  if (/foreign key constraint/i.test(message)) return "sqlite_foreign_key_constraint"
+  if (/\bconstraint\b/i.test(message)) return "sqlite_constraint"
   if (/permission|denied|readonly/i.test(message)) return "sqlite_permission_denied"
   if (TEMPORARY_SQLITE_ERROR.test(message)) return "sqlite_busy_or_locked"
   if (/migration/i.test(message)) return "sqlite_migration_failed"
   if (/integrity|malformed|corrupt/i.test(message)) return "sqlite_integrity_failed"
   if (/Tauri runtime is not available|not available in the desktop runtime/i.test(message)) return "tauri_runtime_unavailable"
-  if (/plugin|load|sql/i.test(message)) return "sqlite_plugin_unavailable"
+  if (/plugin|load/i.test(message)) return "sqlite_plugin_unavailable"
   return "local_database_startup_failed"
 }
 
@@ -386,7 +389,21 @@ export class LocalDatabaseService {
 
     this.primaryConnectionPromise = this.withTemporaryLockRetry(async () => {
       const sqlPlugin = (await import("@tauri-apps/plugin-sql")) as SqlModule
-      return sqlPlugin.default.get(LOCAL_DB_URL)
+      const pluginConnection = sqlPlugin.default.get(LOCAL_DB_URL)
+      const authoritativeConnection: SqlExecutor = {
+        execute: (query, bindValues = []) => pluginConnection.execute(query, bindValues),
+        select: <T>(query: string, bindValues: SqlValue[] = []) =>
+          this.withTemporaryLockRetry(() =>
+            invokeTauri<T[]>("desktop_select", {
+              statement: {
+                query,
+                bindValues,
+              },
+            })
+          ),
+        close: () => pluginConnection.close?.() || Promise.resolve(true),
+      }
+      return authoritativeConnection
     }).catch((error) => {
       this.primaryConnectionPromise = null
       throw error

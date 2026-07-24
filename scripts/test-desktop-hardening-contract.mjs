@@ -49,6 +49,8 @@ assert.match(repositories, /previousImporterCompleted[\s\S]*normalized_legacy_im
 assert.match(localApi, /pendingAction\(createOfflineId\("product-action"\), "save_product"/, "Product create/update must include its sync action in the transaction.")
 assert.match(localApi, /pendingAction\(createOfflineId\("customer-action"\), "save_customer"/, "Customer create/update must include its sync action in the transaction.")
 assert.match(localApi, /pendingAction\(offlineClientId, "create_invoice"/, "Invoice rows, stock, ledger, payment, and sync action must share one transaction.")
+assert.match(localApi, /largestExistingSequence \+ 1/, "Invoice numbering must advance past the largest stored invoice even when the organization counter is stale.")
+assert.match(localApi, /next_invoice_number: invoiceSequence \+ 1/, "A successful invoice must persist the sequence after the number actually assigned.")
 assert.match(localApi, /pendingAction\(createOfflineId\("invoice-delete-action"\), "delete_invoice"/, "Invoice correction and stock restoration must share one transaction.")
 assert.match(localApi, /pendingAction\(createOfflineId\("stock-action"\), "stock_movement"/, "Simple stock changes must include their sync action in the transaction.")
 assert.match(localErp, /createPaymentTransaction\([^)]*action\?: OfflineAction[\s\S]*writeCollections\([^;]*action\)/s, "Payments and ledger effects must include their sync action in the transaction.")
@@ -56,9 +58,13 @@ assert.match(localErp, /createInventoryMovement\([^)]*action\?: OfflineAction[\s
 
 // Validation, rollback-sensitive invoice correction, and workspace isolation.
 assert.match(localApi, /A product with this SKU already exists/, "Unique SKU must have an accurate validation response.")
+assert.match(service, /sqlite_unique_constraint/, "Operation diagnostics must classify unique-constraint failures without mislabeling SQLite itself as a missing plugin.")
 assert.match(localApi, /Opening stock must be a valid number/, "Invalid opening stock must fail before mutation.")
 assert.match(localApi, /Enter a valid customer email address/, "Customer email validation must not be reported as database startup failure.")
 assert.match(localApi, /deleted and stock restored/, "Invoice correction must create an explicit stock-restoration movement.")
+assert.match(localApi, /sync_status: "pending_delete"/, "Invoice correction must retain an offline deletion tombstone instead of leaving pending local rows active.")
+assert.match(localApi, /alreadyRestoredByProduct[\s\S]*Math\.max\(0, quantity -/, "Invoice correction retries must never restore the same product stock twice.")
+assert.match(localApi, /last_purchase_at: remainingCustomerInvoices/, "Invoice correction must recompute the customer's last purchase from remaining invoices.")
 assert.match(repositories, /WHERE organization_id = \? AND deleted_at IS NULL/, "Business rows must be scoped to the selected workspace.")
 assert.match(repositories, /queryNormalizedProducts[\s\S]*LIMIT \? OFFSET \?/, "Product list must be bounded in SQLite.")
 assert.match(repositories, /queryNormalizedCustomers[\s\S]*LIMIT \? OFFSET \?/, "Customer list must be bounded in SQLite.")

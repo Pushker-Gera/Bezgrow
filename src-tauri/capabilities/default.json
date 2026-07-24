@@ -12,6 +12,7 @@
     "sql:allow-execute",
     "allow-desktop-database-diagnostics",
     "allow-desktop-database-backup",
+    "allow-desktop-select",
     "allow-desktop-execute-transaction",
     "allow-desktop-startup-log",
     "allow-store-secret",

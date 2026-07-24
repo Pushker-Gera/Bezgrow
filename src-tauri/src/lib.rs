@@ -19,7 +19,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use sqlx::{
     sqlite::{SqliteConnectOptions, SqliteJournalMode, SqliteSynchronous},
-    Connection, SqliteConnection,
+    Column, Connection, Row, SqliteConnection, TypeInfo, ValueRef,
 };
 use tauri::{Manager, WebviewUrl};
 
@@ -333,6 +333,126 @@ async fn execute_desktop_statement(
         .map_err(|error| error.to_string())
 }
 
+fn sqlite_row_value(
+    row: &sqlx::sqlite::SqliteRow,
+    index: usize,
+) -> Result<serde_json::Value, String> {
+    let raw = row
+        .try_get_raw(index)
+        .map_err(|error| format!("Unable to inspect SQLite result column {index}: {error}"))?;
+    if raw.is_null() {
+        return Ok(serde_json::Value::Null);
+    }
+
+    let type_name = raw.type_info().name().to_ascii_uppercase();
+    match type_name.as_str() {
+        "INTEGER" | "INT" => row
+            .try_get::<i64, _>(index)
+            .map(serde_json::Value::from)
+            .map_err(|error| format!("Unable to decode SQLite integer column {index}: {error}")),
+        "REAL" | "FLOAT" | "DOUBLE" | "NUMERIC" => row
+            .try_get::<f64, _>(index)
+            .map(serde_json::Value::from)
+            .map_err(|error| format!("Unable to decode SQLite real column {index}: {error}")),
+        "BLOB" => row
+            .try_get::<Vec<u8>, _>(index)
+            .map(|bytes| {
+                serde_json::Value::Array(
+                    bytes
+                        .into_iter()
+                        .map(|byte| serde_json::Value::from(u64::from(byte)))
+                        .collect(),
+                )
+            })
+            .map_err(|error| format!("Unable to decode SQLite blob column {index}: {error}")),
+        _ => row
+            .try_get::<String, _>(index)
+            .map(serde_json::Value::from)
+            .map_err(|error| format!("Unable to decode SQLite text column {index}: {error}")),
+    }
+}
+
+async fn select_at_path(
+    database_path: &Path,
+    statement: &DesktopSqlStatement,
+) -> Result<Vec<serde_json::Map<String, serde_json::Value>>, String> {
+    let options = SqliteConnectOptions::new()
+        .filename(database_path)
+        .create_if_missing(false)
+        .foreign_keys(true)
+        .journal_mode(SqliteJournalMode::Wal)
+        .synchronous(SqliteSynchronous::Normal)
+        .busy_timeout(std::time::Duration::from_secs(5));
+    let mut connection = SqliteConnection::connect_with(&options)
+        .await
+        .map_err(|error| {
+            format!("Unable to open the authoritative desktop SQLite database for a read: {error}")
+        })?;
+
+    let mut query = sqlx::query(&statement.query);
+    for value in &statement.bind_values {
+        query = match value {
+            serde_json::Value::Null => query.bind(Option::<String>::None),
+            serde_json::Value::Bool(value) => query.bind(i64::from(*value)),
+            serde_json::Value::Number(value) => {
+                if let Some(value) = value.as_i64() {
+                    query.bind(value)
+                } else if let Some(value) = value.as_u64() {
+                    let value = i64::try_from(value)
+                        .map_err(|_| "SQLite integer bind value is out of range.".to_string())?;
+                    query.bind(value)
+                } else if let Some(value) = value.as_f64() {
+                    query.bind(value)
+                } else {
+                    return Err("SQLite numeric bind value is invalid.".to_string());
+                }
+            }
+            serde_json::Value::String(value) => query.bind(value),
+            serde_json::Value::Array(_) | serde_json::Value::Object(_) => {
+                return Err("SQLite read bind values must be scalar.".to_string());
+            }
+        };
+    }
+
+    let rows = query.fetch_all(&mut connection).await.map_err(|error| {
+        format!(
+            "SQLite read failed ({}): {}",
+            statement_preview(&statement.query),
+            error
+        )
+    })?;
+    rows.into_iter()
+        .map(|row| {
+            let mut result = serde_json::Map::new();
+            for (index, column) in row.columns().iter().enumerate() {
+                result.insert(column.name().to_string(), sqlite_row_value(&row, index)?);
+            }
+            Ok(result)
+        })
+        .collect()
+}
+
+#[tauri::command]
+async fn desktop_select<R: tauri::Runtime>(
+    app: tauri::AppHandle<R>,
+    statement: DesktopSqlStatement,
+) -> Result<Vec<serde_json::Map<String, serde_json::Value>>, String> {
+    let database_path = local_database_path(&app)?;
+    match select_at_path(&database_path, &statement).await {
+        Ok(rows) => Ok(rows),
+        Err(error) => {
+            append_startup_log_handle(
+                &app,
+                format!(
+                    "SQLite native read failed: {}",
+                    error.replace(['\r', '\n'], " ")
+                ),
+            );
+            Err(error)
+        }
+    }
+}
+
 #[tauri::command]
 async fn desktop_execute_transaction<R: tauri::Runtime>(
     app: tauri::AppHandle<R>,
@@ -503,6 +623,21 @@ mod database_transaction_tests {
             .expect("commit native batch");
             assert_eq!(committed.statements, 4);
             assert_eq!(committed.rows_affected, 4);
+
+            let visible_after_commit = select_at_path(
+                &database_path,
+                &statement(
+                    "SELECT value FROM records WHERE id = ?",
+                    vec![serde_json::json!(1)],
+                ),
+            )
+            .await
+            .expect("read committed native batch through authoritative read path");
+            assert_eq!(
+                visible_after_commit[0].get("value"),
+                Some(&serde_json::json!("first")),
+                "a committed mutation must be visible to the next repository read without restart"
+            );
 
             let rolled_back = execute_transaction_at_path(
                 &database_path,
@@ -816,6 +951,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             desktop_database_diagnostics,
             desktop_database_backup,
+            desktop_select,
             desktop_execute_transaction,
             desktop_startup_log,
             store_secret,

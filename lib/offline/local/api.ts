@@ -553,10 +553,27 @@ async function listInvoices(url: URL, organizationId: string) {
   return localListResponse("invoices", url, organizationId, await queryNormalizedInvoices(organizationId, normalizedListQuery(url)))
 }
 
+function nextInvoiceSequence(organization: DataRow | null, existing: DataRow[]) {
+  const prefix = localString(organization?.invoice_prefix, "INV")
+  const largestExistingSequence = existing.reduce((largest, invoice) => {
+    const invoiceNumber = localString(invoice.invoice_number)
+    const prefixWithSeparator = `${prefix}-`
+    if (!invoiceNumber.startsWith(prefixWithSeparator)) return largest
+    const suffix = invoiceNumber.slice(prefixWithSeparator.length)
+    if (!/^\d+$/.test(suffix)) return largest
+    return Math.max(largest, Number(suffix))
+  }, 0)
+
+  return Math.max(
+    1,
+    largestExistingSequence + 1,
+    localNumber(organization?.next_invoice_number, 1)
+  )
+}
+
 function nextInvoiceNumber(organization: DataRow | null, existing: DataRow[]) {
   const prefix = localString(organization?.invoice_prefix, "INV")
-  const next = Math.max(1, localNumber(organization?.next_invoice_number, existing.length + 1))
-  return `${prefix}-${String(next).padStart(5, "0")}`
+  return `${prefix}-${String(nextInvoiceSequence(organization, existing)).padStart(5, "0")}`
 }
 
 function nextLocalDocumentNumber(prefix: string, rows: DataRow[], key: string) {
@@ -603,6 +620,7 @@ async function createInvoice(body: DataRow, organizationId: string) {
 
   const invoiceId = createOfflineId("invoice")
   const offlineClientId = localString(body.offline_client_id) || createOfflineId("invoice-client")
+  const invoiceSequence = nextInvoiceSequence(organization, invoices)
   const invoiceNumber = nextInvoiceNumber(organization, invoices)
   const totalAmount = localNumber(body.total_amount)
   const paidAmount = Math.min(totalAmount, localNumber(body.paid_amount, body.payment_status === "paid" ? totalAmount : 0))
@@ -811,7 +829,7 @@ async function createInvoice(body: DataRow, organizationId: string) {
       : row
   )
   const nextOrganization = organization
-    ? { ...organization, next_invoice_number: localNumber(organization.next_invoice_number, invoices.length + 1) + 1, updated_at: now }
+    ? { ...organization, next_invoice_number: invoiceSequence + 1, updated_at: now }
     : null
 
   await writeCollections(
@@ -875,30 +893,55 @@ async function deleteInvoice(body: DataRow, organizationId: string) {
   const invoice = invoices.find((row) => row.id === invoiceId)
   if (!invoice) return fail("Invoice was not found.", 404)
   const items = invoiceItems.filter((item) => item.invoice_id === invoiceId)
+  const invoiceQuantityByProduct = new Map<string, number>()
+  for (const item of items) {
+    const productId = localString(item.product_id)
+    if (productId) {
+      invoiceQuantityByProduct.set(
+        productId,
+        (invoiceQuantityByProduct.get(productId) || 0) + localNumber(item.quantity)
+      )
+    }
+  }
+  const alreadyRestoredByProduct = new Map<string, number>()
+  for (const movement of movements) {
+    if (movement.reference_type !== "invoice_delete" || movement.reference_id !== invoiceId) continue
+    const productId = localString(movement.product_id)
+    if (productId) {
+      alreadyRestoredByProduct.set(
+        productId,
+        (alreadyRestoredByProduct.get(productId) || 0) + Math.max(0, localNumber(movement.quantity))
+      )
+    }
+  }
+  const restoreQuantityByProduct = new Map(
+    Array.from(invoiceQuantityByProduct.entries()).map(([productId, quantity]) => [
+      productId,
+      Math.max(0, quantity - (alreadyRestoredByProduct.get(productId) || 0)),
+    ])
+  )
   const nextProducts = products.map((product) => {
-    const restoreQuantity = items
-      .filter((item) => item.product_id === product.id)
-      .reduce((sum, item) => sum + localNumber(item.quantity), 0)
+    const restoreQuantity = restoreQuantityByProduct.get(String(product.id || "")) || 0
     return restoreQuantity > 0
       ? { ...product, stock: localNumber(product.stock) + restoreQuantity, sync_status: "pending_update", updated_at: now }
       : product
   })
-  const restoreMovements = items
-    .filter((item) => item.product_id)
-    .map((item) => {
-      const product = products.find((row) => row.id === item.product_id)
+  const restoreMovements = Array.from(restoreQuantityByProduct.entries())
+    .filter(([, quantity]) => quantity > 0)
+    .map(([productId, quantity]) => {
+      const product = products.find((row) => row.id === productId)
       const previousStock = localNumber(product?.stock)
-      const quantity = localNumber(item.quantity)
       return {
         id: createOfflineId("stock-movement"),
         organization_id: organizationId,
-        product_id: item.product_id,
-        product_name: item.product_name || product?.name || "",
+        product_id: productId,
+        product_name: product?.name || "",
         type: "adjustment",
         quantity,
         previous_stock: previousStock,
         new_stock: previousStock + quantity,
         reason: `Invoice ${invoice.invoice_number || invoiceId} deleted and stock restored`,
+        reference_no: invoice.invoice_number || invoiceId,
         reference_type: "invoice_delete",
         reference_id: invoiceId,
         sync_status: "pending_create",
@@ -909,12 +952,26 @@ async function deleteInvoice(body: DataRow, organizationId: string) {
   const receiptIds = new Set(receipts.filter((row) => row.invoice_id === invoiceId).map((row) => row.id))
   const outstandingAmount = localNumber(invoice.outstanding_amount, Math.max(0, localNumber(invoice.grand_total, localNumber(invoice.total_amount, localNumber(invoice.total))) - localNumber(invoice.paid_amount)))
   const invoiceTotal = localNumber(invoice.grand_total, localNumber(invoice.total_amount, localNumber(invoice.total)))
+  const tombstone = (row: DataRow) => ({
+    ...row,
+    deleted_at: now,
+    sync_status: "pending_delete",
+    updated_at: now,
+  })
+  const remainingCustomerInvoices = invoices
+    .filter((row) => row.id !== invoiceId && row.customer_id === invoice.customer_id)
+    .sort((left, right) =>
+      localString(right.invoice_date, localString(right.created_at)).localeCompare(
+        localString(left.invoice_date, localString(left.created_at))
+      )
+    )
   const nextCustomers = customers.map((customer) =>
     customer.id === invoice.customer_id
       ? {
           ...customer,
           total_sales: Math.max(0, localNumber(customer.total_sales) - invoiceTotal),
           current_balance: Math.max(0, localNumber(customer.current_balance) - outstandingAmount),
+          last_purchase_at: remainingCustomerInvoices[0]?.invoice_date || remainingCustomerInvoices[0]?.created_at || null,
           sync_status: "pending_update",
           updated_at: now,
         }
@@ -926,12 +983,17 @@ async function deleteInvoice(body: DataRow, organizationId: string) {
     [
       { collection: "products", value: nextProducts },
       { collection: "inventory_items", value: nextProducts },
-      { collection: "invoices", value: invoices.filter((row) => row.id !== invoiceId) },
-      { collection: "invoice_items", value: invoiceItems.filter((row) => row.invoice_id !== invoiceId) },
+      { collection: "invoices", value: invoices.map((row) => (row.id === invoiceId ? tombstone(row) : row)) },
+      { collection: "invoice_items", value: invoiceItems.map((row) => (row.invoice_id === invoiceId ? tombstone(row) : row)) },
       { collection: "stock_movements", value: [...restoreMovements, ...movements] },
-      { collection: "ledger_entries", value: ledgerEntries.filter((row) => row.document_id !== invoiceId && !receiptIds.has(row.document_id as string)) },
-      { collection: "payment_receipts", value: receipts.filter((row) => row.invoice_id !== invoiceId) },
-      { collection: "payments", value: payments.filter((row) => row.document_id !== invoiceId) },
+      {
+        collection: "ledger_entries",
+        value: ledgerEntries.map((row) =>
+          row.document_id === invoiceId || receiptIds.has(row.document_id as string) ? tombstone(row) : row
+        ),
+      },
+      { collection: "payment_receipts", value: receipts.map((row) => (row.invoice_id === invoiceId ? tombstone(row) : row)) },
+      { collection: "payments", value: payments.map((row) => (row.document_id === invoiceId ? tombstone(row) : row)) },
       { collection: "customers", value: nextCustomers },
     ],
     pendingAction(createOfflineId("invoice-delete-action"), "delete_invoice", organizationId, { invoiceId })

@@ -1,0 +1,13 @@
+# Automatically generated - DO NOT EDIT!
+
+"$schema" = "../schemas/schema.json"
+
+[[permission]]
+identifier = "allow-desktop-select"
+description = "Enables the desktop_select command without any pre-configured scope."
+commands.allow = ["desktop_select"]
+
+[[permission]]
+identifier = "deny-desktop-select"
+description = "Denies the desktop_select command without any pre-configured scope."
+commands.deny = ["desktop_select"]
