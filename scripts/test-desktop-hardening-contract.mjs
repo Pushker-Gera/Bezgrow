@@ -30,11 +30,11 @@ assert.match(service, /private transactionTail: Promise<void> = Promise\.resolve
 assert.doesNotMatch(sqlite, /\bdbPromise\b/, "No second SQLite startup promise may exist in the facade.")
 assert.match(rootLayout, /DesktopDatabaseBootstrap/, "Desktop SQLite must initialize from the root application lifecycle.")
 assert.match(bootstrap, /ensureReady\(\)/, "Root bootstrap must initialize SQLite before page-specific use.")
-assert.match(bootstrap, /onCloseRequested[\s\S]*closeForAppShutdown/, "Application close must flush and close SQLite cleanly.")
-assert.match(bootstrap, /closeForAppShutdown[\s\S]*invokeTauri\("desktop_exit"\)/, "The red close button must quit the desktop process after flushing SQLite.")
+assert.doesNotMatch(bootstrap, /onCloseRequested|closeForAppShutdown|desktop_exit/, "Frontend shutdown code must not close SQLite before the native process exits.")
+assert.doesNotMatch(service, /closeForAppShutdown|pluginConnection\.close/, "The frontend must never leave a closed plugin pool inside a live desktop process.")
 assert.match(recovery, /retryInitialization\(\)/, "Recovery UI must retry the retained database startup failure.")
 assert.match(recovery, />\s*Retry Database\s*</, "Recovery UI must expose a deterministic Retry Database action.")
-assert.match(rust, /fn desktop_exit[\s\S]*app\.exit\(0\)/, "The native shell must expose an orderly full-process exit.")
+assert.match(rust, /WindowEvent::CloseRequested[\s\S]*Native close requested[\s\S]*stop_next_server\(&app\)[\s\S]*app\.exit\(0\)/, "Every native red-button close must stop the bundled server and exit the process.")
 
 // Rollback and diagnostic guarantees use one native connection instead of a
 // pooled sequence of unrelated BEGIN/write/COMMIT calls.

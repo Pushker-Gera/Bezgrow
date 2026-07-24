@@ -1,7 +1,8 @@
 {
-  "version": "0.1.4",
+  "version": "0.1.5",
   "releaseNotes": [
-    "The macOS red close button now flushes local data and fully quits Bezgrow, preventing a closed SQLite pool from being reused after reopening.",
+    "The macOS red close button is now handled entirely by the native shell, which stops the bundled server and exits the full Bezgrow process.",
+    "Frontend code can no longer close SQLite while the desktop process remains alive, preventing the closed-pool database error after a close attempt.",
     "Packaged desktop product, customer, and invoice reads and writes now use one application-lifetime SQLite manager.",
     "Core product, customer, invoice, stock, payment, ledger, and settings mutations now commit atomically with their local sync intent.",
     "List search, filters, sorting, and pagination now run as bounded workspace-scoped SQLite queries, and unfinished business-module cards are hidden in production."
@@ -9,10 +10,10 @@
   "mac": {
     "file": "/downloads/Bezgrow-mac.dmg",
     "downloadUrl": "/downloads/Bezgrow-mac.dmg",
-    "version": "0.1.4",
-    "sha256": "b4afdb4986b2a5557a65b360f98c5b2a2031c119cd47f7f57a9641d22734ba8f",
-    "size": 103316396,
+    "version": "0.1.5",
+    "sha256": "81af8e976207380319d55f3aa0085cb6ca0e841fe43c8b893c909781671cc049",
+    "size": 103278575,
     "notarized": false,
-    "generatedAt": "2026-07-24T23:34:10.000Z"
+    "generatedAt": "2026-07-24T23:53:53.000Z"
   }
 }

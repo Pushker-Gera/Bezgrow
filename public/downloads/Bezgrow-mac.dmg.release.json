@@ -1,9 +1,9 @@
 {
   "file": "/downloads/Bezgrow-mac.dmg",
   "downloadUrl": "/downloads/Bezgrow-mac.dmg",
-  "version": "0.1.4",
-  "sha256": "b4afdb4986b2a5557a65b360f98c5b2a2031c119cd47f7f57a9641d22734ba8f",
-  "size": 103316396,
+  "version": "0.1.5",
+  "sha256": "81af8e976207380319d55f3aa0085cb6ca0e841fe43c8b893c909781671cc049",
+  "size": 103278575,
   "notarized": false,
-  "generatedAt": "2026-07-24T23:34:10.000Z"
+  "generatedAt": "2026-07-24T23:53:53.000Z"
 }

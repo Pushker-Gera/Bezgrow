@@ -8,7 +8,6 @@ export type SqlValue = string | number | null
 export type SqlExecutor = {
   execute(query: string, bindValues?: SqlValue[]): Promise<unknown>
   select<T>(query: string, bindValues?: SqlValue[]): Promise<T[]>
-  close?(): Promise<boolean>
 }
 
 type SqlModule = {
@@ -236,17 +235,6 @@ export class LocalDatabaseService {
     }
   }
 
-  async closeForAppShutdown() {
-    await this.transactionTail.catch(() => undefined)
-    const db = await this.primaryConnectionPromise?.catch(() => null)
-    if (!db) return
-
-    await db.execute("PRAGMA wal_checkpoint(TRUNCATE)").catch(() => undefined)
-    await db.close?.().catch(() => undefined)
-    this.primaryConnectionPromise = null
-    this.startupPromise = null
-  }
-
   async ensureReady() {
     if (this.startupFailure) throw this.startupFailure
     if (!this.startupPromise) {
@@ -401,7 +389,6 @@ export class LocalDatabaseService {
               },
             })
           ),
-        close: () => pluginConnection.close?.() || Promise.resolve(true),
       }
       return authoritativeConnection
     }).catch((error) => {

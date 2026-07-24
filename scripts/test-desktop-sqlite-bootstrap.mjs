@@ -29,7 +29,7 @@ assert.match(service, /PRAGMA busy_timeout = 5000/, "Desktop SQLite must configu
 assert.match(service, /desktop_select/, "Repository reads must cross the authoritative native SQLite read boundary.");
 assert.match(service, /desktop_execute_transaction/, "SQLite writes must cross one native transaction boundary.");
 assert.doesNotMatch(service, /db\.execute\("BEGIN IMMEDIATE"\)/, "JavaScript must not split a transaction across pooled Tauri SQL calls.");
-assert.match(service, /closeForAppShutdown\(\)/, "Desktop SQLite must expose a clean shutdown flush.");
+assert.doesNotMatch(service, /closeForAppShutdown|pluginConnection\.close/, "Frontend code must not close the SQLite pool while the native app can remain alive.");
 assert.doesNotMatch(sqlite, /\bdbPromise\b/, "SQLite facade must not create a second database readiness promise.");
 
 for (const stage of [
@@ -69,7 +69,7 @@ assert.match(rust, /sha256_file/, "Native migration backups must include a check
 assert.match(rust, /desktop_database_diagnostics,[\s\S]*desktop_database_backup,[\s\S]*desktop_select,[\s\S]*desktop_execute_transaction,/, "Native database commands must be registered with Tauri.");
 assert.match(rust, /fn stop_next_server/, "Desktop shutdown must have a single bundled-server cleanup path.");
 assert.match(rust, /child\.kill\(\);[\s\S]*child\.wait\(\);/, "Desktop shutdown must terminate and reap the bundled server process.");
-assert.match(rust, /fn desktop_exit[\s\S]*app\.exit\(0\)/, "The red close button must request a full application exit after SQLite flushes.");
+assert.match(rust, /WindowEvent::CloseRequested[\s\S]*stop_next_server\(&app\)[\s\S]*app\.exit\(0\)/, "The native red close button must terminate the full application process.");
 assert.match(rust, /RunEvent::Exit[\s\S]*RunEvent::ExitRequested/, "Desktop app exit must clean up the bundled server even when window destruction is skipped.");
 assert.match(buildDesktop, /function tauriBuildEnv\(\)/, "Desktop build wrapper must control the Tauri bundler environment.");
 assert.match(buildDesktop, /process\.platform === "darwin"[\s\S]*env\.CI = "true"/, "macOS DMG packaging must run in CI mode to skip fragile Finder automation.");
