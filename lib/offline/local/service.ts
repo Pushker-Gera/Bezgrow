@@ -8,6 +8,7 @@ export type SqlValue = string | number | null
 export type SqlExecutor = {
   execute(query: string, bindValues?: SqlValue[]): Promise<unknown>
   select<T>(query: string, bindValues?: SqlValue[]): Promise<T[]>
+  close?(): Promise<boolean>
 }
 
 type SqlModule = {
@@ -58,6 +59,26 @@ type DesktopDatabaseBackup = {
   checksumSha256: string
   bytes: number
   createdAt: string
+}
+
+type DesktopSqlStatement = {
+  query: string
+  bindValues: SqlValue[]
+  ignoreDuplicateColumn?: boolean
+}
+
+type DesktopTransactionResult = {
+  statements: number
+  rowsAffected: number
+}
+
+type OperationDiagnostic = {
+  operation: string
+  command?: string
+  errorCode: string
+  errorMessage: string
+  stack?: string
+  occurredAt: string
 }
 
 const TEMPORARY_SQLITE_ERROR = /SQLITE_BUSY|busy|database is locked|locked|temporarily unavailable/i
@@ -114,6 +135,8 @@ export class LocalDatabaseService {
   private migrationBackup: DesktopDatabaseBackup | null = null
   private runtimeMode: RuntimeMode | null = null
   private transactionTail: Promise<void> = Promise.resolve()
+  private startupAttempts = 0
+  private recentOperationErrors: OperationDiagnostic[] = []
 
   async isAvailable() {
     return isDesktopRuntime()
@@ -129,6 +152,8 @@ export class LocalDatabaseService {
       lastInitializationError: this.lastInitializationError,
       desktopDiagnostics: this.desktopDiagnostics,
       migrationBackup: this.migrationBackup,
+      startupAttempts: this.startupAttempts,
+      recentOperationErrors: this.recentOperationErrors,
       startupStages: this.startupStages,
     }
   }
@@ -183,19 +208,40 @@ export class LocalDatabaseService {
 
     await previous
     try {
-      const db = await this.requireConnection("write")
-      await this.withTemporaryLockRetry(() => db.execute("BEGIN IMMEDIATE"))
+      await this.requireConnection("write")
+      const statements: DesktopSqlStatement[] = []
+      const bufferedTransaction: SqlExecutor = {
+        execute: async (query, bindValues = []) => {
+          statements.push({ query, bindValues })
+          return { rowsAffected: 0 }
+        },
+        select: async () => {
+          throw new Error("SQLite reads are not allowed inside a buffered desktop write transaction.")
+        },
+      }
+
       try {
-        const result = await work(db)
-        await db.execute("COMMIT")
+        const result = await work(bufferedTransaction)
+        await this.executeNativeTransaction(statements)
         return result
       } catch (error) {
-        await db.execute("ROLLBACK").catch(() => undefined)
+        await this.recordOperationFailure("sqlite_transaction", error, "desktop_execute_transaction")
         throw error
       }
     } finally {
       release()
     }
+  }
+
+  async closeForAppShutdown() {
+    await this.transactionTail.catch(() => undefined)
+    const db = await this.primaryConnectionPromise?.catch(() => null)
+    if (!db) return
+
+    await db.execute("PRAGMA wal_checkpoint(TRUNCATE)").catch(() => undefined)
+    await db.close?.().catch(() => undefined)
+    this.primaryConnectionPromise = null
+    this.startupPromise = null
   }
 
   async ensureReady() {
@@ -210,6 +256,30 @@ export class LocalDatabaseService {
     return this.startupPromise
   }
 
+  async retryInitialization() {
+    this.startupFailure = null
+    this.lastInitializationError = null
+    this.lastFailedStage = null
+    this.startupPromise = null
+    return this.ensureReady()
+  }
+
+  async recordOperationFailure(operation: string, error: unknown, command?: string) {
+    const diagnostic: OperationDiagnostic = {
+      operation,
+      command,
+      errorCode: safeErrorCode(error),
+      errorMessage: safeErrorMessage(error),
+      stack: error instanceof Error ? error.stack?.slice(0, 2000) : undefined,
+      occurredAt: nowIso(),
+    }
+    this.recentOperationErrors = [diagnostic, ...this.recentOperationErrors].slice(0, 20)
+    await invokeTauri("desktop_startup_log", {
+      message: `SQLite operation failed operation=${operation} code=${diagnostic.errorCode} command=${command || "unknown"} error=${diagnostic.errorMessage}`,
+    }).catch(() => undefined)
+    return diagnostic
+  }
+
   async integrityReport() {
     const db = await this.ensureReady()
     const [quick] = await db.select<Record<string, unknown>>("PRAGMA quick_check")
@@ -222,6 +292,7 @@ export class LocalDatabaseService {
   }
 
   private async bootstrap() {
+    this.startupAttempts += 1
     this.startupStages = []
     this.startupFailure = null
     this.lastFailedStage = null
@@ -333,6 +404,15 @@ export class LocalDatabaseService {
     await db.execute("PRAGMA cache_size = -64000")
   }
 
+  private async executeNativeTransaction(statements: DesktopSqlStatement[]) {
+    if (statements.length === 0) return { statements: 0, rowsAffected: 0 }
+    return this.withTemporaryLockRetry(() =>
+      invokeTauri<DesktopTransactionResult>("desktop_execute_transaction", {
+        statements,
+      })
+    )
+  }
+
   private async runMigrations(db: SqlExecutor) {
     const tableRows = await db.select<{ name: string }>("SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?", [MIGRATION_TABLE])
     const migrationTableExists = tableRows.length > 0
@@ -353,7 +433,6 @@ export class LocalDatabaseService {
 
     if (pending.length === 0) {
       await this.recordSkippedStage("migration_backup", "no pending migrations")
-      await this.repairAndOptimize(db)
       return
     }
 
@@ -368,27 +447,31 @@ export class LocalDatabaseService {
       return "database did not exist before migration"
     })
 
-    await db.execute("BEGIN IMMEDIATE")
-    try {
-      for (const migration of pending) {
-        for (const statement of migration.sql) {
-          await this.executeMigrationStatement(db, statement)
-        }
-        await db.execute("INSERT INTO schema_migrations (version, name, applied_at) VALUES (?, ?, ?)", [
+    const statements: DesktopSqlStatement[] = []
+    for (const migration of pending) {
+      for (const statement of migration.sql) {
+        statements.push({
+          query: statement,
+          bindValues: [],
+          ignoreDuplicateColumn: /^\s*ALTER\s+TABLE/i.test(statement),
+        })
+      }
+      statements.push({
+        query: "INSERT INTO schema_migrations (version, name, applied_at) VALUES (?, ?, ?)",
+        bindValues: [
           migration.version,
           migration.name,
           nowIso(),
-        ])
-      }
-
-      await db.execute("PRAGMA user_version = " + localMigrations[localMigrations.length - 1].version)
-      await db.execute("COMMIT")
-    } catch (error) {
-      await db.execute("ROLLBACK").catch(() => undefined)
-      throw error
+        ],
+      })
     }
+    statements.push({
+      query: "PRAGMA user_version = " + localMigrations[localMigrations.length - 1].version,
+      bindValues: [],
+    })
+    await this.executeNativeTransaction(statements)
 
-    await this.repairAndOptimize(db)
+    await db.execute("PRAGMA optimize").catch(() => undefined)
   }
 
   private async recordSkippedStage(stage: StartupStageName, detail: string) {
@@ -444,45 +527,16 @@ export class LocalDatabaseService {
     return `tables=${requiredTables.length}`
   }
 
-  private async executeMigrationStatement(db: SqlExecutor, statement: string) {
-    try {
-      await db.execute(statement)
-    } catch (error) {
-      const message = safeErrorMessage(error)
-      const isDuplicateColumn = /^\s*ALTER\s+TABLE/i.test(statement) && /duplicate column name/i.test(message)
-      if (isDuplicateColumn) return
-      throw error
-    }
-  }
-
-  private async repairAndOptimize(db: SqlExecutor) {
-    const [quick] = await db.select<Record<string, unknown>>("PRAGMA quick_check")
-    const quickStatus = Object.values(quick || {})[0] || "unknown"
-
-    if (!isOkStatus(quickStatus)) {
-      await db.execute("REINDEX").catch(() => undefined)
-      await db.execute("ANALYZE").catch(() => undefined)
-    }
-
-    const foreignKeyRows = await db.select<Record<string, unknown>>("PRAGMA foreign_key_check").catch(() => [])
-    await db.execute(
-      `INSERT OR REPLACE INTO database_health (id, check_name, status, detail, checked_at)
-       VALUES (?, ?, ?, ?, ?)`,
-      [
-        "latest",
-        "startup_integrity",
-        isOkStatus(quickStatus) && foreignKeyRows.length === 0 ? "ok" : "needs_review",
-        `quick_check=${String(quickStatus)}; foreign_key_violations=${foreignKeyRows.length}`,
-        nowIso(),
-      ]
-    ).catch(() => undefined)
-    await db.execute("PRAGMA optimize").catch(() => undefined)
-  }
 }
 
-let localDatabaseService: LocalDatabaseService | null = null
+type DatabaseManagerGlobal = typeof globalThis & {
+  __BEZGROW_LOCAL_DATABASE_MANAGER__?: LocalDatabaseService
+}
 
 export function getLocalDatabaseService() {
-  if (!localDatabaseService) localDatabaseService = new LocalDatabaseService()
-  return localDatabaseService
+  const managerGlobal = globalThis as DatabaseManagerGlobal
+  if (!managerGlobal.__BEZGROW_LOCAL_DATABASE_MANAGER__) {
+    managerGlobal.__BEZGROW_LOCAL_DATABASE_MANAGER__ = new LocalDatabaseService()
+  }
+  return managerGlobal.__BEZGROW_LOCAL_DATABASE_MANAGER__
 }

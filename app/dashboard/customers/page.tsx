@@ -1,11 +1,11 @@
 "use client"
 
-import { useEffect, useMemo, useState } from "react"
+import { useEffect, useMemo, useRef, useState } from "react"
 import { useDebounce } from "use-debounce"
 import { apiFetch } from "@/lib/api/client-fetch"
 import { getOrganizationId } from "@/lib/getOrganization"
 import { createOfflineId, getOfflineData, putOfflineData, queueOfflineAction } from "@/lib/offline/db"
-import { offlineFallbackMessage, shouldSaveOffline } from "@/lib/offline/network"
+import { offlineFallbackMessage, shouldSaveOffline, shouldUseWebOfflineFallback } from "@/lib/offline/network"
 
 type Customer = {
   id: string
@@ -19,6 +19,7 @@ type Customer = {
   is_active: boolean
   organization_id: string
   total_sales: number | null
+  invoice_count?: number | null
   last_purchase_at: string | null
   deleted_at: string | null
   customer_type: string | null
@@ -26,9 +27,11 @@ type Customer = {
   offline_local_id?: string | null
 }
 
-type InvoiceRow = Record<string, unknown>
 type ListResponse<T> = {
   data?: T[]
+  pagination?: {
+    total?: number
+  }
   error?: string
 }
 
@@ -63,26 +66,6 @@ const emptyForm: CustomerForm = {
   address: "",
   gstNumber: "",
   customerType: "retail",
-}
-
-function numberFrom(row: InvoiceRow, fields: string[]) {
-  for (const field of fields) {
-    const value = row[field]
-    if (value !== null && value !== undefined && value !== "") {
-      return Number(value || 0)
-    }
-  }
-
-  return 0
-}
-
-function stringFrom(row: InvoiceRow, fields: string[]) {
-  for (const field of fields) {
-    const value = row[field]
-    if (typeof value === "string" && value.trim()) return value
-  }
-
-  return ""
 }
 
 function money(value: number) {
@@ -163,7 +146,6 @@ function formFromCustomer(customer: Customer): CustomerForm {
 export default function CustomersPage() {
   const [organizationId, setOrganizationId] = useState<string | null>(null)
   const [customers, setCustomers] = useState<Customer[]>([])
-  const [invoices, setInvoices] = useState<InvoiceRow[]>([])
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
   const [notice, setNotice] = useState("")
@@ -173,12 +155,15 @@ export default function CustomersPage() {
   const [typeFilter, setTypeFilter] = useState("all")
   const [gstFilter, setGstFilter] = useState("all")
   const [currentPage, setCurrentPage] = useState(1)
+  const [serverTotal, setServerTotal] = useState(0)
   const [form, setForm] = useState<CustomerForm>(emptyForm)
   const [showFormModal, setShowFormModal] = useState(false)
   const [editCustomer, setEditCustomer] = useState<Customer | null>(null)
   const [detailCustomer, setDetailCustomer] = useState<CustomerWithLedger | null>(null)
   const [confirmCustomer, setConfirmCustomer] = useState<Customer | null>(null)
   const [exportType, setExportType] = useState<"csv" | "excel">("csv")
+  const skipNextCustomersRefresh = useRef(false)
+  const customersRequest = useRef<AbortController | null>(null)
 
   const pageSize = 50
 
@@ -192,6 +177,7 @@ export default function CustomersPage() {
         return
       }
 
+      skipNextCustomersRefresh.current = true
       setOrganizationId(orgId)
       await fetchData(orgId)
     } catch (error) {
@@ -204,8 +190,12 @@ export default function CustomersPage() {
   async function fetchData(orgId = organizationId) {
     if (!orgId) return
 
+    customersRequest.current?.abort()
+    const request = new AbortController()
+    customersRequest.current = request
     const customerParams = new URLSearchParams({
-      limit: "100",
+      page: String(currentPage),
+      limit: String(pageSize),
       organization_id: orgId,
       search: debouncedSearch.trim(),
       status: statusFilter,
@@ -214,44 +204,44 @@ export default function CustomersPage() {
       sort: "created_at",
       direction: "desc",
     })
-    const invoiceParams = new URLSearchParams({ limit: "100", organization_id: orgId })
-
     try {
-      const [customersResponse, invoicesResponse] = await Promise.all([
-        apiFetch(`/api/customers/list?${customerParams.toString()}`, { cache: "no-store" }),
-        apiFetch(`/api/invoices/list?${invoiceParams.toString()}`, { cache: "no-store" }),
-      ])
+      const customersResponse = await apiFetch(`/api/customers/list?${customerParams.toString()}`, {
+        cache: "no-store",
+        signal: request.signal,
+      })
 
       const customersResult = (await customersResponse.json()) as ListResponse<Customer>
-      const invoicesResult = (await invoicesResponse.json()) as ListResponse<InvoiceRow>
 
       if (!customersResponse.ok) throw new Error(customersResult.error || "Customers failed to load.")
-      if (!invoicesResponse.ok) setNotice(invoicesResult.error || "Invoices failed to load.")
 
       let nextCustomers = customersResult.data || []
       if (customersResponse.headers.get("X-Bezgrow-Data-Source") !== "sqlite") {
         await putOfflineData(orgId, "customers", nextCustomers)
       }
-      if (invoicesResponse.headers.get("X-Bezgrow-Data-Source") !== "sqlite") {
-        await putOfflineData(orgId, "invoices", invoicesResult.data || [])
-      }
       if (statusFilter === "active") nextCustomers = nextCustomers.filter((customer) => customer.is_active)
       if (statusFilter === "inactive") nextCustomers = nextCustomers.filter((customer) => !customer.is_active)
       setCustomers(nextCustomers)
-      setInvoices(invoicesResult.data || [])
+      setServerTotal(customersResult.pagination?.total ?? nextCustomers.length)
       setNotice("")
     } catch (error) {
+      if (request.signal.aborted) return
+      if (!(await shouldUseWebOfflineFallback(error))) {
+        setNotice(error instanceof Error ? error.message : "Customers failed to load.")
+        return
+      }
+
       let cachedCustomers = await getOfflineData<Customer[]>(orgId, "customers", [])
-      const cachedInvoices = await getOfflineData<InvoiceRow[]>(orgId, "invoices", [])
       if (statusFilter === "active") cachedCustomers = cachedCustomers.filter((customer) => customer.is_active)
       if (statusFilter === "inactive") cachedCustomers = cachedCustomers.filter((customer) => !customer.is_active)
       setCustomers(cachedCustomers)
-      setInvoices(cachedInvoices)
+      setServerTotal(cachedCustomers.length)
       setNotice(
         shouldSaveOffline(error)
           ? offlineFallbackMessage("Offline mode: showing cached customers.", "Connection failed. Showing cached customers.")
           : error instanceof Error ? error.message : "Customers failed to load."
       )
+    } finally {
+      if (customersRequest.current === request) customersRequest.current = null
     }
   }
 
@@ -356,7 +346,7 @@ export default function CustomersPage() {
         return
       }
     } catch (error) {
-      if (!shouldSaveOffline(error)) {
+      if (!(await shouldUseWebOfflineFallback(error))) {
         setNotice(error instanceof Error ? error.message : "Customer could not be saved.")
         setSaving(false)
         return
@@ -393,7 +383,7 @@ export default function CustomersPage() {
         return
       }
     } catch (error) {
-      if (!shouldSaveOffline(error)) {
+      if (!(await shouldUseWebOfflineFallback(error))) {
         setNotice(error instanceof Error ? error.message : "Customer status could not be updated.")
         return
       }
@@ -465,7 +455,7 @@ export default function CustomersPage() {
         return
       }
     } catch (error) {
-      if (!shouldSaveOffline(error)) {
+      if (!(await shouldUseWebOfflineFallback(error))) {
         setNotice(error instanceof Error ? error.message : "Customer could not be archived.")
         return
       }
@@ -486,35 +476,33 @@ export default function CustomersPage() {
   }, [])
 
   useEffect(() => {
-    if (!organizationId) return
     setCurrentPage(1)
+  }, [debouncedSearch, gstFilter, statusFilter, typeFilter])
+
+  useEffect(() => {
+    if (!organizationId) return
+    if (skipNextCustomersRefresh.current) {
+      skipNextCustomersRefresh.current = false
+      return
+    }
     fetchData()
     // Refresh follows filters and debounced search.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [debouncedSearch, gstFilter, statusFilter, typeFilter, organizationId])
+  }, [currentPage, debouncedSearch, gstFilter, statusFilter, typeFilter, organizationId])
 
   const customersWithLedger = useMemo<CustomerWithLedger[]>(() => {
     return customers.map((customer) => {
-      const customerInvoices = invoices.filter((invoice) => {
-        const customerId = stringFrom(invoice, ["customer_id"])
-        return customerId === customer.id
-      })
-      const invoiceRevenue = customerInvoices.reduce(
-        (sum, invoice) => sum + numberFrom(invoice, ["grand_total", "total_amount", "total"]),
-        0
-      )
-      const latestInvoice = customerInvoices[0]
-      const totalSales = invoiceRevenue || Number(customer.total_sales || 0)
+      const totalSales = Number(customer.total_sales || 0)
 
       return {
         ...customer,
         total_sales: totalSales,
-        invoiceCount: customerInvoices.length,
+        invoiceCount: Number(customer.invoice_count || 0),
         invoiceRevenue: totalSales,
-        lastInvoiceAt: stringFrom(latestInvoice || {}, ["created_at"]) || customer.last_purchase_at,
+        lastInvoiceAt: customer.last_purchase_at,
       }
     })
-  }, [customers, invoices])
+  }, [customers])
 
   const customerTypes = useMemo(
     () =>
@@ -533,11 +521,8 @@ export default function CustomersPage() {
     })
   }, [customersWithLedger, gstFilter, typeFilter])
 
-  const paginatedCustomers = filteredCustomers.slice(
-    (currentPage - 1) * pageSize,
-    currentPage * pageSize
-  )
-  const totalPages = Math.max(1, Math.ceil(filteredCustomers.length / pageSize))
+  const paginatedCustomers = filteredCustomers
+  const totalPages = Math.max(1, Math.ceil(serverTotal / pageSize))
 
   const metrics = useMemo(() => {
     const totalCustomers = customersWithLedger.length

@@ -8,7 +8,7 @@ import type { PrintFormat, PrintSettings } from "@/components/print/types"
 import { apiFetch } from "@/lib/api/client-fetch"
 import { getOrganizationId } from "@/lib/getOrganization"
 import { createOfflineId, exportOfflineBackup, getOfflineData, putOfflineData, queueOfflineAction, restoreOfflineBackup } from "@/lib/offline/db"
-import { shouldSaveOffline } from "@/lib/offline/network"
+import { shouldUseWebOfflineFallback } from "@/lib/offline/network"
 import { getWorkspaceBootstrap } from "@/lib/workspaceBootstrapClient"
 
 type Organization = Record<string, unknown> & {
@@ -48,7 +48,7 @@ type WorkspaceResponse = {
   error?: string
 }
 
-const featureCatalog = [
+const experimentalFeatureCatalog = [
   ["pos_billing", "POS Billing", "Fast counter billing for retail stores, malls, and walk-in checkout teams."],
   ["quick_checkout", "Quick Checkout", "Speed-focused billing flows for counters with high daily invoice volume."],
   ["gst_b2b", "GST B2B Billing", "Business invoices, buyer tax IDs, GST-ready line items, and tax visibility."],
@@ -80,6 +80,7 @@ const featureCatalog = [
   ["weight_tracking", "Weight Tracking", "Track sold and remaining quantity by weight units."],
   ["purity_tracking", "Purity Tracking", "Jewellery purity and material-grade tracking for high-value inventory."],
 ]
+const showExperimentalModules = process.env.NODE_ENV === "development"
 
 function valueText(value: unknown) {
   return typeof value === "string" ? value : ""
@@ -173,13 +174,14 @@ export default function SettingsPage() {
 
       setRecentInvoices(invoices.data || [])
     } catch (error) {
+      if (!(await shouldUseWebOfflineFallback(error))) {
+        setNotice(error instanceof Error ? error.message : "Invoices failed to load.")
+        return
+      }
+
       const cachedInvoices = await getOfflineData<InvoiceCorrectionRow[]>(orgId, "invoices", [])
       setRecentInvoices(cachedInvoices)
-      setNotice(
-        shouldSaveOffline(error)
-          ? "Offline mode: showing cached invoices."
-          : error instanceof Error ? error.message : "Invoices failed to load."
-      )
+      setNotice("Offline mode: showing cached invoices.")
     }
   }
 
@@ -256,7 +258,9 @@ export default function SettingsPage() {
         features: nextFeatures,
         updated_at: new Date().toISOString(),
       })
-      await putOfflineData(orgId, "invoices", invoices.data || [])
+      if (invoiceResponse.headers.get("X-Bezgrow-Data-Source") !== "sqlite") {
+        await putOfflineData(orgId, "invoices", invoices.data || [])
+      }
     } catch (error) {
       const [cachedSettings, cachedInvoices] = await Promise.all([
         getOfflineData<Record<string, unknown>>(orgId, "settings", {}),
@@ -350,14 +354,18 @@ export default function SettingsPage() {
   }, [features])
 
   const readiness = useMemo(() => {
-    return [
+    const coreReadiness = [
       ["Business profile", Boolean(form.name.trim() && form.industry.trim())],
       ["Currency configured", Boolean(form.currency)],
-      ["Industry features", enabledFeatureSet.size >= 3],
-      ["Billing ready", enabledFeatureSet.has("pos_billing") || enabledFeatureSet.has("bulk_pricing") || enabledFeatureSet.has("shipping_labels")],
-      ["Inventory controls", enabledFeatureSet.has("batch_tracking") || enabledFeatureSet.has("barcode_scanning")],
+      ["Print format configured", Boolean(printSettings.paperSize)],
+      ["Invoice correction ready", true],
     ]
-  }, [enabledFeatureSet, form.currency, form.industry, form.name])
+    if (!showExperimentalModules) return coreReadiness
+    return [
+      ...coreReadiness,
+      ["Development modules", enabledFeatureSet.size >= 1],
+    ]
+  }, [enabledFeatureSet, form.currency, form.industry, form.name, printSettings.paperSize])
 
   const filteredCorrectionInvoices = useMemo(() => {
     const term = invoiceSearch.trim().toLowerCase()
@@ -414,7 +422,7 @@ export default function SettingsPage() {
         return
       }
     } catch (error) {
-      if (shouldSaveOffline(error)) {
+      if (await shouldUseWebOfflineFallback(error)) {
         const nextOrganization = { ...(organization || { id: organizationId }), ...settingsPayload, updated_at: new Date().toISOString() }
         await putOfflineData(organizationId, "settings", {
           id: `settings:${organizationId}`,
@@ -482,7 +490,7 @@ export default function SettingsPage() {
         await initializeSettings()
       }
     } catch (error) {
-      if (shouldSaveOffline(error)) {
+      if (await shouldUseWebOfflineFallback(error)) {
         const nextFeatures = existing
           ? features.map((feature) => feature.feature_key === featureKey ? { ...feature, is_enabled: nextEnabled } : feature)
           : [...features, { organization_id: organizationId, feature_key: featureKey, is_enabled: nextEnabled }]
@@ -545,8 +553,8 @@ export default function SettingsPage() {
       }
     } catch (error) {
       setNotice(
-        shouldSaveOffline(error)
-          ? "Internet required to delete invoices so stock can be validated and restored safely."
+        (await shouldUseWebOfflineFallback(error))
+          ? "Internet is required in the web app to delete invoices so stock can be validated and restored safely."
           : error instanceof Error ? error.message : "Invoice could not be deleted."
       )
       setSaving(false)
@@ -579,7 +587,7 @@ export default function SettingsPage() {
               Settings for your business, billing, printing, and data safety.
             </h1>
             <p className="mt-5 max-w-4xl text-lg leading-8 text-neutral-400">
-              Configure business details, currency, print formats, invoice correction, modules, backups, and restore options.
+              Configure business details, currency, print formats, invoice correction, backups, and restore options.
             </p>
           </div>
         </section>
@@ -701,32 +709,33 @@ export default function SettingsPage() {
 
             <AppUpdatesPanel />
 
-            <div className="rounded-[36px] border border-white/10 bg-white/[0.035] p-7 backdrop-blur-2xl">
-              <h2 className="text-3xl font-black">Business Modules</h2>
-              <p className="mt-2 text-sm text-neutral-500">Turn on the capabilities needed for your industry.</p>
-              <div className="mt-6 grid grid-cols-1 gap-4 md:grid-cols-2">
-                {featureCatalog.map(([key, title, description]) => {
-                  const enabled = enabledFeatureSet.has(key)
-                  return (
-                    <button
-                      key={key}
-                      onClick={() => void toggleFeature(key)}
-                      className={`rounded-3xl border p-5 text-left transition-all duration-300 ${enabled ? "border-cyan-400/35 bg-cyan-500/10" : "border-white/10 bg-black/35 hover:border-white/20"}`}
-                    >
-                      <div className="flex items-start justify-between gap-4">
-                        <div>
-                          <p className="text-lg font-black text-white">{title}</p>
-                          <p className="mt-2 text-sm leading-6 text-neutral-500">{description}</p>
+            {showExperimentalModules && (
+              <div data-development-only="business-modules" className="rounded-[36px] border border-white/10 bg-white/[0.035] p-7 backdrop-blur-2xl">
+                <h2 className="text-3xl font-black">Development Modules</h2>
+                <div className="mt-6 grid grid-cols-1 gap-4 md:grid-cols-2">
+                  {experimentalFeatureCatalog.map(([key, title, description]) => {
+                    const enabled = enabledFeatureSet.has(key)
+                    return (
+                      <button
+                        key={key}
+                        onClick={() => void toggleFeature(key)}
+                        className={`rounded-3xl border p-5 text-left transition-all duration-300 ${enabled ? "border-cyan-400/35 bg-cyan-500/10" : "border-white/10 bg-black/35 hover:border-white/20"}`}
+                      >
+                        <div className="flex items-start justify-between gap-4">
+                          <div>
+                            <p className="text-lg font-black text-white">{title}</p>
+                            <p className="mt-2 text-sm leading-6 text-neutral-500">{description}</p>
+                          </div>
+                          <span className={`rounded-full px-3 py-1 text-xs font-bold ${enabled ? "bg-cyan-400 text-black" : "bg-white/10 text-white"}`}>
+                            {enabled ? "On" : "Off"}
+                          </span>
                         </div>
-                        <span className={`rounded-full px-3 py-1 text-xs font-bold ${enabled ? "bg-cyan-400 text-black" : "bg-white/10 text-white"}`}>
-                          {enabled ? "On" : "Off"}
-                        </span>
-                      </div>
-                    </button>
-                  )
-                })}
+                      </button>
+                    )
+                  })}
+                </div>
               </div>
-            </div>
+            )}
 
             <div className="rounded-[36px] border border-red-400/20 bg-red-500/[0.04] p-7 backdrop-blur-2xl">
               <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
@@ -844,7 +853,7 @@ export default function SettingsPage() {
               <div className="mt-6 space-y-4 text-sm text-neutral-400">
                 <p>Business reference: {organization?.id || "-"}</p>
                 <p>Currency: {form.currency}</p>
-                <p>Enabled modules: {enabledFeatureSet.size}</p>
+                {showExperimentalModules && <p>Development modules: {enabledFeatureSet.size}</p>}
                 <p>Business type: {form.businessType}</p>
               </div>
             </div>

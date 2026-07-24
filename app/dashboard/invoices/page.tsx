@@ -7,7 +7,7 @@ import { useDebounce } from "use-debounce"
 import { apiFetch } from "@/lib/api/client-fetch"
 import { getOrganizationId } from "@/lib/getOrganization"
 import { createOfflineId, getOfflineData, putOfflineData, queueOfflineAction } from "@/lib/offline/db"
-import { shouldSaveOffline } from "@/lib/offline/network"
+import { shouldUseWebOfflineFallback } from "@/lib/offline/network"
 
 type InvoiceRow = Record<string, unknown> & {
   id: string
@@ -157,10 +157,14 @@ export default function InvoicesPage() {
   const [currentPage, setCurrentPage] = useState(1)
   const [serverTotal, setServerTotal] = useState(0)
   const skipNextInvoicesRefresh = useRef(false)
+  const billingRequest = useRef<AbortController | null>(null)
 
   const fetchBillingData = useCallback(async (orgId = organizationId) => {
     if (!orgId) return
 
+    billingRequest.current?.abort()
+    const request = new AbortController()
+    billingRequest.current = request
     const invoiceParams = new URLSearchParams({
       page: String(currentPage),
       limit: String(pageSize),
@@ -181,10 +185,12 @@ export default function InvoicesPage() {
         apiFetch(`/api/invoices/list?${invoiceParams.toString()}`, {
           credentials: "include",
           cache: "no-store",
+          signal: request.signal,
         }),
         apiFetch(`/api/customers/list?${customerParams.toString()}`, {
           credentials: "include",
           cache: "no-store",
+          signal: request.signal,
         }),
       ])
       const invoiceResult = (await invoiceResponse.json()) as ListResponse<InvoiceRow>
@@ -208,6 +214,12 @@ export default function InvoicesPage() {
       setServerTotal(invoiceResult.pagination?.total || nextInvoices.length)
       if (customerResponse.ok) setNotice("")
     } catch (error) {
+      if (request.signal.aborted) return
+      if (!(await shouldUseWebOfflineFallback(error))) {
+        setNotice(error instanceof Error ? error.message : "Invoices failed to load.")
+        return
+      }
+
       const [cachedInvoices, cachedCustomers, cachedItems] = await Promise.all([
         getOfflineData<InvoiceRow[]>(orgId, "invoices", []),
         getOfflineData<CustomerRow[]>(orgId, "customers", []),
@@ -222,6 +234,8 @@ export default function InvoicesPage() {
           ? "Offline mode: showing cached invoices."
           : error instanceof Error ? error.message : "Invoices failed to load."
       )
+    } finally {
+      if (billingRequest.current === request) billingRequest.current = null
     }
   }, [currentPage, customerFilter, debouncedSearch, organizationId, periodFilter, statusFilter])
 
@@ -389,7 +403,7 @@ export default function InvoicesPage() {
         return
       }
     } catch (error) {
-      if (!shouldSaveOffline(error)) {
+      if (!(await shouldUseWebOfflineFallback(error))) {
         setNotice(error instanceof Error ? error.message : "Invoice status could not be updated.")
         setSavingId(null)
         return

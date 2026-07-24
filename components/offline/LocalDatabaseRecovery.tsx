@@ -62,12 +62,16 @@ export default function LocalDatabaseRecovery({ checking = false, errorMessage, 
     }
   }
 
-  function retry() {
-    if (onRetry) {
-      onRetry()
-      return
+  async function retry() {
+    setStatus("Retrying local database…")
+    try {
+      await getLocalDatabaseService().retryInitialization()
+      setStatus("Local database is ready.")
+      if (onRetry) onRetry()
+      else window.location.reload()
+    } catch {
+      setStatus("Local database retry failed. Download diagnostics for the exact native error.")
     }
-    window.location.reload()
   }
 
   return (
@@ -91,8 +95,8 @@ export default function LocalDatabaseRecovery({ checking = false, errorMessage, 
               Your dashboard is locked until the desktop database is available, so new invoices, products, and license changes cannot be saved to the wrong place.
             </div>
             <div className="mt-6 grid gap-3 sm:grid-cols-3">
-              <button type="button" onClick={retry} className="h-12 rounded-lg bg-white px-4 text-sm font-black text-black">
-                Retry
+              <button type="button" onClick={() => void retry()} className="h-12 rounded-lg bg-white px-4 text-sm font-black text-black">
+                Retry Database
               </button>
               <button type="button" onClick={() => void exportDiagnostics()} className="h-12 rounded-lg border border-white/15 bg-white/10 px-4 text-sm font-black text-white">
                 Download Diagnostics

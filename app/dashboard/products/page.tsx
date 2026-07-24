@@ -7,7 +7,7 @@ import { apiFetch } from "@/lib/api/client-fetch"
 import { getOrganizationFeatures } from "@/lib/get-organization-features"
 import { getOrganizationId } from "@/lib/getOrganization"
 import { createOfflineId, getOfflineData, putOfflineData, queueOfflineAction } from "@/lib/offline/db"
-import { offlineFallbackMessage, shouldSaveOffline } from "@/lib/offline/network"
+import { offlineFallbackMessage, shouldSaveOffline, shouldUseWebOfflineFallback } from "@/lib/offline/network"
 
 type ProductRow = {
     id: string
@@ -292,6 +292,7 @@ export default function ProductsPage() {
     const [sortField, setSortField] = useState<keyof ProductRow>("created_at")
     const [sortAsc, setSortAsc] = useState(false)
     const [currentPage, setCurrentPage] = useState(1)
+    const [serverTotal, setServerTotal] = useState(0)
     const [showFormModal, setShowFormModal] = useState(false)
     const [editProduct, setEditProduct] = useState<ProductRow | null>(null)
     const [viewProduct, setViewProduct] = useState<ProductRow | null>(null)
@@ -299,6 +300,7 @@ export default function ProductsPage() {
     const [form, setForm] = useState<ProductForm>(emptyForm)
     const [formError, setFormError] = useState("")
     const skipNextProductsRefresh = useRef(false)
+    const productsRequest = useRef<AbortController | null>(null)
 
     const itemsPerPage = 50
     const hasExpiryTracking = features.includes("expiry_tracking")
@@ -336,6 +338,9 @@ export default function ProductsPage() {
             return
         }
 
+        productsRequest.current?.abort()
+        const request = new AbortController()
+        productsRequest.current = request
         const params = new URLSearchParams({
             page: String(currentPage),
             limit: String(itemsPerPage),
@@ -353,6 +358,7 @@ export default function ProductsPage() {
             const response = await apiFetch(`/api/products/list?${params.toString()}`, {
                 credentials: "include",
                 cache: forceFresh ? "no-store" : "default",
+                signal: request.signal,
             })
             const payload = (await response.json()) as ProductsListResponse
 
@@ -371,17 +377,27 @@ export default function ProductsPage() {
             setAnalytics(buildAnalytics(rows))
             writeCachedProducts(rows)
             setProducts(rows)
+            setServerTotal(payload.pagination?.total ?? rows.length)
             setNotice("")
         } catch (error) {
+            if (request.signal.aborted) return
+            if (!(await shouldUseWebOfflineFallback(error))) {
+                setNotice(error instanceof Error ? error.message : "Products failed to load.")
+                return
+            }
+
             const cachedProducts = await getOfflineData<ProductRow[]>(orgId, "products", [])
             setAnalytics(buildAnalytics(cachedProducts))
             setProducts(cachedProducts)
+            setServerTotal(cachedProducts.length)
             writeCachedProducts(cachedProducts)
             setNotice(
                 shouldSaveOffline(error)
                     ? offlineFallbackMessage("Offline mode: showing cached products.", "Connection failed. Showing cached products.")
                     : error instanceof Error ? error.message : "Products failed to load."
             )
+        } finally {
+            if (productsRequest.current === request) productsRequest.current = null
         }
     }
 
@@ -528,7 +544,7 @@ export default function ProductsPage() {
             setSaving(false)
             setNotice(editProduct ? "Product updated successfully." : "Product created successfully.")
         } catch (error) {
-            if (shouldSaveOffline(error)) {
+            if (await shouldUseWebOfflineFallback(error)) {
                 await saveProductOffline(payload)
                 setSaving(false)
                 return
@@ -607,7 +623,7 @@ export default function ProductsPage() {
             setNotice("Product archived offline. Pending sync.")
         }
 
-        if (shouldSaveOffline()) {
+        if (await shouldUseWebOfflineFallback()) {
             await archiveOffline()
             return
         }
@@ -633,7 +649,7 @@ export default function ProductsPage() {
             await fetchProducts(undefined, true)
             setNotice("Product moved to trash.")
         } catch (error) {
-            if (shouldSaveOffline(error)) {
+            if (await shouldUseWebOfflineFallback(error)) {
                 await archiveOffline()
                 return
             }
@@ -785,7 +801,7 @@ export default function ProductsPage() {
         stockStatusFilter,
     ])
 
-    const totalPages = Math.max(1, currentPage + (products.length === itemsPerPage ? 1 : 0))
+    const totalPages = Math.max(1, Math.ceil(serverTotal / itemsPerPage))
 
     const productHealth =
         analytics.totalProducts > 0

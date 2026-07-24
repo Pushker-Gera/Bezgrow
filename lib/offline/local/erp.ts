@@ -1,6 +1,6 @@
 "use client"
 
-import { createOfflineId, getOfflineData, putOfflineData, type OfflineCollection } from "@/lib/offline/db"
+import { createOfflineId, getOfflineData, putOfflineData, type OfflineAction, type OfflineCollection } from "@/lib/offline/db"
 import { isDesktopRuntime } from "@/lib/desktop/tauri"
 import { exportNormalizedBackup, putNormalizedCollectionsInTransaction } from "@/lib/offline/local/repositories"
 import { getLocalDatabaseService } from "@/lib/offline/local/service"
@@ -64,9 +64,9 @@ async function readRows(organizationId: string, collection: OfflineCollection) {
   return getOfflineData<DataRow[]>(organizationId, collection, [])
 }
 
-async function writeCollections(organizationId: string, updates: CollectionUpdate[]) {
+async function writeCollections(organizationId: string, updates: CollectionUpdate[], action?: OfflineAction) {
   const desktopRuntime = await isDesktopRuntime().catch(() => false)
-  const wroteToSqlite = await putNormalizedCollectionsInTransaction(organizationId, updates)
+  const wroteToSqlite = await putNormalizedCollectionsInTransaction(organizationId, updates, action)
     .then(() => true)
     .catch((error) => {
       console.warn("[offline/local-erp] SQLite batch write unavailable.", error)
@@ -469,7 +469,7 @@ export async function createPurchaseDocument(organizationId: string, input: Data
   return { purchase_id: documentId, bill_number: billNumber, status: document.status, outstanding_amount: outstandingAmount }
 }
 
-export async function createPaymentTransaction(organizationId: string, input: DataRow) {
+export async function createPaymentTransaction(organizationId: string, input: DataRow, action?: OfflineAction) {
   const now = nowIso()
   const amount = money(localNumber(input.amount))
   if (amount <= 0) throw new Error("Payment amount must be greater than zero.")
@@ -595,7 +595,7 @@ export async function createPaymentTransaction(organizationId: string, input: Da
     { collection: "expenses", value: nextExpenses },
     { collection: "customers", value: nextCustomers },
     { collection: "suppliers", value: nextSuppliers },
-  ])
+  ], action)
 
   return { payment_id: paymentId, amount, direction, document_id: documentId || null }
 }
@@ -831,7 +831,7 @@ export async function createExpenseRecord(organizationId: string, input: DataRow
   return { expense_id: expenseId, amount, payment_status: expense.payment_status }
 }
 
-export async function createInventoryMovement(organizationId: string, input: DataRow) {
+export async function createInventoryMovement(organizationId: string, input: DataRow, action?: OfflineAction) {
   const now = nowIso()
   const productId = localString(input.product_id)
   const quantity = Math.abs(localNumber(input.quantity))
@@ -916,7 +916,7 @@ export async function createInventoryMovement(organizationId: string, input: Dat
     { collection: "inventory_items", value: nextProducts },
     { collection: "stock_batches", value: nextBatches },
     { collection: "stock_movements", value: [...movementRows, ...movements] },
-  ])
+  ], action)
   return { product_id: productId, previous_stock: previousStock, new_stock: nextStock, movement_count: movementRows.length }
 }
 

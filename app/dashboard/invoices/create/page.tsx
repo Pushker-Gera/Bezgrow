@@ -8,7 +8,7 @@ import { apiFetch } from "@/lib/api/client-fetch"
 import { getOrganizationId } from "@/lib/getOrganization"
 import { createWhatsAppInvoiceUrl } from "@/lib/invoice-share"
 import { createOfflineId, getOfflineData, putOfflineData, queueOfflineAction } from "@/lib/offline/db"
-import { shouldSaveOffline } from "@/lib/offline/network"
+import { shouldUseWebOfflineFallback } from "@/lib/offline/network"
 import { getWorkspaceBootstrap } from "@/lib/workspaceBootstrapClient"
 
 type Customer = {
@@ -216,8 +216,15 @@ export default function CreateInvoicePage() {
       if (!response.ok) throw new Error(payload.error || "Customers failed to load.")
       const nextCustomers = (payload.data || []).filter((customer) => customer.name)
       setCustomers(nextCustomers)
-      await putOfflineData(orgId, "customers", nextCustomers)
+      if (response.headers.get("X-Bezgrow-Data-Source") !== "sqlite") {
+        await putOfflineData(orgId, "customers", nextCustomers)
+      }
     } catch (error) {
+      if (!(await shouldUseWebOfflineFallback(error))) {
+        setNotice({ title: "Customers failed", message: error instanceof Error ? error.message : "Customers failed to load.", type: "error" })
+        return
+      }
+
       const cachedCustomers = await getOfflineData<Customer[]>(orgId, "customers", [])
       setCustomers(cachedCustomers.filter((customer) => customer.name))
       if (!navigator.onLine) {
@@ -240,9 +247,16 @@ export default function CreateInvoicePage() {
 
       if (!response.ok) throw new Error(payload.error || "Products failed to load.")
       setProducts(payload.data || [])
-      await putOfflineData(orgId, "products", payload.data || [])
-      await putOfflineData(orgId, "inventory_items", payload.data || [])
+      if (response.headers.get("X-Bezgrow-Data-Source") !== "sqlite") {
+        await putOfflineData(orgId, "products", payload.data || [])
+        await putOfflineData(orgId, "inventory_items", payload.data || [])
+      }
     } catch (error) {
+      if (!(await shouldUseWebOfflineFallback(error))) {
+        setNotice({ title: "Products failed", message: error instanceof Error ? error.message : "Products failed to load.", type: "error" })
+        return
+      }
+
       const cachedProducts = await getOfflineData<Product[]>(orgId, "products", [])
       setProducts(cachedProducts)
       if (!navigator.onLine) {
@@ -707,7 +721,7 @@ export default function CreateInvoicePage() {
         return
       }
     } catch (error) {
-      if (!shouldSaveOffline(error)) {
+      if (!(await shouldUseWebOfflineFallback(error))) {
         setNotice({ title: "Bill Not Saved", message: error instanceof Error ? error.message : "Please check the bill and try again.", type: "error" })
         setLoading(false)
         return

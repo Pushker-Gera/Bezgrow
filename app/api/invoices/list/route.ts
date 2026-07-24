@@ -47,6 +47,10 @@ export async function GET(request: Request) {
   const status = url.searchParams.get("status") || "all"
   const customerId = url.searchParams.get("customer_id") || "all"
   const period = url.searchParams.get("period") || "all"
+  const allowedSort = new Set(["created_at", "invoice_number", "grand_total", "total_amount", "paid_amount", "outstanding_amount", "payment_status"])
+  const requestedSort = url.searchParams.get("sort") || pagination.sort
+  const requestedDirection = url.searchParams.get("direction") === "asc" ? "asc" : "desc"
+  const sort = allowedSort.has(requestedSort) ? requestedSort : "created_at"
   let matchingCustomerIds: string[] = []
   let selectColumns = [...baseInvoiceColumns]
 
@@ -63,11 +67,12 @@ export async function GET(request: Request) {
   }
 
   const runQuery = async () => {
+    const activeSort = selectColumns.includes(sort) ? sort : "created_at"
     let query = adminSupabase
       .from("invoices")
       .select(selectColumns.join(","), { count: "exact" })
       .eq("organization_id", orgId)
-      .order("created_at", { ascending: false })
+      .order(activeSort, { ascending: requestedDirection === "asc" })
       .range(from, to)
 
     if (status !== "all" && selectColumns.includes("payment_status")) {

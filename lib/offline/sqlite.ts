@@ -1,7 +1,7 @@
 "use client"
 
 import { isDesktopRuntime } from "@/lib/desktop/tauri"
-import { getLocalDatabaseService, type SqlExecutor } from "@/lib/offline/local/service"
+import { getLocalDatabaseService } from "@/lib/offline/local/service"
 import { localFirstRepositoryAdapter } from "@/lib/offline/local/adapters"
 import {
   clearNormalizedData,
@@ -17,7 +17,7 @@ import type { OfflineAction, OfflineActionStatus, OfflineCollection } from "@/li
 
 const service = getLocalDatabaseService()
 
-let dbPromise: Promise<SqlExecutor | null> | null = null
+let legacyImportPromise: Promise<void> | null = null
 
 async function strictDesktopStorage() {
   return isDesktopRuntime().catch(() => false)
@@ -28,36 +28,26 @@ async function rethrowInDesktop(error: unknown) {
 }
 
 async function ensureSqliteReady() {
-  if (dbPromise) {
-    const db = await dbPromise
-    if (db) return db
-    dbPromise = null
+  const desktopRuntime = await isDesktopRuntime().catch(() => false)
+  const db = await service.connection("read").catch(async (error) => {
+    await service.recordOperationFailure("sqlite_ready", error, "DatabaseManager.ensureReady")
+    if (desktopRuntime) throw error
+    return null
+  })
+  if (!db) {
+    if (desktopRuntime) throw new Error("Bezgrow local database is not available in the desktop runtime.")
+    return null
   }
 
-  const desktopRuntime = await isDesktopRuntime().catch(() => false)
-  dbPromise = service
-    .connection("read")
-    .then(async (db) => {
-      if (!db) {
-        if (desktopRuntime) throw new Error("Bezgrow local database is not available in the desktop runtime.")
-        return null
-      }
-      await importLegacyJsonCollectionsOnce().catch((error) => {
+  if (!legacyImportPromise) {
+    legacyImportPromise = importLegacyJsonCollectionsOnce()
+      .then(() => undefined)
+      .catch(async (error) => {
+        await service.recordOperationFailure("legacy_sqlite_import", error, "importLegacyJsonCollectionsOnce")
         console.warn("[offline/sqlite] legacy SQLite import skipped", error)
       })
-      return db
-    })
-    .catch((error) => {
-      console.warn("[offline/sqlite] SQLite initialization failed.", error)
-      if (desktopRuntime) throw error
-      return null
-    })
-
-  const db = await dbPromise
-  if (!db) {
-    dbPromise = null
-    if (desktopRuntime) throw new Error("Bezgrow local database is not available in the desktop runtime.")
   }
+  await legacyImportPromise
   return db
 }
 

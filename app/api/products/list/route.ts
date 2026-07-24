@@ -5,13 +5,14 @@ import { adminSupabase } from "@/lib/supabase/admin"
 
 export const dynamic = "force-dynamic"
 
-const allowedSort = new Set(["created_at", "name", "sku", "stock", "sale_rate", "category"])
+const allowedSort = new Set(["created_at", "name", "sku", "stock", "price", "purchase_rate", "sale_rate", "category", "supplier", "warehouse"])
 
 export async function GET(request: Request) {
   const workspace = await requireWorkspace(request)
   if (!workspace.ok) return fail(workspace.error, workspace.status)
 
   const pagination = parsePagination(request)
+  const url = new URL(request.url)
   const { from, to } = paginationRange(pagination)
   const sort = allowedSort.has(pagination.sort) ? pagination.sort : "created_at"
 
@@ -30,6 +31,14 @@ export async function GET(request: Request) {
     const term = pagination.search.replaceAll(",", " ")
     query = query.or(`name.ilike.%${term}%,sku.ilike.%${term}%,category.ilike.%${term}%,supplier.ilike.%${term}%,barcode.ilike.%${term}%`)
   }
+  const category = url.searchParams.get("category")
+  const supplier = url.searchParams.get("supplier")
+  const stock = url.searchParams.get("stock")
+  if (category && category !== "all") query = query.eq("category", category)
+  if (supplier && supplier !== "all") query = query.eq("supplier", supplier)
+  if (stock === "inStock") query = query.gt("stock", 0)
+  if (stock === "outOfStock") query = query.lte("stock", 0)
+  if (stock === "low") query = query.gt("stock", 0).lte("stock", 5)
 
   const { data, error, count } = await query
   if (error) return fail("Products failed to load.", 500)

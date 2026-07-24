@@ -1,7 +1,7 @@
 use std::{
     fs::{self, OpenOptions},
     io::{Read, Write},
-    path::PathBuf,
+    path::{Path, PathBuf},
     process::{Child, Command},
     sync::Mutex,
     time::{SystemTime, UNIX_EPOCH},
@@ -15,8 +15,12 @@ use std::{
     time::Duration,
 };
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+use sqlx::{
+    sqlite::{SqliteConnectOptions, SqliteJournalMode, SqliteSynchronous},
+    Connection, SqliteConnection,
+};
 use tauri::{Manager, WebviewUrl};
 
 const KEYCHAIN_SERVICE: &str = "com.bezgrow.erp";
@@ -31,12 +35,7 @@ fn stop_next_server<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
         return;
     };
 
-    let Some(mut child) = state
-        .0
-        .lock()
-        .expect("next server state poisoned")
-        .take()
-    else {
+    let Some(mut child) = state.0.lock().expect("next server state poisoned").take() else {
         return;
     };
 
@@ -77,7 +76,10 @@ fn desktop_startup_log<R: tauri::Runtime>(app: tauri::AppHandle<R>, message: Str
     append_startup_log_handle(&app, sanitized);
 }
 
-fn append_startup_log_handle<R: tauri::Runtime>(app: &tauri::AppHandle<R>, message: impl AsRef<str>) {
+fn append_startup_log_handle<R: tauri::Runtime>(
+    app: &tauri::AppHandle<R>,
+    message: impl AsRef<str>,
+) {
     let path = app
         .path()
         .app_log_dir()
@@ -147,6 +149,23 @@ struct DesktopDatabaseBackup {
     checksum_sha256: String,
     bytes: u64,
     created_at: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct DesktopSqlStatement {
+    query: String,
+    #[serde(default)]
+    bind_values: Vec<serde_json::Value>,
+    #[serde(default)]
+    ignore_duplicate_column: bool,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct DesktopTransactionResult {
+    statements: usize,
+    rows_affected: u64,
 }
 
 fn unix_timestamp() -> String {
@@ -266,6 +285,260 @@ fn desktop_database_backup<R: tauri::Runtime>(
         bytes: metadata.len(),
         created_at,
     }))
+}
+
+fn statement_preview(query: &str) -> String {
+    query
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .chars()
+        .take(180)
+        .collect()
+}
+
+async fn execute_desktop_statement(
+    connection: &mut SqliteConnection,
+    statement: &DesktopSqlStatement,
+) -> Result<u64, String> {
+    let mut query = sqlx::query(&statement.query);
+    for value in &statement.bind_values {
+        query = match value {
+            serde_json::Value::Null => query.bind(Option::<String>::None),
+            serde_json::Value::Bool(value) => query.bind(i64::from(*value)),
+            serde_json::Value::Number(value) => {
+                if let Some(value) = value.as_i64() {
+                    query.bind(value)
+                } else if let Some(value) = value.as_u64() {
+                    let value = i64::try_from(value)
+                        .map_err(|_| "SQLite integer bind value is out of range.".to_string())?;
+                    query.bind(value)
+                } else if let Some(value) = value.as_f64() {
+                    query.bind(value)
+                } else {
+                    return Err("SQLite numeric bind value is invalid.".to_string());
+                }
+            }
+            serde_json::Value::String(value) => query.bind(value),
+            serde_json::Value::Array(_) | serde_json::Value::Object(_) => {
+                return Err("SQLite transaction bind values must be scalar.".to_string());
+            }
+        };
+    }
+
+    query
+        .execute(&mut *connection)
+        .await
+        .map(|result| result.rows_affected())
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+async fn desktop_execute_transaction<R: tauri::Runtime>(
+    app: tauri::AppHandle<R>,
+    statements: Vec<DesktopSqlStatement>,
+) -> Result<DesktopTransactionResult, String> {
+    let database_path = local_database_path(&app)?;
+    match execute_transaction_at_path(&database_path, &statements).await {
+        Ok(result) => Ok(result),
+        Err(error) => {
+            append_startup_log_handle(
+                &app,
+                format!(
+                    "SQLite native transaction failed and was rolled back: {}",
+                    error.replace(['\r', '\n'], " ")
+                ),
+            );
+            Err(error)
+        }
+    }
+}
+
+async fn execute_transaction_at_path(
+    database_path: &Path,
+    statements: &[DesktopSqlStatement],
+) -> Result<DesktopTransactionResult, String> {
+    if statements.is_empty() {
+        return Ok(DesktopTransactionResult {
+            statements: 0,
+            rows_affected: 0,
+        });
+    }
+
+    let options = SqliteConnectOptions::new()
+        .filename(database_path)
+        .create_if_missing(false)
+        .foreign_keys(true)
+        .journal_mode(SqliteJournalMode::Wal)
+        .synchronous(SqliteSynchronous::Normal)
+        .busy_timeout(std::time::Duration::from_secs(5));
+    let mut connection = SqliteConnection::connect_with(&options)
+        .await
+        .map_err(|error| format!("Unable to open the authoritative desktop SQLite database for a transaction: {error}"))?;
+
+    sqlx::query("BEGIN IMMEDIATE")
+        .execute(&mut connection)
+        .await
+        .map_err(|error| {
+            format!("Unable to begin the authoritative desktop SQLite transaction: {error}")
+        })?;
+    if let Err(error) = sqlx::query("PRAGMA defer_foreign_keys = ON")
+        .execute(&mut connection)
+        .await
+    {
+        let _ = sqlx::query("ROLLBACK").execute(&mut connection).await;
+        return Err(format!(
+            "Unable to defer desktop SQLite foreign-key checks; the transaction was rolled back: {error}"
+        ));
+    }
+
+    let mut rows_affected = 0_u64;
+    for (index, statement) in statements.iter().enumerate() {
+        match execute_desktop_statement(&mut connection, statement).await {
+            Ok(affected) => rows_affected += affected,
+            Err(error)
+                if statement.ignore_duplicate_column
+                    && error.to_ascii_lowercase().contains("duplicate column name") =>
+            {
+                continue;
+            }
+            Err(error) => {
+                let _ = sqlx::query("ROLLBACK").execute(&mut connection).await;
+                let preview = statement_preview(&statement.query);
+                return Err(format!(
+                    "SQLite transaction statement {} failed ({}): {}",
+                    index + 1,
+                    preview,
+                    error
+                ));
+            }
+        }
+    }
+
+    if let Err(error) = sqlx::query("COMMIT").execute(&mut connection).await {
+        let _ = sqlx::query("ROLLBACK").execute(&mut connection).await;
+        return Err(format!(
+            "Unable to commit the authoritative desktop SQLite transaction; all statements were rolled back: {error}"
+        ));
+    }
+
+    Ok(DesktopTransactionResult {
+        statements: statements.len(),
+        rows_affected,
+    })
+}
+
+#[cfg(test)]
+mod database_transaction_tests {
+    use super::*;
+
+    fn statement(query: &str, bind_values: Vec<serde_json::Value>) -> DesktopSqlStatement {
+        DesktopSqlStatement {
+            query: query.to_string(),
+            bind_values,
+            ignore_duplicate_column: false,
+        }
+    }
+
+    #[test]
+    fn native_batch_commits_and_rolls_back_on_one_connection() {
+        let database_path = std::env::temp_dir().join(format!(
+            "bezgrow-native-transaction-{}-{}.db",
+            std::process::id(),
+            unix_timestamp()
+        ));
+
+        tauri::async_runtime::block_on(async {
+            let options = SqliteConnectOptions::new()
+                .filename(&database_path)
+                .create_if_missing(true);
+            let mut connection = SqliteConnection::connect_with(&options)
+                .await
+                .expect("create transaction fixture");
+            sqlx::query("CREATE TABLE records (id INTEGER PRIMARY KEY, value TEXT NOT NULL)")
+                .execute(&mut connection)
+                .await
+                .expect("create fixture table");
+            sqlx::query(
+                "CREATE TABLE references_record (
+                    id INTEGER PRIMARY KEY,
+                    record_id INTEGER NOT NULL REFERENCES records(id)
+                )",
+            )
+            .execute(&mut connection)
+            .await
+            .expect("create foreign-key fixture table");
+            sqlx::query("INSERT INTO records (id, value) VALUES (10, 'referenced')")
+                .execute(&mut connection)
+                .await
+                .expect("create referenced fixture row");
+            sqlx::query("INSERT INTO references_record (id, record_id) VALUES (1, 10)")
+                .execute(&mut connection)
+                .await
+                .expect("create child fixture row");
+            connection.close().await.expect("close fixture");
+
+            let committed = execute_transaction_at_path(
+                &database_path,
+                &[
+                    statement(
+                        "DELETE FROM records WHERE id = ?",
+                        vec![serde_json::json!(10)],
+                    ),
+                    statement(
+                        "INSERT INTO records (id, value) VALUES (?, ?)",
+                        vec![serde_json::json!(10), serde_json::json!("reinserted")],
+                    ),
+                    statement(
+                        "INSERT INTO records (id, value) VALUES (?, ?)",
+                        vec![serde_json::json!(1), serde_json::json!("first")],
+                    ),
+                    statement(
+                        "INSERT INTO records (id, value) VALUES (?, ?)",
+                        vec![serde_json::json!(2), serde_json::json!("second")],
+                    ),
+                ],
+            )
+            .await
+            .expect("commit native batch");
+            assert_eq!(committed.statements, 4);
+            assert_eq!(committed.rows_affected, 4);
+
+            let rolled_back = execute_transaction_at_path(
+                &database_path,
+                &[
+                    statement(
+                        "INSERT INTO records (id, value) VALUES (?, ?)",
+                        vec![serde_json::json!(3), serde_json::json!("third")],
+                    ),
+                    statement(
+                        "INSERT INTO missing_table (id) VALUES (?)",
+                        vec![serde_json::json!(4)],
+                    ),
+                ],
+            )
+            .await;
+            assert!(rolled_back.is_err());
+
+            let options = SqliteConnectOptions::new()
+                .filename(&database_path)
+                .create_if_missing(false);
+            let mut connection = SqliteConnection::connect_with(&options)
+                .await
+                .expect("reopen transaction fixture");
+            let count: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM records")
+                .fetch_one(&mut connection)
+                .await
+                .expect("count committed fixture rows");
+            assert_eq!(
+                count.0, 3,
+                "the failed batch must roll back its first statement"
+            );
+            connection.close().await.expect("close transaction fixture");
+        });
+
+        let _ = fs::remove_file(database_path);
+    }
 }
 
 #[tauri::command]
@@ -543,6 +816,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             desktop_database_diagnostics,
             desktop_database_backup,
+            desktop_execute_transaction,
             desktop_startup_log,
             store_secret,
             read_secret,
@@ -552,7 +826,10 @@ pub fn run() {
         .build(tauri::generate_context!())
         .expect("error while building Bezgrow ERP")
         .run(|app, event| {
-            if matches!(event, tauri::RunEvent::Exit | tauri::RunEvent::ExitRequested { .. }) {
+            if matches!(
+                event,
+                tauri::RunEvent::Exit | tauri::RunEvent::ExitRequested { .. }
+            ) {
                 stop_next_server(app);
             }
         });

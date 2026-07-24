@@ -195,6 +195,12 @@
           "markdownDescription": "Enables the desktop_database_diagnostics command without any pre-configured scope."
         },
         {
+          "description": "Enables the desktop_execute_transaction command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-desktop-execute-transaction",
+          "markdownDescription": "Enables the desktop_execute_transaction command without any pre-configured scope."
+        },
+        {
           "description": "Enables the desktop_startup_log command without any pre-configured scope.",
           "type": "string",
           "const": "allow-desktop-startup-log",
@@ -235,6 +241,12 @@
           "type": "string",
           "const": "deny-desktop-database-diagnostics",
           "markdownDescription": "Denies the desktop_database_diagnostics command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the desktop_execute_transaction command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-desktop-execute-transaction",
+          "markdownDescription": "Denies the desktop_execute_transaction command without any pre-configured scope."
         },
         {
           "description": "Denies the desktop_startup_log command without any pre-configured scope.",

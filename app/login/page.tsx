@@ -191,7 +191,7 @@ export default function LoginPage() {
 
             const desktopRuntime = (await withTimeout(isTauriRuntimeAsync(), 2500)) || false
             if (desktopRuntime) {
-                await withTimeout(getLocalDatabaseService().integrityReport(), 5000)
+                await withTimeout(getLocalDatabaseService().ensureReady(), 5000)
                 const workspace = await withTimeout(restoreLicensedWorkspaceContext().catch(() => null), 5000)
                 const organizationId = workspace?.organization?.id || workspace?.membership?.organization_id || undefined
                 const license = await withTimeout(localLicenseSnapshot(organizationId), 5000)

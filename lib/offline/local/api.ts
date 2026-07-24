@@ -22,7 +22,15 @@ import {
   verifyLocalBackup,
 } from "@/lib/offline/local/erp"
 import { assertLocalWriteAllowed, localLicenseSnapshot, restoreLicensedWorkspaceContext } from "@/lib/offline/local/license"
-import { putNormalizedCollectionsInTransaction } from "@/lib/offline/local/repositories"
+import {
+  putNormalizedCollectionsInTransaction,
+  queryNormalizedCustomers,
+  queryNormalizedInvoices,
+  queryNormalizedProducts,
+  type NormalizedListPage,
+  type NormalizedListQuery,
+} from "@/lib/offline/local/repositories"
+import { getLocalDatabaseService, LocalDatabaseUnavailableError } from "@/lib/offline/local/service"
 
 type DataRow = Record<string, unknown> & { id?: string }
 
@@ -30,6 +38,8 @@ type LocalApiResult = {
   response: Response | null
   handled: boolean
 }
+
+const databaseManager = getLocalDatabaseService()
 
 const dailyEndpoints = new Set([
   "/api/workspace/bootstrap",
@@ -233,8 +243,39 @@ function paginate(url: URL, rows: DataRow[]) {
   }
 }
 
-function localListResponse(collection: "products" | "customers" | "invoices", url: URL, organizationId: string, rows: DataRow[]) {
-  const payload = paginate(url, rows)
+function normalizedListQuery(url: URL): NormalizedListQuery {
+  const requestedPage = Number.parseInt(url.searchParams.get("page") || "1", 10)
+  const requestedLimit = Number.parseInt(url.searchParams.get("limit") || url.searchParams.get("pageSize") || "50", 10)
+  return {
+    page: Number.isFinite(requestedPage) ? Math.max(1, requestedPage) : 1,
+    limit: Number.isFinite(requestedLimit) ? Math.max(1, Math.min(500, requestedLimit)) : 50,
+    search: url.searchParams.get("search") || "",
+    sort: url.searchParams.get("sort") || "created_at",
+    direction: url.searchParams.get("direction") === "asc" ? "asc" : "desc",
+    category: url.searchParams.get("category") || "all",
+    supplier: url.searchParams.get("supplier") || "all",
+    stock: url.searchParams.get("stock") || "all",
+    status: url.searchParams.get("status") || "all",
+    customerType: url.searchParams.get("customer_type") || "all",
+    gstStatus: url.searchParams.get("gst_status") || "all",
+    customerId: url.searchParams.get("customer_id") || "all",
+    period: url.searchParams.get("period") || "all",
+  }
+}
+
+function localListResponse(collection: "products" | "customers" | "invoices", url: URL, organizationId: string, page: NormalizedListPage) {
+  const query = normalizedListQuery(url)
+  const payload = {
+    data: page.data,
+    pagination: {
+      page: query.page,
+      limit: query.limit,
+      sort: query.sort,
+      direction: query.direction,
+      search: query.search,
+      total: page.total,
+    },
+  }
   console.info("[desktop-local-list]", {
     adapter: "sqlite-normalized-repository",
     collection,
@@ -256,10 +297,11 @@ async function readCollection<T extends DataRow>(organizationId: string, collect
 
 async function writeCollections(
   organizationId: string,
-  updates: Array<{ collection: OfflineCollection; value: unknown }>
+  updates: Array<{ collection: OfflineCollection; value: unknown }>,
+  action?: OfflineAction
 ) {
   const desktopRuntime = await isDesktopRuntime().catch(() => false)
-  const wroteToSqlite = await putNormalizedCollectionsInTransaction(organizationId, updates)
+  const wroteToSqlite = await putNormalizedCollectionsInTransaction(organizationId, updates, action)
     .then(() => true)
     .catch((error) => {
       console.warn("[offline/local-api] SQLite batch write unavailable.", error)
@@ -276,6 +318,16 @@ async function writeCollections(
   if (typeof window !== "undefined") window.dispatchEvent(new Event("bezgrow:offline-data-changed"))
 }
 
+function pendingAction(
+  id: string,
+  type: OfflineAction["type"],
+  organizationId: string,
+  payload: Record<string, unknown>
+): OfflineAction {
+  const now = nowIso()
+  return { id, type, organizationId, payload, status: "pending", attempts: 0, createdAt: now, updatedAt: now }
+}
+
 async function queue(action: Parameters<typeof queueOfflineAction>[0]) {
   await queueOfflineAction(action)
 }
@@ -287,21 +339,7 @@ function rowMatches(row: DataRow, fields: string[], term: string) {
 }
 
 async function listProducts(url: URL, organizationId: string) {
-  const search = url.searchParams.get("search") || ""
-  const category = url.searchParams.get("category") || "all"
-  const supplier = url.searchParams.get("supplier") || "all"
-  const stock = url.searchParams.get("stock") || "all"
-  const sort = url.searchParams.get("sort") || "created_at"
-  const direction = url.searchParams.get("direction") || "desc"
-  let rows = filterDeleted(await readCollection<DataRow>(organizationId, "products"))
-  rows = rows.filter((row) => rowMatches(row, ["name", "sku", "category", "supplier", "barcode"], search))
-  if (category !== "all") rows = rows.filter((row) => localString(row.category) === category || localString(row.category_id) === category)
-  if (supplier !== "all") rows = rows.filter((row) => localString(row.supplier) === supplier || localString(row.supplier_id) === supplier)
-  if (stock === "inStock") rows = rows.filter((row) => localNumber(row.stock) > 0)
-  if (stock === "outOfStock") rows = rows.filter((row) => localNumber(row.stock) <= 0)
-  if (stock === "low") rows = rows.filter((row) => localNumber(row.stock) > 0 && localNumber(row.stock) <= localNumber(row.min_stock, 5))
-  rows = sortRows(rows, sort, direction, ["created_at", "updated_at", "name", "sku", "category", "supplier", "warehouse", "stock", "price", "purchase_rate", "sale_rate"])
-  return localListResponse("products", url, organizationId, rows)
+  return localListResponse("products", url, organizationId, await queryNormalizedProducts(organizationId, normalizedListQuery(url)))
 }
 
 async function saveProduct(url: URL, body: DataRow, isUpdate: boolean, organizationId: string) {
@@ -310,6 +348,16 @@ async function saveProduct(url: URL, body: DataRow, isUpdate: boolean, organizat
   const movements = await readCollection<DataRow>(organizationId, "stock_movements")
   const id = isUpdate ? localString(body.id) : createOfflineId("product")
   if (!id) return fail("Invalid product id.", 422)
+  if (!localString(body.name)) return fail("Product name is required.", 422)
+  const sku = localString(body.sku).toLowerCase()
+  if (sku && products.some((product) => product.id !== id && localString(product.sku).toLowerCase() === sku && !product.deleted_at)) {
+    return fail("A product with this SKU already exists.", 409)
+  }
+  if (body.stock !== undefined) {
+    const parsedStock = Number(body.stock)
+    if (!Number.isFinite(parsedStock)) return fail("Opening stock must be a valid number.", 422)
+    if (parsedStock < 0) return fail("Opening stock cannot be negative.", 422)
+  }
 
   const previous = products.find((product) => product.id === id)
   const stock = localNumber(body.stock, localNumber(previous?.stock))
@@ -350,21 +398,19 @@ async function saveProduct(url: URL, body: DataRow, isUpdate: boolean, organizat
           ...movements,
         ]
 
-  await writeCollections(organizationId, [
-    { collection: "products", value: nextProducts },
-    { collection: "inventory_items", value: nextProducts },
-    { collection: "stock_movements", value: nextMovements },
-  ])
-  await queue({
-    id: createOfflineId("product-action"),
-    type: "save_product",
+  await writeCollections(
     organizationId,
-    payload: {
+    [
+      { collection: "products", value: nextProducts },
+      { collection: "inventory_items", value: nextProducts },
+      { collection: "stock_movements", value: nextMovements },
+    ],
+    pendingAction(createOfflineId("product-action"), "save_product", organizationId, {
       localProductId: id,
       serverProductId: isUpdate && !id.startsWith("offline-") ? id : null,
       product: { ...body, id: undefined },
-    },
-  })
+    })
+  )
 
   return ok({ product: { id, name: payload.name, sku: payload.sku || null, stock } })
 }
@@ -377,56 +423,27 @@ async function archiveProduct(body: DataRow, organizationId: string) {
   const nextProducts = products.map((product) =>
     product.id === id ? { ...product, deleted_at: now, sync_status: "pending_delete", updated_at: now } : product
   )
-  await writeCollections(organizationId, [
-    { collection: "products", value: nextProducts },
-    { collection: "inventory_items", value: nextProducts },
-  ])
-  await queue({
-    id: createOfflineId("product-archive"),
-    type: "archive_product",
+  await writeCollections(
     organizationId,
-    payload: { productId: id },
-  })
+    [
+      { collection: "products", value: nextProducts },
+      { collection: "inventory_items", value: nextProducts },
+    ],
+    pendingAction(createOfflineId("product-archive"), "archive_product", organizationId, { productId: id })
+  )
   return ok({ product: { id } })
 }
 
 async function listCustomers(url: URL, organizationId: string) {
-  const search = url.searchParams.get("search") || ""
-  const status = url.searchParams.get("status") || "all"
-  const customerType = url.searchParams.get("customer_type") || "all"
-  const gstStatus = url.searchParams.get("gst_status") || "all"
-  const [customers, invoices] = await Promise.all([
-    readCollection<DataRow>(organizationId, "customers"),
-    readCollection<DataRow>(organizationId, "invoices"),
-  ])
-  let rows: DataRow[] = filterDeleted(customers).map((customer): DataRow => {
-    const customerInvoices = filterDeleted(invoices).filter((invoice) => invoice.customer_id === customer.id)
-    return {
-      ...customer,
-      invoice_count: customerInvoices.length,
-      total_sales: sumRows(customerInvoices, ["grand_total", "total_amount", "total"]),
-      last_purchase_at: customerInvoices.map(createdAt).filter(Boolean).sort().at(-1) || localString(customer.last_purchase_at) || null,
-    }
-  })
-  rows = rows.filter((row) => rowMatches(row, ["name", "email", "phone", "gst_number", "tax_id"], search))
-  if (status === "active") rows = rows.filter((row) => row.is_active === true || row.is_active === 1)
-  if (status === "inactive") rows = rows.filter((row) => row.is_active === false || row.is_active === 0)
-  if (customerType !== "all") rows = rows.filter((row) => localString(row.customer_type, "retail") === customerType)
-  if (gstStatus === "gst") rows = rows.filter((row) => Boolean(localString(row.gst_number || row.tax_id)))
-  if (gstStatus === "nonGst") rows = rows.filter((row) => !localString(row.gst_number || row.tax_id))
-  rows = sortRows(
-    rows,
-    url.searchParams.get("sort") || "created_at",
-    url.searchParams.get("direction") || "desc",
-    ["created_at", "updated_at", "name", "total_sales", "last_purchase_at", "invoice_count"]
-  )
-  return localListResponse("customers", url, organizationId, rows)
+  return localListResponse("customers", url, organizationId, await queryNormalizedCustomers(organizationId, normalizedListQuery(url)))
 }
 
 async function saveCustomer(body: DataRow, organizationId: string) {
   const now = nowIso()
   const customers = await readCollection<DataRow>(organizationId, "customers")
   const id = localString(body.id) || createOfflineId("customer")
+  if (!localString(body.name)) return fail("Customer name is required.", 422)
+  if (body.email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(localString(body.email))) return fail("Enter a valid customer email address.", 422)
   const previous = customers.find((customer) => customer.id === id)
   const nextCustomer = {
     ...previous,
@@ -444,16 +461,14 @@ async function saveCustomer(body: DataRow, organizationId: string) {
     offline_local_id: localString(previous?.offline_local_id) || id,
   }
   const nextCustomers = previous ? customers.map((customer) => (customer.id === id ? nextCustomer : customer)) : [nextCustomer, ...customers]
-  await writeCollections(organizationId, [{ collection: "customers", value: nextCustomers }])
-  await queue({
-    id: createOfflineId("customer-action"),
-    type: "save_customer",
+  await writeCollections(
     organizationId,
-    payload: {
+    [{ collection: "customers", value: nextCustomers }],
+    pendingAction(createOfflineId("customer-action"), "save_customer", organizationId, {
       localCustomerId: id,
       customer: previous && !id.startsWith("offline-") ? { id, ...body } : body,
-    },
-  })
+    })
+  )
   return ok({ id })
 }
 
@@ -475,16 +490,14 @@ async function customerStatus(body: DataRow, organizationId: string) {
         }
       : customer
   )
-  await writeCollections(organizationId, [{ collection: "customers", value: nextCustomers }])
-  await queue({
-    id: createOfflineId("customer-status"),
-    type: "customer_status",
+  await writeCollections(
     organizationId,
-    payload: {
+    [{ collection: "customers", value: nextCustomers }],
+    pendingAction(createOfflineId("customer-status"), "customer_status", organizationId, {
       customerId: id,
       status: { id: id.startsWith("offline-") ? undefined : id, active, archive },
-    },
-  })
+    })
+  )
   return ok({ id, active, archived: archive })
 }
 
@@ -537,66 +550,7 @@ async function supplierLedger(url: URL, organizationId: string) {
 }
 
 async function listInvoices(url: URL, organizationId: string) {
-  const [invoices, customers, items] = await Promise.all([
-    readCollection<DataRow>(organizationId, "invoices"),
-    readCollection<DataRow>(organizationId, "customers"),
-    readCollection<DataRow>(organizationId, "invoice_items"),
-  ])
-  const search = url.searchParams.get("search") || ""
-  const status = url.searchParams.get("status") || "all"
-  const customerId = url.searchParams.get("customer_id") || "all"
-  const period = url.searchParams.get("period") || "all"
-  const customerMap = new Map(customers.map((customer) => [customer.id, customer]))
-  const itemMetrics = new Map<string, { itemCount: number; quantity: number; tax: number; total: number }>()
-
-  items.forEach((item) => {
-    const invoiceId = localString(item.invoice_id)
-    if (!invoiceId) return
-    const current = itemMetrics.get(invoiceId) || { itemCount: 0, quantity: 0, tax: 0, total: 0 }
-    current.itemCount += 1
-    current.quantity += localNumber(item.quantity)
-    current.tax += localNumber(item.gst_amount)
-    current.total += localNumber(item.line_total)
-    itemMetrics.set(invoiceId, current)
-  })
-
-  const now = new Date()
-  const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1)
-  const startOfWeek = new Date(now)
-  startOfWeek.setDate(now.getDate() - 7)
-
-  let rows: DataRow[] = filterDeleted(invoices).map((invoice): DataRow => {
-    const customer = customerMap.get(invoice.customer_id as string)
-    const metrics = itemMetrics.get(String(invoice.id || "")) || { itemCount: 0, quantity: 0, tax: 0, total: 0 }
-    return {
-      ...invoice,
-      customer_name: invoice.customer_name || customer?.name || null,
-      customer_phone: invoice.customer_phone || customer?.phone || null,
-      customer_email: invoice.customer_email || customer?.email || null,
-      item_count: metrics.itemCount,
-      total_quantity: metrics.quantity,
-      item_tax: metrics.tax,
-      item_total: metrics.total,
-    }
-  })
-
-  rows = rows.filter((invoice) => {
-    if (status !== "all" && invoice.payment_status !== status && invoice.status !== status) return false
-    if (customerId !== "all" && invoice.customer_id !== customerId) return false
-    if (!rowMatches(invoice, ["invoice_number", "payment_method", "customer_name", "notes"], search)) return false
-    const created = invoice.created_at ? new Date(String(invoice.created_at)) : null
-    if (period === "today" && created?.toDateString() !== now.toDateString()) return false
-    if (period === "week" && (!created || created < startOfWeek)) return false
-    if (period === "month" && (!created || created < startOfMonth)) return false
-    return true
-  })
-  rows = sortRows(
-    rows,
-    url.searchParams.get("sort") || "created_at",
-    url.searchParams.get("direction") || "desc",
-    ["created_at", "updated_at", "invoice_date", "date", "invoice_number", "customer_name", "total_amount", "grand_total", "paid_amount", "outstanding_amount", "payment_status", "status"]
-  )
-  return localListResponse("invoices", url, organizationId, rows)
+  return localListResponse("invoices", url, organizationId, await queryNormalizedInvoices(organizationId, normalizedListQuery(url)))
 }
 
 function nextInvoiceNumber(organization: DataRow | null, existing: DataRow[]) {
@@ -860,29 +814,27 @@ async function createInvoice(body: DataRow, organizationId: string) {
     ? { ...organization, next_invoice_number: localNumber(organization.next_invoice_number, invoices.length + 1) + 1, updated_at: now }
     : null
 
-  await writeCollections(organizationId, [
-    { collection: "products", value: nextProducts },
-    { collection: "inventory_items", value: nextProducts },
-    { collection: "invoices", value: [invoiceRecord, ...invoices] },
-    { collection: "invoice_items", value: [...nextItems, ...invoiceItems] },
-    { collection: "stock_movements", value: nextMovements },
-    { collection: "ledger_entries", value: nextLedger },
-    { collection: "payment_receipts", value: nextReceipts },
-    { collection: "payments", value: nextPayments },
-    { collection: "customers", value: nextCustomers },
-    ...(nextOrganization ? [{ collection: "organization" as OfflineCollection, value: nextOrganization }] : []),
-  ])
-  await queue({
-    id: offlineClientId,
-    type: "create_invoice",
+  await writeCollections(
     organizationId,
-    payload: {
+    [
+      { collection: "products", value: nextProducts },
+      { collection: "inventory_items", value: nextProducts },
+      { collection: "invoices", value: [invoiceRecord, ...invoices] },
+      { collection: "invoice_items", value: [...nextItems, ...invoiceItems] },
+      { collection: "stock_movements", value: nextMovements },
+      { collection: "ledger_entries", value: nextLedger },
+      { collection: "payment_receipts", value: nextReceipts },
+      { collection: "payments", value: nextPayments },
+      { collection: "customers", value: nextCustomers },
+      ...(nextOrganization ? [{ collection: "organization" as OfflineCollection, value: nextOrganization }] : []),
+    ],
+    pendingAction(offlineClientId, "create_invoice", organizationId, {
       offlineClientId,
       localInvoiceId: invoiceId,
       invoice: body,
       items: items.map((item) => ({ ...item, stock_at_queue: products.find((product) => product.id === item.product_id)?.stock || 0 })),
-    },
-  })
+    })
+  )
 
   return ok({ invoice_id: invoiceId, invoice_number: invoiceNumber })
 }
@@ -898,13 +850,11 @@ async function updateInvoiceStatus(body: DataRow, organizationId: string) {
       ? { ...invoice, payment_status: paymentStatus, status: paymentStatus, sync_status: "pending_update", updated_at: now }
       : invoice
   )
-  await writeCollections(organizationId, [{ collection: "invoices", value: nextInvoices }])
-  await queue({
-    id: createOfflineId("invoice-status-action"),
-    type: "update_invoice_status",
+  await writeCollections(
     organizationId,
-    payload: { invoiceId, paymentStatus },
-  })
+    [{ collection: "invoices", value: nextInvoices }],
+    pendingAction(createOfflineId("invoice-status-action"), "update_invoice_status", organizationId, { invoiceId, paymentStatus })
+  )
   return ok({ invoiceId, payment_status: paymentStatus })
 }
 
@@ -971,23 +921,21 @@ async function deleteInvoice(body: DataRow, organizationId: string) {
       : customer
   )
 
-  await writeCollections(organizationId, [
-    { collection: "products", value: nextProducts },
-    { collection: "inventory_items", value: nextProducts },
-    { collection: "invoices", value: invoices.filter((row) => row.id !== invoiceId) },
-    { collection: "invoice_items", value: invoiceItems.filter((row) => row.invoice_id !== invoiceId) },
-    { collection: "stock_movements", value: [...restoreMovements, ...movements] },
-    { collection: "ledger_entries", value: ledgerEntries.filter((row) => row.document_id !== invoiceId && !receiptIds.has(row.document_id as string)) },
-    { collection: "payment_receipts", value: receipts.filter((row) => row.invoice_id !== invoiceId) },
-    { collection: "payments", value: payments.filter((row) => row.document_id !== invoiceId) },
-    { collection: "customers", value: nextCustomers },
-  ])
-  await queue({
-    id: createOfflineId("invoice-delete-action"),
-    type: "delete_invoice",
+  await writeCollections(
     organizationId,
-    payload: { invoiceId },
-  })
+    [
+      { collection: "products", value: nextProducts },
+      { collection: "inventory_items", value: nextProducts },
+      { collection: "invoices", value: invoices.filter((row) => row.id !== invoiceId) },
+      { collection: "invoice_items", value: invoiceItems.filter((row) => row.invoice_id !== invoiceId) },
+      { collection: "stock_movements", value: [...restoreMovements, ...movements] },
+      { collection: "ledger_entries", value: ledgerEntries.filter((row) => row.document_id !== invoiceId && !receiptIds.has(row.document_id as string)) },
+      { collection: "payment_receipts", value: receipts.filter((row) => row.invoice_id !== invoiceId) },
+      { collection: "payments", value: payments.filter((row) => row.document_id !== invoiceId) },
+      { collection: "customers", value: nextCustomers },
+    ],
+    pendingAction(createOfflineId("invoice-delete-action"), "delete_invoice", organizationId, { invoiceId })
+  )
   return ok({ invoiceId, restoredItems: items.length })
 }
 
@@ -1349,17 +1297,18 @@ async function stockMovement(body: DataRow, organizationId: string) {
     created_at: now,
     updated_at: now,
   }
-  await writeCollections(organizationId, [
-    { collection: "products", value: nextProducts },
-    { collection: "inventory_items", value: nextProducts },
-    { collection: "stock_movements", value: [movement, ...movements] },
-  ])
-  await queue({
-    id: createOfflineId("stock-action"),
-    type: "stock_movement",
+  await writeCollections(
     organizationId,
-    payload: { localMovementId: movement.id, movement: body },
-  })
+    [
+      { collection: "products", value: nextProducts },
+      { collection: "inventory_items", value: nextProducts },
+      { collection: "stock_movements", value: [movement, ...movements] },
+    ],
+    pendingAction(createOfflineId("stock-action"), "stock_movement", organizationId, {
+      localMovementId: movement.id,
+      movement: body,
+    })
+  )
   return ok({ productId, previousStock, newStock: nextStock })
 }
 
@@ -1398,8 +1347,11 @@ async function listPayments(url: URL, organizationId: string) {
 }
 
 async function paymentCreate(body: DataRow, organizationId: string) {
-  const result = await createPaymentTransaction(organizationId, body)
-  await queueProfessionalAction("create_payment", organizationId, { payment: body, result })
+  const result = await createPaymentTransaction(
+    organizationId,
+    body,
+    pendingAction(createOfflineId("create_payment-action"), "create_payment", organizationId, { payment: body })
+  )
   return ok(result)
 }
 
@@ -1502,8 +1454,11 @@ async function expenseCreate(body: DataRow, organizationId: string) {
 }
 
 async function professionalInventoryMovement(body: DataRow, organizationId: string) {
-  const result = await createInventoryMovement(organizationId, body)
-  await queueProfessionalAction("stock_movement", organizationId, { movement: body, result })
+  const result = await createInventoryMovement(
+    organizationId,
+    body,
+    pendingAction(createOfflineId("stock_movement-action"), "stock_movement", organizationId, { movement: body })
+  )
   return ok(result)
 }
 
@@ -1710,21 +1665,20 @@ async function updateOrganization(body: DataRow, organizationId: string) {
     organization_id: organizationId,
     updated_at: nowIso(),
   }
-  await writeCollections(organizationId, [
-    { collection: "organization", value: organization },
-    { collection: "settings", value: { ...currentSettings, organization_id: organizationId, organization, updated_at: nowIso() } },
-  ])
-  await queue({
-    id: createOfflineId("settings-action"),
-    type: "save_settings",
+  await writeCollections(
     organizationId,
-    payload: { kind: "organization", data: body },
-  })
+    [
+      { collection: "organization", value: organization },
+      { collection: "settings", value: { ...currentSettings, organization_id: organizationId, organization, updated_at: nowIso() } },
+    ],
+    pendingAction(createOfflineId("settings-action"), "save_settings", organizationId, { kind: "organization", data: body })
+  )
   return ok({ organizationId })
 }
 
 async function toggleFeature(body: DataRow, organizationId: string) {
   const currentSettings = await getOfflineData<DataRow>(organizationId, "settings", {})
+  const auditLogs = await readCollection<DataRow>(organizationId, "audit_logs")
   const features = Array.isArray(currentSettings.features) ? ([...currentSettings.features] as DataRow[]) : []
   const featureKey = localString(body.feature_key)
   if (!featureKey) return fail("Invalid feature toggle.", 422)
@@ -1732,15 +1686,34 @@ async function toggleFeature(body: DataRow, organizationId: string) {
   const nextFeatures = existing
     ? features.map((feature) => (feature.feature_key === featureKey ? { ...feature, is_enabled: body.is_enabled === true } : feature))
     : [...features, { organization_id: organizationId, feature_key: featureKey, is_enabled: body.is_enabled === true }]
-  await writeCollections(organizationId, [
-    { collection: "settings", value: { ...currentSettings, organization_id: organizationId, features: nextFeatures, updated_at: nowIso() } },
-  ])
-  await queue({
-    id: createOfflineId("feature-action"),
-    type: "save_settings",
+  const changedAt = nowIso()
+  await writeCollections(
     organizationId,
-    payload: { kind: "feature", data: { feature_key: featureKey, is_enabled: body.is_enabled === true } },
-  })
+    [
+      { collection: "settings", value: { ...currentSettings, organization_id: organizationId, features: nextFeatures, updated_at: changedAt } },
+      {
+        collection: "audit_logs",
+        value: [
+          {
+            id: createOfflineId("audit"),
+            organization_id: organizationId,
+            action: "settings.feature_toggled",
+            entity_type: "feature_flag",
+            entity_id: featureKey,
+            description: `${featureKey} ${body.is_enabled === true ? "enabled" : "disabled"} on this device`,
+            sync_status: "pending_create",
+            created_at: changedAt,
+            updated_at: changedAt,
+          },
+          ...auditLogs,
+        ],
+      },
+    ],
+    pendingAction(createOfflineId("feature-action"), "save_settings", organizationId, {
+      kind: "feature",
+      data: { feature_key: featureKey, is_enabled: body.is_enabled === true },
+    })
+  )
   return ok({ feature_key: featureKey, is_enabled: body.is_enabled === true })
 }
 
@@ -1767,9 +1740,13 @@ async function shouldHandleLocalApi() {
 }
 
 function userSafeLocalError(error: unknown) {
-  const message = error instanceof Error ? error.message : "Local database request failed."
-  if (/local database|local offline storage|sqlite|sql plugin|fallback mode/i.test(message)) {
+  if (error instanceof LocalDatabaseUnavailableError) {
     return "Bezgrow local database could not start. Restart the desktop app and try again. If this continues, export diagnostics before making more changes."
+  }
+  const message = error instanceof Error ? error.message : "Local database request failed."
+  if (/unique constraint.*products.*sku/i.test(message)) return "A product with this SKU already exists."
+  if (/constraint|sqlite|sql plugin|database is locked|transaction/i.test(message)) {
+    return "The local database could not save this change. Nothing was changed; please try again."
   }
   return message
 }
@@ -1844,6 +1821,11 @@ export async function localApiFetch(input: RequestInfo | URL, init: RequestInit 
     if (method === "POST" && url.pathname === "/api/settings/update-organization") return { handled: true, response: await updateOrganization(body || {}, organizationId) }
     if (method === "POST" && url.pathname === "/api/settings/toggle-feature") return { handled: true, response: await toggleFeature(body || {}, organizationId) }
   } catch (error) {
+    await databaseManager.recordOperationFailure(
+      `local_api:${(init.method || "GET").toUpperCase()}:${url.pathname}`,
+      error,
+      `${(init.method || "GET").toUpperCase()} ${url.pathname}`
+    )
     const message = userSafeLocalError(error)
     return { handled: true, response: fail(message, isLicenseError(message) ? 403 : 500) }
   }

@@ -37,10 +37,11 @@ for (const table of ["database_health", "license_state", "device_activations", "
 
 const indexes = schema.match(/CREATE INDEX IF NOT EXISTS/g) || [];
 assert.ok(indexes.length >= 40, `Expected broad offline indexes; found ${indexes.length}.`);
-assert.match(schema, /LOCAL_DB_VERSION\s*=\s*6/, "Local DB version should reflect the current normalized schema.");
+assert.match(schema, /LOCAL_DB_VERSION\s*=\s*7/, "Local DB version should reflect the current normalized schema.");
 
 assert.match(dashboardLayout, /LocalDatabaseRecovery/, "Dashboard must render the local database recovery screen.");
-assert.match(dashboardLayout, /integrityReport\(\)/, "Dashboard must verify local database integrity before opening.");
+assert.match(dashboardLayout, /getLocalDatabaseService\(\)\.ensureReady\(\)/, "Dashboard must await the authoritative startup manager.");
+assert.doesNotMatch(dashboardLayout, /integrityReport\(\)/, "Dashboard navigation must not repeat a full integrity check.");
 assert.match(dashboardLayout, /startupStartedRef/, "Dashboard startup guard must run only once.");
 assert.match(dashboardLayout, /restoreLicensedWorkspaceContext\(\)/, "Dashboard must restore licensed desktop workspace before redirect decisions.");
 assert.match(dashboardLayout, /status: "initializing" \| "database-ready" \| "license-valid" \| "business-ready"/, "Dashboard must keep explicit desktop startup phases.");
@@ -54,9 +55,11 @@ assert.doesNotMatch(recovery, /license_key|SUPABASE|PASSWORD|PRIVATE_KEY/i, "Dia
 
 assert.match(proxy, /BEZGROW_DESKTOP_BUILD === "1"/, "Proxy must distinguish packaged desktop from ordinary localhost web.");
 assert.match(proxy, /localDesktopHost && desktopServerBuild && protectedRoute[\s\S]*NextResponse\.next\(\)/, "Packaged desktop protected routes must reach the client license guard.");
-assert.match(startupRedirect, /integrityReport\(\)/, "Startup redirect must wait for local database readiness.");
+assert.match(startupRedirect, /ensureReady\(\)/, "Startup redirect must wait for local database readiness.");
+assert.doesNotMatch(startupRedirect, /integrityReport\(\)/, "Startup redirect must not repeat a full integrity check.");
 assert.match(startupRedirect, /restoreLicensedWorkspaceContext\(\)/, "Startup redirect must restore licensed workspace before deciding.");
-assert.match(loginPage, /integrityReport\(\)/, "Login startup check must wait for local database readiness.");
+assert.match(loginPage, /ensureReady\(\)/, "Login startup check must wait for local database readiness.");
+assert.doesNotMatch(loginPage, /integrityReport\(\)/, "Login startup must not repeat a full integrity check.");
 assert.match(loginPage, /restoreLicensedWorkspaceContext\(\)/, "Login startup check must restore licensed workspace before deciding.");
 assert.match(license, /readDeviceIdFromStoredLicense/, "Desktop device ID recovery must use the stored license when secure device metadata is missing.");
 assert.match(license, /const secureDeviceId = await readDesktopSecret\(DEVICE_SECRET_KEY\)[\s\S]*readDeviceIdFromStoredLicense\(\)[\s\S]*getOfflineMeta/, "Secure desktop device storage must be checked before SQLite/localStorage metadata.");

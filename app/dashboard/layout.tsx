@@ -91,7 +91,7 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
                 const desktopRuntime = await isTauriRuntimeAsync().catch(() => false)
                 if (desktopRuntime) {
                     try {
-                        await getLocalDatabaseService().integrityReport()
+                        await getLocalDatabaseService().ensureReady()
                         if (!cancelled) setDesktopDatabase({ status: "database-ready" })
                     } catch (error) {
                         if (!cancelled) {
@@ -231,8 +231,12 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
     async function handleLogout() {
         clearWorkspaceBootstrapCache()
         await clearDesktopSession()
-        await supabase.auth.signOut()
         router.replace("/login")
+        // Cloud sign-out is optional for the packaged desktop. It must not
+        // delay navigation or alter the local SQLite/license authority.
+        void supabase.auth.signOut().catch((error) => {
+            console.warn("Cloud sign-out warning:", error)
+        })
     }
 
     if (desktopDatabase.status === "initializing" || desktopDatabase.status === "database-ready" || desktopDatabase.status === "license-valid") {

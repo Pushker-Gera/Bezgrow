@@ -6,6 +6,27 @@ import type { OfflineAction, OfflineActionStatus, OfflineCollection } from "@/li
 
 type DataRow = Record<string, unknown>
 
+export type NormalizedListQuery = {
+  page: number
+  limit: number
+  search: string
+  sort: string
+  direction: "asc" | "desc"
+  category?: string
+  supplier?: string
+  stock?: string
+  status?: string
+  customerType?: string
+  gstStatus?: string
+  customerId?: string
+  period?: string
+}
+
+export type NormalizedListPage = {
+  data: DataRow[]
+  total: number
+}
+
 type FieldValue = {
   field_path: string
   value_text: string | null
@@ -656,6 +677,9 @@ function stockBatchRow(input: DataRow, organizationId: string, index = 0) {
 function organizationRow(input: DataRow, organizationId: string) {
   return {
     ...common(input, organizationId, "organization"),
+    // organizations is the tenant root and is keyed by id; unlike child
+    // business tables it intentionally has no organization_id column.
+    organization_id: undefined,
     id: text(input, ["id"], organizationId),
     owner_id: text(input, ["owner_id"]),
     name: text(input, ["name", "business_name"], "Business"),
@@ -1207,7 +1231,10 @@ export async function putNormalizedCollection(organizationId: string, collection
 
 async function putNormalizedCollectionWithDb(db: SqlExecutor, organizationId: string, collection: OfflineCollection, rows: DataRow[]) {
   await ensureOrganization(db, organizationId)
-  if (collection === "products" || collection === "inventory_items") await repositories.products.replaceSynced(organizationId, rows, db)
+  if (collection === "products") await repositories.products.replaceSynced(organizationId, rows, db)
+  // ProductRepository updates inventory_items atomically with products. The
+  // compatibility collection must not run the same full replacement twice.
+  if (collection === "inventory_items") return
   if (collection === "customers") await repositories.customers.replaceSynced(organizationId, rows, db)
   if (collection === "suppliers") await repositories.suppliers.replaceSynced(organizationId, rows, db)
   if (collection === "invoices") await repositories.invoices.replaceSynced(organizationId, rows, db)
@@ -1236,13 +1263,230 @@ async function putNormalizedCollectionWithDb(db: SqlExecutor, organizationId: st
 
 export async function putNormalizedCollectionsInTransaction(
   organizationId: string,
-  updates: Array<{ collection: OfflineCollection; value: unknown }>
+  updates: Array<{ collection: OfflineCollection; value: unknown }>,
+  action?: OfflineAction
 ) {
   await service.transaction(async (db) => {
     for (const update of updates) {
       await putNormalizedCollectionWithDb(db, organizationId, update.collection, asRows(update.value))
     }
+    if (action) await queueNormalizedActionWithDb(db, action)
   })
+}
+
+function listDirection(direction: NormalizedListQuery["direction"]) {
+  return direction === "asc" ? "ASC" : "DESC"
+}
+
+function likeTerm(value: string) {
+  return `%${value.trim()}%`
+}
+
+async function countRows(db: SqlExecutor, sql: string, values: SqlValue[]) {
+  const [row] = await db.select<{ total: number }>(sql, values)
+  return Number(row?.total || 0)
+}
+
+export async function queryNormalizedProducts(organizationId: string, query: NormalizedListQuery): Promise<NormalizedListPage> {
+  const db = await service.requireConnection("read")
+  const where = ["p.organization_id = ?", "p.deleted_at IS NULL"]
+  const values: SqlValue[] = [organizationId]
+  const search = query.search.trim()
+  if (search) {
+    const term = likeTerm(search)
+    where.push("(p.name LIKE ? COLLATE NOCASE OR p.sku LIKE ? COLLATE NOCASE OR p.category LIKE ? COLLATE NOCASE OR p.supplier LIKE ? COLLATE NOCASE OR p.barcode LIKE ? COLLATE NOCASE)")
+    values.push(term, term, term, term, term)
+  }
+  if (query.category && query.category !== "all") {
+    where.push("(p.category = ? OR p.category_id = ?)")
+    values.push(query.category, query.category)
+  }
+  if (query.supplier && query.supplier !== "all") {
+    where.push("(p.supplier = ? OR p.supplier_id = ?)")
+    values.push(query.supplier, query.supplier)
+  }
+  if (query.stock === "inStock") where.push("p.stock > 0")
+  if (query.stock === "outOfStock") where.push("p.stock <= 0")
+  if (query.stock === "low") where.push("p.stock > 0 AND p.stock <= COALESCE(p.min_stock, 5)")
+
+  const sortColumns: Record<string, string> = {
+    created_at: "datetime(p.created_at)",
+    updated_at: "datetime(p.updated_at)",
+    name: "p.name COLLATE NOCASE",
+    sku: "p.sku COLLATE NOCASE",
+    category: "category_label COLLATE NOCASE",
+    supplier: "supplier_label COLLATE NOCASE",
+    warehouse: "warehouse_label COLLATE NOCASE",
+    stock: "p.stock",
+    price: "p.price",
+    purchase_rate: "p.purchase_rate",
+    sale_rate: "p.sale_rate",
+  }
+  const orderBy = sortColumns[query.sort] || sortColumns.created_at
+  const whereSql = where.join(" AND ")
+  const total = await countRows(db, `SELECT COUNT(*) AS total FROM products p WHERE ${whereSql}`, values)
+  const offset = (query.page - 1) * query.limit
+  const data = await db.select<DataRow>(
+    `SELECT
+       p.*,
+       COALESCE(c.name, p.category) AS category_label,
+       COALESCE(c.name, p.category) AS category,
+       COALESCE(s.name, p.supplier) AS supplier_label,
+       COALESCE(s.name, p.supplier) AS supplier,
+       COALESCE(w.name, p.warehouse, 'Main Warehouse') AS warehouse_label,
+       COALESCE(w.name, p.warehouse, 'Main Warehouse') AS warehouse,
+       COALESCE(p.stock, 0) * COALESCE(p.sale_rate, p.price, 0) AS inventory_value
+     FROM products p
+     LEFT JOIN categories c ON c.id = p.category_id AND c.organization_id = p.organization_id
+     LEFT JOIN suppliers s ON s.id = p.supplier_id AND s.organization_id = p.organization_id
+     LEFT JOIN warehouses w ON w.id = p.warehouse_id AND w.organization_id = p.organization_id
+     WHERE ${whereSql}
+     ORDER BY ${orderBy} ${listDirection(query.direction)}, p.id ${listDirection(query.direction)}
+     LIMIT ? OFFSET ?`,
+    [...values, query.limit, offset]
+  )
+  return { data, total }
+}
+
+export async function queryNormalizedCustomers(organizationId: string, query: NormalizedListQuery): Promise<NormalizedListPage> {
+  const db = await service.requireConnection("read")
+  const where = ["c.organization_id = ?", "c.deleted_at IS NULL"]
+  const values: SqlValue[] = [organizationId]
+  const search = query.search.trim()
+  if (search) {
+    const term = likeTerm(search)
+    where.push("(c.name LIKE ? COLLATE NOCASE OR c.email LIKE ? COLLATE NOCASE OR c.phone LIKE ? COLLATE NOCASE OR c.gst_number LIKE ? COLLATE NOCASE OR c.tax_id LIKE ? COLLATE NOCASE)")
+    values.push(term, term, term, term, term)
+  }
+  if (query.status === "active") where.push("c.is_active = 1")
+  if (query.status === "inactive") where.push("c.is_active = 0")
+  if (query.customerType && query.customerType !== "all") {
+    where.push("COALESCE(c.customer_type, 'retail') = ?")
+    values.push(query.customerType)
+  }
+  if (query.gstStatus === "gst") where.push("COALESCE(NULLIF(trim(c.gst_number), ''), NULLIF(trim(c.tax_id), '')) IS NOT NULL")
+  if (query.gstStatus === "nonGst") where.push("COALESCE(NULLIF(trim(c.gst_number), ''), NULLIF(trim(c.tax_id), '')) IS NULL")
+
+  const sortColumns: Record<string, string> = {
+    created_at: "datetime(c.created_at)",
+    updated_at: "datetime(c.updated_at)",
+    name: "c.name COLLATE NOCASE",
+    total_sales: "total_sales",
+    last_purchase_at: "last_purchase_at",
+    invoice_count: "invoice_count",
+  }
+  const orderBy = sortColumns[query.sort] || sortColumns.created_at
+  const whereSql = where.join(" AND ")
+  const total = await countRows(db, `SELECT COUNT(*) AS total FROM customers c WHERE ${whereSql}`, values)
+  const offset = (query.page - 1) * query.limit
+  const data = await db.select<DataRow>(
+    `SELECT
+       c.*,
+       COALESCE(inv.invoice_count, 0) AS invoice_count,
+       CASE WHEN COALESCE(inv.invoice_count, 0) > 0 THEN COALESCE(inv.invoice_revenue, 0) ELSE COALESCE(c.total_sales, 0) END AS total_sales,
+       COALESCE(inv.last_purchase_at, c.last_purchase_at) AS last_purchase_at
+     FROM customers c
+     LEFT JOIN (
+       SELECT customer_id,
+              COUNT(*) AS invoice_count,
+              SUM(COALESCE(grand_total, total_amount, total, 0)) AS invoice_revenue,
+              MAX(created_at) AS last_purchase_at
+       FROM sales_invoices
+       WHERE organization_id = ? AND deleted_at IS NULL
+       GROUP BY customer_id
+     ) inv ON inv.customer_id = c.id
+     WHERE ${whereSql}
+     ORDER BY ${orderBy} ${listDirection(query.direction)}, c.id ${listDirection(query.direction)}
+     LIMIT ? OFFSET ?`,
+    [organizationId, ...values, query.limit, offset]
+  )
+  return { data, total }
+}
+
+export async function queryNormalizedInvoices(organizationId: string, query: NormalizedListQuery): Promise<NormalizedListPage> {
+  const db = await service.requireConnection("read")
+  const where = ["i.organization_id = ?", "i.deleted_at IS NULL"]
+  const values: SqlValue[] = [organizationId]
+  const search = query.search.trim()
+  if (search) {
+    const term = likeTerm(search)
+    where.push("(i.invoice_number LIKE ? COLLATE NOCASE OR i.payment_method LIKE ? COLLATE NOCASE OR COALESCE(i.customer_name, c.name) LIKE ? COLLATE NOCASE OR i.notes LIKE ? COLLATE NOCASE)")
+    values.push(term, term, term, term)
+  }
+  if (query.status && query.status !== "all") {
+    where.push("(i.payment_status = ? OR i.status = ?)")
+    values.push(query.status, query.status)
+  }
+  if (query.customerId && query.customerId !== "all") {
+    where.push("i.customer_id = ?")
+    values.push(query.customerId)
+  }
+  if (query.period && query.period !== "all") {
+    const now = new Date()
+    let cutoff: Date | null = null
+    if (query.period === "today") cutoff = new Date(now.getFullYear(), now.getMonth(), now.getDate())
+    if (query.period === "week") cutoff = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000)
+    if (query.period === "month") cutoff = new Date(now.getFullYear(), now.getMonth(), 1)
+    if (cutoff) {
+      where.push("datetime(i.created_at) >= datetime(?)")
+      values.push(cutoff.toISOString())
+    }
+  }
+
+  const sortColumns: Record<string, string> = {
+    created_at: "datetime(i.created_at)",
+    updated_at: "datetime(i.updated_at)",
+    invoice_date: "i.invoice_date",
+    date: "i.date",
+    invoice_number: "i.invoice_number COLLATE NOCASE",
+    customer_name: "customer_name COLLATE NOCASE",
+    total_amount: "i.total_amount",
+    grand_total: "i.grand_total",
+    paid_amount: "i.paid_amount",
+    outstanding_amount: "i.outstanding_amount",
+    payment_status: "i.payment_status",
+    status: "i.status",
+  }
+  const orderBy = sortColumns[query.sort] || sortColumns.created_at
+  const whereSql = where.join(" AND ")
+  const countValues = [...values]
+  const total = await countRows(
+    db,
+    `SELECT COUNT(*) AS total
+     FROM sales_invoices i
+     LEFT JOIN customers c ON c.id = i.customer_id AND c.organization_id = i.organization_id
+     WHERE ${whereSql}`,
+    countValues
+  )
+  const offset = (query.page - 1) * query.limit
+  const data = await db.select<DataRow>(
+    `SELECT
+       i.*,
+       COALESCE(i.customer_name, c.name) AS customer_name,
+       c.phone AS customer_phone,
+       c.email AS customer_email,
+       COALESCE(items.item_count, 0) AS item_count,
+       COALESCE(items.total_quantity, 0) AS total_quantity,
+       COALESCE(items.item_tax, 0) AS item_tax,
+       COALESCE(items.item_total, 0) AS item_total
+     FROM sales_invoices i
+     LEFT JOIN customers c ON c.id = i.customer_id AND c.organization_id = i.organization_id
+     LEFT JOIN (
+       SELECT invoice_id,
+              COUNT(*) AS item_count,
+              SUM(COALESCE(quantity, 0)) AS total_quantity,
+              SUM(COALESCE(gst_amount, 0)) AS item_tax,
+              SUM(COALESCE(line_total, 0)) AS item_total
+       FROM sales_invoice_items
+       WHERE organization_id = ? AND deleted_at IS NULL
+       GROUP BY invoice_id
+     ) items ON items.invoice_id = i.id
+     WHERE ${whereSql}
+     ORDER BY ${orderBy} ${listDirection(query.direction)}, i.id ${listDirection(query.direction)}
+     LIMIT ? OFFSET ?`,
+    [organizationId, ...values, query.limit, offset]
+  )
+  return { data, total }
 }
 
 export async function getNormalizedCollection(organizationId: string, collection: OfflineCollection) {
@@ -1355,11 +1599,10 @@ async function readFields(db: SqlExecutor, table: string, ownerColumn: string, o
   return value
 }
 
-export async function queueNormalizedAction(action: OfflineAction) {
-  await service.transaction(async (db) => {
-    await ensureOrganization(db, action.organizationId)
-    const entityType = action.type.replace(/^save_/, "").replace(/^create_/, "").replace(/^archive_/, "")
-    await db.execute(
+async function queueNormalizedActionWithDb(db: SqlExecutor, action: OfflineAction) {
+  await ensureOrganization(db, action.organizationId)
+  const entityType = action.type.replace(/^save_/, "").replace(/^create_/, "").replace(/^archive_/, "")
+  await db.execute(
       `INSERT INTO offline_sync_queue (
         id, organization_id, entity_type, operation_type, status, attempts, error,
         idempotency_key, created_at, updated_at, last_synced_at
@@ -1383,8 +1626,13 @@ export async function queueNormalizedAction(action: OfflineAction) {
         action.updatedAt,
         action.status === "synced" ? nowIso() : null,
       ]
-    )
-    await replaceFields(db, "offline_sync_action_fields", action.id, flatten(action.payload))
+  )
+  await replaceFields(db, "offline_sync_action_fields", action.id, flatten(action.payload))
+}
+
+export async function queueNormalizedAction(action: OfflineAction) {
+  await service.transaction(async (db) => {
+    await queueNormalizedActionWithDb(db, action)
   })
 }
 
@@ -1576,6 +1824,11 @@ export async function importLegacyJsonCollectionsOnce() {
   const db = await service.requireConnection("write")
   const imported = await getNormalizedMeta("normalized_legacy_import_complete", false, "global").catch(() => false)
   if (imported) return
+  const previousImporterCompleted = await getNormalizedMeta("legacy_indexeddb_to_sqlite_v7", false, "global").catch(() => false)
+  if (previousImporterCompleted) {
+    await setNormalizedMeta("normalized_legacy_import_complete", true, "global")
+    return
+  }
 
   const legacyMap: Partial<Record<OfflineCollection, string>> = {
     workspace: "local_workspace",

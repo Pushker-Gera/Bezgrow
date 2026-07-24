@@ -38,7 +38,7 @@ export async function resolveStartupRedirect(fallback = "/dashboard") {
 
   const desktopRuntime = await isTauriRuntimeAsync()
   if (desktopRuntime) {
-    await getLocalDatabaseService().integrityReport()
+    await getLocalDatabaseService().ensureReady()
     const workspace = await restoreLicensedWorkspaceContext().catch(() => null)
     const organizationId = workspace?.organization?.id || workspace?.membership?.organization_id || undefined
     const license = await localLicenseSnapshot(organizationId).catch(() => null)

@@ -6,7 +6,7 @@ import { useDebounce } from "use-debounce"
 import { apiFetch } from "@/lib/api/client-fetch"
 import { getOrganizationId } from "@/lib/getOrganization"
 import { createOfflineId, getOfflineData, putOfflineData, queueOfflineAction } from "@/lib/offline/db"
-import { offlineFallbackMessage, shouldSaveOffline } from "@/lib/offline/network"
+import { offlineFallbackMessage, shouldSaveOffline, shouldUseWebOfflineFallback } from "@/lib/offline/network"
 
 type Product = {
   id: string
@@ -387,7 +387,7 @@ export default function OrdersPage() {
         return
       }
     } catch (error) {
-      if (shouldSaveOffline(error)) {
+      if (await shouldUseWebOfflineFallback(error)) {
         try {
           await createOrderOffline(orderPayload)
         } catch (offlineError) {
