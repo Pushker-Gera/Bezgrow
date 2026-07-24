@@ -344,6 +344,9 @@ export default function ProductsPage() {
         })
 
         if (debouncedSearch.trim()) params.set("search", debouncedSearch.trim())
+        if (selectedCategory !== "all") params.set("category", selectedCategory)
+        if (selectedSupplier !== "all") params.set("supplier", selectedSupplier)
+        if (stockStatusFilter !== "all") params.set("stock", stockStatusFilter)
         if (forceFresh) params.set("_t", String(Date.now()))
 
         try {
@@ -358,8 +361,13 @@ export default function ProductsPage() {
             }
 
             const rows = payload.data || []
-            await putOfflineData(orgId, "products", rows)
-            await putOfflineData(orgId, "inventory_items", rows)
+            // A desktop-local response already came from these normalized SQLite
+            // repositories. Writing the page back into the same tables can delete
+            // FK-referenced rows and was the source of the false load failure.
+            if (response.headers.get("X-Bezgrow-Data-Source") !== "sqlite") {
+                await putOfflineData(orgId, "products", rows)
+                await putOfflineData(orgId, "inventory_items", rows)
+            }
             setAnalytics(buildAnalytics(rows))
             writeCachedProducts(rows)
             setProducts(rows)
@@ -715,7 +723,7 @@ export default function ProductsPage() {
         fetchProducts()
         // Data refresh follows debounced search and pagination state.
         // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [debouncedSearch, currentPage, organizationId])
+    }, [debouncedSearch, currentPage, organizationId, selectedCategory, selectedSupplier, stockStatusFilter])
 
     const categories = useMemo(
         () => Array.from(new Set(products.map((product) => product.category).filter(Boolean))) as string[],

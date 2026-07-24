@@ -92,6 +92,7 @@ function jsonResponse(payload: unknown, status = 200) {
     headers: {
       "Cache-Control": "no-store",
       "Content-Type": "application/json",
+      "X-Bezgrow-Data-Source": "sqlite",
     },
   })
 }
@@ -200,11 +201,12 @@ async function requestBody(init: RequestInit = {}) {
   }
 }
 
-function sortRows(rows: DataRow[], sort: string, direction: string) {
+function sortRows(rows: DataRow[], sort: string, direction: string, allowed: readonly string[] = ["created_at"]) {
+  const safeSort = allowed.includes(sort) ? sort : allowed[0]
   const multiplier = direction === "asc" ? 1 : -1
   return [...rows].sort((a, b) => {
-    const left = a[sort]
-    const right = b[sort]
+    const left = a[safeSort]
+    const right = b[safeSort]
     if (typeof left === "number" || typeof right === "number") {
       return (localNumber(left) - localNumber(right)) * multiplier
     }
@@ -213,8 +215,10 @@ function sortRows(rows: DataRow[], sort: string, direction: string) {
 }
 
 function paginate(url: URL, rows: DataRow[]) {
-  const page = Math.max(1, Number(url.searchParams.get("page") || 1))
-  const limit = Math.max(1, Math.min(500, Number(url.searchParams.get("limit") || 50)))
+  const requestedPage = Number.parseInt(url.searchParams.get("page") || "1", 10)
+  const requestedLimit = Number.parseInt(url.searchParams.get("limit") || url.searchParams.get("pageSize") || "50", 10)
+  const page = Number.isFinite(requestedPage) ? Math.max(1, requestedPage) : 1
+  const limit = Number.isFinite(requestedLimit) ? Math.max(1, Math.min(500, requestedLimit)) : 50
   const from = (page - 1) * limit
   return {
     data: rows.slice(from, from + limit),
@@ -227,6 +231,19 @@ function paginate(url: URL, rows: DataRow[]) {
       total: rows.length,
     },
   }
+}
+
+function localListResponse(collection: "products" | "customers" | "invoices", url: URL, organizationId: string, rows: DataRow[]) {
+  const payload = paginate(url, rows)
+  console.info("[desktop-local-list]", {
+    adapter: "sqlite-normalized-repository",
+    collection,
+    route: url.pathname,
+    organizationId,
+    request: Object.fromEntries(url.searchParams),
+    response: { count: payload.data.length, pagination: payload.pagination },
+  })
+  return jsonResponse(payload)
 }
 
 function filterDeleted<T extends DataRow>(rows: T[]) {
@@ -271,12 +288,20 @@ function rowMatches(row: DataRow, fields: string[], term: string) {
 
 async function listProducts(url: URL, organizationId: string) {
   const search = url.searchParams.get("search") || ""
+  const category = url.searchParams.get("category") || "all"
+  const supplier = url.searchParams.get("supplier") || "all"
+  const stock = url.searchParams.get("stock") || "all"
   const sort = url.searchParams.get("sort") || "created_at"
   const direction = url.searchParams.get("direction") || "desc"
   let rows = filterDeleted(await readCollection<DataRow>(organizationId, "products"))
   rows = rows.filter((row) => rowMatches(row, ["name", "sku", "category", "supplier", "barcode"], search))
-  rows = sortRows(rows, sort, direction)
-  return jsonResponse(paginate(url, rows))
+  if (category !== "all") rows = rows.filter((row) => localString(row.category) === category || localString(row.category_id) === category)
+  if (supplier !== "all") rows = rows.filter((row) => localString(row.supplier) === supplier || localString(row.supplier_id) === supplier)
+  if (stock === "inStock") rows = rows.filter((row) => localNumber(row.stock) > 0)
+  if (stock === "outOfStock") rows = rows.filter((row) => localNumber(row.stock) <= 0)
+  if (stock === "low") rows = rows.filter((row) => localNumber(row.stock) > 0 && localNumber(row.stock) <= localNumber(row.min_stock, 5))
+  rows = sortRows(rows, sort, direction, ["created_at", "updated_at", "name", "sku", "category", "supplier", "warehouse", "stock", "price", "purchase_rate", "sale_rate"])
+  return localListResponse("products", url, organizationId, rows)
 }
 
 async function saveProduct(url: URL, body: DataRow, isUpdate: boolean, organizationId: string) {
@@ -367,10 +392,35 @@ async function archiveProduct(body: DataRow, organizationId: string) {
 
 async function listCustomers(url: URL, organizationId: string) {
   const search = url.searchParams.get("search") || ""
-  let rows = filterDeleted(await readCollection<DataRow>(organizationId, "customers"))
-  rows = rows.filter((row) => rowMatches(row, ["name", "email", "phone", "gst_number"], search))
-  rows = sortRows(rows, url.searchParams.get("sort") || "created_at", url.searchParams.get("direction") || "desc")
-  return jsonResponse(paginate(url, rows))
+  const status = url.searchParams.get("status") || "all"
+  const customerType = url.searchParams.get("customer_type") || "all"
+  const gstStatus = url.searchParams.get("gst_status") || "all"
+  const [customers, invoices] = await Promise.all([
+    readCollection<DataRow>(organizationId, "customers"),
+    readCollection<DataRow>(organizationId, "invoices"),
+  ])
+  let rows: DataRow[] = filterDeleted(customers).map((customer): DataRow => {
+    const customerInvoices = filterDeleted(invoices).filter((invoice) => invoice.customer_id === customer.id)
+    return {
+      ...customer,
+      invoice_count: customerInvoices.length,
+      total_sales: sumRows(customerInvoices, ["grand_total", "total_amount", "total"]),
+      last_purchase_at: customerInvoices.map(createdAt).filter(Boolean).sort().at(-1) || localString(customer.last_purchase_at) || null,
+    }
+  })
+  rows = rows.filter((row) => rowMatches(row, ["name", "email", "phone", "gst_number", "tax_id"], search))
+  if (status === "active") rows = rows.filter((row) => row.is_active === true || row.is_active === 1)
+  if (status === "inactive") rows = rows.filter((row) => row.is_active === false || row.is_active === 0)
+  if (customerType !== "all") rows = rows.filter((row) => localString(row.customer_type, "retail") === customerType)
+  if (gstStatus === "gst") rows = rows.filter((row) => Boolean(localString(row.gst_number || row.tax_id)))
+  if (gstStatus === "nonGst") rows = rows.filter((row) => !localString(row.gst_number || row.tax_id))
+  rows = sortRows(
+    rows,
+    url.searchParams.get("sort") || "created_at",
+    url.searchParams.get("direction") || "desc",
+    ["created_at", "updated_at", "name", "total_sales", "last_purchase_at", "invoice_count"]
+  )
+  return localListResponse("customers", url, organizationId, rows)
 }
 
 async function saveCustomer(body: DataRow, organizationId: string) {
@@ -540,8 +590,13 @@ async function listInvoices(url: URL, organizationId: string) {
     if (period === "month" && (!created || created < startOfMonth)) return false
     return true
   })
-  rows = sortRows(rows, "created_at", "desc")
-  return jsonResponse(paginate(url, rows))
+  rows = sortRows(
+    rows,
+    url.searchParams.get("sort") || "created_at",
+    url.searchParams.get("direction") || "desc",
+    ["created_at", "updated_at", "invoice_date", "date", "invoice_number", "customer_name", "total_amount", "grand_total", "paid_amount", "outstanding_amount", "payment_status", "status"]
+  )
+  return localListResponse("invoices", url, organizationId, rows)
 }
 
 function nextInvoiceNumber(organization: DataRow | null, existing: DataRow[]) {

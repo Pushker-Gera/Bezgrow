@@ -113,6 +113,7 @@ export class LocalDatabaseService {
   private desktopDiagnostics: DesktopDatabaseDiagnostics | null = null
   private migrationBackup: DesktopDatabaseBackup | null = null
   private runtimeMode: RuntimeMode | null = null
+  private transactionTail: Promise<void> = Promise.resolve()
 
   async isAvailable() {
     return isDesktopRuntime()
@@ -174,15 +175,26 @@ export class LocalDatabaseService {
   }
 
   async transaction<T>(work: (db: SqlExecutor) => Promise<T>) {
-    const db = await this.requireConnection("write")
-    await this.withTemporaryLockRetry(() => db.execute("BEGIN IMMEDIATE"))
+    const previous = this.transactionTail
+    let release!: () => void
+    this.transactionTail = new Promise<void>((resolve) => {
+      release = resolve
+    })
+
+    await previous
     try {
-      const result = await work(db)
-      await db.execute("COMMIT")
-      return result
-    } catch (error) {
-      await db.execute("ROLLBACK").catch(() => undefined)
-      throw error
+      const db = await this.requireConnection("write")
+      await this.withTemporaryLockRetry(() => db.execute("BEGIN IMMEDIATE"))
+      try {
+        const result = await work(db)
+        await db.execute("COMMIT")
+        return result
+      } catch (error) {
+        await db.execute("ROLLBACK").catch(() => undefined)
+        throw error
+      }
+    } finally {
+      release()
     }
   }
 

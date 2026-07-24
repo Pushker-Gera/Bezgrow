@@ -196,8 +196,12 @@ export default function InvoicesPage() {
       const nextInvoices = invoiceResult.data || []
       const nextCustomers = customerResult.data || []
 
-      await putOfflineData(orgId, "invoices", nextInvoices)
-      await putOfflineData(orgId, "customers", nextCustomers)
+      if (invoiceResponse.headers.get("X-Bezgrow-Data-Source") !== "sqlite") {
+        await putOfflineData(orgId, "invoices", nextInvoices)
+      }
+      if (customerResponse.headers.get("X-Bezgrow-Data-Source") !== "sqlite") {
+        await putOfflineData(orgId, "customers", nextCustomers)
+      }
       setInvoices(nextInvoices)
       setCustomers(nextCustomers)
       setItems([])

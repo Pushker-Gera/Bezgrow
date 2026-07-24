@@ -208,6 +208,9 @@ export default function CustomersPage() {
       limit: "100",
       organization_id: orgId,
       search: debouncedSearch.trim(),
+      status: statusFilter,
+      customer_type: typeFilter,
+      gst_status: gstFilter,
       sort: "created_at",
       direction: "desc",
     })
@@ -226,8 +229,12 @@ export default function CustomersPage() {
       if (!invoicesResponse.ok) setNotice(invoicesResult.error || "Invoices failed to load.")
 
       let nextCustomers = customersResult.data || []
-      await putOfflineData(orgId, "customers", nextCustomers)
-      await putOfflineData(orgId, "invoices", invoicesResult.data || [])
+      if (customersResponse.headers.get("X-Bezgrow-Data-Source") !== "sqlite") {
+        await putOfflineData(orgId, "customers", nextCustomers)
+      }
+      if (invoicesResponse.headers.get("X-Bezgrow-Data-Source") !== "sqlite") {
+        await putOfflineData(orgId, "invoices", invoicesResult.data || [])
+      }
       if (statusFilter === "active") nextCustomers = nextCustomers.filter((customer) => customer.is_active)
       if (statusFilter === "inactive") nextCustomers = nextCustomers.filter((customer) => !customer.is_active)
       setCustomers(nextCustomers)
@@ -484,7 +491,7 @@ export default function CustomersPage() {
     fetchData()
     // Refresh follows filters and debounced search.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [debouncedSearch, statusFilter, organizationId])
+  }, [debouncedSearch, gstFilter, statusFilter, typeFilter, organizationId])
 
   const customersWithLedger = useMemo<CustomerWithLedger[]>(() => {
     return customers.map((customer) => {
