@@ -1,7 +1,7 @@
 "use client"
 
 import { useEffect } from "react"
-import { isDesktopRuntime } from "@/lib/desktop/tauri"
+import { invokeTauri, isDesktopRuntime } from "@/lib/desktop/tauri"
 import { getLocalDatabaseService } from "@/lib/offline/local/service"
 
 export default function DesktopDatabaseBootstrap() {
@@ -26,7 +26,7 @@ export default function DesktopDatabaseBootstrap() {
           await databaseManager.closeForAppShutdown().catch((error) => {
             console.error("[desktop-database] shutdown flush failed", error)
           })
-          await appWindow.destroy()
+          await invokeTauri("desktop_exit")
         })
       })
       .catch((error) => {

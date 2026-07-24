@@ -76,6 +76,12 @@ fn desktop_startup_log<R: tauri::Runtime>(app: tauri::AppHandle<R>, message: Str
     append_startup_log_handle(&app, sanitized);
 }
 
+#[tauri::command]
+fn desktop_exit<R: tauri::Runtime>(app: tauri::AppHandle<R>) {
+    append_startup_log_handle(&app, "Orderly desktop exit requested");
+    app.exit(0);
+}
+
 fn append_startup_log_handle<R: tauri::Runtime>(
     app: &tauri::AppHandle<R>,
     message: impl AsRef<str>,
@@ -940,12 +946,14 @@ pub fn run() {
             Ok(())
         })
         .on_window_event(|window, event| {
-            if window.label() != "main" {
-                return;
-            }
-
-            if let tauri::WindowEvent::Destroyed = event {
-                stop_next_server(&window.app_handle());
+            match event {
+                tauri::WindowEvent::Destroyed if window.label() == "main" => {
+                    stop_next_server(&window.app_handle());
+                }
+                tauri::WindowEvent::CloseRequested { .. } if window.label() != "main" => {
+                    window.app_handle().exit(0);
+                }
+                _ => {}
             }
         })
         .invoke_handler(tauri::generate_handler![
@@ -954,6 +962,7 @@ pub fn run() {
             desktop_select,
             desktop_execute_transaction,
             desktop_startup_log,
+            desktop_exit,
             store_secret,
             read_secret,
             delete_secret,

@@ -69,6 +69,7 @@ assert.match(rust, /sha256_file/, "Native migration backups must include a check
 assert.match(rust, /desktop_database_diagnostics,[\s\S]*desktop_database_backup,[\s\S]*desktop_select,[\s\S]*desktop_execute_transaction,/, "Native database commands must be registered with Tauri.");
 assert.match(rust, /fn stop_next_server/, "Desktop shutdown must have a single bundled-server cleanup path.");
 assert.match(rust, /child\.kill\(\);[\s\S]*child\.wait\(\);/, "Desktop shutdown must terminate and reap the bundled server process.");
+assert.match(rust, /fn desktop_exit[\s\S]*app\.exit\(0\)/, "The red close button must request a full application exit after SQLite flushes.");
 assert.match(rust, /RunEvent::Exit[\s\S]*RunEvent::ExitRequested/, "Desktop app exit must clean up the bundled server even when window destruction is skipped.");
 assert.match(buildDesktop, /function tauriBuildEnv\(\)/, "Desktop build wrapper must control the Tauri bundler environment.");
 assert.match(buildDesktop, /process\.platform === "darwin"[\s\S]*env\.CI = "true"/, "macOS DMG packaging must run in CI mode to skip fragile Finder automation.");
