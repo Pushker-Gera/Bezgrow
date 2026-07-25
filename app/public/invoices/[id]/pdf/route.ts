@@ -54,9 +54,10 @@ export async function GET(request: Request, context: RouteContext) {
   })
 
   const pdf = createInvoicePdf(printInvoice)
+  const pdfBody = pdf.buffer.slice(pdf.byteOffset, pdf.byteOffset + pdf.byteLength) as ArrayBuffer
   const filename = `${safeFilename(printInvoice.invoiceNumber)}.pdf`
 
-  return new Response(pdf, {
+  return new Response(pdfBody, {
     headers: {
       "Content-Type": "application/pdf",
       "Content-Disposition": `${download ? "attachment" : "inline"}; filename="${filename}"`,

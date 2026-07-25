@@ -6,7 +6,7 @@ import { PrintEngine } from "@/components/print/PrintEngine"
 import { readStoredPrintSettings } from "@/components/print/settings/defaults"
 import type { PrintInvoice } from "@/components/print/types"
 import { getCachedWorkspaceBootstrap, getOfflineData } from "@/lib/offline/db"
-import { buildPrintInvoice, stringFrom, type PrintRow } from "@/lib/print-invoice-builder"
+import { buildPrintInvoice, resolvePrintOrganization, stringFrom, type PrintRow } from "@/lib/print-invoice-builder"
 import { supabase } from "@/lib/supabase"
 
 export default function PrintInvoicePage() {
@@ -29,9 +29,10 @@ export default function PrintInvoicePage() {
     const offlineInvoice = cachedInvoices.find((row) => stringFrom(row, ["id"]) === invoiceId)
     if (!offlineInvoice) return false
 
-    const [cachedItems, cachedOrganization, cachedCustomers, cachedProducts] = await Promise.all([
+    const [cachedItems, cachedOrganization, cachedSettings, cachedCustomers, cachedProducts] = await Promise.all([
       getOfflineData<PrintRow[]>(organizationId, "invoice_items", []),
       getOfflineData<PrintRow | null>(organizationId, "organization", null),
+      getOfflineData<Record<string, unknown>>(organizationId, "settings", {}),
       getOfflineData<PrintRow[]>(organizationId, "customers", []),
       getOfflineData<PrintRow[]>(organizationId, "products", []),
     ])
@@ -40,7 +41,13 @@ export default function PrintInvoicePage() {
 
     setInvoice(offlineInvoice)
     setItems(offlineItems)
-    setOrganization(cachedOrganization)
+    setOrganization(
+      resolvePrintOrganization(
+        cachedSettings.organization as Record<string, unknown> | null,
+        cachedWorkspace?.organization as Record<string, unknown> | null,
+        cachedOrganization
+      )
+    )
     setCustomer(
       cachedCustomers.find((row) => stringFrom(row, ["id"]) === customerId || stringFrom(row, ["offline_local_id"]) === customerId) || null
     )

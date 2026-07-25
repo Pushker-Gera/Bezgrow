@@ -704,7 +704,7 @@ fn delete_secret(key: String) -> Result<(), String> {
 fn validate_external_url(url: &str) -> Result<(), String> {
     let parsed = tauri::Url::parse(url).map_err(|error| format!("Invalid URL: {error}"))?;
 
-    if parsed.scheme() == "https" {
+    if matches!(parsed.scheme(), "https" | "mailto") {
         return Ok(());
     }
 
@@ -716,6 +716,51 @@ fn validate_external_url(url: &str) -> Result<(), String> {
     }
 
     Err("Only trusted web URLs can be opened externally.".to_string())
+}
+
+fn safe_invoice_filename(filename: &str) -> String {
+    let sanitized: String = filename
+        .chars()
+        .map(|character| {
+            if character.is_ascii_alphanumeric() || matches!(character, '.' | '-' | '_') {
+                character
+            } else {
+                '-'
+            }
+        })
+        .collect();
+    let trimmed = sanitized.trim_matches(['.', '-']);
+    let base = if trimmed.is_empty() { "invoice.pdf" } else { trimmed };
+
+    if base.to_ascii_lowercase().ends_with(".pdf") {
+        base.to_string()
+    } else {
+        format!("{base}.pdf")
+    }
+}
+
+#[tauri::command]
+fn desktop_save_invoice_pdf<R: tauri::Runtime>(
+    app: tauri::AppHandle<R>,
+    filename: String,
+    bytes: Vec<u8>,
+) -> Result<String, String> {
+    if bytes.len() < 5 || !bytes.starts_with(b"%PDF-") {
+        return Err("The generated invoice is not a valid PDF.".to_string());
+    }
+
+    let downloads = app
+        .path()
+        .download_dir()
+        .or_else(|_| app.path().document_dir())
+        .map_err(|error| format!("Unable to find a Downloads folder: {error}"))?;
+    let invoice_directory = downloads.join("Bezgrow Invoices");
+    fs::create_dir_all(&invoice_directory)
+        .map_err(|error| format!("Unable to create the invoice folder: {error}"))?;
+
+    let path = invoice_directory.join(safe_invoice_filename(&filename));
+    fs::write(&path, bytes).map_err(|error| format!("Unable to save the invoice PDF: {error}"))?;
+    Ok(path.to_string_lossy().to_string())
 }
 
 #[tauri::command]
@@ -965,6 +1010,7 @@ pub fn run() {
             store_secret,
             read_secret,
             delete_secret,
+            desktop_save_invoice_pdf,
             open_external_url
         ])
         .build(tauri::generate_context!())

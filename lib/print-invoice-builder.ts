@@ -3,6 +3,8 @@ import { amountInIndianWords } from "@/components/print/utils"
 
 export type PrintRow = Record<string, unknown> & { id: string }
 
+const genericBusinessNames = new Set(["business", "bezgrow", "bezgrow erp", "enterprise", "your business"])
+
 export function stringFrom(row: Record<string, unknown> | null | undefined, fields: string[]) {
   if (!row) return ""
   for (const field of fields) {
@@ -10,6 +12,26 @@ export function stringFrom(row: Record<string, unknown> | null | undefined, fiel
     if (typeof value === "string" && value.trim()) return value
   }
   return ""
+}
+
+export function resolvePrintOrganization(
+  ...sources: Array<Record<string, unknown> | null | undefined>
+): PrintRow | null {
+  const organizations = sources.filter((source): source is Record<string, unknown> => Boolean(source))
+  if (!organizations.length) return null
+
+  const merged = Object.assign({}, ...organizations.slice().reverse()) as PrintRow
+  const names = organizations
+    .map((source) => stringFrom(source, ["name", "business_name"]))
+    .filter(Boolean)
+  const preferredName = names.find((name) => !genericBusinessNames.has(name.trim().toLowerCase())) || names[0]
+
+  if (preferredName) {
+    merged.name = preferredName
+    merged.business_name = preferredName
+  }
+
+  return merged
 }
 
 export function numberFrom(row: Record<string, unknown> | null | undefined, fields: string[]) {
@@ -106,15 +128,15 @@ export function buildPrintInvoice({
     dueDate: dateValue(invoice, ["due_date"]),
     salesperson: stringFrom(invoice, ["salesperson", "salesperson_name"]) || "-",
     enterprise: {
-      name: stringFrom(organization, ["name", "business_name"]) || "Bezgrow ERP",
+      name: stringFrom(organization, ["name", "business_name"]) || "Your Business",
       businessType: stringFrom(organization, ["business_type", "industry", "business_category"]) || "Enterprise",
       gstNumber: stringFrom(organization, ["gst_number", "gstin", "tax_id"]) || "-",
       fssai: stringFrom(organization, ["fssai", "fssai_number"]) || "-",
       phone: stringFrom(organization, ["phone", "contact_phone"]) || "-",
       email: stringFrom(organization, ["email", "support_email"]) || "-",
-      website: stringFrom(organization, ["website"]) || "bezgrow.com",
+      website: stringFrom(organization, ["website"]) || "-",
       address: stringFrom(organization, ["address", "business_address"]) || "-",
-      logoUrl: stringFrom(organization, ["logo_url", "logo"]) || "/brand/bezgrow-logo-3d.png",
+      logoUrl: stringFrom(organization, ["logo_url", "logo", "business_logo_url"]),
       branchName: stringFrom(organization, ["branch_name"]) || "Main Branch",
     },
     customer: {
@@ -147,9 +169,9 @@ export function buildPrintInvoice({
       amountInWords: amountInIndianWords(grandTotal),
     },
     terms: [],
-    notes: stringFrom(invoice, ["notes"]) || "Thank you for your business.",
+    notes: stringFrom(invoice, ["notes"]),
     qrValue: publicInvoiceUrl,
     barcodeValue: invoiceNumber,
-    watermark: stringFrom(organization, ["name", "business_name"]) || "BEZGROW",
+    watermark: stringFrom(organization, ["name", "business_name"]) || "BUSINESS",
   }
 }

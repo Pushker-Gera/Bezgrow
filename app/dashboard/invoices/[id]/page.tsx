@@ -5,6 +5,7 @@ import { useCallback, useEffect, useMemo, useState } from "react"
 import { useParams } from "next/navigation"
 import { createWhatsAppInvoiceUrl } from "@/lib/invoice-share"
 import { getCachedWorkspaceBootstrap, getOfflineData } from "@/lib/offline/db"
+import { resolvePrintOrganization } from "@/lib/print-invoice-builder"
 import { supabase } from "@/lib/supabase"
 
 type DataRow = Record<string, unknown> & {
@@ -52,9 +53,10 @@ export default function InvoiceViewPage() {
     const offlineInvoice = cachedInvoices.find((row) => stringFrom(row, ["id"]) === invoiceId)
     if (!offlineInvoice) return false
 
-    const [cachedCustomers, cachedOrganization] = await Promise.all([
+    const [cachedCustomers, cachedOrganization, cachedSettings] = await Promise.all([
       getOfflineData<DataRow[]>(organizationId, "customers", []),
       getOfflineData<DataRow | null>(organizationId, "organization", null),
+      getOfflineData<Record<string, unknown>>(organizationId, "settings", {}),
     ])
     const customerId = stringFrom(offlineInvoice, ["customer_id"])
 
@@ -62,7 +64,13 @@ export default function InvoiceViewPage() {
     setCustomer(
       cachedCustomers.find((row) => stringFrom(row, ["id"]) === customerId || stringFrom(row, ["offline_local_id"]) === customerId) || null
     )
-    setOrganization(cachedOrganization)
+    setOrganization(
+      resolvePrintOrganization(
+        cachedSettings.organization as Record<string, unknown> | null,
+        cachedWorkspace?.organization as Record<string, unknown> | null,
+        cachedOrganization
+      )
+    )
     return true
   }, [invoiceId])
 
@@ -120,6 +128,11 @@ export default function InvoiceViewPage() {
   }, [amount, customer, customerName, enterpriseName, invoiceId, invoiceNumber, publicPdfUrl])
 
   function sendOnWhatsApp() {
+    if (!navigator.onLine) {
+      setNotice("You are offline. Open View / Print to save the invoice PDF now; WhatsApp can send it when internet access returns.")
+      return
+    }
+
     if (!whatsappUrl) {
       setNotice("Customer phone number required.")
       return

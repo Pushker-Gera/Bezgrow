@@ -4,7 +4,7 @@ export type InvoiceShareInput = {
   enterpriseName: string
   invoiceNumber: string
   amount: number
-  invoiceUrl: string
+  invoiceUrl?: string
 }
 
 export function normalizeWhatsAppPhone(phone: string | null | undefined) {
@@ -20,13 +20,20 @@ export function normalizeWhatsAppPhone(phone: string | null | undefined) {
 }
 
 export function createInvoiceShareText(input: InvoiceShareInput) {
-  return [
+  const lines = [
     `Hello ${input.customerName || "Customer"},`,
     `Thank you for purchasing from ${input.enterpriseName || "Bezgrow"}.`,
     `Invoice Number: ${input.invoiceNumber || "Invoice"}`,
     `Amount: \u20b9${Math.round(input.amount).toLocaleString("en-IN")}`,
-    `View / download invoice PDF: ${input.invoiceUrl}`,
-  ].join("\n")
+  ]
+
+  if (input.invoiceUrl) {
+    lines.push(`View / download invoice PDF: ${input.invoiceUrl}`)
+  } else {
+    lines.push("The invoice PDF is ready to attach.")
+  }
+
+  return lines.join("\n")
 }
 
 export function createWhatsAppInvoiceUrl(input: InvoiceShareInput) {
