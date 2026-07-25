@@ -1,44 +1,91 @@
 export type InvoiceShareInput = {
   customerName: string
   customerPhone?: string | null
+  customerEmail?: string | null
   enterpriseName: string
   invoiceNumber: string
+  invoiceDate?: string
   amount: number
-  invoiceUrl?: string
+  paidAmount?: number
+  dueAmount?: number
+}
+
+function money(value: number | undefined) {
+  return `Rs ${Number(value || 0).toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+}
+
+function formattedDate(value: string | undefined) {
+  if (!value) return "-"
+  const date = new Date(value)
+  return Number.isNaN(date.getTime()) ? value : date.toLocaleDateString("en-IN")
 }
 
 export function normalizeWhatsAppPhone(phone: string | null | undefined) {
-  let digits = String(phone || "").replace(/\D/g, "")
-  if (!digits) return ""
+  const raw = String(phone || "").trim()
+  if (!raw) return ""
+  let digits = raw.replace(/\D/g, "")
+  if (digits.startsWith("00")) digits = digits.slice(2)
   if (digits.length === 11 && digits.startsWith("0")) digits = digits.slice(1)
-  if (digits.length === 12 && digits.startsWith("91") && digits[2] === "0") {
-    digits = `91${digits.slice(3)}`
+
+  if (digits.length === 10) {
+    return /^[6-9]\d{9}$/.test(digits) ? `91${digits}` : ""
   }
-  if (digits.length === 10) return `91${digits}`
-  if (digits.length >= 11 && digits.length <= 15) return digits
+  if (digits.startsWith("91") && digits.length === 12) {
+    return /^91[6-9]\d{9}$/.test(digits) ? digits : ""
+  }
+  if (/^[1-9]\d{7,14}$/.test(digits)) return digits
   return ""
 }
 
+export function validateCustomerEmail(email: string | null | undefined) {
+  const normalized = String(email || "").trim()
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(normalized) ? normalized : ""
+}
+
 export function createInvoiceShareText(input: InvoiceShareInput) {
-  const lines = [
+  return [
     `Hello ${input.customerName || "Customer"},`,
-    `Thank you for purchasing from ${input.enterpriseName || "Bezgrow"}.`,
-    `Invoice Number: ${input.invoiceNumber || "Invoice"}`,
-    `Amount: \u20b9${Math.round(input.amount).toLocaleString("en-IN")}`,
-  ]
-
-  if (input.invoiceUrl) {
-    lines.push(`View / download invoice PDF: ${input.invoiceUrl}`)
-  } else {
-    lines.push("The invoice PDF is ready to attach.")
-  }
-
-  return lines.join("\n")
+    "",
+    `Please find your invoice from ${input.enterpriseName || "our business"}.`,
+    `Invoice: ${input.invoiceNumber || "Invoice"}`,
+    `Date: ${formattedDate(input.invoiceDate)}`,
+    `Grand total: ${money(input.amount)}`,
+    `Paid: ${money(input.paidAmount)}`,
+    `Due: ${money(input.dueAmount)}`,
+    "",
+    "The invoice PDF was prepared locally. Please attach it before sending.",
+  ].join("\n")
 }
 
 export function createWhatsAppInvoiceUrl(input: InvoiceShareInput) {
   const phone = normalizeWhatsAppPhone(input.customerPhone)
   if (!phone) return ""
-
   return `https://wa.me/${phone}?text=${encodeURIComponent(createInvoiceShareText(input))}`
 }
+
+export function createInvoiceEmailDraft(input: InvoiceShareInput) {
+  const recipient = validateCustomerEmail(input.customerEmail)
+  const subject = `Invoice ${input.invoiceNumber} from ${input.enterpriseName}`
+  const body = [
+    `Hello ${input.customerName || "Customer"},`,
+    "",
+    `Please find your invoice from ${input.enterpriseName || "our business"}.`,
+    "",
+    `Invoice number: ${input.invoiceNumber || "Invoice"}`,
+    `Invoice date: ${formattedDate(input.invoiceDate)}`,
+    `Grand total: ${money(input.amount)}`,
+    `Paid amount: ${money(input.paidAmount)}`,
+    `Due amount: ${money(input.dueAmount)}`,
+    "",
+    "The invoice PDF was prepared locally. Please attach it to this draft before sending.",
+    "",
+    "Thank you for your business.",
+  ].join("\n")
+  return {
+    recipient,
+    subject,
+    body,
+    mailtoUrl: `mailto:${encodeURIComponent(recipient)}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`,
+  }
+}
+

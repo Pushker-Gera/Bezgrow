@@ -3,11 +3,12 @@
 import { useCallback, useEffect, useMemo, useState } from "react"
 import { useParams } from "next/navigation"
 import { PrintEngine } from "@/components/print/PrintEngine"
-import { readStoredPrintSettings } from "@/components/print/settings/defaults"
-import type { PrintInvoice } from "@/components/print/types"
+import { loadStoredPrintSettings, readStoredPrintSettings } from "@/components/print/settings/defaults"
+import type { PrintInvoice, PrintSettings } from "@/components/print/types"
+import { resolveBusinessLogoUrl } from "@/lib/business-logo"
+import { isTauriRuntimeAsync } from "@/lib/desktop/tauri"
 import { getCachedWorkspaceBootstrap, getOfflineData } from "@/lib/offline/db"
 import { buildPrintInvoice, resolvePrintOrganization, stringFrom, type PrintRow } from "@/lib/print-invoice-builder"
-import { supabase } from "@/lib/supabase"
 
 export default function PrintInvoicePage() {
   const params = useParams()
@@ -18,6 +19,7 @@ export default function PrintInvoicePage() {
   const [customer, setCustomer] = useState<PrintRow | null>(null)
   const [products, setProducts] = useState<PrintRow[]>([])
   const [loading, setLoading] = useState(true)
+  const [printSettings, setPrintSettings] = useState<PrintSettings>(() => readStoredPrintSettings())
 
   const loadOfflineInvoice = useCallback(async () => {
     if (!invoiceId) return false
@@ -29,29 +31,31 @@ export default function PrintInvoicePage() {
     const offlineInvoice = cachedInvoices.find((row) => stringFrom(row, ["id"]) === invoiceId)
     if (!offlineInvoice) return false
 
-    const [cachedItems, cachedOrganization, cachedSettings, cachedCustomers, cachedProducts] = await Promise.all([
+    const [cachedItems, cachedOrganization, cachedSettings, cachedCustomers, cachedProducts, storedPrintSettings] = await Promise.all([
       getOfflineData<PrintRow[]>(organizationId, "invoice_items", []),
       getOfflineData<PrintRow | null>(organizationId, "organization", null),
       getOfflineData<Record<string, unknown>>(organizationId, "settings", {}),
       getOfflineData<PrintRow[]>(organizationId, "customers", []),
       getOfflineData<PrintRow[]>(organizationId, "products", []),
+      loadStoredPrintSettings(organizationId),
     ])
     const offlineItems = cachedItems.filter((row) => stringFrom(row, ["invoice_id"]) === invoiceId)
     const customerId = stringFrom(offlineInvoice, ["customer_id"])
 
     setInvoice(offlineInvoice)
     setItems(offlineItems)
-    setOrganization(
-      resolvePrintOrganization(
-        cachedSettings.organization as Record<string, unknown> | null,
-        cachedWorkspace?.organization as Record<string, unknown> | null,
-        cachedOrganization
-      )
+    const resolvedOrganization = resolvePrintOrganization(
+      cachedSettings.organization as Record<string, unknown> | null,
+      cachedWorkspace?.organization as Record<string, unknown> | null,
+      cachedOrganization
     )
+    const logoUrl = await resolveBusinessLogoUrl(stringFrom(resolvedOrganization, ["logo_path"])).catch(() => "")
+    setOrganization(resolvedOrganization ? { ...resolvedOrganization, logo_url: logoUrl } : null)
     setCustomer(
       cachedCustomers.find((row) => stringFrom(row, ["id"]) === customerId || stringFrom(row, ["offline_local_id"]) === customerId) || null
     )
     setProducts(cachedProducts)
+    setPrintSettings(storedPrintSettings)
     return true
   }, [invoiceId])
 
@@ -66,6 +70,12 @@ export default function PrintInvoicePage() {
       return true
     }
 
+    if (await isTauriRuntimeAsync()) {
+      setLoading(false)
+      return false
+    }
+
+    const { supabase } = await import("@/lib/supabase")
     let typedInvoice: PrintRow | null = null
     try {
       const { data: invoiceData } = await supabase.from("invoices").select("*").eq("id", invoiceId).single()
@@ -131,5 +141,5 @@ export default function PrintInvoicePage() {
     return <div className="flex min-h-dvh items-center justify-center bg-black text-white">Invoice not found.</div>
   }
 
-  return <PrintEngine invoice={printInvoice} initialSettings={readStoredPrintSettings()} />
+  return <PrintEngine invoice={printInvoice} initialSettings={printSettings} />
 }

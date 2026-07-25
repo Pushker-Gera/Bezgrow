@@ -7,13 +7,10 @@ import { useEffect, useMemo, useRef, useState } from "react"
 import { BezgrowLogoMark } from "@/components/brand/BezgrowLogoMark"
 import DesktopBackButton from "@/components/desktop/DesktopBackButton"
 import LocalDatabaseRecovery from "@/components/offline/LocalDatabaseRecovery"
-import OfflineStatusBar from "@/components/offline/OfflineStatusBar"
 import { clearDesktopSession } from "@/lib/desktop/session"
 import { isTauriRuntimeAsync } from "@/lib/desktop/tauri"
-import { prepareOfflineWorkspace } from "@/lib/offline/bootstrap"
 import { getLocalDatabaseService } from "@/lib/offline/local/service"
 import { localLicenseSnapshot, restoreLicensedWorkspaceContext } from "@/lib/offline/local/license"
-import { supabase } from "@/lib/supabase"
 import { clearWorkspaceBootstrapCache, getWorkspaceBootstrap } from "@/lib/workspaceBootstrapClient"
 
 const navItems = [
@@ -123,12 +120,10 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
                         setOwnerEmail(restoredWorkspace.user?.email || "licensed@bezgrow.local")
                         setCanShowAdmin(false)
                         if (!cancelled) setDesktopDatabase({ status: "business-ready" })
-                        cancelOfflinePrep = scheduleIdleTask(() => {
-                            if (cancelled) return
-                            void prepareOfflineWorkspace(restoredWorkspace).catch(() => undefined)
-                        })
                         return
                     }
+                    router.replace(`/offline?next=${encodeURIComponent(initialPathRef.current)}`)
+                    return
                 } else if (!cancelled) {
                     setDesktopDatabase({ status: "ready" })
                 }
@@ -158,7 +153,7 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
                     if (cancelled) return
                     let lastProgressAt = 0
 
-                    void prepareOfflineWorkspace(payload, {
+                    void import("@/lib/offline/bootstrap").then(({ prepareOfflineWorkspace }) => prepareOfflineWorkspace(payload, {
                         onProgress: (progress) => {
                             const now = Date.now()
                             const isDone = progress.completed >= progress.total
@@ -170,7 +165,7 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
                                 globalThis.setTimeout(() => setOfflinePrepMessage(""), 4000)
                             }
                         },
-                    }).catch((error) => {
+                    })).catch((error) => {
                         if (typeof navigator !== "undefined" && navigator.onLine) {
                             setOfflinePrepMessage(error instanceof Error ? error.message : "Offline data could not be prepared.")
                             globalThis.setTimeout(() => setOfflinePrepMessage(""), 6000)
@@ -232,11 +227,12 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
         clearWorkspaceBootstrapCache()
         await clearDesktopSession()
         router.replace("/login")
-        // Cloud sign-out is optional for the packaged desktop. It must not
-        // delay navigation or alter the local SQLite/license authority.
-        void supabase.auth.signOut().catch((error) => {
-            console.warn("Cloud sign-out warning:", error)
-        })
+        if (!(await isTauriRuntimeAsync())) {
+            const { supabase } = await import("@/lib/supabase")
+            void supabase.auth.signOut().catch((error) => {
+                console.warn("Cloud sign-out warning:", error)
+            })
+        }
     }
 
     if (desktopDatabase.status === "initializing" || desktopDatabase.status === "database-ready" || desktopDatabase.status === "license-valid") {
@@ -360,7 +356,7 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
                                 <p className="truncate text-sm font-black text-white">{businessName}</p>
                                 <div className="mt-1 flex items-center gap-2 text-[11px] font-bold uppercase tracking-[0.12em] text-neutral-500">
                                     <span className={`h-2 w-2 rounded-full ${online ? "bg-emerald-300" : "bg-amber-300"}`} />
-                                    <span>{online ? "Synced" : "Offline"}</span>
+                                    <span>{online ? "Online" : "Offline"}</span>
                                 </div>
                             </div>
                         </div>
@@ -384,7 +380,6 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
                 </header>
 
                 <main className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden bg-black pb-28 md:pb-4">
-                    <OfflineStatusBar />
                     {offlinePrepMessage && (
                         <div className="border-b border-emerald-400/20 bg-emerald-500/10 px-3 py-2 text-sm font-semibold text-emerald-100">
                             <div className="mx-auto max-w-[1800px]">{offlinePrepMessage}</div>

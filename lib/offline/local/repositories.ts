@@ -183,12 +183,12 @@ function namedId(prefix: string, organizationId: string, name: string) {
 
 async function ensureOrganization(db: SqlExecutor, organizationId: string) {
   if (!organizationId) return
-  await upsert(db, "organizations", {
-    id: organizationId,
-    name: "Business",
-    created_at: nowIso(),
-    updated_at: nowIso(),
-  })
+  const now = nowIso()
+  await db.execute(
+    `INSERT OR IGNORE INTO organizations (id, name, created_at, updated_at)
+     VALUES (?, 'Business', ?, ?)`,
+    [organizationId, now, now]
+  )
 }
 
 async function ensureNamedReference(db: SqlExecutor, table: "categories" | "units" | "warehouses", organizationId: string, name: string | null) {
@@ -704,6 +704,11 @@ function organizationRow(input: DataRow, organizationId: string) {
     invoice_prefix: text(input, ["invoice_prefix"]),
     next_invoice_number: number(input, ["next_invoice_number"], 1),
     financial_year_start: text(input, ["financial_year_start"]),
+    logo_path: Object.hasOwn(input, "logo_path") ? text(input, ["logo_path"]) : undefined,
+    logo_mime_type: Object.hasOwn(input, "logo_mime_type") ? text(input, ["logo_mime_type"]) : undefined,
+    logo_width: Object.hasOwn(input, "logo_width") ? sqlValue(input.logo_width) : undefined,
+    logo_height: Object.hasOwn(input, "logo_height") ? sqlValue(input.logo_height) : undefined,
+    logo_updated_at: Object.hasOwn(input, "logo_updated_at") ? text(input, ["logo_updated_at"]) : undefined,
   }
 }
 

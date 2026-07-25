@@ -4,12 +4,13 @@ import { useCallback, useEffect, useState } from "react"
 import Link from "next/link"
 import { BezgrowLogoMark } from "@/components/brand/BezgrowLogoMark"
 import { clearDesktopSession } from "@/lib/desktop/session"
-import { supabase } from "@/lib/supabase"
+import { isTauriRuntimeAsync } from "@/lib/desktop/tauri"
+import { clearWorkspaceBootstrapCache, getWorkspaceBootstrap } from "@/lib/workspaceBootstrapClient"
 import { useRouter } from "next/navigation"
-import type { User } from "@supabase/supabase-js"
 
 type OrganizationProfile = {
   id: string
+  name?: string | null
   business_name?: string | null
   business_type?: string | null
   business_category?: string | null
@@ -19,37 +20,18 @@ export default function ProfilePage() {
 
   const router = useRouter()
 
-  const [user, setUser] = useState<User | null>(null)
+  const [user, setUser] = useState<{ id?: string; email?: string | null } | null>(null)
   const [organization, setOrganization] = useState<OrganizationProfile | null>(null)
   const [loading, setLoading] = useState(true)
 
   const checkUser = useCallback(async () => {
-    const { data } = await supabase.auth.getUser()
-
-    if (!data.user) {
+    const workspace = await getWorkspaceBootstrap()
+    if (!workspace?.success) {
       router.push("/login")
       return
     }
-
-    setUser(data.user)
-
-    const { data: membership } = await supabase
-      .from("organization_members")
-      .select("organization_id")
-      .eq("user_id", data.user.id)
-      .limit(1)
-      .maybeSingle()
-
-    if (membership?.organization_id) {
-      const { data: org } = await supabase
-        .from("organizations")
-        .select("*")
-        .eq("id", membership.organization_id)
-        .single()
-
-      setOrganization(org)
-    }
-
+    setUser(workspace.user || null)
+    setOrganization(workspace.organization ? { ...workspace.organization, id: workspace.organization.id || "local-business" } : null)
     setLoading(false)
   }, [router])
 
@@ -60,8 +42,12 @@ export default function ProfilePage() {
   }, [checkUser])
 
   async function logout() {
+    clearWorkspaceBootstrapCache()
     await clearDesktopSession()
-    await supabase.auth.signOut()
+    if (!(await isTauriRuntimeAsync())) {
+      const { supabase } = await import("@/lib/supabase")
+      await supabase.auth.signOut()
+    }
     router.push("/login")
   }
 
@@ -100,9 +86,9 @@ export default function ProfilePage() {
 
               <div className="mb-6 flex min-w-0 items-center gap-3 sm:gap-4 lg:mb-10">
 
-                {organization?.business_name ? (
+                {organization?.business_name || organization?.name ? (
                   <div className="flex h-14 w-14 shrink-0 items-center justify-center rounded-[20px] bg-gradient-to-br from-cyan-400 via-blue-500 to-blue-700 text-2xl font-black shadow-[0_0_50px_rgba(34,211,238,0.3)] sm:h-20 sm:w-20 sm:rounded-[28px] sm:text-4xl">
-                    {organization.business_name.charAt(0)}
+                    {(organization.business_name || organization.name || "B").charAt(0)}
                   </div>
                 ) : (
                   <BezgrowLogoMark className="h-14 w-14 rounded-[20px] sm:h-20 sm:w-20 sm:rounded-[28px]" size={80} />
@@ -110,7 +96,7 @@ export default function ProfilePage() {
 
                 <div className="min-w-0">
                   <h2 className="truncate text-xl font-black leading-tight sm:text-2xl">
-                    {organization?.business_name || "Bezgrow ERP"}
+                    {organization?.business_name || organization?.name || "Bezgrow ERP"}
                   </h2>
 
                   <p className="text-sm text-neutral-400 mt-2">

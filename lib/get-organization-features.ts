@@ -1,4 +1,4 @@
-import { supabase } from "@/lib/supabase"
+import { isTauriRuntimeAsync } from "@/lib/desktop/tauri"
 import { getOfflineData } from "@/lib/offline/db"
 import { localLicenseSnapshot } from "@/lib/offline/local/license"
 
@@ -20,7 +20,9 @@ export async function getOrganizationFeatures(
 
     const license = await localLicenseSnapshot(organizationId).catch(() => null)
     if (license?.allowed) return license.allowedFeatures
+    if (await isTauriRuntimeAsync()) return []
 
+    const { supabase } = await import("@/lib/supabase")
     const { data, error } = await supabase
         .from("organization_features")
         .select("feature_key")

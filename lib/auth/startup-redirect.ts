@@ -6,7 +6,6 @@ import { isTauriRuntimeAsync } from "@/lib/desktop/tauri"
 import { getCachedWorkspaceBootstrap } from "@/lib/offline/db"
 import { localLicenseSnapshot, restoreLicensedWorkspaceContext } from "@/lib/offline/local/license"
 import { getLocalDatabaseService } from "@/lib/offline/local/service"
-import { supabase } from "@/lib/supabase"
 import type { WorkspaceBootstrapPayload } from "@/lib/workspaceBootstrapClient"
 
 function redirectFromWorkspace(payload: WorkspaceBootstrapPayload | null, fallback = "/dashboard") {
@@ -55,6 +54,7 @@ export async function resolveStartupRedirect(fallback = "/dashboard") {
     return hasSession ? redirectFromWorkspace(cachedWorkspace, fallback) : ""
   }
 
+  const { supabase } = await import("@/lib/supabase")
   const {
     data: { session },
   } = await supabase.auth.getSession()

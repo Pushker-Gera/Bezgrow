@@ -20,6 +20,7 @@ export type PrintSettings = {
 }
 
 export type PrintEnterprise = {
+  organizationId: string
   name: string
   businessType: string
   gstNumber: string

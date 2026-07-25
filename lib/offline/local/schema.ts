@@ -1,6 +1,6 @@
 "use client"
 
-export const LOCAL_DB_VERSION = 7
+export const LOCAL_DB_VERSION = 8
 export const LOCAL_DB_URL = "sqlite:bezgrow-offline.db"
 
 export const normalizedTables = [
@@ -1055,6 +1055,28 @@ export const localMigrations: Array<{ version: number; name: string; sql: string
       "CREATE INDEX IF NOT EXISTS idx_sales_invoices_org_filters ON sales_invoices (organization_id, payment_status, customer_id, invoice_date DESC, deleted_at)",
       "CREATE INDEX IF NOT EXISTS idx_sales_items_invoice_active ON sales_invoice_items (organization_id, invoice_id, deleted_at)",
       "CREATE INDEX IF NOT EXISTS idx_feature_flags_org_key_enabled ON feature_flags (organization_id, feature_key, is_enabled)",
+    ],
+  },
+  {
+    version: 8,
+    name: "offline_business_logo_print_settings_and_export_indexes",
+    sql: [
+      "ALTER TABLE organizations ADD COLUMN logo_path TEXT",
+      "ALTER TABLE organizations ADD COLUMN logo_mime_type TEXT",
+      "ALTER TABLE organizations ADD COLUMN logo_width INTEGER",
+      "ALTER TABLE organizations ADD COLUMN logo_height INTEGER",
+      "ALTER TABLE organizations ADD COLUMN logo_updated_at TEXT",
+      "CREATE INDEX IF NOT EXISTS idx_organizations_updated ON organizations (datetime(updated_at) DESC)",
+      "CREATE INDEX IF NOT EXISTS idx_products_org_updated ON products (organization_id, datetime(updated_at) DESC)",
+      "CREATE INDEX IF NOT EXISTS idx_customers_org_updated ON customers (organization_id, datetime(updated_at) DESC)",
+      "CREATE INDEX IF NOT EXISTS idx_sales_invoices_org_invoice_date ON sales_invoices (organization_id, invoice_date DESC, invoice_number)",
+      "CREATE INDEX IF NOT EXISTS idx_sales_invoices_org_updated ON sales_invoices (organization_id, datetime(updated_at) DESC)",
+      "CREATE INDEX IF NOT EXISTS idx_stock_movements_org_created ON stock_movements (organization_id, datetime(created_at) DESC)",
+      "CREATE INDEX IF NOT EXISTS idx_stock_movements_org_updated ON stock_movements (organization_id, datetime(updated_at) DESC)",
+      "CREATE INDEX IF NOT EXISTS idx_orders_org_updated ON orders (organization_id, datetime(updated_at) DESC)",
+      "CREATE INDEX IF NOT EXISTS idx_suppliers_org_updated ON suppliers (organization_id, datetime(updated_at) DESC)",
+      "CREATE INDEX IF NOT EXISTS idx_payments_org_updated ON payments (organization_id, datetime(updated_at) DESC)",
+      "CREATE INDEX IF NOT EXISTS idx_expenses_org_updated ON expenses (organization_id, datetime(updated_at) DESC)",
     ],
   },
 ]

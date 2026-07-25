@@ -3,6 +3,7 @@
 import Link from "next/link"
 import { useEffect, useMemo, useState } from "react"
 import { apiFetch } from "@/lib/api/client-fetch"
+import { exportCsv } from "@/lib/desktop-file-export"
 import { getOrganizationFeatures } from "@/lib/get-organization-features"
 import { getOrganizationId } from "@/lib/getOrganization"
 import { createOfflineId, getOfflineData, putOfflineData, queueOfflineAction } from "@/lib/offline/db"
@@ -132,11 +133,6 @@ function money(value: number) {
 function formatDate(value: string | null) {
     if (!value) return "-"
     return new Date(value).toLocaleDateString()
-}
-
-function csvCell(value: string | number | null) {
-    const text = String(value ?? "")
-    return `"${text.replaceAll("\"", "\"\"")}"`
 }
 
 function relationName(value: RelationName) {
@@ -442,7 +438,7 @@ export default function InventoryPage() {
                 setShowAddStockModal(false)
                 setShowTransferModal(false)
                 await loadCachedInventory(organizationId)
-                setNotice("Stock updated on this device. It will update online when the connection returns.")
+                setNotice("Stock updated locally.")
                 return
             }
 
@@ -461,47 +457,39 @@ export default function InventoryPage() {
         setShippingQr("")
     }
 
-    function exportInventoryCsv() {
+    async function exportInventoryCsv() {
         if (filteredProducts.length === 0) {
             setNotice("No inventory rows are available to export.")
             return
         }
 
-        const headers = [
-            "Product",
-            "SKU",
-            "Category",
-            "Stock",
-            "Minimum Stock",
-            "Sold Quantity",
-            "Warehouse",
-            "Inventory Value",
-            "Expiry Date",
-        ]
-        const rows = filteredProducts.map((product) => [
-            product.name,
-            product.sku || "",
-            product.category || "",
-            product.currentStock,
-            product.min_stock ?? "",
-            product.soldQuantity,
-            product.warehouseName,
-            Math.round(product.inventoryValue),
-            product.expiry_date || "",
-        ])
-        const csv = [headers, ...rows]
-            .map((row) => row.map(csvCell).join(","))
-            .join("\n")
-        const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" })
-        const url = URL.createObjectURL(blob)
-        const link = document.createElement("a")
-
-        link.href = url
-        link.download = `inventory-export-${new Date().toISOString()}.csv`
-        document.body.appendChild(link)
-        link.click()
-        document.body.removeChild(link)
-        URL.revokeObjectURL(url)
+        const rows = filteredProducts.map((product) => ({
+            product: product.name,
+            sku: product.sku || "",
+            category: product.category || "",
+            stock: product.currentStock,
+            minimumStock: product.min_stock ?? "",
+            soldQuantity: product.soldQuantity,
+            warehouse: product.warehouseName,
+            inventoryValue: product.inventoryValue,
+            expiryDate: product.expiry_date || "",
+        }))
+        try {
+            const result = await exportCsv(`bezgrow-inventory-${new Date().toISOString().slice(0, 10)}.csv`, [
+                { header: "Product", value: "product" },
+                { header: "SKU", value: "sku", preserveLeadingZeros: true },
+                { header: "Category", value: "category" },
+                { header: "Stock", value: "stock" },
+                { header: "Minimum Stock", value: "minimumStock" },
+                { header: "Sold Quantity", value: "soldQuantity" },
+                { header: "Warehouse", value: "warehouse" },
+                { header: "Inventory Value", value: "inventoryValue" },
+                { header: "Expiry Date", value: "expiryDate" },
+            ], rows)
+            if (result) setNotice(`Inventory exported to ${result.path || result.filename}.`)
+        } catch (error) {
+            setNotice(error instanceof Error ? error.message : "Inventory CSV export failed.")
+        }
     }
 
     useEffect(() => {

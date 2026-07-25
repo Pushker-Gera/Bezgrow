@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-desktop-pick-business-logo"
+description = "Enables the desktop_pick_business_logo command without any pre-configured scope."
+commands.allow = ["desktop_pick_business_logo"]
+
+[[permission]]
+identifier = "deny-desktop-pick-business-logo"
+description = "Denies the desktop_pick_business_logo command without any pre-configured scope."
+commands.deny = ["desktop_pick_business_logo"]

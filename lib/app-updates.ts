@@ -1,3 +1,5 @@
+import { isTauriRuntimeAsync } from "@/lib/desktop/tauri"
+
 export type DesktopReleaseManifest = {
   version?: string
   generatedAt?: string
@@ -51,24 +53,45 @@ export const appUpdateStatusLabel: Record<AppUpdateStatus, string> = {
   available: "Update available",
   downloading: "Downloading",
   ready: "Ready to install",
-  success: "Updated successfully",
+  success: "No update available",
   failed: "Update failed, try again",
   offline: "Offline",
 }
 
 export function compareVersions(left: string, right: string) {
-  const leftParts = left.split(/[.-]/).map((part) => Number.parseInt(part, 10) || 0)
-  const rightParts = right.split(/[.-]/).map((part) => Number.parseInt(part, 10) || 0)
-  const maxLength = Math.max(leftParts.length, rightParts.length)
+  function parse(value: string) {
+    const normalized = value.trim().replace(/^v/i, "").split("+", 1)[0]
+    const [core, prerelease = ""] = normalized.split("-", 2)
+    const coreParts = core.split(".").map((part) => (/^\d+$/.test(part) ? Number(part) : 0))
+    return { core: [coreParts[0] || 0, coreParts[1] || 0, coreParts[2] || 0], prerelease: prerelease ? prerelease.split(".") : [] }
+  }
 
-  for (let index = 0; index < maxLength; index += 1) {
-    const leftValue = leftParts[index] || 0
-    const rightValue = rightParts[index] || 0
+  const leftVersion = parse(left)
+  const rightVersion = parse(right)
+  for (let index = 0; index < 3; index += 1) {
+    const leftValue = leftVersion.core[index]
+    const rightValue = rightVersion.core[index]
 
     if (leftValue > rightValue) return 1
     if (leftValue < rightValue) return -1
   }
 
+  if (leftVersion.prerelease.length === 0 && rightVersion.prerelease.length > 0) return 1
+  if (rightVersion.prerelease.length === 0 && leftVersion.prerelease.length > 0) return -1
+
+  const maxPrerelease = Math.max(leftVersion.prerelease.length, rightVersion.prerelease.length)
+  for (let index = 0; index < maxPrerelease; index += 1) {
+    const leftPart = leftVersion.prerelease[index]
+    const rightPart = rightVersion.prerelease[index]
+    if (leftPart === undefined) return -1
+    if (rightPart === undefined) return 1
+    if (leftPart === rightPart) continue
+    const leftNumeric = /^\d+$/.test(leftPart)
+    const rightNumeric = /^\d+$/.test(rightPart)
+    if (leftNumeric && rightNumeric) return Number(leftPart) > Number(rightPart) ? 1 : -1
+    if (leftNumeric !== rightNumeric) return leftNumeric ? -1 : 1
+    return leftPart > rightPart ? 1 : -1
+  }
   return 0
 }
 
@@ -92,17 +115,6 @@ export function releaseGeneratedAt(manifest: DesktopReleaseManifest | null) {
     .filter((value) => Number.isFinite(value))
 
   return Math.max(0, ...timestamps)
-}
-
-function newestManifest(left: DesktopReleaseManifest | null, right: DesktopReleaseManifest | null) {
-  if (!left) return right
-  if (!right) return left
-
-  const versionComparison = compareVersions(left.version || "", right.version || "")
-  if (versionComparison > 0) return left
-  if (versionComparison < 0) return right
-
-  return releaseGeneratedAt(left) >= releaseGeneratedAt(right) ? left : right
 }
 
 function currentPlatform() {
@@ -162,18 +174,10 @@ async function readManifest(url: string, signal?: AbortSignal) {
 export async function fetchDesktopReleaseManifest(signal?: AbortSignal) {
   if (!isOnline()) return null
 
-  const localManifestPromise = readManifest("/downloads/desktop-release.json", signal)
-  const proxiedRemoteManifestPromise = readManifest("/api/desktop-release", signal)
-
-  const siteUrl = process.env.NEXT_PUBLIC_SITE_URL || "https://www.bezgrow.com"
-  const remoteUrl = `${siteUrl.replace(/\/$/, "")}/downloads/desktop-release.json`
-  const directRemoteManifestPromise = readManifest(remoteUrl, signal)
-
-  const manifests = await Promise.all([
-    localManifestPromise,
-    proxiedRemoteManifestPromise,
-    directRemoteManifestPromise,
-  ])
-
-  return manifests.reduce<DesktopReleaseManifest | null>((latest, manifest) => newestManifest(latest, manifest), null)
+  const desktopRuntime = await isTauriRuntimeAsync()
+  const manifestPath = "/api/desktop-release"
+  const url = desktopRuntime
+    ? `/api/desktop-proxy?path=${encodeURIComponent(manifestPath)}`
+    : manifestPath
+  return readManifest(url, signal)
 }

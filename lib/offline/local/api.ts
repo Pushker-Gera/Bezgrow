@@ -1720,9 +1720,13 @@ async function billingSummary(organizationId: string) {
 async function updateOrganization(body: DataRow, organizationId: string) {
   const currentSettings = await getOfflineData<DataRow>(organizationId, "settings", {})
   const currentOrganization = (currentSettings.organization && typeof currentSettings.organization === "object" ? currentSettings.organization : {}) as DataRow
+  const normalizedBody = {
+    ...body,
+    ...(localString(body.name) ? { business_name: localString(body.name) } : {}),
+  }
   const organization = {
     ...currentOrganization,
-    ...body,
+    ...normalizedBody,
     id: organizationId,
     organization_id: organizationId,
     updated_at: nowIso(),
@@ -1733,7 +1737,7 @@ async function updateOrganization(body: DataRow, organizationId: string) {
       { collection: "organization", value: organization },
       { collection: "settings", value: { ...currentSettings, organization_id: organizationId, organization, updated_at: nowIso() } },
     ],
-    pendingAction(createOfflineId("settings-action"), "save_settings", organizationId, { kind: "organization", data: body })
+    pendingAction(createOfflineId("settings-action"), "save_settings", organizationId, { kind: "organization", data: normalizedBody })
   )
   return ok({ organizationId })
 }

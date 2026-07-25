@@ -5,8 +5,8 @@ import { useRouter } from "next/navigation"
 import type { ReactNode } from "react"
 import { useCallback, useEffect, useMemo, useState } from "react"
 import { apiFetch } from "@/lib/api/client-fetch"
+import { loadStoredPrintSettings } from "@/components/print/settings/defaults"
 import { getOrganizationId } from "@/lib/getOrganization"
-import { createWhatsAppInvoiceUrl } from "@/lib/invoice-share"
 import { createOfflineId, getOfflineData, putOfflineData, queueOfflineAction } from "@/lib/offline/db"
 import { shouldUseWebOfflineFallback } from "@/lib/offline/network"
 import { getWorkspaceBootstrap } from "@/lib/workspaceBootstrapClient"
@@ -171,7 +171,6 @@ export default function CreateInvoicePage() {
   const [sendSmsMessage, setSendSmsMessage] = useState(true)
   const [smsBillLink, setSmsBillLink] = useState("")
   const [organizationId, setOrganizationId] = useState("")
-  const [organizationName, setOrganizationName] = useState("Bezgrow")
   const [loading, setLoading] = useState(false)
   const [notice, setNotice] = useState<Notice>(null)
 
@@ -199,7 +198,6 @@ export default function CreateInvoicePage() {
       throw new Error(workspace?.error || "Internet required to refresh login.")
     }
     setFeatures(Array.isArray(workspace.features) ? workspace.features : [])
-    setOrganizationName(workspace.organization?.name || "Bezgrow")
     await Promise.all([fetchCustomers(orgId), fetchProducts(orgId)])
   }
 
@@ -499,14 +497,8 @@ export default function CreateInvoicePage() {
   }
 
   function createWhatsAppBillLink(invoiceId: string, invoiceNumber: string) {
-    return createWhatsAppInvoiceUrl({
-      customerName: selectedCustomerRecord?.name || "Customer",
-      customerPhone: selectedCustomerRecord?.phone,
-      enterpriseName: organizationName,
-      invoiceNumber,
-      amount: totals.grandTotal,
-      invoiceUrl: `${window.location.origin}/public/invoices/${invoiceId}/pdf`,
-    })
+    void invoiceNumber
+    return `/dashboard/invoices/${invoiceId}/print?share=whatsapp`
   }
 
   async function saveInvoiceOffline(invoicePayload: InvoicePayload, invoiceItems: InvoiceItemPayload[], printAfterSave: boolean) {
@@ -625,15 +617,16 @@ export default function CreateInvoicePage() {
     setProducts(nextProducts)
     resetInvoiceForm()
 
-    if (printAfterSave) {
+    const autoPrint = (await loadStoredPrintSettings(organizationId)).autoPrintAfterSave
+    if (printAfterSave || autoPrint) {
       setLoading(false)
-      router.push(`/dashboard/invoices/${localInvoiceId}/print`)
+      router.push(`/dashboard/invoices/${localInvoiceId}/print${autoPrint ? "?autoprint=1" : ""}`)
       return
     }
 
     setNotice({
       title: "Bill Saved On This Device",
-      message: `${invoiceNumber} will update online when the connection returns. Local stock was reduced.`,
+      message: `${invoiceNumber} was saved locally and local stock was reduced.`,
       type: "warning",
     })
     setLoading(false)
@@ -747,7 +740,8 @@ export default function CreateInvoicePage() {
       }
     }
 
-    if (printAfterSave && data?.invoice_id) {
+    const autoPrint = (await loadStoredPrintSettings(organizationId)).autoPrintAfterSave
+    if ((printAfterSave || autoPrint) && data?.invoice_id) {
       setProducts((current) =>
         current.map((product) => {
           const billedQuantity = invoiceItems
@@ -759,7 +753,7 @@ export default function CreateInvoicePage() {
       )
       resetInvoiceForm()
       setLoading(false)
-      router.push(`/dashboard/invoices/${data.invoice_id}/print`)
+      router.push(`/dashboard/invoices/${data.invoice_id}/print${autoPrint ? "?autoprint=1" : ""}`)
       return
     }
 

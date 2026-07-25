@@ -22,7 +22,10 @@ export function resolvePrintOrganization(
 
   const merged = Object.assign({}, ...organizations.slice().reverse()) as PrintRow
   const names = organizations
-    .map((source) => stringFrom(source, ["name", "business_name"]))
+    .flatMap((source) => [
+      stringFrom(source, ["business_name"]),
+      stringFrom(source, ["name"]),
+    ])
     .filter(Boolean)
   const preferredName = names.find((name) => !genericBusinessNames.has(name.trim().toLowerCase())) || names[0]
 
@@ -76,7 +79,8 @@ export function buildPrintInvoice({
   const subtotal = numberFrom(invoice, ["subtotal", "sub_total"]) || itemBaseSubtotal
   const taxableAmount = numberFrom(invoice, ["taxable_amount"]) || Math.max(0, subtotal - discount)
   const gstSplit = taxTotal / 2
-  const paid = stringFrom(invoice, ["payment_status", "status"]).toLowerCase() === "paid" ? grandTotal : 0
+  const paid = numberFrom(invoice, ["paid_amount"]) ||
+    (stringFrom(invoice, ["payment_status", "status"]).toLowerCase() === "paid" ? grandTotal : 0)
   const dueAmount = Math.max(0, grandTotal - paid)
 
   const mappedItems: PrintInvoiceItem[] = items.map((item, index) => {
@@ -118,7 +122,7 @@ export function buildPrintInvoice({
   })
 
   const invoiceNumber = stringFrom(invoice, ["invoice_number"]) || invoice.id
-  const publicInvoiceUrl = `${origin}/public/invoices/${invoice.id}/pdf`
+  void origin
 
   return {
     id: invoice.id,
@@ -128,7 +132,8 @@ export function buildPrintInvoice({
     dueDate: dateValue(invoice, ["due_date"]),
     salesperson: stringFrom(invoice, ["salesperson", "salesperson_name"]) || "-",
     enterprise: {
-      name: stringFrom(organization, ["name", "business_name"]) || "Your Business",
+      organizationId: stringFrom(organization, ["id"]) || stringFrom(invoice, ["organization_id"]),
+      name: stringFrom(organization, ["business_name", "name"]) || "Your Business",
       businessType: stringFrom(organization, ["business_type", "industry", "business_category"]) || "Enterprise",
       gstNumber: stringFrom(organization, ["gst_number", "gstin", "tax_id"]) || "-",
       fssai: stringFrom(organization, ["fssai", "fssai_number"]) || "-",
@@ -170,8 +175,8 @@ export function buildPrintInvoice({
     },
     terms: [],
     notes: stringFrom(invoice, ["notes"]),
-    qrValue: publicInvoiceUrl,
+    qrValue: `BEZGROW-INVOICE:${invoiceNumber}:${grandTotal.toFixed(2)}`,
     barcodeValue: invoiceNumber,
-    watermark: stringFrom(organization, ["name", "business_name"]) || "BUSINESS",
+    watermark: stringFrom(organization, ["business_name", "name"]) || "BUSINESS",
   }
 }

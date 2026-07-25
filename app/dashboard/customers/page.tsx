@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from "react"
 import { useDebounce } from "use-debounce"
 import { apiFetch } from "@/lib/api/client-fetch"
+import { exportCsv } from "@/lib/desktop-file-export"
 import { getOrganizationId } from "@/lib/getOrganization"
 import { createOfflineId, getOfflineData, putOfflineData, queueOfflineAction } from "@/lib/offline/db"
 import { offlineFallbackMessage, shouldSaveOffline, shouldUseWebOfflineFallback } from "@/lib/offline/network"
@@ -70,11 +71,6 @@ const emptyForm: CustomerForm = {
 
 function money(value: number) {
   return `Rs ${Math.round(value).toLocaleString()}`
-}
-
-function csvCell(value: string | number | null) {
-  const text = String(value ?? "")
-  return `"${text.replaceAll("\"", "\"\"")}"`
 }
 
 function xmlCell(value: string | number | null | undefined) {
@@ -305,7 +301,7 @@ export default function CustomersPage() {
     setShowFormModal(false)
     setEditCustomer(null)
     setForm(emptyForm)
-    setNotice("Customer saved offline. Pending sync.")
+    setNotice("Customer saved locally.")
   }
 
   async function saveCustomer() {
@@ -434,7 +430,7 @@ export default function CustomersPage() {
     })
     setCustomers(visibleCustomers)
     setConfirmCustomer(null)
-    setNotice(status.archive ? "Customer archived offline. Pending sync." : "Customer status saved offline. Pending sync.")
+    setNotice(status.archive ? "Customer archived locally." : "Customer status saved locally.")
   }
 
   async function archiveCustomer() {
@@ -546,7 +542,7 @@ export default function CustomersPage() {
     }
   }, [customersWithLedger])
 
-  function exportCustomers() {
+  async function exportCustomers() {
     if (filteredCustomers.length === 0) {
       setNotice("No customers available to export.")
       return
@@ -572,14 +568,24 @@ export default function CustomersPage() {
       return
     }
 
-    const headers = Object.keys(rows[0])
-    const csv = [
-      headers.map(csvCell).join(","),
-      ...rows.map((row) =>
-        headers.map((header) => csvCell(String(row[header as keyof typeof row] ?? ""))).join(",")
-      ),
-    ].join("\n")
-    downloadBlob(new Blob([csv], { type: "text/csv;charset=utf-8;" }), `${fileName}.csv`)
+    try {
+      const result = await exportCsv(`${fileName}.csv`, [
+        { header: "Name", value: "Name" },
+        { header: "Phone", value: "Phone", preserveLeadingZeros: true },
+        { header: "Email", value: "Email" },
+        { header: "Address", value: "Address" },
+        { header: "GST", value: "GST", preserveLeadingZeros: true },
+        { header: "Type", value: "Type" },
+        { header: "Status", value: "Status" },
+        { header: "Revenue", value: "Revenue" },
+        { header: "Invoices", value: "Invoices" },
+        { header: "Last Purchase", value: "Last Purchase" },
+        { header: "Created At", value: "Created At" },
+      ], rows)
+      if (result) setNotice(`Customers exported to ${result.path || result.filename}.`)
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : "Customer CSV export failed.")
+    }
   }
 
   return (

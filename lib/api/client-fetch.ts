@@ -1,7 +1,8 @@
 "use client"
 
-import { supabase } from "@/lib/supabase"
+import { isTauriRuntimeAsync } from "@/lib/desktop/tauri"
 import { localApiFetch } from "@/lib/offline/local/api"
+import type { SupabaseClient } from "@supabase/supabase-js"
 
 type CachedToken = {
   token: string
@@ -11,6 +12,13 @@ type CachedToken = {
 let cachedToken: CachedToken | null = null
 let tokenRequest: Promise<string | null> | null = null
 let authListenerInstalled = false
+let browserSupabase: SupabaseClient | null = null
+
+async function getBrowserSupabase() {
+  if (browserSupabase) return browserSupabase
+  browserSupabase = (await import("@/lib/supabase")).supabase
+  return browserSupabase
+}
 
 function tokenExpiryMs(expiresAt?: number) {
   return expiresAt ? expiresAt * 1000 : Date.now() + 5 * 60 * 1000
@@ -20,9 +28,10 @@ function rememberToken(token: string | undefined, expiresAt?: number) {
   cachedToken = token ? { token, expiresAt: tokenExpiryMs(expiresAt) } : null
 }
 
-function installAuthListener() {
+async function installAuthListener() {
   if (authListenerInstalled || typeof window === "undefined") return
   authListenerInstalled = true
+  const supabase = await getBrowserSupabase()
 
   supabase.auth.onAuthStateChange((event, session) => {
     if (event === "SIGNED_OUT") {
@@ -36,7 +45,8 @@ function installAuthListener() {
 }
 
 export async function getCachedAccessToken(forceFresh = false) {
-  installAuthListener()
+  if (await isTauriRuntimeAsync()) return null
+  await installAuthListener()
 
   if (!forceFresh && cachedToken && cachedToken.expiresAt - Date.now() > 60_000) {
     return cachedToken.token
@@ -44,6 +54,7 @@ export async function getCachedAccessToken(forceFresh = false) {
 
   if (!forceFresh && tokenRequest) return tokenRequest
 
+  const supabase = await getBrowserSupabase()
   tokenRequest = supabase.auth
     .getSession()
     .then(({ data }) => {
@@ -80,6 +91,10 @@ export async function apiFetch(input: RequestInfo | URL, init: RequestInit = {})
       }
     }
     return localResult.response
+  }
+
+  if (await isTauriRuntimeAsync()) {
+    throw new Error("This desktop operation is not implemented in the local SQLite repository.")
   }
 
   return fetch(input, {

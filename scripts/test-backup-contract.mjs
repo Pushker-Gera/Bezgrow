@@ -9,9 +9,9 @@ const repositories = read("lib/offline/local/repositories.ts");
 const db = read("lib/offline/db.ts");
 const erp = read("lib/offline/local/erp.ts");
 const api = read("lib/offline/local/api.ts");
-const statusBar = read("components/offline/OfflineStatusBar.tsx");
 const settings = read("app/dashboard/settings/page.tsx");
 const schema = read("lib/offline/local/schema.ts");
+const rust = read("src-tauri/src/lib.rs");
 
 assert.match(repositories, /export async function exportNormalizedBackup\(\)/, "Normalized SQLite backup export is missing.");
 assert.match(repositories, /storage:\s*"sqlite-normalized"/, "SQLite backup payload must identify its storage format.");
@@ -28,10 +28,14 @@ assert.match(erp, /checksum\(backup\)/, "Backup verification must record a check
 assert.match(erp, /integrityReport\(\)/, "Backup verification must include database integrity.");
 assert.match(api, /"\/api\/backup\/verify"/, "Local API must route backup verification.");
 
-assert.match(statusBar, /Download Backup/, "Offline status bar must expose backup download.");
-assert.match(statusBar, /Restore Backup/, "Offline status bar must expose backup restore.");
 assert.match(settings, /Download Backup/, "Settings must expose backup download.");
 assert.match(settings, /Restore Backup/, "Settings must expose backup restore.");
+assert.match(settings, /desktop_export_backup/, "Settings must use native desktop backup export.");
+assert.match(settings, /desktop_restore_backup/, "Settings must use native desktop backup restore.");
+assert.match(rust, /DesktopBackupManifest/, "Native backup packages need a manifest.");
+assert.match(rust, /database_checksum_sha256/, "Native backup packages need a database checksum.");
+assert.match(rust, /pre_restore_backup_path/, "Native restore must create a pre-restore backup.");
+assert.match(rust, /BEGIN IMMEDIATE[\s\S]*ROLLBACK[\s\S]*COMMIT/, "Native restore must be transactional.");
 
 assert.match(schema, /CREATE TABLE IF NOT EXISTS backup_manifest/, "Backup manifest table is missing.");
 assert.match(schema, /idx_backup_org_created/, "Backup manifest created-at index is missing.");

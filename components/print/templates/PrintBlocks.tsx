@@ -11,13 +11,10 @@ function joinFilled(parts: string[]) {
 }
 
 export function BusinessLogo({ invoice, className = "" }: { invoice: PrintInvoice; className?: string }) {
+  if (!invoice.enterprise.logoUrl) return null
   return (
     <div className={`brand-logo ${className}`.trim()} aria-label={`${invoice.enterprise.name} logo`}>
-      {invoice.enterprise.logoUrl ? (
-        <Image src={invoice.enterprise.logoUrl} alt={`${invoice.enterprise.name} logo`} width={46} height={46} unoptimized />
-      ) : (
-        invoice.enterprise.name.slice(0, 1).toUpperCase()
-      )}
+      <Image src={invoice.enterprise.logoUrl} alt={`${invoice.enterprise.name} logo`} width={46} height={46} unoptimized />
     </div>
   )
 }

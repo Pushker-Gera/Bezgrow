@@ -1,5 +1,5 @@
 {
-  "version": "0.1.5",
+  "version": "0.1.6",
   "releaseNotes": [
     "The macOS red close button is now handled entirely by the native shell, which stops the bundled server and exits the full Bezgrow process.",
     "Frontend code can no longer close SQLite while the desktop process remains alive, preventing the closed-pool database error after a close attempt.",
@@ -10,10 +10,10 @@
   "mac": {
     "file": "/downloads/Bezgrow-mac.dmg",
     "downloadUrl": "/downloads/Bezgrow-mac.dmg",
-    "version": "0.1.5",
-    "sha256": "81af8e976207380319d55f3aa0085cb6ca0e841fe43c8b893c909781671cc049",
-    "size": 103278575,
+    "version": "0.1.6",
+    "sha256": "845069c14dceaf1babd9d5c43b03045a63b28dcd0b82fc121fb888b39b1a76c9",
+    "size": 104486246,
     "notarized": false,
-    "generatedAt": "2026-07-24T23:53:53.000Z"
+    "generatedAt": "2026-07-25T21:17:43.404Z"
   }
 }

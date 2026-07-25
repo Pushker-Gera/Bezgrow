@@ -53,7 +53,7 @@ export async function GET(request: Request, context: RouteContext) {
     origin: process.env.NEXT_PUBLIC_SITE_URL || "https://www.bezgrow.com",
   })
 
-  const pdf = createInvoicePdf(printInvoice)
+  const pdf = await createInvoicePdf(printInvoice)
   const pdfBody = pdf.buffer.slice(pdf.byteOffset, pdf.byteOffset + pdf.byteLength) as ArrayBuffer
   const filename = `${safeFilename(printInvoice.invoiceNumber)}.pdf`
 

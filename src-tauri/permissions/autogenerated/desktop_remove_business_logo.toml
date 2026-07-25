@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-desktop-remove-business-logo"
+description = "Enables the desktop_remove_business_logo command without any pre-configured scope."
+commands.allow = ["desktop_remove_business_logo"]
+
+[[permission]]
+identifier = "deny-desktop-remove-business-logo"
+description = "Denies the desktop_remove_business_logo command without any pre-configured scope."
+commands.deny = ["desktop_remove_business_logo"]

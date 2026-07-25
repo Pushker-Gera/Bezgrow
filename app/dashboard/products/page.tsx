@@ -4,6 +4,7 @@ import Link from "next/link"
 import { useEffect, useMemo, useRef, useState } from "react"
 import { useDebounce } from "use-debounce"
 import { apiFetch } from "@/lib/api/client-fetch"
+import { exportCsv } from "@/lib/desktop-file-export"
 import { getOrganizationFeatures } from "@/lib/get-organization-features"
 import { getOrganizationId } from "@/lib/getOrganization"
 import { createOfflineId, getOfflineData, putOfflineData, queueOfflineAction } from "@/lib/offline/db"
@@ -175,11 +176,6 @@ function formatDate(value: string | null) {
     if (!normalized) return "-"
     const [year, month, day] = normalized.split("-")
     return `${day}/${month}/${year}`
-}
-
-function csvCell(value: string | number | null) {
-    const text = String(value ?? "")
-    return `"${text.replaceAll("\"", "\"\"")}"`
 }
 
 const productCacheKey = "bezgrow:products:last"
@@ -595,7 +591,7 @@ export default function ProductsPage() {
         setShowFormModal(false)
         setEditProduct(null)
         setForm(emptyForm)
-        setNotice(editProduct ? "Product updated offline. Pending sync." : "Product created offline. Pending sync.")
+        setNotice(editProduct ? "Product updated locally." : "Product created locally.")
     }
 
     async function confirmDelete() {
@@ -620,7 +616,7 @@ export default function ProductsPage() {
             })
             setProducts(nextProducts.filter((product) => product.id !== idToDelete))
             setAnalytics(buildAnalytics(nextProducts.filter((product) => product.id !== idToDelete)))
-            setNotice("Product archived offline. Pending sync.")
+            setNotice("Product archived locally.")
         }
 
         if (await shouldUseWebOfflineFallback()) {
@@ -659,65 +655,57 @@ export default function ProductsPage() {
         }
     }
 
-    function exportProductsCSV() {
+    async function exportProductsCSV() {
         if (filteredProducts.length === 0) {
             setNotice("No products available to export.")
             return
         }
 
-        const headers = [
-            "Name",
-            "SKU",
-            "Barcode",
-            "Category",
-            "Supplier",
-            "Warehouse",
-            "Stock",
-            "Minimum Stock",
-            "Purchase Rate",
-            "Sale Rate",
-            "MRP",
-            "GST",
-            "Profit Per Unit",
-            "Inventory Value",
-            "Expiry Date",
-        ]
         const rows = filteredProducts.map((product) => {
             const sale = Number(product.sale_rate || product.price || 0)
             const purchase = Number(product.purchase_rate || 0)
             const stock = Number(product.stock || 0)
 
-            return [
-                product.name,
-                product.sku || "",
-                product.barcode || "",
-                product.category || "",
-                product.supplier || "",
-                product.warehouse || "",
+            return {
+                name: product.name,
+                sku: product.sku || "",
+                barcode: product.barcode || "",
+                category: product.category || "",
+                supplier: product.supplier || "",
+                warehouse: product.warehouse || "",
                 stock,
-                product.min_stock ?? 5,
-                purchase,
-                sale,
-                product.mrp ?? "",
-                product.gst ?? "",
-                sale - purchase,
-                sale * stock,
-                product.expiry_date || "",
-            ]
+                minimumStock: product.min_stock ?? 5,
+                purchaseRate: purchase,
+                saleRate: sale,
+                mrp: product.mrp ?? "",
+                gst: product.gst ?? "",
+                profitPerUnit: sale - purchase,
+                inventoryValue: sale * stock,
+                expiryDate: product.expiry_date || "",
+            }
         })
-        const csv = [headers, ...rows]
-            .map((row) => row.map(csvCell).join(","))
-            .join("\n")
-        const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" })
-        const url = URL.createObjectURL(blob)
-        const link = document.createElement("a")
-
-        link.href = url
-        link.download = `product-master-export-${new Date().toISOString()}.csv`
-        document.body.appendChild(link)
-        link.click()
-        document.body.removeChild(link)
-        URL.revokeObjectURL(url)
+        try {
+            const result = await exportCsv(`bezgrow-products-${new Date().toISOString().slice(0, 10)}.csv`, [
+                { header: "Name", value: "name" },
+                { header: "SKU", value: "sku", preserveLeadingZeros: true },
+                { header: "Barcode", value: "barcode", preserveLeadingZeros: true },
+                { header: "Category", value: "category" },
+                { header: "Supplier", value: "supplier" },
+                { header: "Warehouse", value: "warehouse" },
+                { header: "Stock", value: "stock" },
+                { header: "Minimum Stock", value: "minimumStock" },
+                { header: "Purchase Rate", value: "purchaseRate" },
+                { header: "Sale Rate", value: "saleRate" },
+                { header: "MRP", value: "mrp" },
+                { header: "GST", value: "gst" },
+                { header: "Profit Per Unit", value: "profitPerUnit" },
+                { header: "Inventory Value", value: "inventoryValue" },
+                { header: "Expiry Date", value: "expiryDate" },
+            ], rows)
+            if (result) setNotice(`Products exported to ${result.path || result.filename}.`)
+        } catch (error) {
+            setNotice(error instanceof Error ? error.message : "Product CSV export failed.")
+        }
     }
 
     useEffect(() => {

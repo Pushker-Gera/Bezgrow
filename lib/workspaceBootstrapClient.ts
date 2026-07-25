@@ -87,6 +87,10 @@ export async function getWorkspaceBootstrap(options: { forceFresh?: boolean } = 
     if (localWorkspace?.success) return localWorkspace
     const restoredWorkspace = await restoreLicensedWorkspaceContext().catch(() => null)
     if (restoredWorkspace?.success) return restoredWorkspace
+    const license = await localLicenseSnapshot().catch(() => null)
+    if (license?.allowed) {
+      return { success: false, error: "The licensed local workspace could not be restored." }
+    }
   } else if (!options.forceFresh) {
     const license = await localLicenseSnapshot().catch(() => null)
     if (license?.allowed && localWorkspace?.success) return localWorkspace

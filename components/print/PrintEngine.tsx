@@ -1,12 +1,19 @@
 "use client"
 
-import { useEffect, useMemo, useState } from "react"
-import { createWhatsAppInvoiceUrl } from "@/lib/invoice-share"
+import { useEffect, useMemo, useRef, useState } from "react"
+import {
+  createInvoiceEmailDraft,
+  createInvoiceShareText,
+  createWhatsAppInvoiceUrl,
+  normalizeWhatsAppPhone,
+  validateCustomerEmail,
+} from "@/lib/invoice-share"
 import { downloadInvoicePdf, saveInvoicePdf, shareInvoicePdf } from "@/lib/invoice-pdf-client"
-import { openExternalUrl } from "@/lib/desktop/tauri"
-import { defaultPrintSettings, saveStoredPrintSettings } from "@/components/print/settings/defaults"
+import { invokeTauri, isTauriRuntimeAsync, openExternalUrl } from "@/lib/desktop/tauri"
+import { defaultPrintSettings, persistPrintSettings, saveStoredPrintSettings } from "@/components/print/settings/defaults"
 import type { PrintFormat, PrintInvoice, PrintSettings } from "@/components/print/types"
 import { getReprintHistory, rememberReprint } from "@/components/print/utils"
+import { getOfflineMeta, setOfflineMeta } from "@/lib/offline/db"
 import { A4Template } from "./templates/A4Template"
 import { HalfCompactTemplate } from "./templates/HalfCompactTemplate"
 import { HalfTopTemplate } from "./templates/HalfTopTemplate"
@@ -41,6 +48,8 @@ export function PrintEngine({
   const [pendingAction, setPendingAction] = useState("")
   const [termsText, setTermsText] = useState(invoice.terms.join("\n"))
   const [history, setHistory] = useState(() => getReprintHistory().filter((entry) => entry.invoiceId === invoice.id))
+  const requestedShareHandled = useRef(false)
+  const requestedPrintHandled = useRef(false)
 
   const effectiveInvoice = useMemo<PrintInvoice>(() => {
     const terms = termsText
@@ -66,6 +75,9 @@ export function PrintEngine({
     const updated = { ...settings, ...next }
     setSettings(updated)
     saveStoredPrintSettings(updated)
+    void persistPrintSettings(invoice.enterprise.organizationId, updated)
+      .then(() => setNotice("Print settings saved locally."))
+      .catch((error) => setNotice(error instanceof Error ? error.message : "Print settings could not be saved."))
   }
 
   function escapeHtml(value: string) {
@@ -298,10 +310,24 @@ export function PrintEngine({
     return true
   }
 
-  function printInvoice() {
+  async function printInvoice() {
     document.documentElement.dataset.printFormat = format
     rememberReprint(effectiveInvoice, format)
     setHistory(getReprintHistory().filter((entry) => entry.invoiceId === invoice.id))
+
+    if (await isTauriRuntimeAsync()) {
+      setPendingAction("Printing")
+      setNotice("")
+      try {
+        await invokeTauri<void>("desktop_print_current_webview")
+        setNotice("System print dialog opened. Printing does not change the invoice.")
+      } catch (error) {
+        setNotice(error instanceof Error ? error.message : "The system print dialog could not be opened.")
+      } finally {
+        setPendingAction("")
+      }
+      return
+    }
 
     const printDocument = document.querySelector(".print-preview-stage .print-document")
 
@@ -333,7 +359,7 @@ export function PrintEngine({
       await action()
     } catch (error) {
       if (error instanceof DOMException && error.name === "AbortError") {
-        setNotice("Action cancelled.")
+        setNotice("")
       } else {
         setNotice(error instanceof Error ? error.message : `${label} could not be completed.`)
       }
@@ -344,24 +370,27 @@ export function PrintEngine({
 
   function savePdf() {
     void runAction("Saving PDF", async () => {
-      const result = await saveInvoicePdf(effectiveInvoice)
+      const result = await saveInvoicePdf(effectiveInvoice, settings, format)
+      if (!result) return
       setNotice(resultNotice("PDF saved", result))
     })
   }
 
   function downloadPdf() {
     void runAction("Downloading PDF", async () => {
-      const result = await downloadInvoicePdf(effectiveInvoice)
+      const result = await downloadInvoicePdf(effectiveInvoice, settings, format)
+      if (!result) return
       setNotice(resultNotice("PDF downloaded", result))
     })
   }
 
   function sharePdf() {
     void runAction("Sharing PDF", async () => {
-      const result = await shareInvoicePdf(effectiveInvoice)
+      const result = await shareInvoicePdf(effectiveInvoice, settings, format)
+      if (!result) return
       setNotice(
         result.shared
-          ? "Invoice PDF shared successfully."
+          ? "The system share sheet completed."
           : `${resultNotice("Direct file sharing is unavailable, so the PDF was saved", result)}.`
       )
     })
@@ -369,18 +398,31 @@ export function PrintEngine({
 
   function emailInvoice() {
     void runAction("Preparing email", async () => {
-      const saved = await downloadInvoicePdf(effectiveInvoice)
-      const recipient = invoice.customer.email?.trim()
-      const validRecipient = recipient && recipient !== "-" && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(recipient) ? recipient : ""
-      const subject = encodeURIComponent(`Invoice ${invoice.invoiceNumber}`)
-      const body = encodeURIComponent(
-        `Hello ${invoice.customer.name},\n\nThank you for purchasing from ${invoice.enterprise.name}.\n\nInvoice Number: ${invoice.invoiceNumber}\nAmount: Rs ${invoice.totals.grandTotal.toLocaleString("en-IN")}\n\nPlease attach ${saved.filename} to this email.\n\nThank you for your business.\nGenerated by Bezgrow`
-      )
-
-      await openExternalUrl(`mailto:${encodeURIComponent(validRecipient)}?subject=${subject}&body=${body}`)
-      setNotice(
-        `${resultNotice("Invoice PDF prepared", saved)}. Email composer opened${validRecipient ? "" : " without a recipient"}; attach the saved PDF.`
-      )
+      if (!validateCustomerEmail(invoice.customer.email)) {
+        setNotice(invoice.customer.email && invoice.customer.email !== "-" ? "Enter a valid customer email address." : "Customer email address is required.")
+        return
+      }
+      const saved = await downloadInvoicePdf(effectiveInvoice, settings, format)
+      if (!saved) return
+      const draft = createInvoiceEmailDraft({
+        customerName: invoice.customer.name,
+        customerEmail: invoice.customer.email,
+        enterpriseName: invoice.enterprise.name,
+        invoiceNumber: invoice.invoiceNumber,
+        invoiceDate: invoice.invoiceDate,
+        amount: invoice.totals.grandTotal,
+        paidAmount: invoice.payment.paidAmount,
+        dueAmount: invoice.payment.dueAmount,
+      })
+      await navigator.clipboard.writeText(`Subject: ${draft.subject}\n\n${draft.body}`).catch(() => undefined)
+      if (!navigator.onLine) {
+        if (saved.path) await invokeTauri<void>("desktop_reveal_file", { path: saved.path }).catch(() => undefined)
+        setNotice("The invoice is saved locally. Connect to the internet when you are ready to email it.")
+        return
+      }
+      await openExternalUrl(draft.mailtoUrl)
+      if (saved.path) await invokeTauri<void>("desktop_reveal_file", { path: saved.path }).catch(() => undefined)
+      setNotice(`${resultNotice("Invoice PDF prepared", saved)}. Email draft opened; attach the saved PDF.`)
     })
   }
 
@@ -391,22 +433,83 @@ export function PrintEngine({
         customerPhone: invoice.customer.phone,
         enterpriseName: invoice.enterprise.name,
         invoiceNumber: invoice.invoiceNumber,
+        invoiceDate: invoice.invoiceDate,
         amount: invoice.totals.grandTotal,
+        paidAmount: invoice.payment.paidAmount,
+        dueAmount: invoice.payment.dueAmount,
       })
 
       if (!url) {
-        setNotice("Customer phone number required.")
+        setNotice(
+          invoice.customer.phone && invoice.customer.phone !== "-"
+            ? "Enter a valid customer mobile number with a valid country code."
+            : "Customer phone number is required."
+        )
         return
       }
 
-      const saved = await downloadInvoicePdf(effectiveInvoice)
+      const saved = await downloadInvoicePdf(effectiveInvoice, settings, format)
+      if (!saved) return
+      const shareMessage = createInvoiceShareText({
+        customerName: invoice.customer.name,
+        customerPhone: invoice.customer.phone,
+        enterpriseName: invoice.enterprise.name,
+        invoiceNumber: invoice.invoiceNumber,
+        invoiceDate: invoice.invoiceDate,
+        amount: invoice.totals.grandTotal,
+        paidAmount: invoice.payment.paidAmount,
+        dueAmount: invoice.payment.dueAmount,
+      })
       if (!navigator.onLine) {
-        setNotice(`${resultNotice("Invoice PDF saved", saved)}. Connect to the internet, then attach it in WhatsApp.`)
+        await navigator.clipboard.writeText(shareMessage).catch(() => undefined)
+        if (saved.path) await invokeTauri<void>("desktop_reveal_file", { path: saved.path }).catch(() => undefined)
+        setNotice("The invoice is saved locally. Connect to the internet when you are ready to send it through WhatsApp.")
         return
       }
 
       await openExternalUrl(url)
+      if (saved.path) await invokeTauri<void>("desktop_reveal_file", { path: saved.path }).catch(() => undefined)
       setNotice(`${resultNotice("Invoice PDF prepared", saved)}. WhatsApp opened; attach the saved PDF.`)
+    })
+  }
+
+  useEffect(() => {
+    if (requestedShareHandled.current || typeof window === "undefined") return
+    const requested = new URLSearchParams(window.location.search).get("share")
+    if (requested === "whatsapp") {
+      requestedShareHandled.current = true
+      queueMicrotask(whatsappInvoice)
+    }
+  })
+
+  useEffect(() => {
+    if (requestedPrintHandled.current || typeof window === "undefined") return
+    if (new URLSearchParams(window.location.search).get("autoprint") !== "1") return
+    requestedPrintHandled.current = true
+    const timeoutId = globalThis.setTimeout(printInvoice, 350)
+    return () => globalThis.clearTimeout(timeoutId)
+  })
+
+  function queueSharingReminder() {
+    void runAction("Queueing reminder", async () => {
+      const key = "invoice_share_reminders_json"
+      const existingText = await getOfflineMeta(key, "[]", invoice.enterprise.organizationId)
+      let existing: Array<Record<string, unknown>> = []
+      try {
+        existing = JSON.parse(existingText) as Array<Record<string, unknown>>
+      } catch {
+        existing = []
+      }
+      const reminders = existing.filter((entry) => entry.invoiceId !== invoice.id)
+      reminders.push({
+        invoiceId: invoice.id,
+        invoiceNumber: invoice.invoiceNumber,
+        customerName: invoice.customer.name,
+        phone: normalizeWhatsAppPhone(invoice.customer.phone),
+        createdAt: new Date().toISOString(),
+      })
+      await setOfflineMeta(key, JSON.stringify(reminders), invoice.enterprise.organizationId)
+      setNotice("Sharing reminder queued locally. Bezgrow will not contact WhatsApp or retry in the background.")
     })
   }
 
@@ -513,6 +616,7 @@ export function PrintEngine({
             <button onClick={sharePdf} disabled={Boolean(pendingAction)}>{pendingAction === "Sharing PDF" ? "Sharing..." : "Share PDF"}</button>
             <button onClick={whatsappInvoice} disabled={Boolean(pendingAction)}>{pendingAction === "Preparing WhatsApp" ? "Preparing..." : "WhatsApp"}</button>
             <button onClick={emailInvoice} disabled={Boolean(pendingAction)}>{pendingAction === "Preparing email" ? "Preparing..." : "Email"}</button>
+            <button onClick={queueSharingReminder} disabled={Boolean(pendingAction)}>{pendingAction === "Queueing reminder" ? "Queueing..." : "Queue Share Reminder"}</button>
           </section>
 
           <section>
@@ -605,7 +709,7 @@ function PrintEngineStyles({ format, thermalWidth }: { format: PrintFormat; ther
       .print-header-block { display: grid; grid-template-columns: 1.45fr .75fr; gap: 12px; border-bottom: 2px solid #111827; padding-bottom: 10px; }
       .brand-block { display: flex; gap: 12px; min-width: 0; }
       .brand-logo { width: 46px; height: 46px; flex: none; border-radius: 10px; background: #e0f2fe; display: grid; place-items: center; font-weight: 900; color: #075985; overflow: hidden; }
-      .brand-logo img { width: 100%; height: 100%; object-fit: cover; }
+      .brand-logo img { width: 100%; height: 100%; object-fit: contain; }
       .brand-block h1 { margin: 3px 0; font-size: 24px; line-height: 1; font-weight: 900; overflow-wrap: anywhere; }
       .brand-block p, .invoice-meta-card p, .info-card p, .terms-card p { margin: 2px 0; color: #475569; font-size: 10px; line-height: 1.35; }
       .invoice-meta-card, .info-card, .terms-card, .total-card { border: 1px solid #dbe3ee; background: #f8fafc; border-radius: 10px; padding: 8px; }

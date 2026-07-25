@@ -532,15 +532,34 @@ export async function cacheWorkspaceBootstrap(payload: WorkspaceBootstrapPayload
   const organizationId = payload.organization?.id || payload.membership?.organization_id
   if (!organizationId) return
   const now = new Date().toISOString()
+  let organization = payload.organization
+  if (await strictDesktopStorage()) {
+    const [currentOrganization] = await getOfflineData<Record<string, unknown>[]>(organizationId, "organization", []).catch(() => [])
+    const isPlaceholder =
+      currentOrganization &&
+      !currentOrganization.business_name &&
+      (!currentOrganization.name || currentOrganization.name === "Business")
+    if (currentOrganization && !isPlaceholder) {
+      organization = {
+        ...(payload.organization || {}),
+        ...currentOrganization,
+        id: organizationId,
+      }
+      const businessName = typeof currentOrganization.business_name === "string" ? currentOrganization.business_name.trim() : ""
+      const genericName = typeof organization.name !== "string" || ["", "business", "your business"].includes(organization.name.trim().toLowerCase())
+      if (businessName && genericName) organization.name = businessName
+    }
+  }
+  const cachedPayload = { ...payload, organization }
 
   await putOfflineData(organizationId, "workspace", {
     id: `workspace:${organizationId}`,
     organization_id: organizationId,
-    payload,
+    payload: cachedPayload,
     updated_at: now,
   })
   await putOfflineData(organizationId, "profiles", payload.profile ? [{ ...payload.profile, id: payload.profile.id || payload.user?.id, organization_id: organizationId }] : [])
-  await putOfflineData(organizationId, "organization", payload.organization || null)
+  await putOfflineData(organizationId, "organization", organization || null)
   await putOfflineData(
     organizationId,
     "organization_members",
@@ -566,7 +585,7 @@ export async function cacheWorkspaceBootstrap(payload: WorkspaceBootstrapPayload
   })
 
   if (isBrowser()) {
-    localStorage.setItem("bezgrow:offline-workspace", JSON.stringify({ payload, organizationId, cachedAt: Date.now() }))
+    localStorage.setItem("bezgrow:offline-workspace", JSON.stringify({ payload: cachedPayload, organizationId, cachedAt: Date.now() }))
   }
 }
 

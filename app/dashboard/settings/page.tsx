@@ -3,9 +3,12 @@
 import { useEffect, useMemo, useRef, useState } from "react"
 import { useDebounce } from "use-debounce"
 import AppUpdatesPanel from "@/components/AppUpdatesPanel"
-import { readStoredPrintSettings, saveStoredPrintSettings } from "@/components/print/settings/defaults"
+import { loadStoredPrintSettings, persistPrintSettings, readStoredPrintSettings, saveStoredPrintSettings } from "@/components/print/settings/defaults"
 import type { PrintFormat, PrintSettings } from "@/components/print/types"
+import { LocalDataExportsPanel } from "@/components/settings/LocalDataExportsPanel"
 import { apiFetch } from "@/lib/api/client-fetch"
+import { invalidateBusinessLogoUrl, pickBusinessLogo, removeBusinessLogo, resolveBusinessLogoUrl } from "@/lib/business-logo"
+import { invokeTauri, isTauriRuntimeAsync } from "@/lib/desktop/tauri"
 import { getOrganizationId } from "@/lib/getOrganization"
 import { createOfflineId, exportOfflineBackup, getOfflineData, putOfflineData, queueOfflineAction, restoreOfflineBackup } from "@/lib/offline/db"
 import { shouldUseWebOfflineFallback } from "@/lib/offline/network"
@@ -25,6 +28,12 @@ type Organization = Record<string, unknown> & {
   website?: string | null
   address?: string | null
   branch_name?: string | null
+  logo_path?: string | null
+  logo_mime_type?: string | null
+  logo_width?: number | null
+  logo_height?: number | null
+  logo_updated_at?: string | null
+  logo_url?: string | null
 }
 
 type FeatureRow = {
@@ -139,6 +148,7 @@ export default function SettingsPage() {
   const [printSettings, setPrintSettings] = useState<PrintSettings>(() => readStoredPrintSettings())
   const [saving, setSaving] = useState(false)
   const [notice, setNotice] = useState("")
+  const [logoBusy, setLogoBusy] = useState(false)
   const backupInputRef = useRef<HTMLInputElement | null>(null)
   const [form, setForm] = useState({
     name: "",
@@ -193,16 +203,19 @@ export default function SettingsPage() {
     }
 
     setOrganizationId(orgId)
-    const [cachedSettings, cachedInvoices] = await Promise.all([
+    const [cachedSettings, cachedInvoices, storedPrintSettings] = await Promise.all([
       getOfflineData<Record<string, unknown>>(orgId, "settings", {}),
       getOfflineData<InvoiceCorrectionRow[]>(orgId, "invoices", []),
+      loadStoredPrintSettings(orgId),
     ])
+    setPrintSettings(storedPrintSettings)
     const cachedOrg = (cachedSettings.organization || null) as Organization | null
     const cachedFeatures = normalizeFeatures(cachedSettings.features as WorkspaceResponse["features"], orgId)
     if (cachedOrg) {
-      setOrganization(cachedOrg)
+      const logoUrl = await resolveBusinessLogoUrl(cachedOrg.logo_path).catch(() => "")
+      setOrganization({ ...cachedOrg, logo_url: logoUrl })
       setForm({
-        name: valueText(cachedOrg.name || cachedOrg.business_name),
+        name: valueText(cachedOrg.business_name || cachedOrg.name),
         industry: valueText(cachedOrg.industry),
         currency: valueText(cachedOrg.currency) || "INR",
         businessType: valueText(cachedOrg.business_type) || "retail",
@@ -234,7 +247,7 @@ export default function SettingsPage() {
         const org = { ...workspace.organization, id: workspace.organization.id || orgId } as Organization
         setOrganization(org)
         setForm({
-          name: valueText(org.name || org.business_name),
+          name: valueText(org.business_name || org.name),
           industry: valueText(org.industry),
           currency: valueText(org.currency) || "INR",
           businessType: valueText(org.business_type) || "retail",
@@ -272,7 +285,7 @@ export default function SettingsPage() {
       if (org) {
         setOrganization(org)
         setForm({
-          name: valueText(org.name || org.business_name),
+          name: valueText(org.business_name || org.name),
           industry: valueText(org.industry),
           currency: valueText(org.currency) || "INR",
           businessType: valueText(org.business_type) || "retail",
@@ -315,7 +328,90 @@ export default function SettingsPage() {
     saveStoredPrintSettings(updated)
   }
 
+  async function savePrintSettings() {
+    try {
+      await persistPrintSettings(organizationId, printSettings)
+      setNotice("Print settings saved locally for this business.")
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : "Print settings could not be saved.")
+    }
+  }
+
+  async function saveLogoMetadata(next: Partial<Organization>) {
+    const response = await apiFetch("/api/settings/update-organization", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(next),
+    })
+    const result = (await response.json()) as { error?: string }
+    if (!response.ok) throw new Error(result.error || "Business logo metadata could not be saved.")
+  }
+
+  async function uploadLogo() {
+    if (!organizationId || logoBusy) return
+    setLogoBusy(true)
+    try {
+      const selected = await pickBusinessLogo(organizationId)
+      if (!selected) return
+      const previousPath = organization?.logo_path || ""
+      const metadata: Partial<Organization> = {
+        logo_path: selected.relativePath,
+        logo_mime_type: selected.mimeType,
+        logo_width: selected.width,
+        logo_height: selected.height,
+        logo_updated_at: new Date().toISOString(),
+      }
+      await saveLogoMetadata(metadata)
+      invalidateBusinessLogoUrl(selected.relativePath)
+      const logoUrl = await resolveBusinessLogoUrl(selected.relativePath)
+      setOrganization((current) => ({ ...(current || { id: organizationId }), ...metadata, logo_url: logoUrl }))
+      if (previousPath && previousPath !== selected.relativePath) await removeBusinessLogo(previousPath).catch(() => undefined)
+      setNotice(`Business logo saved locally (${selected.width} x ${selected.height}).`)
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : "Business logo could not be saved.")
+    } finally {
+      setLogoBusy(false)
+    }
+  }
+
+  async function clearLogo() {
+    const relativePath = organization?.logo_path || ""
+    if (!relativePath || logoBusy) return
+    setLogoBusy(true)
+    try {
+      const metadata: Partial<Organization> = {
+        logo_path: "",
+        logo_mime_type: "",
+        logo_width: null,
+        logo_height: null,
+        logo_updated_at: new Date().toISOString(),
+      }
+      await saveLogoMetadata(metadata)
+      await removeBusinessLogo(relativePath)
+      setOrganization((current) => ({ ...(current || { id: organizationId }), ...metadata, logo_url: "" }))
+      setNotice("Business logo removed. Invoices will show the business name instead.")
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : "Business logo could not be removed.")
+    } finally {
+      setLogoBusy(false)
+    }
+  }
+
   async function downloadBackup() {
+    try {
+      if (await isTauriRuntimeAsync()) {
+        const result = await invokeTauri<{ path: string } | null>("desktop_export_backup", {
+          organizationId,
+          filename: `bezgrow-backup-${new Date().toISOString().slice(0, 10)}.bezgrow-backup`,
+        })
+        if (result) setNotice(`Backup saved to ${result.path}.`)
+        return
+      }
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : "Backup could not be saved.")
+      return
+    }
+
     const backup = await exportOfflineBackup()
     if (!backup) {
       setNotice("No local backup data is available on this device yet.")
@@ -334,19 +430,40 @@ export default function SettingsPage() {
     setNotice("Backup downloaded.")
   }
 
-  async function restoreBackup(file: File | null) {
+  async function restoreBackup(file: File | null = null) {
+    if (await isTauriRuntimeAsync()) {
+      try {
+        const result = await invokeTauri<{ backupPath: string; preRestoreBackupPath: string } | null>("desktop_restore_backup", {
+          organizationId,
+        })
+        if (!result) return
+        setNotice(`Backup restored from ${result.backupPath}. A pre-restore backup was saved at ${result.preRestoreBackupPath}.`)
+        await initializeSettings()
+      } catch (error) {
+        setNotice(error instanceof Error ? error.message : "Backup could not be restored.")
+      }
+      return
+    }
     if (!file) return
 
     try {
       const payload = JSON.parse(await file.text()) as unknown
       const result = await restoreOfflineBackup(payload)
-      setNotice(`Backup restored: ${result.restoredRecords} records${result.restoredActions ? ` and ${result.restoredActions} pending updates` : ""}.`)
+      setNotice(`Backup restored: ${result.restoredRecords} records.`)
       await initializeSettings()
     } catch (error) {
       setNotice(error instanceof Error ? error.message : "Backup could not be restored.")
     } finally {
       if (backupInputRef.current) backupInputRef.current.value = ""
     }
+  }
+
+  async function openRestorePicker() {
+    if (await isTauriRuntimeAsync()) {
+      await restoreBackup()
+      return
+    }
+    backupInputRef.current?.click()
   }
 
   const enabledFeatureSet = useMemo(() => {
@@ -438,7 +555,7 @@ export default function SettingsPage() {
           payload: { kind: "organization", data: settingsPayload },
         })
         setOrganization(nextOrganization as Organization)
-        setNotice("Settings saved on this device. They will update online when the connection returns.")
+        setNotice("Settings saved locally.")
         setSaving(false)
         return
       }
@@ -510,7 +627,7 @@ export default function SettingsPage() {
             data: { feature_key: featureKey, is_enabled: nextEnabled },
           },
         })
-        setNotice("Module change saved on this device. It will update online when the connection returns.")
+        setNotice("Module change saved locally.")
         return
       }
 
@@ -639,6 +756,35 @@ export default function SettingsPage() {
               </button>
             </div>
 
+            <div className="rounded-[36px] border border-white/10 bg-white/[0.035] p-7 backdrop-blur-2xl">
+              <div className="flex flex-col gap-5 md:flex-row md:items-center md:justify-between">
+                <div>
+                  <h2 className="text-3xl font-black">Business Logo</h2>
+                  <p className="mt-2 max-w-2xl text-sm leading-6 text-neutral-500">
+                    PNG, JPEG, or WebP up to 5 MB. Oversized images are resized locally and kept in Bezgrow&apos;s application-data folder.
+                  </p>
+                </div>
+                <div className="flex h-28 w-44 shrink-0 items-center justify-center overflow-hidden rounded-2xl border border-white/10 bg-white p-3 text-center text-sm font-black text-black">
+                  {organization?.logo_url ? (
+                    // eslint-disable-next-line @next/next/no-img-element
+                    <img src={organization.logo_url} alt="Business logo preview" className="h-full w-full object-contain" />
+                  ) : (
+                    <span>{form.name || "Business name"}</span>
+                  )}
+                </div>
+              </div>
+              <div className="mt-5 flex flex-wrap gap-3">
+                <button type="button" onClick={() => void uploadLogo()} disabled={logoBusy} className="h-12 rounded-2xl bg-white px-5 text-sm font-black text-black disabled:opacity-50">
+                  {logoBusy ? "Working..." : organization?.logo_path ? "Replace Logo" : "Upload Logo"}
+                </button>
+                {organization?.logo_path && (
+                  <button type="button" onClick={() => void clearLogo()} disabled={logoBusy} className="h-12 rounded-2xl border border-red-400/20 bg-red-500/10 px-5 text-sm font-black text-red-100 disabled:opacity-50">
+                    Remove Logo
+                  </button>
+                )}
+              </div>
+            </div>
+
             <div className="rounded-[36px] border border-cyan-400/20 bg-cyan-500/[0.06] p-7 backdrop-blur-2xl">
               <div className="flex flex-col gap-2 md:flex-row md:items-end md:justify-between">
                 <div>
@@ -705,9 +851,14 @@ export default function SettingsPage() {
                   </label>
                 ))}
               </div>
+              <button type="button" onClick={() => void savePrintSettings()} className="mt-6 h-12 rounded-2xl bg-white px-6 text-sm font-black text-black">
+                Save Print Settings
+              </button>
             </div>
 
             <AppUpdatesPanel />
+
+            <LocalDataExportsPanel organizationId={organizationId} />
 
             {showExperimentalModules && (
               <div data-development-only="business-modules" className="rounded-[36px] border border-white/10 bg-white/[0.035] p-7 backdrop-blur-2xl">
@@ -835,7 +986,7 @@ export default function SettingsPage() {
                 <button onClick={() => void downloadBackup()} className="h-12 rounded-2xl bg-white px-5 text-sm font-black text-black">
                   Download Backup
                 </button>
-                <button onClick={() => backupInputRef.current?.click()} className="h-12 rounded-2xl border border-white/10 bg-white/[0.06] px-5 text-sm font-black text-white">
+                <button onClick={() => void openRestorePicker()} className="h-12 rounded-2xl border border-white/10 bg-white/[0.06] px-5 text-sm font-black text-white">
                   Restore Backup
                 </button>
                 <input

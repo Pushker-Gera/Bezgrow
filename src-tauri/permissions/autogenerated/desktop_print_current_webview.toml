@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-desktop-print-current-webview"
+description = "Enables the desktop_print_current_webview command without any pre-configured scope."
+commands.allow = ["desktop_print_current_webview"]
+
+[[permission]]
+identifier = "deny-desktop-print-current-webview"
+description = "Denies the desktop_print_current_webview command without any pre-configured scope."
+commands.deny = ["desktop_print_current_webview"]

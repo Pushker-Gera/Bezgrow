@@ -1,12 +1,10 @@
 "use client"
 
 import Link from "next/link"
-import { useCallback, useEffect, useMemo, useState } from "react"
+import { useCallback, useEffect, useState } from "react"
 import { useParams } from "next/navigation"
-import { createWhatsAppInvoiceUrl } from "@/lib/invoice-share"
+import { isTauriRuntimeAsync } from "@/lib/desktop/tauri"
 import { getCachedWorkspaceBootstrap, getOfflineData } from "@/lib/offline/db"
-import { resolvePrintOrganization } from "@/lib/print-invoice-builder"
-import { supabase } from "@/lib/supabase"
 
 type DataRow = Record<string, unknown> & {
   id: string
@@ -39,9 +37,7 @@ export default function InvoiceViewPage() {
   const invoiceId = Array.isArray(params.id) ? params.id[0] : params.id
   const [invoice, setInvoice] = useState<DataRow | null>(null)
   const [customer, setCustomer] = useState<DataRow | null>(null)
-  const [organization, setOrganization] = useState<DataRow | null>(null)
   const [loading, setLoading] = useState(true)
-  const [notice, setNotice] = useState("")
 
   const loadOfflineInvoice = useCallback(async () => {
     if (!invoiceId) return false
@@ -53,23 +49,12 @@ export default function InvoiceViewPage() {
     const offlineInvoice = cachedInvoices.find((row) => stringFrom(row, ["id"]) === invoiceId)
     if (!offlineInvoice) return false
 
-    const [cachedCustomers, cachedOrganization, cachedSettings] = await Promise.all([
-      getOfflineData<DataRow[]>(organizationId, "customers", []),
-      getOfflineData<DataRow | null>(organizationId, "organization", null),
-      getOfflineData<Record<string, unknown>>(organizationId, "settings", {}),
-    ])
+    const cachedCustomers = await getOfflineData<DataRow[]>(organizationId, "customers", [])
     const customerId = stringFrom(offlineInvoice, ["customer_id"])
 
     setInvoice(offlineInvoice)
     setCustomer(
       cachedCustomers.find((row) => stringFrom(row, ["id"]) === customerId || stringFrom(row, ["offline_local_id"]) === customerId) || null
-    )
-    setOrganization(
-      resolvePrintOrganization(
-        cachedSettings.organization as Record<string, unknown> | null,
-        cachedWorkspace?.organization as Record<string, unknown> | null,
-        cachedOrganization
-      )
     )
     return true
   }, [invoiceId])
@@ -85,6 +70,12 @@ export default function InvoiceViewPage() {
       return
     }
 
+    if (await isTauriRuntimeAsync()) {
+      setLoading(false)
+      return
+    }
+
+    const { supabase } = await import("@/lib/supabase")
     const { data: invoiceData } = await supabase.from("invoices").select("*").eq("id", invoiceId).single()
     const typedInvoice = (invoiceData as DataRow | null) || null
     setInvoice(typedInvoice)
@@ -92,11 +83,6 @@ export default function InvoiceViewPage() {
     if (typedInvoice?.customer_id) {
       const { data } = await supabase.from("customers").select("*").eq("id", typedInvoice.customer_id).single()
       setCustomer((data as DataRow | null) || null)
-    }
-
-    if (typedInvoice?.organization_id) {
-      const { data } = await supabase.from("organizations").select("*").eq("id", typedInvoice.organization_id).single()
-      setOrganization((data as DataRow | null) || null)
     }
 
     setLoading(false)
@@ -111,35 +97,7 @@ export default function InvoiceViewPage() {
   const amount = numberFrom(invoice, ["grand_total", "total_amount", "total"])
   const customerName = stringFrom(customer, ["name"]) || stringFrom(invoice, ["customer_name"]) || "Walk-in customer"
   const invoiceNumber = stringFrom(invoice, ["invoice_number"]) || "Invoice"
-  const enterpriseName = stringFrom(organization, ["name", "business_name"]) || "Bezgrow"
   const printUrl = invoiceId ? `/dashboard/invoices/${invoiceId}/print` : "/dashboard/invoices"
-  const publicPdfUrl = invoiceId ? `/public/invoices/${invoiceId}/pdf` : "/dashboard/invoices"
-
-  const whatsappUrl = useMemo(() => {
-    if (!invoiceId || typeof window === "undefined") return ""
-    return createWhatsAppInvoiceUrl({
-      customerName,
-      customerPhone: stringFrom(customer, ["phone"]),
-      enterpriseName,
-      invoiceNumber,
-      amount,
-      invoiceUrl: `${window.location.origin}${publicPdfUrl}`,
-    })
-  }, [amount, customer, customerName, enterpriseName, invoiceId, invoiceNumber, publicPdfUrl])
-
-  function sendOnWhatsApp() {
-    if (!navigator.onLine) {
-      setNotice("You are offline. Open View / Print to save the invoice PDF now; WhatsApp can send it when internet access returns.")
-      return
-    }
-
-    if (!whatsappUrl) {
-      setNotice("Customer phone number required.")
-      return
-    }
-
-    window.open(whatsappUrl, "_blank", "noopener,noreferrer")
-  }
 
   if (loading) {
     return (
@@ -164,12 +122,6 @@ export default function InvoiceViewPage() {
         <p className="mt-3 text-lg font-semibold text-white">{customerName}</p>
         <p className="mt-2 text-sm text-neutral-400">{money(amount)}</p>
 
-        {notice && (
-          <div className="mt-5 rounded-2xl border border-amber-400/25 bg-amber-500/10 px-4 py-3 text-sm text-amber-100">
-            {notice}
-          </div>
-        )}
-
         <div className="mt-7 grid gap-3 sm:grid-cols-3">
           <Link href="/dashboard/invoices" className="flex h-12 items-center justify-center rounded-2xl border border-white/10 font-bold">
             Back
@@ -177,9 +129,9 @@ export default function InvoiceViewPage() {
           <Link href={printUrl} className="flex h-12 items-center justify-center rounded-2xl border border-cyan-400/25 bg-cyan-500/10 font-bold text-cyan-100">
             View / Print
           </Link>
-          <button onClick={sendOnWhatsApp} className="h-12 rounded-2xl bg-white px-4 font-black text-black">
+          <Link href={`${printUrl}?share=whatsapp`} className="flex h-12 items-center justify-center rounded-2xl bg-white px-4 font-black text-black">
             Send on WhatsApp
-          </button>
+          </Link>
         </div>
       </main>
     </div>

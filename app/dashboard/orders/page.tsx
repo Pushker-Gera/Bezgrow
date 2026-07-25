@@ -4,6 +4,7 @@ import Link from "next/link"
 import { useEffect, useMemo, useState } from "react"
 import { useDebounce } from "use-debounce"
 import { apiFetch } from "@/lib/api/client-fetch"
+import { exportCsv } from "@/lib/desktop-file-export"
 import { getOrganizationId } from "@/lib/getOrganization"
 import { createOfflineId, getOfflineData, putOfflineData, queueOfflineAction } from "@/lib/offline/db"
 import { offlineFallbackMessage, shouldSaveOffline, shouldUseWebOfflineFallback } from "@/lib/offline/network"
@@ -68,11 +69,6 @@ function numberFrom(row: Record<string, unknown>, fields: string[]) {
     if (value !== null && value !== undefined && value !== "") return Number(value || 0)
   }
   return 0
-}
-
-function csvCell(value: string | number | null) {
-  const text = String(value ?? "")
-  return `"${text.replaceAll("\"", "\"\"")}"`
 }
 
 function offlineOrderNumber(date = new Date()) {
@@ -335,7 +331,7 @@ export default function OrdersPage() {
     setChannel("direct")
     setPaymentMode("cod")
     setItems([])
-    setNotice(`${orderNumber} saved on this device. It will update online when the connection returns.`)
+    setNotice(`${orderNumber} saved locally.`)
   }
 
   async function createOrder() {
@@ -415,26 +411,30 @@ export default function OrdersPage() {
     setLoading(false)
   }
 
-  function exportOrders() {
-    const rows = filteredOrders.map((order) => [
-      stringFrom(order, ["order_number"]),
-      stringFrom(order, ["customer_name"]),
-      stringFrom(order, ["customer_phone"]),
-      stringFrom(order, ["courier_name"]),
-      stringFrom(order, ["tracking_number"]),
-      numberFrom(order, ["total_amount", "grand_total", "total"]),
-      order.created_at ? new Date(order.created_at).toLocaleString() : "",
-    ])
-    const csv = [["Order", "Customer", "Phone", "Courier", "Tracking", "Amount", "Created"], ...rows]
-      .map((row) => row.map((cell) => csvCell(cell as string | number | null)).join(","))
-      .join("\n")
-    const blob = new Blob([csv], { type: "text/csv;charset=utf-8" })
-    const url = URL.createObjectURL(blob)
-    const link = document.createElement("a")
-    link.href = url
-    link.download = `orders-${new Date().toISOString().slice(0, 10)}.csv`
-    link.click()
-    URL.revokeObjectURL(url)
+  async function exportOrders() {
+    const rows = filteredOrders.map((order) => ({
+      order: stringFrom(order, ["order_number"]),
+      customer: stringFrom(order, ["customer_name"]),
+      phone: stringFrom(order, ["customer_phone"]),
+      courier: stringFrom(order, ["courier_name"]),
+      tracking: stringFrom(order, ["tracking_number"]),
+      amount: numberFrom(order, ["total_amount", "grand_total", "total"]),
+      created: order.created_at || "",
+    }))
+    try {
+      const result = await exportCsv(`bezgrow-orders-${new Date().toISOString().slice(0, 10)}.csv`, [
+        { header: "Order", value: "order", preserveLeadingZeros: true },
+        { header: "Customer", value: "customer" },
+        { header: "Phone", value: "phone", preserveLeadingZeros: true },
+        { header: "Courier", value: "courier" },
+        { header: "Tracking", value: "tracking", preserveLeadingZeros: true },
+        { header: "Amount", value: "amount" },
+        { header: "Created", value: "created" },
+      ], rows)
+      if (result) setNotice(`Orders exported to ${result.path || result.filename}.`)
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : "Order CSV export failed.")
+    }
   }
 
   return (

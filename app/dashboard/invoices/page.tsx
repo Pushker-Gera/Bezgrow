@@ -6,6 +6,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { useDebounce } from "use-debounce"
 import { apiFetch } from "@/lib/api/client-fetch"
 import { getOrganizationId } from "@/lib/getOrganization"
+import { exportInvoicesCsv } from "@/lib/invoice-csv-export"
 import { createOfflineId, getOfflineData, putOfflineData, queueOfflineAction } from "@/lib/offline/db"
 import { shouldUseWebOfflineFallback } from "@/lib/offline/network"
 
@@ -74,11 +75,6 @@ function dateFrom(row: Record<string, unknown>, fields: string[]) {
 
 function money(value: number) {
   return `Rs ${Math.round(value).toLocaleString()}`
-}
-
-function csvCell(value: string | number | null) {
-  const text = String(value ?? "")
-  return `"${text.replaceAll("\"", "\"\"")}"`
 }
 
 function formatDate(value: string | null | undefined) {
@@ -423,7 +419,7 @@ export default function InvoicesPage() {
         payload: { invoiceId, paymentStatus: status },
       })
       setInvoices(nextInvoices)
-      setNotice("Invoice status saved on this device. It will update online when the connection returns.")
+      setNotice("Invoice status saved locally.")
       setSavingId(null)
       return
     }
@@ -438,44 +434,24 @@ export default function InvoicesPage() {
     setSavingId(null)
   }
 
-  function exportCSV() {
-    const header = [
-      "Invoice",
-      "Customer",
-      "Status",
-      "Payment Method",
-      "Items",
-      "Quantity",
-      "Tax",
-      "Amount",
-      "Due Date",
-      "Created",
-    ]
-
-    const rows = filteredInvoices.map((invoice) => [
-      stringFrom(invoice, ["invoice_number"]),
-      invoice.customerName,
-      invoice.statusLabel,
-      stringFrom(invoice, ["payment_method"]),
-      invoice.itemCount,
-      invoice.totalQuantity,
-      invoice.tax,
-      invoice.amount,
-      formatDate(stringFrom(invoice, ["due_date"])),
-      formatDate(invoice.created_at),
-    ])
-
-    const csv = [header, ...rows]
-      .map((row) => row.map((cell) => csvCell(cell as string | number | null)).join(","))
-      .join("\n")
-
-    const blob = new Blob([csv], { type: "text/csv;charset=utf-8" })
-    const url = URL.createObjectURL(blob)
-    const link = document.createElement("a")
-    link.href = url
-    link.download = `invoices-${new Date().toISOString().slice(0, 10)}.csv`
-    link.click()
-    URL.revokeObjectURL(url)
+  async function exportCSV() {
+    if (!organizationId) {
+      setNotice("No active business is available for export.")
+      return
+    }
+    try {
+      const { result, rowCount } = await exportInvoicesCsv(organizationId, {
+        search: debouncedSearch,
+        status: statusFilter,
+        period: periodFilter,
+        customerId: customerFilter,
+        risk: riskFilter,
+      })
+      if (!result) return
+      setNotice(`Exported ${rowCount} invoice${rowCount === 1 ? "" : "s"} to ${result.path || result.filename}.`)
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : "Invoice CSV export failed.")
+    }
   }
 
   return (
@@ -675,12 +651,6 @@ export default function InvoicesPage() {
                       <p className="shrink-0 text-right text-lg font-black text-cyan-200">{money(invoice.amount)}</p>
                     </div>
 
-                    {stringFrom(invoice, ["sync_status"]) && stringFrom(invoice, ["sync_status"]) !== "synced" ? (
-                      <p className="mt-3 inline-flex rounded-full border border-amber-400/30 bg-amber-500/10 px-2.5 py-1 text-[11px] font-black uppercase tracking-[0.12em] text-amber-100">
-                        Pending Update
-                      </p>
-                    ) : null}
-
                     <div className="mt-4 grid grid-cols-2 gap-3 text-sm">
                       <div className="rounded-lg border border-white/10 bg-black/30 p-3">
                         <p className="text-xs text-neutral-500">Payment</p>
@@ -748,11 +718,6 @@ export default function InvoicesPage() {
                         <td className="px-6 py-5">
                           <p className="font-bold text-white">{stringFrom(invoice, ["invoice_number"]) || "Invoice"}</p>
                           <p className="mt-1 text-xs text-neutral-500">{formatDate(invoice.created_at)}</p>
-                          {stringFrom(invoice, ["sync_status"]) && stringFrom(invoice, ["sync_status"]) !== "synced" ? (
-                            <p className="mt-2 inline-flex rounded-full border border-amber-400/30 bg-amber-500/10 px-2.5 py-1 text-[11px] font-black uppercase tracking-[0.12em] text-amber-100">
-                              Pending Update
-                            </p>
-                          ) : null}
                         </td>
                         <td className="px-6 py-5">
                           <p className="font-semibold text-white">{invoice.customerName}</p>

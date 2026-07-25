@@ -201,6 +201,60 @@
           "markdownDescription": "Enables the desktop_execute_transaction command without any pre-configured scope."
         },
         {
+          "description": "Enables the desktop_export_backup command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-desktop-export-backup",
+          "markdownDescription": "Enables the desktop_export_backup command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the desktop_pick_business_logo command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-desktop-pick-business-logo",
+          "markdownDescription": "Enables the desktop_pick_business_logo command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the desktop_print_current_webview command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-desktop-print-current-webview",
+          "markdownDescription": "Enables the desktop_print_current_webview command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the desktop_read_local_asset command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-desktop-read-local-asset",
+          "markdownDescription": "Enables the desktop_read_local_asset command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the desktop_remove_business_logo command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-desktop-remove-business-logo",
+          "markdownDescription": "Enables the desktop_remove_business_logo command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the desktop_restore_backup command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-desktop-restore-backup",
+          "markdownDescription": "Enables the desktop_restore_backup command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the desktop_reveal_file command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-desktop-reveal-file",
+          "markdownDescription": "Enables the desktop_reveal_file command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the desktop_save_file command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-desktop-save-file",
+          "markdownDescription": "Enables the desktop_save_file command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the desktop_save_invoice_pdf command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-desktop-save-invoice-pdf",
+          "markdownDescription": "Enables the desktop_save_invoice_pdf command without any pre-configured scope."
+        },
+        {
           "description": "Enables the desktop_select command without any pre-configured scope.",
           "type": "string",
           "const": "allow-desktop-select",
@@ -253,6 +307,60 @@
           "type": "string",
           "const": "deny-desktop-execute-transaction",
           "markdownDescription": "Denies the desktop_execute_transaction command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the desktop_export_backup command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-desktop-export-backup",
+          "markdownDescription": "Denies the desktop_export_backup command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the desktop_pick_business_logo command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-desktop-pick-business-logo",
+          "markdownDescription": "Denies the desktop_pick_business_logo command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the desktop_print_current_webview command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-desktop-print-current-webview",
+          "markdownDescription": "Denies the desktop_print_current_webview command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the desktop_read_local_asset command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-desktop-read-local-asset",
+          "markdownDescription": "Denies the desktop_read_local_asset command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the desktop_remove_business_logo command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-desktop-remove-business-logo",
+          "markdownDescription": "Denies the desktop_remove_business_logo command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the desktop_restore_backup command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-desktop-restore-backup",
+          "markdownDescription": "Denies the desktop_restore_backup command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the desktop_reveal_file command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-desktop-reveal-file",
+          "markdownDescription": "Denies the desktop_reveal_file command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the desktop_save_file command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-desktop-save-file",
+          "markdownDescription": "Denies the desktop_save_file command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the desktop_save_invoice_pdf command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-desktop-save-invoice-pdf",
+          "markdownDescription": "Denies the desktop_save_invoice_pdf command without any pre-configured scope."
         },
         {
           "description": "Denies the desktop_select command without any pre-configured scope.",

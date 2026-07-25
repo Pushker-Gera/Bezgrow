@@ -1,4 +1,5 @@
 import type { PrintSettings } from "@/components/print/types"
+import { getOfflineMeta, setOfflineMeta } from "@/lib/offline/db"
 
 export const defaultPrintSettings: PrintSettings = {
   defaultFormat: "a4",
@@ -32,4 +33,27 @@ export function readStoredPrintSettings() {
 export function saveStoredPrintSettings(settings: PrintSettings) {
   if (typeof window === "undefined") return
   window.localStorage.setItem("bezgrow.print-settings", JSON.stringify(settings))
+}
+
+export async function loadStoredPrintSettings(organizationId: string) {
+  const cached = readStoredPrintSettings()
+  if (!organizationId) return cached
+
+  const stored = await getOfflineMeta("print_settings_json", "", organizationId)
+  if (!stored) return cached
+
+  try {
+    const parsed = typeof stored === "string" ? JSON.parse(stored) : stored
+    const settings = { ...defaultPrintSettings, ...(parsed as Partial<PrintSettings>) }
+    saveStoredPrintSettings(settings)
+    return settings
+  } catch {
+    return cached
+  }
+}
+
+export async function persistPrintSettings(organizationId: string, settings: PrintSettings) {
+  saveStoredPrintSettings(settings)
+  if (!organizationId) throw new Error("No active business is available for print settings.")
+  await setOfflineMeta("print_settings_json", JSON.stringify(settings), organizationId)
 }
