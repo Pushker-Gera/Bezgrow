@@ -95,8 +95,10 @@ export function PrintEngine({
 
   useEffect(() => {
     document.documentElement.dataset.printFormat = format
+    document.getElementById("dynamic-thermal-page-size")?.remove()
     return () => {
       delete document.documentElement.dataset.printFormat
+      document.getElementById("dynamic-thermal-page-size")?.remove()
     }
   }, [format])
 
@@ -341,6 +343,41 @@ export function PrintEngine({
     return true
   }
 
+  async function prepareCurrentDocumentForPrint() {
+    const images = Array.from(document.images)
+    await Promise.all(images.map((image) => {
+      if (image.complete) return Promise.resolve()
+      return new Promise<void>((resolve) => {
+        image.addEventListener("load", () => resolve(), { once: true })
+        image.addEventListener("error", () => resolve(), { once: true })
+      })
+    }))
+    await document.fonts?.ready?.catch(() => undefined)
+
+    if (format !== "thermal") return
+    const paper = document.querySelector<HTMLElement>(".print-preview-stage .invoice-paper")
+    if (!paper) return
+
+    const probe = document.createElement("div")
+    probe.style.cssText = "position:absolute;visibility:hidden;pointer-events:none;width:100mm;height:0"
+    document.body.appendChild(probe)
+    const pixelsPerMm = probe.getBoundingClientRect().width / 100 || 96 / 25.4
+    probe.remove()
+
+    const thermalPaperWidth = settings.thermalWidth === "58mm" ? "58mm" : "80mm"
+    const minimumHeightMm = thermalPaperWidth === "58mm" ? 45 : 55
+    const contentHeight = Math.max(paper.scrollHeight, paper.getBoundingClientRect().height)
+    const pageHeightMm = Math.max(minimumHeightMm, Math.ceil(contentHeight / pixelsPerMm) + 4)
+    const style = document.createElement("style")
+    style.id = "dynamic-thermal-page-size"
+    style.textContent =
+      `@page { size: ${thermalPaperWidth} ${pageHeightMm}mm; margin: 0; }` +
+      "html, body, .print-document { height: auto !important; min-height: 0 !important; }" +
+      ".print-thermal { min-height: 0 !important; }"
+    document.getElementById(style.id)?.remove()
+    document.head.appendChild(style)
+  }
+
   async function printInvoice() {
     document.documentElement.dataset.printFormat = format
     rememberReprint(effectiveInvoice, format)
@@ -350,6 +387,7 @@ export function PrintEngine({
       setPendingAction("Printing")
       setNotice("")
       try {
+        await prepareCurrentDocumentForPrint()
         await invokeTauri<void>("desktop_print_current_webview")
         setNotice("System print dialog opened. Printing does not change the invoice.")
       } catch (error) {

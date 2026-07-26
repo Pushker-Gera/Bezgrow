@@ -68,6 +68,12 @@ const version = readArg("--version") || existingManifest.version || packageJson.
 const mac = buildInstaller("mac", "notarized", version);
 const windows = buildInstaller("windows", "signed", version);
 const windowsMsi = buildInstaller("windows-msi", "signed", version);
+const windowsArm64 = buildInstaller("windows-arm64", "signed", version);
+const windowsArm64Msi = buildInstaller("windows-arm64-msi", "signed", version);
+const windowsPortable = buildInstaller("windows-portable", "signed", version);
+const windowsPortableZip = buildInstaller("windows-portable-zip", "signed", version);
+const windowsArm64Portable = buildInstaller("windows-arm64-portable", "signed", version);
+const windowsArm64PortableZip = buildInstaller("windows-arm64-portable-zip", "signed", version);
 
 const nextManifest = {
   ...existingManifest,
@@ -75,6 +81,12 @@ const nextManifest = {
   ...(mac ? { mac } : {}),
   ...(windows ? { windows } : {}),
   ...(windowsMsi ? { windowsMsi } : {}),
+  ...(windowsArm64 ? { windowsArm64 } : {}),
+  ...(windowsArm64Msi ? { windowsArm64Msi } : {}),
+  ...(windowsPortable ? { windowsPortable } : {}),
+  ...(windowsPortableZip ? { windowsPortableZip } : {}),
+  ...(windowsArm64Portable ? { windowsArm64Portable } : {}),
+  ...(windowsArm64PortableZip ? { windowsArm64PortableZip } : {}),
 };
 
 mkdirSync(dirname(manifestPath), { recursive: true });

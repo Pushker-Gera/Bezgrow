@@ -8,13 +8,14 @@
     "start": "next start",
     "lint": "eslint",
     "typecheck": "tsc --noEmit",
-    "test": "npm run test:license && npm run test:api-routes && npm run test:release-artifacts && npm run test:integration && npm run test:desktop-sqlite && npm run test:desktop-sqlite-regression && npm run test:desktop-hardening && npm run test:offline && npm run test:local-lists && npm run test:invoice-print && npm run test:final-offline-network && npm run test:final-offline-exports && npm run test:backup && npm run test:performance",
+    "test": "npm run test:license && npm run test:api-routes && npm run test:release-artifacts && npm run test:integration && npm run test:windows && npm run test:desktop-sqlite && npm run test:desktop-sqlite-regression && npm run test:desktop-hardening && npm run test:offline && npm run test:local-lists && npm run test:invoice-print && npm run test:final-offline-network && npm run test:final-offline-exports && npm run test:backup && npm run test:performance",
     "test:api-routes": "node scripts/test-api-route-coverage.mjs",
     "test:backup": "node scripts/test-backup-contract.mjs",
     "test:e2e": "node scripts/test-e2e.mjs",
     "test:integration": "node scripts/test-desktop-runtime-config.mjs",
+    "test:windows": "node scripts/test-windows-contract.mjs",
     "test:desktop-sqlite": "node scripts/test-desktop-sqlite-bootstrap.mjs",
-    "test:desktop-sqlite-regression": "node scripts/test-desktop-sqlite-regression.mjs",
+    "test:desktop-sqlite-regression": "node --disable-warning=ExperimentalWarning scripts/test-desktop-sqlite-regression.mjs",
     "test:desktop-hardening": "node scripts/test-desktop-hardening-contract.mjs",
     "test:release-artifacts": "node scripts/test-release-artifacts.mjs",
     "test:license": "node scripts/test-license-flow.mjs",
@@ -34,15 +35,15 @@
     "desktop:build:mac:public": "node scripts/build-desktop.mjs --public-mac --bundles dmg",
     "desktop:build:windows": "node scripts/build-desktop.mjs --bundles msi,nsis",
     "desktop:build:windows:public": "node scripts/build-desktop.mjs --public-windows --bundles msi,nsis",
+    "desktop:package:windows:portable": "node scripts/build-windows-portable.mjs",
     "preflight:final": "node scripts/preflight-final-hardening.mjs"
   },
   "dependencies": {
     "@supabase/ssr": "^0.10.3",
     "@supabase/supabase-js": "^2.96.0",
     "@tauri-apps/api": "^2.11.1",
-    "@tauri-apps/plugin-sql": "^2.4.0",
     "@types/three": "^0.184.1",
-    "next": "^16.2.9",
+    "next": "^16.2.12",
     "pdf-lib": "^1.17.1",
     "qrcode": "^1.5.4",
     "qrcode.react": "^4.2.0",
@@ -55,18 +56,25 @@
     "zod": "^4.3.6"
   },
   "overrides": {
-    "postcss": "8.5.15"
+    "minimatch@3.1.5": {
+      "brace-expansion": "1.1.16"
+    },
+    "minimatch@9.0.9": {
+      "brace-expansion": "2.1.2"
+    },
+    "postcss": "8.5.23",
+    "sharp": "0.35.3"
   },
   "devDependencies": {
-    "@tailwindcss/postcss": "^4",
+    "@tailwindcss/postcss": "^4.3.3",
     "@tauri-apps/cli": "^2.11.3",
     "@types/node": "^20",
     "@types/qrcode": "^1.5.6",
     "@types/react": "^19",
     "@types/react-dom": "^19",
     "eslint": "^9",
-    "eslint-config-next": "^16.2.9",
-    "tailwindcss": "^4",
+    "eslint-config-next": "^16.2.12",
+    "tailwindcss": "^4.3.3",
     "tsx": "^4.23.1",
     "typescript": "^5"
   }

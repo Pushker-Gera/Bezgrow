@@ -3,6 +3,7 @@
 type TauriWindow = Window & {
   __BEZGROW_DESKTOP__?: boolean
   __BEZGROW_RUNTIME__?: RuntimeMode
+  __BEZGROW_ARCH__?: "x64" | "arm64"
   __TAURI_INTERNALS__?: { invoke?: unknown }
   __TAURI__?: unknown
   isTauri?: boolean
@@ -11,6 +12,7 @@ type TauriWindow = Window & {
 type TauriGlobal = typeof globalThis & {
   __BEZGROW_DESKTOP__?: boolean
   __BEZGROW_RUNTIME__?: RuntimeMode
+  __BEZGROW_ARCH__?: "x64" | "arm64"
   __TAURI_INTERNALS__?: { invoke?: unknown }
   __TAURI__?: unknown
   isTauri?: boolean
@@ -76,6 +78,13 @@ export async function isDesktopRuntime() {
 
 export async function isPackagedDesktopRuntime() {
   return (await detectRuntimeMode()) === "tauri-packaged"
+}
+
+export function desktopArchitecture() {
+  if (typeof window === "undefined") return "x64"
+  const tauriWindow = window as TauriWindow
+  const tauriGlobal = globalThis as TauriGlobal
+  return tauriWindow.__BEZGROW_ARCH__ || tauriGlobal.__BEZGROW_ARCH__ || "x64"
 }
 
 export async function isTauriRuntimeAsync() {

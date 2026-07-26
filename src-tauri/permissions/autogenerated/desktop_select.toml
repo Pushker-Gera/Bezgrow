@@ -1,7 +1,5 @@
 # Automatically generated - DO NOT EDIT!
 
-"$schema" = "../schemas/schema.json"
-
 [[permission]]
 identifier = "allow-desktop-select"
 description = "Enables the desktop_select command without any pre-configured scope."

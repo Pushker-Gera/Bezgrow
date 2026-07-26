@@ -1,4 +1,15 @@
-import { isTauriRuntimeAsync } from "@/lib/desktop/tauri"
+import { desktopArchitecture, isTauriRuntimeAsync } from "@/lib/desktop/tauri"
+
+type WindowsRelease = {
+  downloadUrl?: string
+  url?: string
+  file?: string
+  version?: string
+  size?: number
+  sha256?: string
+  signed?: boolean
+  generatedAt?: string
+}
 
 export type DesktopReleaseManifest = {
   version?: string
@@ -15,26 +26,10 @@ export type DesktopReleaseManifest = {
     notarized?: boolean
     generatedAt?: string
   }
-  windows?: {
-    downloadUrl?: string
-    url?: string
-    file?: string
-    version?: string
-    size?: number
-    sha256?: string
-    signed?: boolean
-    generatedAt?: string
-  }
-  windowsMsi?: {
-    downloadUrl?: string
-    url?: string
-    file?: string
-    version?: string
-    size?: number
-    sha256?: string
-    signed?: boolean
-    generatedAt?: string
-  }
+  windows?: WindowsRelease
+  windowsMsi?: WindowsRelease
+  windowsArm64?: WindowsRelease
+  windowsArm64Msi?: WindowsRelease
 }
 
 export type AppUpdateStatus =
@@ -110,7 +105,14 @@ export function normalizeReleaseNotes(manifest: DesktopReleaseManifest | null) {
 
 export function releaseGeneratedAt(manifest: DesktopReleaseManifest | null) {
   if (!manifest) return 0
-  const timestamps = [manifest.generatedAt, manifest.mac?.generatedAt, manifest.windows?.generatedAt, manifest.windowsMsi?.generatedAt]
+  const timestamps = [
+    manifest.generatedAt,
+    manifest.mac?.generatedAt,
+    manifest.windows?.generatedAt,
+    manifest.windowsMsi?.generatedAt,
+    manifest.windowsArm64?.generatedAt,
+    manifest.windowsArm64Msi?.generatedAt,
+  ]
     .map((value) => (value ? Date.parse(value) : 0))
     .filter((value) => Number.isFinite(value))
 
@@ -127,7 +129,11 @@ function currentPlatform() {
 
 export function releaseForCurrentPlatform(manifest: DesktopReleaseManifest | null) {
   if (!manifest) return null
-  return currentPlatform() === "windows" ? manifest.windows || manifest.windowsMsi || null : manifest.mac || null
+  if (currentPlatform() !== "windows") return manifest.mac || null
+  if (desktopArchitecture() === "arm64") {
+    return manifest.windowsArm64 || manifest.windowsArm64Msi || manifest.windows || manifest.windowsMsi || null
+  }
+  return manifest.windows || manifest.windowsMsi || null
 }
 
 function releaseHref(release: ReturnType<typeof releaseForCurrentPlatform>) {

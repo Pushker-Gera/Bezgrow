@@ -71,8 +71,30 @@ writeFileSync(join(desktopServerDir, ".gitkeep"), "");
 rmSync(desktopNodeDir, { recursive: true, force: true });
 mkdirSync(desktopNodeDir, { recursive: true });
 
-const nodeExecutableName = process.platform === "win32" ? "node.exe" : "node";
+const targetTriple = process.env.BEZGROW_DESKTOP_TARGET || "";
+const targetsWindows = targetTriple.includes("windows") || (!targetTriple && process.platform === "win32");
+const targetArchitecture = targetTriple.startsWith("aarch64")
+  ? "arm64"
+  : targetTriple.startsWith("x86_64")
+    ? "x64"
+    : process.arch;
+const crossArchitectureWindowsBuild =
+  targetsWindows && ((targetArchitecture === "arm64" && process.arch !== "arm64") || (targetArchitecture === "x64" && process.arch !== "x64"));
+const requestedNodeBinary = process.env.BEZGROW_DESKTOP_NODE_BINARY;
+
+if (crossArchitectureWindowsBuild && !requestedNodeBinary) {
+  throw new Error(
+    `The ${targetArchitecture} Windows build requires BEZGROW_DESKTOP_NODE_BINARY to point to a native ${targetArchitecture} node.exe.`
+  );
+}
+
+const nodeSource = requestedNodeBinary || process.execPath;
+if (!existsSync(nodeSource)) {
+  throw new Error(`The requested bundled Node runtime does not exist: ${nodeSource}`);
+}
+
+const nodeExecutableName = targetsWindows ? "node.exe" : "node";
 const nodeTarget = join(desktopNodeDir, nodeExecutableName);
-copyFileSync(process.execPath, nodeTarget);
+copyFileSync(nodeSource, nodeTarget);
 chmodSync(nodeTarget, 0o755);
 writeFileSync(join(desktopNodeDir, ".gitkeep"), "");

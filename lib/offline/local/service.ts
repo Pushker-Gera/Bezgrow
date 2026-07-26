@@ -10,12 +10,6 @@ export type SqlExecutor = {
   select<T>(query: string, bindValues?: SqlValue[]): Promise<T[]>
 }
 
-type SqlModule = {
-  default: {
-    get(url: string): SqlExecutor
-  }
-}
-
 type StartupStageStatus = "pending" | "ok" | "failed" | "skipped"
 
 type StartupStageName =
@@ -255,6 +249,20 @@ export class LocalDatabaseService {
     return this.ensureReady()
   }
 
+  async closeForAppShutdown() {
+    await this.transactionTail.catch(() => undefined)
+    if (this.primaryConnectionPromise) {
+      await invokeTauri<number>("desktop_execute", {
+        statement: {
+          query: "PRAGMA wal_checkpoint(TRUNCATE)",
+          bindValues: [],
+        },
+      }).catch((error) => this.recordOperationFailure("sqlite_shutdown_checkpoint", error, "desktop_execute"))
+    }
+    this.primaryConnectionPromise = null
+    this.startupPromise = null
+  }
+
   async recordOperationFailure(operation: string, error: unknown, command?: string) {
     const diagnostic: OperationDiagnostic = {
       operation,
@@ -376,10 +384,16 @@ export class LocalDatabaseService {
     if (this.primaryConnectionPromise) return this.primaryConnectionPromise
 
     this.primaryConnectionPromise = this.withTemporaryLockRetry(async () => {
-      const sqlPlugin = (await import("@tauri-apps/plugin-sql")) as SqlModule
-      const pluginConnection = sqlPlugin.default.get(LOCAL_DB_URL)
       const authoritativeConnection: SqlExecutor = {
-        execute: (query, bindValues = []) => pluginConnection.execute(query, bindValues),
+        execute: (query, bindValues = []) =>
+          this.withTemporaryLockRetry(() =>
+            invokeTauri<number>("desktop_execute", {
+              statement: {
+                query,
+                bindValues,
+              },
+            })
+          ),
         select: <T>(query: string, bindValues: SqlValue[] = []) =>
           this.withTemporaryLockRetry(() =>
             invokeTauri<T[]>("desktop_select", {
@@ -402,7 +416,8 @@ export class LocalDatabaseService {
   private async configureConnection(db: SqlExecutor) {
     await db.execute("PRAGMA foreign_keys = ON")
     await db.execute("PRAGMA journal_mode = WAL")
-    await db.execute("PRAGMA synchronous = NORMAL")
+    await db.execute("PRAGMA synchronous = FULL")
+    await db.execute("PRAGMA wal_autocheckpoint = 1000")
     await db.execute("PRAGMA temp_store = MEMORY")
     await db.execute("PRAGMA busy_timeout = 5000")
     await db.execute("PRAGMA cache_size = -64000")

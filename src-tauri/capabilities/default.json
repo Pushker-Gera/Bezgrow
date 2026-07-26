@@ -8,10 +8,9 @@
   "windows": ["main", "startup-error"],
   "permissions": [
     "core:default",
-    "sql:default",
-    "sql:allow-execute",
     "allow-desktop-database-diagnostics",
     "allow-desktop-database-backup",
+    "allow-desktop-execute",
     "allow-desktop-select",
     "allow-desktop-execute-transaction",
     "allow-desktop-startup-log",
@@ -25,8 +24,10 @@
     "allow-desktop-read-local-asset",
     "allow-desktop-print-current-webview",
     "allow-desktop-reveal-file",
+    "allow-desktop-open-file",
     "allow-desktop-export-backup",
     "allow-desktop-restore-backup",
+    "allow-desktop-exit",
     "allow-open-external-url"
   ]
 }

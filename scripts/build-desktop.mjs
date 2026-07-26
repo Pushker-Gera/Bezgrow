@@ -25,6 +25,11 @@ const publicWindowsFlag = "--public-windows";
 const publicMacBuild = process.env.BEZGROW_MAC_PUBLIC_BUILD === "1" || passthroughArgs.includes(publicMacFlag);
 const publicWindowsBuild = process.env.BEZGROW_WINDOWS_PUBLIC_BUILD === "1" || passthroughArgs.includes(publicWindowsFlag);
 const tauriArgs = passthroughArgs.filter((arg) => arg !== publicMacFlag && arg !== publicWindowsFlag);
+const targetArgumentIndex = tauriArgs.indexOf("--target");
+const targetTriple = targetArgumentIndex >= 0 ? tauriArgs[targetArgumentIndex + 1] || "" : "";
+const releaseRoot = targetTriple
+  ? join(root, "src-tauri", "target", targetTriple, "release")
+  : join(root, "src-tauri", "target", "release");
 
 function envBoolean(name) {
   const value = (process.env[name] || "").toLowerCase();
@@ -82,11 +87,34 @@ function configureMacSigning(config) {
   return config;
 }
 
+function configureWindowsSigning(config) {
+  if (process.platform !== "win32") return config;
+
+  const certificateThumbprint = process.env.BEZGROW_WINDOWS_CERTIFICATE_THUMBPRINT || "";
+  if (publicWindowsBuild && !certificateThumbprint) {
+    throw new Error(
+      "Public Windows builds require BEZGROW_WINDOWS_CERTIFICATE_THUMBPRINT for Authenticode signing."
+    );
+  }
+  if (!certificateThumbprint) return config;
+
+  config.bundle ??= {};
+  config.bundle.windows ??= {};
+  config.bundle.windows.certificateThumbprint = certificateThumbprint;
+  config.bundle.windows.digestAlgorithm = "sha256";
+  config.bundle.windows.timestampUrl =
+    process.env.BEZGROW_WINDOWS_TIMESTAMP_URL || "http://timestamp.digicert.com";
+  return config;
+}
+
 function tauriBuildEnv() {
   const env = { ...process.env };
 
   if (process.platform === "darwin" && !env.CI) {
     env.CI = "true";
+  }
+  if (targetTriple) {
+    env.BEZGROW_DESKTOP_TARGET = targetTriple;
   }
 
   return env;
@@ -119,7 +147,7 @@ function latestBundleFile(directory, predicate) {
 function verifyPublicMacDmg() {
   if (!publicMacBuild || process.platform !== "darwin") return;
 
-  const dmgDir = join(root, "src-tauri", "target", "release", "bundle", "dmg");
+  const dmgDir = join(releaseRoot, "bundle", "dmg");
   const dmgPath = latestBundleFile(dmgDir, (file) => file.startsWith("Bezgrow_") && file.endsWith(".dmg"));
 
   if (!existsSync(dmgPath)) {
@@ -170,6 +198,21 @@ function verifyPublicMacDmg() {
   });
 }
 
+function verifyAuthenticodeSignature(path) {
+  const verification = spawnSync(
+    "powershell.exe",
+    [
+      "-NoProfile",
+      "-NonInteractive",
+      "-Command",
+      "(Get-AuthenticodeSignature -LiteralPath $args[0]).Status",
+      path,
+    ],
+    { cwd: root, encoding: "utf8" }
+  );
+  return verification.status === 0 && verification.stdout.trim() === "Valid";
+}
+
 function writeDesktopReleaseManifest(partialManifest) {
   const existing = existsSync(desktopReleaseManifest)
     ? JSON.parse(readFileSync(desktopReleaseManifest, "utf8"))
@@ -201,8 +244,8 @@ function verifyPublicWindowsInstaller() {
     throw new Error("Public Windows builds must run on Windows.");
   }
 
-  const nsisDir = join(root, "src-tauri", "target", "release", "bundle", "nsis");
-  const msiDir = join(root, "src-tauri", "target", "release", "bundle", "msi");
+  const nsisDir = join(releaseRoot, "bundle", "nsis");
+  const msiDir = join(releaseRoot, "bundle", "msi");
   const windowsPath = latestBundleFile(nsisDir, (file) => file.startsWith("Bezgrow_") && file.endsWith(".exe"));
   const windowsMsiPath = latestBundleFile(msiDir, (file) => file.startsWith("Bezgrow_") && file.endsWith(".msi"));
 
@@ -211,6 +254,9 @@ function verifyPublicWindowsInstaller() {
   }
   if (!existsSync(windowsMsiPath)) {
     throw new Error(`Expected Windows MSI was not found in ${msiDir}`);
+  }
+  if (!verifyAuthenticodeSignature(windowsPath) || !verifyAuthenticodeSignature(windowsMsiPath)) {
+    throw new Error("Public Windows installers must have a valid Authenticode signature.");
   }
 
   mkdirSync(publicDownloadsDir, { recursive: true });
@@ -222,7 +268,7 @@ function verifyPublicWindowsInstaller() {
   const exeSha256 = createHash("sha256").update(exeBytes).digest("hex");
   const msiSha256 = createHash("sha256").update(msiBytes).digest("hex");
   const generatedAt = new Date().toISOString();
-  const signed = envBoolean("BEZGROW_WINDOWS_SIGNED");
+  const signed = true;
 
   writeInstallerReleaseManifest(publicWindowsExeReleaseManifest, {
     file: "/downloads/Bezgrow-windows.exe",
@@ -266,15 +312,15 @@ function verifyPublicWindowsInstaller() {
 
 function copyGeneratedInstallersForDownloads() {
   const dmgPath = latestBundleFile(
-    join(root, "src-tauri", "target", "release", "bundle", "dmg"),
+    join(releaseRoot, "bundle", "dmg"),
     (file) => file.startsWith("Bezgrow_") && file.endsWith(".dmg")
   );
   const windowsExePath = latestBundleFile(
-    join(root, "src-tauri", "target", "release", "bundle", "nsis"),
+    join(releaseRoot, "bundle", "nsis"),
     (file) => file.startsWith("Bezgrow_") && file.endsWith(".exe")
   );
   const windowsMsiPath = latestBundleFile(
-    join(root, "src-tauri", "target", "release", "bundle", "msi"),
+    join(releaseRoot, "bundle", "msi"),
     (file) => file.startsWith("Bezgrow_") && file.endsWith(".msi")
   );
 
@@ -317,7 +363,7 @@ function copyGeneratedInstallersForDownloads() {
     const bytes = readFileSync(publicWindowsExe);
     const sha256 = createHash("sha256").update(bytes).digest("hex");
     const generatedAt = new Date().toISOString();
-    const signed = envBoolean("BEZGROW_WINDOWS_SIGNED");
+    const signed = publicWindowsBuild ? verifyAuthenticodeSignature(windowsExePath) : envBoolean("BEZGROW_WINDOWS_SIGNED");
     writeInstallerReleaseManifest(publicWindowsExeReleaseManifest, {
       file: "/downloads/Bezgrow-windows.exe",
       downloadUrl: "/downloads/Bezgrow-windows.exe",
@@ -346,7 +392,7 @@ function copyGeneratedInstallersForDownloads() {
     const bytes = readFileSync(publicWindowsMsi);
     const sha256 = createHash("sha256").update(bytes).digest("hex");
     const generatedAt = new Date().toISOString();
-    const signed = envBoolean("BEZGROW_WINDOWS_SIGNED");
+    const signed = publicWindowsBuild ? verifyAuthenticodeSignature(windowsMsiPath) : envBoolean("BEZGROW_WINDOWS_SIGNED");
     writeInstallerReleaseManifest(publicWindowsMsiReleaseManifest, {
       file: "/downloads/Bezgrow-windows.msi",
       downloadUrl: "/downloads/Bezgrow-windows.msi",
@@ -372,10 +418,18 @@ function copyGeneratedInstallersForDownloads() {
 }
 
 mkdirSync(generatedConfigDir, { recursive: true });
-const config = configureMacSigning(JSON.parse(readFileSync(tauriConfigPath, "utf8")));
+const config = configureWindowsSigning(
+  configureMacSigning(JSON.parse(readFileSync(tauriConfigPath, "utf8")))
+);
 writeFileSync(generatedConfigPath, `${JSON.stringify(config, null, 2)}\n`);
 
 run("tauri", ["build", "--config", generatedConfigPath, ...tauriArgs]);
+if (process.platform === "win32") {
+  run(process.execPath, [
+    join(root, "scripts", "build-windows-portable.mjs"),
+    ...(targetTriple ? ["--target", targetTriple] : []),
+  ]);
+}
 verifyPublicMacDmg();
 verifyPublicWindowsInstaller();
 copyGeneratedInstallersForDownloads();

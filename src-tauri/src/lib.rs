@@ -32,6 +32,7 @@ use objc2_web_kit::WKWebView;
 
 const KEYCHAIN_SERVICE: &str = "com.bezgrow.erp";
 const LOCAL_DATABASE_NAME: &str = "bezgrow-offline.db";
+const WINDOWS_APP_DATA_DIR: &str = "Bezgrow";
 #[cfg(not(debug_assertions))]
 const DESKTOP_SERVER_PORT: u16 = 43124;
 
@@ -50,11 +51,37 @@ fn stop_next_server<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
     let _ = child.wait();
 }
 
+#[tauri::command]
+fn desktop_exit<R: tauri::Runtime>(app: tauri::AppHandle<R>) {
+    append_startup_log_handle(&app, "Orderly desktop shutdown requested");
+    stop_next_server(&app);
+    app.exit(0);
+}
+
+fn managed_app_data_root<R: tauri::Runtime>(manager: &impl Manager<R>) -> Result<PathBuf, String> {
+    #[cfg(target_os = "windows")]
+    {
+        if let Some(app_data) = std::env::var_os("APPDATA") {
+            return Ok(PathBuf::from(app_data).join(WINDOWS_APP_DATA_DIR));
+        }
+    }
+
+    manager
+        .path()
+        .app_data_dir()
+        .map_err(|error| format!("Unable to resolve Bezgrow's managed data folder: {error}"))
+}
+
+fn managed_data_directory<R: tauri::Runtime>(
+    manager: &impl Manager<R>,
+    name: &str,
+) -> Result<PathBuf, String> {
+    managed_app_data_root(manager).map(|root| root.join(name))
+}
+
 fn startup_log_path(app: &tauri::App) -> PathBuf {
-    app.path()
-        .app_log_dir()
-        .or_else(|_| app.path().app_data_dir())
-        .unwrap_or_else(|_| std::env::temp_dir().join("Bezgrow"))
+    managed_data_directory(app, "Logs")
+        .unwrap_or_else(|_| std::env::temp_dir().join(WINDOWS_APP_DATA_DIR))
         .join("bezgrow-startup.log")
 }
 
@@ -87,11 +114,8 @@ fn append_startup_log_handle<R: tauri::Runtime>(
     app: &tauri::AppHandle<R>,
     message: impl AsRef<str>,
 ) {
-    let path = app
-        .path()
-        .app_log_dir()
-        .or_else(|_| app.path().app_data_dir())
-        .unwrap_or_else(|_| std::env::temp_dir().join("Bezgrow"))
+    let path = managed_data_directory(app, "Logs")
+        .unwrap_or_else(|_| std::env::temp_dir().join(WINDOWS_APP_DATA_DIR))
         .join("bezgrow-startup.log");
 
     if let Some(parent) = path.parent() {
@@ -240,10 +264,81 @@ fn unix_timestamp() -> String {
 }
 
 fn local_database_path<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> Result<PathBuf, String> {
-    app.path()
-        .app_config_dir()
-        .map(|path| path.join(LOCAL_DATABASE_NAME))
-        .map_err(|error| format!("Unable to resolve desktop app data directory: {error}"))
+    #[cfg(target_os = "windows")]
+    {
+        return managed_data_directory(app, "Database").map(|path| path.join(LOCAL_DATABASE_NAME));
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        app.path()
+            .app_config_dir()
+            .map(|path| path.join(LOCAL_DATABASE_NAME))
+            .map_err(|error| format!("Unable to resolve desktop app data directory: {error}"))
+    }
+}
+
+fn prepare_managed_data<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> Result<(), String> {
+    let root = managed_app_data_root(app)?;
+    for directory in [
+        "Database",
+        "business-assets/logos",
+        "Settings",
+        "PDFs",
+        "Exports",
+        "Temporary",
+        "Backups",
+        "Logs",
+        "WebView",
+    ] {
+        fs::create_dir_all(root.join(directory))
+            .map_err(|error| format!("Unable to create Bezgrow's {directory} folder: {error}"))?;
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        let legacy_config = app.path().app_config_dir().map_err(|error| {
+            format!("Unable to inspect the previous Bezgrow database folder: {error}")
+        })?;
+        let legacy_data = app.path().app_data_dir().map_err(|error| {
+            format!("Unable to inspect the previous Bezgrow data folder: {error}")
+        })?;
+        let destination_database = root.join("Database").join(LOCAL_DATABASE_NAME);
+        let legacy_database = legacy_config.join(LOCAL_DATABASE_NAME);
+
+        if !destination_database.exists() && legacy_database.is_file() {
+            for suffix in ["-wal", "-shm"] {
+                let source =
+                    PathBuf::from(format!("{}{suffix}", legacy_database.to_string_lossy()));
+                let destination = PathBuf::from(format!(
+                    "{}{suffix}",
+                    destination_database.to_string_lossy()
+                ));
+                if source.is_file() {
+                    fs::copy(&source, &destination).map_err(|error| {
+                        format!("Unable to migrate the previous SQLite {suffix} file: {error}")
+                    })?;
+                }
+            }
+            let temporary = destination_database.with_extension("migration.tmp");
+            fs::copy(&legacy_database, &temporary).map_err(|error| {
+                format!("Unable to migrate the previous Bezgrow database: {error}")
+            })?;
+            fs::rename(&temporary, &destination_database).map_err(|error| {
+                format!("Unable to activate the migrated Bezgrow database: {error}")
+            })?;
+        }
+
+        for directory in ["business-assets", "backups"] {
+            let source = legacy_data.join(directory);
+            let destination = root.join(directory);
+            if source.is_dir() {
+                copy_directory_missing(&source, &destination)?;
+            }
+        }
+    }
+
+    Ok(())
 }
 
 fn sha256_file(path: &PathBuf) -> Result<String, String> {
@@ -302,7 +397,8 @@ fn safe_extension(filename: &str, extension: &str) -> String {
     }
 }
 
-fn save_bytes_with_dialog(
+fn save_bytes_with_dialog<R: tauri::Runtime>(
+    app: &tauri::AppHandle<R>,
     filename: &str,
     bytes: &[u8],
     kind: &str,
@@ -318,7 +414,16 @@ fn save_bytes_with_dialog(
         _ => return Err("Unsupported desktop file type.".to_string()),
     };
     let safe_name = safe_extension(&sanitize_filename(filename, fallback), extension);
+    let default_directory = match kind {
+        "pdf" => managed_data_directory(app, "PDFs"),
+        "csv" => managed_data_directory(app, "Exports"),
+        "backup" => managed_data_directory(app, "Backups"),
+        _ => managed_app_data_root(app),
+    }?;
+    fs::create_dir_all(&default_directory)
+        .map_err(|error| format!("Unable to create the default save folder: {error}"))?;
     let destination = rfd::FileDialog::new()
+        .set_directory(default_directory)
         .set_file_name(&safe_name)
         .add_filter(description, &[extension])
         .save_file();
@@ -399,14 +504,12 @@ fn local_asset_path<R: tauri::Runtime>(
     if !relative_path.starts_with("business-assets/") {
         return Err("The local asset is outside Bezgrow's managed asset folder.".to_string());
     }
-    app.path()
-        .app_data_dir()
-        .map(|root| root.join(path))
-        .map_err(|error| format!("Unable to resolve Bezgrow's local asset folder: {error}"))
+    managed_app_data_root(app).map(|root| root.join(path))
 }
 
 #[tauri::command]
-fn desktop_save_file(
+fn desktop_save_file<R: tauri::Runtime>(
+    app: tauri::AppHandle<R>,
     filename: String,
     bytes: Vec<u8>,
     file_kind: String,
@@ -420,7 +523,7 @@ fn desktop_save_file(
     if file_kind == "csv" && !bytes.starts_with(&[0xef, 0xbb, 0xbf]) {
         return Err("The CSV export must be UTF-8 with an Excel-compatible BOM.".to_string());
     }
-    save_bytes_with_dialog(&filename, &bytes, &file_kind)
+    save_bytes_with_dialog(&app, &filename, &bytes, &file_kind)
 }
 
 #[tauri::command]
@@ -560,7 +663,15 @@ fn desktop_print_current_webview<R: tauri::Runtime>(
         return Ok(());
     }
 
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(target_os = "windows")]
+    {
+        webview
+            .eval("window.print();")
+            .map_err(|error| format!("Unable to open the Windows print dialog: {error}"))?;
+        return Ok(());
+    }
+
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     {
         let _ = webview;
         Err("The native print panel is not available on this desktop platform.".to_string())
@@ -576,7 +687,7 @@ async fn create_consistent_database_snapshot(
         .create_if_missing(false)
         .foreign_keys(true)
         .journal_mode(SqliteJournalMode::Wal)
-        .synchronous(SqliteSynchronous::Normal)
+        .synchronous(SqliteSynchronous::Full)
         .busy_timeout(std::time::Duration::from_secs(10));
     let mut connection = SqliteConnection::connect_with(&options)
         .await
@@ -635,6 +746,30 @@ fn copy_directory(source: &Path, destination: &Path) -> Result<(), String> {
         } else if source_path.is_file() {
             fs::copy(&source_path, &destination_path)
                 .map_err(|error| format!("Unable to restore a business asset: {error}"))?;
+        }
+    }
+    Ok(())
+}
+
+#[cfg(any(target_os = "windows", test))]
+fn copy_directory_missing(source: &Path, destination: &Path) -> Result<(), String> {
+    if !source.exists() {
+        return Ok(());
+    }
+    fs::create_dir_all(destination)
+        .map_err(|error| format!("Unable to create a migrated data folder: {error}"))?;
+    for entry in fs::read_dir(source)
+        .map_err(|error| format!("Unable to read a previous Bezgrow data folder: {error}"))?
+    {
+        let entry =
+            entry.map_err(|error| format!("Unable to inspect previous Bezgrow data: {error}"))?;
+        let source_path = entry.path();
+        let destination_path = destination.join(entry.file_name());
+        if source_path.is_dir() {
+            copy_directory_missing(&source_path, &destination_path)?;
+        } else if source_path.is_file() && !destination_path.exists() {
+            fs::copy(&source_path, &destination_path)
+                .map_err(|error| format!("Unable to migrate previous Bezgrow data: {error}"))?;
         }
     }
     Ok(())
@@ -716,7 +851,7 @@ async fn restore_database_contents(
         .create_if_missing(false)
         .foreign_keys(false)
         .journal_mode(SqliteJournalMode::Wal)
-        .synchronous(SqliteSynchronous::Normal)
+        .synchronous(SqliteSynchronous::Full)
         .busy_timeout(std::time::Duration::from_secs(10));
     let mut connection = SqliteConnection::connect_with(&options)
         .await
@@ -842,7 +977,11 @@ async fn desktop_export_backup<R: tauri::Runtime>(
         &sanitize_filename(&filename, "bezgrow-backup.bezgrow-backup"),
         "bezgrow-backup",
     );
+    let backup_directory = managed_data_directory(&app, "Backups")?;
+    fs::create_dir_all(&backup_directory)
+        .map_err(|error| format!("Unable to create Bezgrow's backup folder: {error}"))?;
     let destination = rfd::FileDialog::new()
+        .set_directory(&backup_directory)
         .set_file_name(&safe_filename)
         .add_filter("Bezgrow backup", &["bezgrow-backup"])
         .save_file();
@@ -851,12 +990,9 @@ async fn desktop_export_backup<R: tauri::Runtime>(
     };
 
     let database_path = local_database_path(&app)?;
-    let app_data = app
-        .path()
-        .app_data_dir()
-        .map_err(|error| format!("Unable to resolve Bezgrow's local data folder: {error}"))?;
+    let app_data = managed_app_data_root(&app)?;
     let staging = app_data
-        .join("backups")
+        .join("Temporary")
         .join(format!("export-staging-{}", unix_timestamp()));
     fs::create_dir_all(&staging)
         .map_err(|error| format!("Unable to create the backup staging folder: {error}"))?;
@@ -940,8 +1076,21 @@ async fn desktop_export_backup<R: tauri::Runtime>(
     if !parent.exists() {
         return Err("The selected backup destination no longer exists.".to_string());
     }
-    fs::rename(&temporary_package, &destination)
-        .map_err(|error| format!("Unable to save the backup package: {error}"))?;
+    let destination_temporary = parent.join(format!(".{}.{}.tmp", safe_filename, unix_timestamp()));
+    fs::copy(&temporary_package, &destination_temporary)
+        .map_err(|error| format!("Unable to copy the backup package: {error}"))?;
+    if let Err(initial_error) = fs::rename(&destination_temporary, &destination) {
+        let replacement_result = if destination.exists() {
+            fs::remove_file(&destination)
+                .and_then(|()| fs::rename(&destination_temporary, &destination))
+        } else {
+            Err(initial_error)
+        };
+        if let Err(error) = replacement_result {
+            let _ = fs::remove_file(&destination_temporary);
+            return Err(format!("Unable to save the backup package: {error}"));
+        }
+    }
     let result = DesktopSavedFile {
         path: destination.to_string_lossy().to_string(),
         filename: destination
@@ -962,18 +1111,19 @@ async fn desktop_restore_backup<R: tauri::Runtime>(
     app: tauri::AppHandle<R>,
     organization_id: String,
 ) -> Result<Option<DesktopRestoreResult>, String> {
+    let backup_directory = managed_data_directory(&app, "Backups")?;
+    fs::create_dir_all(&backup_directory)
+        .map_err(|error| format!("Unable to create Bezgrow's backup folder: {error}"))?;
     let source = rfd::FileDialog::new()
+        .set_directory(&backup_directory)
         .add_filter("Bezgrow backup", &["bezgrow-backup"])
         .pick_file();
     let Some(source) = source else {
         return Ok(None);
     };
-    let app_data = app
-        .path()
-        .app_data_dir()
-        .map_err(|error| format!("Unable to resolve Bezgrow's local data folder: {error}"))?;
+    let app_data = managed_app_data_root(&app)?;
     let staging = app_data
-        .join("backups")
+        .join("Temporary")
         .join(format!("restore-staging-{}", unix_timestamp()));
     fs::create_dir_all(&staging)
         .map_err(|error| format!("Unable to create the restore staging folder: {error}"))?;
@@ -1060,12 +1210,12 @@ async fn desktop_restore_backup<R: tauri::Runtime>(
     }
 
     let pre_restore = app_data
-        .join("backups")
+        .join("Backups")
         .join(format!("pre-restore-{}.db", unix_timestamp()));
     create_consistent_database_snapshot(&current_database, &pre_restore).await?;
     let active_assets = app_data.join("business-assets");
     let pre_restore_assets = app_data
-        .join("backups")
+        .join("Backups")
         .join(format!("pre-restore-assets-{}", unix_timestamp()));
     if active_assets.exists() {
         copy_directory(&active_assets, &pre_restore_assets)?;
@@ -1099,19 +1249,23 @@ fn desktop_database_diagnostics<R: tauri::Runtime>(
     app: tauri::AppHandle<R>,
 ) -> Result<DesktopDatabaseDiagnostics, String> {
     append_startup_log_handle(&app, "SQLite native diagnostics invoked");
-    let app_config_dir = app
-        .path()
-        .app_config_dir()
-        .map_err(|error| format!("Unable to resolve desktop app config directory: {error}"))?;
-    let app_data_dir = app
-        .path()
-        .app_data_dir()
-        .map_err(|error| format!("Unable to resolve desktop app data directory: {error}"))?;
+    let app_data_dir = managed_app_data_root(&app)?;
+    let app_config_dir = local_database_path(&app)?
+        .parent()
+        .ok_or_else(|| "Unable to resolve desktop database directory.".to_string())?
+        .to_path_buf();
     let database_path = app_config_dir.join(LOCAL_DATABASE_NAME);
-    let parent_existed = app_config_dir.exists();
+    let parent_existed = app_config_dir.is_dir();
 
     fs::create_dir_all(&app_config_dir)
         .map_err(|error| format!("Unable to create desktop database directory: {error}"))?;
+    if !database_path.exists() {
+        OpenOptions::new()
+            .create_new(true)
+            .write(true)
+            .open(&database_path)
+            .map_err(|error| format!("Unable to create the desktop database file: {error}"))?;
+    }
 
     let probe_path = app_config_dir.join(".bezgrow-write-probe");
     let parent_writable = OpenOptions::new()
@@ -1147,10 +1301,7 @@ fn desktop_database_backup<R: tauri::Runtime>(
         return Ok(None);
     }
 
-    let parent = database_path
-        .parent()
-        .ok_or_else(|| "Desktop database parent directory could not be resolved.".to_string())?;
-    let backup_dir = parent.join("backups");
+    let backup_dir = managed_data_directory(&app, "Backups")?;
     fs::create_dir_all(&backup_dir)
         .map_err(|error| format!("Unable to create desktop backup directory: {error}"))?;
 
@@ -1274,7 +1425,7 @@ async fn select_at_path(
         .create_if_missing(false)
         .foreign_keys(true)
         .journal_mode(SqliteJournalMode::Wal)
-        .synchronous(SqliteSynchronous::Normal)
+        .synchronous(SqliteSynchronous::Full)
         .busy_timeout(std::time::Duration::from_secs(5));
     let mut connection = SqliteConnection::connect_with(&options)
         .await
@@ -1323,6 +1474,45 @@ async fn select_at_path(
             Ok(result)
         })
         .collect()
+}
+
+#[tauri::command]
+async fn desktop_execute<R: tauri::Runtime>(
+    app: tauri::AppHandle<R>,
+    statement: DesktopSqlStatement,
+) -> Result<u64, String> {
+    let database_path = local_database_path(&app)?;
+    let options = SqliteConnectOptions::new()
+        .filename(&database_path)
+        .create_if_missing(true)
+        .foreign_keys(true)
+        .journal_mode(SqliteJournalMode::Wal)
+        .synchronous(SqliteSynchronous::Full)
+        .busy_timeout(std::time::Duration::from_secs(5));
+    let mut connection = SqliteConnection::connect_with(&options)
+        .await
+        .map_err(|error| {
+            format!("Unable to open the authoritative desktop SQLite database for a write: {error}")
+        })?;
+
+    match execute_desktop_statement(&mut connection, &statement).await {
+        Ok(rows_affected) => Ok(rows_affected),
+        Err(error) => {
+            let error = format!(
+                "SQLite write failed ({}): {}",
+                statement_preview(&statement.query),
+                error
+            );
+            append_startup_log_handle(
+                &app,
+                format!(
+                    "SQLite native write failed: {}",
+                    error.replace(['\r', '\n'], " ")
+                ),
+            );
+            Err(error)
+        }
+    }
 }
 
 #[tauri::command]
@@ -1383,7 +1573,7 @@ async fn execute_transaction_at_path(
         .create_if_missing(false)
         .foreign_keys(true)
         .journal_mode(SqliteJournalMode::Wal)
-        .synchronous(SqliteSynchronous::Normal)
+        .synchronous(SqliteSynchronous::Full)
         .busy_timeout(std::time::Duration::from_secs(5));
     let mut connection = SqliteConnection::connect_with(&options)
         .await
@@ -1567,6 +1757,35 @@ mod database_transaction_tests {
 
         let _ = fs::remove_file(database_path);
     }
+
+    #[test]
+    fn windows_legacy_data_migration_never_overwrites_current_files() {
+        let fixture_root = std::env::temp_dir().join(format!(
+            "bezgrow-data-migration-{}-{}",
+            std::process::id(),
+            unix_timestamp()
+        ));
+        let legacy = fixture_root.join("legacy");
+        let managed = fixture_root.join("managed");
+        fs::create_dir_all(&legacy).expect("create legacy fixture");
+        fs::create_dir_all(&managed).expect("create managed fixture");
+        fs::write(legacy.join("logo.png"), b"legacy").expect("write legacy fixture");
+        fs::write(legacy.join("backup.db"), b"backup").expect("write legacy backup");
+        fs::write(managed.join("logo.png"), b"current").expect("write current fixture");
+
+        copy_directory_missing(&legacy, &managed).expect("migrate only missing files");
+
+        assert_eq!(
+            fs::read(managed.join("logo.png")).expect("read current fixture"),
+            b"current",
+            "an upgrade must never replace current managed data with a legacy copy"
+        );
+        assert_eq!(
+            fs::read(managed.join("backup.db")).expect("read migrated backup"),
+            b"backup"
+        );
+        let _ = fs::remove_dir_all(fixture_root);
+    }
 }
 
 #[tauri::command]
@@ -1637,14 +1856,15 @@ fn safe_invoice_filename(filename: &str) -> String {
 }
 
 #[tauri::command]
-fn desktop_save_invoice_pdf(
+fn desktop_save_invoice_pdf<R: tauri::Runtime>(
+    app: tauri::AppHandle<R>,
     filename: String,
     bytes: Vec<u8>,
 ) -> Result<Option<DesktopSavedFile>, String> {
     if bytes.len() < 5 || !bytes.starts_with(b"%PDF-") {
         return Err("The generated invoice is not a valid PDF.".to_string());
     }
-    save_bytes_with_dialog(&safe_invoice_filename(&filename), &bytes, "pdf")
+    save_bytes_with_dialog(&app, &safe_invoice_filename(&filename), &bytes, "pdf")
 }
 
 #[tauri::command]
@@ -1793,15 +2013,28 @@ fn wait_for_local_server(child: &mut Child, port: u16) -> Result<(), String> {
 }
 
 #[cfg(not(debug_assertions))]
-fn reserve_local_port() -> Result<u16, Box<dyn std::error::Error>> {
-    // WebKit storage is origin-scoped, so changing this port selects a different
-    // localStorage/legacy IndexedDB workspace. Never silently fall back to a
-    // random port and present an empty business.
-    let listener = TcpListener::bind(("127.0.0.1", DESKTOP_SERVER_PORT)).map_err(|error| {
-        format!(
-            "Bezgrow desktop port {DESKTOP_SERVER_PORT} is unavailable. Close the other Bezgrow instance and reopen the app: {error}"
-        )
-    })?;
+fn reserve_local_port(app: &tauri::App) -> Result<u16, Box<dyn std::error::Error>> {
+    let listener = match TcpListener::bind(("127.0.0.1", DESKTOP_SERVER_PORT)) {
+        Ok(listener) => listener,
+        Err(fixed_port_error) => {
+            // A force-quit or operating-system crash can leave the bundled Node
+            // child orphaned. SQLite and desktop authentication are persisted
+            // outside WebKit's origin-scoped storage, and OAuth already returns
+            // to the current local origin, so keep the ERP usable on an isolated
+            // loopback port instead of blocking startup.
+            append_startup_log(
+                app,
+                format!(
+                    "Desktop port {DESKTOP_SERVER_PORT} is occupied ({fixed_port_error}); selecting an isolated loopback fallback port"
+                ),
+            );
+            TcpListener::bind(("127.0.0.1", 0)).map_err(|fallback_error| {
+                format!(
+                    "Bezgrow could not reserve a local desktop server port. Fixed port error: {fixed_port_error}; fallback error: {fallback_error}"
+                )
+            })?
+        }
+    };
     let port = listener.local_addr()?.port();
     drop(listener);
     Ok(port)
@@ -1835,12 +2068,13 @@ fn start_next_server(app: &mut tauri::App) -> Result<u16, Box<dyn std::error::Er
 
 #[cfg(not(debug_assertions))]
 fn start_next_server(app: &mut tauri::App) -> Result<u16, Box<dyn std::error::Error>> {
-    let port = reserve_local_port()?;
+    let port = reserve_local_port(app)?;
     let resource_dir = app.path().resource_dir()?;
     let server_dir = app.path().resource_dir()?.join("next-server");
     let server_entry = server_dir.join("server.js");
     let node_path = bundled_node_path(app)?;
     let log_path = startup_log_path(app);
+    let temporary_directory = managed_data_directory(app, "Temporary")?;
 
     append_startup_log(
         app,
@@ -1877,6 +2111,9 @@ fn start_next_server(app: &mut tauri::App) -> Result<u16, Box<dyn std::error::Er
         .env("NODE_ENV", "production")
         .env("BEZGROW_DESKTOP_BUILD", "1")
         .env("NEXT_TELEMETRY_DISABLED", "1")
+        .env("TEMP", &temporary_directory)
+        .env("TMP", &temporary_directory)
+        .env("TMPDIR", &temporary_directory)
         .stdin(Stdio::null())
         .stdout(Stdio::from(log_file.try_clone()?))
         .stderr(Stdio::from(log_file))
@@ -1908,18 +2145,27 @@ fn create_main_window(app: &mut tauri::App, port: u16) -> Result<(), Box<dyn std
     } else {
         "tauri-packaged"
     };
+    let runtime_architecture = if cfg!(target_arch = "aarch64") {
+        "arm64"
+    } else {
+        "x64"
+    };
     let runtime_script = format!(
-        "window.__BEZGROW_DESKTOP__ = true; window.__BEZGROW_RUNTIME__ = \"{runtime_mode}\"; window.isTauri = true;"
+        "window.__BEZGROW_DESKTOP__ = true; window.__BEZGROW_RUNTIME__ = \"{runtime_mode}\"; window.__BEZGROW_ARCH__ = \"{runtime_architecture}\"; window.isTauri = true;"
     );
 
-    tauri::WebviewWindowBuilder::new(app, "main", WebviewUrl::External(url))
+    let builder = tauri::WebviewWindowBuilder::new(app, "main", WebviewUrl::External(url))
         .title("Bezgrow ERP")
         .inner_size(1360.0, 860.0)
         .min_inner_size(1100.0, 720.0)
         .resizable(true)
         .fullscreen(false)
-        .initialization_script(runtime_script)
-        .build()?;
+        .initialization_script(runtime_script);
+
+    #[cfg(target_os = "windows")]
+    let builder = builder.data_directory(managed_data_directory(app, "WebView")?);
+
+    builder.build()?;
 
     Ok(())
 }
@@ -1927,9 +2173,9 @@ fn create_main_window(app: &mut tauri::App, port: u16) -> Result<(), Box<dyn std
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
-        .plugin(tauri_plugin_sql::Builder::default().build())
         .setup(|app| {
             app.manage(NextServerState(Mutex::new(None)));
+            prepare_managed_data(&app.handle())?;
 
             match start_next_server(app).and_then(|port| create_main_window(app, port)) {
                 Ok(()) => {
@@ -1954,23 +2200,37 @@ pub fn run() {
             Ok(())
         })
         .on_window_event(|window, event| match event {
-            tauri::WindowEvent::CloseRequested { .. } => {
-                let app = window.app_handle();
+            tauri::WindowEvent::CloseRequested { api, .. } => {
+                let app = window.app_handle().clone();
+                api.prevent_close();
+                if window.label() == "startup-error" {
+                    stop_next_server(&app);
+                    app.exit(1);
+                    return;
+                }
                 append_startup_log_handle(
                     &app,
                     format!(
-                        "Native close requested for window={}; exiting application",
+                        "Native close requested for window={}; waiting for SQLite shutdown checkpoint",
                         window.label()
                     ),
                 );
-                stop_next_server(&app);
-                app.exit(0);
+                std::thread::spawn(move || {
+                    std::thread::sleep(std::time::Duration::from_secs(3));
+                    append_startup_log_handle(
+                        &app,
+                        "Shutdown checkpoint timed out; native fallback exit started",
+                    );
+                    stop_next_server(&app);
+                    app.exit(0);
+                });
             }
             _ => {}
         })
         .invoke_handler(tauri::generate_handler![
             desktop_database_diagnostics,
             desktop_database_backup,
+            desktop_execute,
             desktop_select,
             desktop_execute_transaction,
             desktop_startup_log,
@@ -1987,6 +2247,7 @@ pub fn run() {
             desktop_open_file,
             desktop_export_backup,
             desktop_restore_backup,
+            desktop_exit,
             open_external_url
         ])
         .build(tauri::generate_context!())
