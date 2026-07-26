@@ -17,6 +17,7 @@ export default function BackupsPage() {
   const [status, setStatus] = useState("")
   const filters = useMemo(() => ({ status }), [status])
   const list = useAdminList<Record<string, unknown>>("/api/admin/backups", filters)
+  const exportParams = new URLSearchParams({ format: "csv", search: list.search, status })
 
   return (
     <div className="space-y-6">
@@ -29,6 +30,7 @@ export default function BackupsPage() {
       <AdminListControls
         search={list.search}
         onSearch={list.setSearch}
+        exportHref={`/api/admin/backups?${exportParams}`}
         filters={
           <select value={status} onChange={(event) => setStatus(event.target.value)} className="h-11 rounded-2xl border border-white/10 bg-black px-4 text-sm">
             <option value="">Enabled and disabled</option>

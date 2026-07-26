@@ -2,6 +2,10 @@ import "server-only"
 import type { User } from "@supabase/supabase-js"
 import { z } from "zod"
 import { isConfiguredAdmin } from "@/lib/admin-role"
+import {
+  adminControlPlaneUnavailableMessage,
+  verifyAdminControlPlaneSchema,
+} from "@/lib/admin/schema-readiness"
 import { checkRateLimit, rateLimitKey } from "@/lib/security/rate-limit"
 import { adminSupabase } from "@/lib/supabase/admin"
 import { createServerSupabase } from "@/lib/supabase/server"
@@ -147,6 +151,24 @@ export async function requireAdmin(request: Request): Promise<
       userAgent: request.headers.get("user-agent"),
     },
   }
+}
+
+export async function requireAdminControlPlane(request: Request): Promise<
+  | { ok: true; context: AdminContext }
+  | { ok: false; status: number; error: string }
+> {
+  const auth = await requireAdmin(request)
+  if (!auth.ok) return auth
+
+  const schema = await verifyAdminControlPlaneSchema(auth.context.requestId)
+  if (!schema.ready) {
+    return {
+      ok: false,
+      status: 503,
+      error: adminControlPlaneUnavailableMessage(),
+    }
+  }
+  return auth
 }
 
 export async function writeAdminAudit(context: AdminContext, input: AdminAuditInput) {

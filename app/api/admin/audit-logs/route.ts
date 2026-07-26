@@ -1,10 +1,11 @@
 import "server-only"
 
-import { requireAdmin } from "@/lib/api/auth"
+import { requireAdminControlPlane } from "@/lib/api/auth"
 import {
   adminFail,
   adminOk,
   adminRange,
+  adminSort,
   controlPlaneErrorMessage,
   csvResponse,
   parseAdminListQuery,
@@ -15,7 +16,7 @@ import { adminSupabase } from "@/lib/supabase/admin"
 export const dynamic = "force-dynamic"
 
 export async function GET(request: Request) {
-  const auth = await requireAdmin(request)
+  const auth = await requireAdminControlPlane(request)
   if (!auth.ok) return adminFail({ requestId: crypto.randomUUID() }, auth.error, auth.status)
   const context = auth.context
 
@@ -23,10 +24,15 @@ export async function GET(request: Request) {
     const list = parseAdminListQuery(request)
     const { from, to } = adminRange(list)
     const exportMode = list.format === "csv"
+    const sort = adminSort(
+      list,
+      ["created_at", "admin_email", "action", "target_type", "result"],
+      "created_at"
+    )
     let query = adminSupabase
       .from("admin_audit_logs")
       .select("*", { count: "exact" })
-      .order("created_at", { ascending: false })
+      .order(sort.column, { ascending: sort.ascending })
     if (list.search) {
       const term = list.search.replaceAll(",", " ")
       query = query.or(

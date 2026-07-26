@@ -1,11 +1,12 @@
 import "server-only"
 
 import { z } from "zod"
-import { requireAdmin, writeAdminAudit } from "@/lib/api/auth"
+import { requireAdminControlPlane, writeAdminAudit } from "@/lib/api/auth"
 import {
   adminFail,
   adminOk,
   controlPlaneErrorMessage,
+  csvResponse,
   unexpectedAdminError,
 } from "@/lib/admin/control-plane"
 import { adminSupabase } from "@/lib/supabase/admin"
@@ -39,7 +40,7 @@ const settingsSchema = z.object({
 })
 
 export async function GET(request: Request) {
-  const auth = await requireAdmin(request)
+  const auth = await requireAdminControlPlane(request)
   if (!auth.ok) return adminFail({ requestId: crypto.randomUUID() }, auth.error, auth.status)
   const context = auth.context
 
@@ -48,14 +49,46 @@ export async function GET(request: Request) {
     if (result.error) {
       return adminFail(context, controlPlaneErrorMessage(result.error, "Platform settings failed to load."), 500)
     }
-    return adminOk(context, { settings: result.data || null })
+    if (new URL(request.url).searchParams.get("format") === "csv") {
+      return csvResponse(
+        `bezgrow-platform-settings-${new Date().toISOString().slice(0, 10)}.csv`,
+        [
+          "id",
+          "platform_name",
+          "support_email",
+          "default_license_duration_days",
+          "default_grace_days",
+          "default_allowed_features",
+          "license_plans",
+          "update_channels",
+          "minimum_supported_version",
+          "backup_policies",
+          "diagnostic_upload_enabled",
+          "diagnostic_retention_days",
+          "maintenance_message",
+          "customer_download_urls",
+          "mac_release_status",
+          "windows_release_status",
+          "updated_at",
+        ],
+        result.data ? [result.data] : []
+      )
+    }
+    return adminOk(context, {
+      settings: result.data
+        ? {
+            ...result.data,
+            support_email: result.data.support_email || "",
+          }
+        : null,
+    })
   } catch (error) {
     return unexpectedAdminError(context, error, "Platform settings failed to load.")
   }
 }
 
 export async function PATCH(request: Request) {
-  const auth = await requireAdmin(request)
+  const auth = await requireAdminControlPlane(request)
   if (!auth.ok) return adminFail({ requestId: crypto.randomUUID() }, auth.error, auth.status)
   const context = auth.context
   const parsed = settingsSchema.safeParse(await request.json().catch(() => null))

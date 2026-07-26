@@ -1,13 +1,13 @@
 import "server-only"
 
-import { requireAdmin } from "@/lib/api/auth"
+import { requireAdminControlPlane } from "@/lib/api/auth"
 import { adminFail, unexpectedAdminError } from "@/lib/admin/control-plane"
 import { adminSupabase } from "@/lib/supabase/admin"
 
 export const dynamic = "force-dynamic"
 
 export async function GET(request: Request, { params }: { params: Promise<{ id: string }> }) {
-  const auth = await requireAdmin(request)
+  const auth = await requireAdminControlPlane(request)
   if (!auth.ok) return adminFail({ requestId: crypto.randomUUID() }, auth.error, auth.status)
   const context = auth.context
 

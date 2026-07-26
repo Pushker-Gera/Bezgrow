@@ -21,6 +21,7 @@ export default function DevicesPage() {
   const [actionError, setActionError] = useState("")
   const filters = useMemo(() => ({ status, platform }), [platform, status])
   const list = useAdminList<Record<string, unknown>>("/api/admin/devices", filters)
+  const exportParams = new URLSearchParams({ format: "csv", search: list.search, status, platform })
 
   async function action(row: Record<string, unknown>, actionName: string) {
     setNotice("")
@@ -63,6 +64,7 @@ export default function DevicesPage() {
       <AdminListControls
         search={list.search}
         onSearch={list.setSearch}
+        exportHref={`/api/admin/devices?${exportParams}`}
         filters={
           <>
             <select value={status} onChange={(event) => setStatus(event.target.value)} className="h-11 rounded-2xl border border-white/10 bg-black px-4 text-sm">

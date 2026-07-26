@@ -1,12 +1,14 @@
 import "server-only"
 
 import { z } from "zod"
-import { requireAdmin, writeAdminAudit } from "@/lib/api/auth"
+import { requireAdminControlPlane, writeAdminAudit } from "@/lib/api/auth"
 import {
   adminFail,
   adminOk,
   adminRange,
+  adminSort,
   controlPlaneErrorMessage,
+  csvResponse,
   parseAdminListQuery,
   unexpectedAdminError,
 } from "@/lib/admin/control-plane"
@@ -27,23 +29,25 @@ const updateCustomerSchema = z.object({
 })
 
 export async function GET(request: Request) {
-  const auth = await requireAdmin(request)
+  const auth = await requireAdminControlPlane(request)
   if (!auth.ok) return adminFail({ requestId: crypto.randomUUID() }, auth.error, auth.status)
   const context = auth.context
 
   try {
     const list = parseAdminListQuery(request)
     const { from, to } = adminRange(list)
+    const exportMode = list.format === "csv"
+    const sort = adminSort(list, ["created_at", "updated_at", "name", "email", "account_status"], "created_at")
     let query = adminSupabase
       .from("platform_customers")
       .select("*", { count: "exact" })
-      .order("created_at", { ascending: false })
-      .range(from, to)
+      .order(sort.column, { ascending: sort.ascending })
     if (list.search) {
       const term = list.search.replaceAll(",", " ")
       query = query.or(`name.ilike.%${term}%,email.ilike.%${term}%,company.ilike.%${term}%,phone.ilike.%${term}%`)
     }
     if (list.status) query = query.eq("account_status", list.status)
+    query = exportMode ? query.limit(10000) : query.range(from, to)
 
     const result = await query
     if (result.error) {
@@ -87,14 +91,39 @@ export async function GET(request: Request) {
     const businessCounts = countBy(businesses.data)
     const supportCounts = countBy(support.data)
 
-    return adminOk(context, {
-      data: (result.data || []).map((customer) => ({
+    const data = (result.data || []).map((customer) => ({
         ...customer,
         license_count: licenseCounts.get(customer.id) || 0,
         device_count: deviceCounts.get(customer.id) || 0,
         business_count: businessCounts.get(customer.id) || 0,
         open_support_count: supportCounts.get(customer.id) || 0,
-      })),
+      }))
+    if (exportMode) {
+      return csvResponse(
+        `bezgrow-platform-customers-${new Date().toISOString().slice(0, 10)}.csv`,
+        [
+          "id",
+          "name",
+          "email",
+          "phone",
+          "company",
+          "country",
+          "account_status",
+          "support_status",
+          "license_count",
+          "device_count",
+          "business_count",
+          "open_support_count",
+          "last_platform_activity_at",
+          "created_at",
+          "updated_at",
+        ],
+        data
+      )
+    }
+
+    return adminOk(context, {
+      data,
       pagination: { page: list.page, limit: list.limit, total: result.count || 0 },
       dataNotice: "Platform customers are separate from retail customers stored in local ERP workspaces.",
     })
@@ -104,7 +133,7 @@ export async function GET(request: Request) {
 }
 
 export async function PATCH(request: Request) {
-  const auth = await requireAdmin(request)
+  const auth = await requireAdminControlPlane(request)
   if (!auth.ok) return adminFail({ requestId: crypto.randomUUID() }, auth.error, auth.status)
   const context = auth.context
   const parsed = updateCustomerSchema.safeParse(await request.json().catch(() => null))

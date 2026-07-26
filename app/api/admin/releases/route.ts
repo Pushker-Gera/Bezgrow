@@ -2,12 +2,14 @@ import "server-only"
 
 import { createHash } from "node:crypto"
 import { z } from "zod"
-import { requireAdmin, writeAdminAudit } from "@/lib/api/auth"
+import { requireAdminControlPlane, writeAdminAudit } from "@/lib/api/auth"
 import {
   adminFail,
   adminOk,
   adminRange,
+  adminSort,
   controlPlaneErrorMessage,
+  csvResponse,
   parseAdminListQuery,
   unexpectedAdminError,
 } from "@/lib/admin/control-plane"
@@ -144,25 +146,73 @@ async function verifyArtifact(artifact: NonNullable<ReleaseRow["release_artifact
 }
 
 export async function GET(request: Request) {
-  const auth = await requireAdmin(request)
+  const auth = await requireAdminControlPlane(request)
   if (!auth.ok) return adminFail({ requestId: crypto.randomUUID() }, auth.error, auth.status)
   const context = auth.context
 
   try {
     const list = parseAdminListQuery(request)
     const { from, to } = adminRange(list)
+    const exportMode = list.format === "csv"
+    const sort = adminSort(
+      list,
+      ["created_at", "updated_at", "published_at", "version", "build_number", "platform", "release_status"],
+      "created_at"
+    )
     let query = adminSupabase
       .from("desktop_releases")
       .select("*,release_artifacts(*)", { count: "exact" })
-      .order("created_at", { ascending: false })
-      .range(from, to)
+      .order(sort.column, { ascending: sort.ascending })
     if (list.search) query = query.or(`version.ilike.%${list.search}%,build_number.ilike.%${list.search}%`)
     if (list.status) query = query.eq("release_status", list.status)
     if (list.platform) query = query.eq("platform", list.platform)
     if (list.channel) query = query.eq("release_channel", list.channel)
+    query = exportMode ? query.limit(10000) : query.range(from, to)
     const result = await query
     if (result.error) {
       return adminFail(context, controlPlaneErrorMessage(result.error, "Releases failed to load."), 500)
+    }
+    if (exportMode) {
+      const data = (result.data || []).map((release) => {
+        const artifact = Array.isArray(release.release_artifacts) ? release.release_artifacts[0] : null
+        return {
+          ...release,
+          file_url: artifact?.file_url || null,
+          file_size: artifact?.file_size || null,
+          sha256: artifact?.sha256 || null,
+          validation_status: artifact?.validation_status || null,
+          signature_status: artifact?.signature_status || null,
+          notarization_status: artifact?.notarization_status || null,
+          code_signing_status: artifact?.code_signing_status || null,
+        }
+      })
+      return csvResponse(
+        `bezgrow-desktop-releases-${new Date().toISOString().slice(0, 10)}.csv`,
+        [
+          "id",
+          "version",
+          "build_number",
+          "platform",
+          "architecture",
+          "release_channel",
+          "release_status",
+          "minimum_supported_version",
+          "rollout_percentage",
+          "mandatory",
+          "active",
+          "file_url",
+          "file_size",
+          "sha256",
+          "validation_status",
+          "signature_status",
+          "notarization_status",
+          "code_signing_status",
+          "published_at",
+          "created_at",
+          "updated_at",
+        ],
+        data
+      )
     }
     return adminOk(context, {
       data: result.data || [],
@@ -176,7 +226,7 @@ export async function GET(request: Request) {
 }
 
 export async function POST(request: Request) {
-  const auth = await requireAdmin(request)
+  const auth = await requireAdminControlPlane(request)
   if (!auth.ok) return adminFail({ requestId: crypto.randomUUID() }, auth.error, auth.status)
   const context = auth.context
   const parsed = createReleaseSchema.safeParse(await request.json().catch(() => null))
@@ -233,7 +283,7 @@ export async function POST(request: Request) {
 }
 
 export async function PATCH(request: Request) {
-  const auth = await requireAdmin(request)
+  const auth = await requireAdminControlPlane(request)
   if (!auth.ok) return adminFail({ requestId: crypto.randomUUID() }, auth.error, auth.status)
   const context = auth.context
   const parsed = releaseActionSchema.safeParse(await request.json().catch(() => null))

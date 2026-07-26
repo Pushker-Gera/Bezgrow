@@ -1,11 +1,13 @@
 import "server-only"
 
-import { requireAdmin } from "@/lib/api/auth"
+import { requireAdminControlPlane } from "@/lib/api/auth"
 import {
   adminFail,
   adminOk,
   adminRange,
+  adminSort,
   controlPlaneErrorMessage,
+  csvResponse,
   effectiveLicenseStatus,
   parseAdminListQuery,
   unexpectedAdminError,
@@ -15,13 +17,19 @@ import { adminSupabase } from "@/lib/supabase/admin"
 export const dynamic = "force-dynamic"
 
 export async function GET(request: Request) {
-  const auth = await requireAdmin(request)
+  const auth = await requireAdminControlPlane(request)
   if (!auth.ok) return adminFail({ requestId: crypto.randomUUID() }, auth.error, auth.status)
   const context = auth.context
 
   try {
     const list = parseAdminListQuery(request)
     const { from, to } = adminRange(list)
+    const exportMode = list.format === "csv"
+    const sort = adminSort(
+      list,
+      ["created_at", "updated_at", "business_name", "status", "platform", "app_version", "telemetry_reported_at"],
+      "created_at"
+    )
     let licensedBusinessIds: string[] | null = null
     if (list.license_status) {
       const licenseFilter = await adminSupabase
@@ -50,8 +58,7 @@ export async function GET(request: Request) {
     let query = adminSupabase
       .from("platform_businesses")
       .select("*", { count: "exact" })
-      .order("created_at", { ascending: false })
-      .range(from, to)
+      .order(sort.column, { ascending: sort.ascending })
     if (list.search) {
       const term = list.search.replaceAll(",", " ")
       query = query.or(`business_name.ilike.%${term}%,workspace_id.ilike.%${term}%,app_version.ilike.%${term}%`)
@@ -62,6 +69,7 @@ export async function GET(request: Request) {
     if (list.version) query = query.eq("app_version", list.version)
     if (list.cloud) query = query.eq("cloud_mode", list.cloud)
     if (licensedBusinessIds) query = query.in("id", licensedBusinessIds)
+    query = exportMode ? query.limit(10000) : query.range(from, to)
 
     const result = await query
     if (result.error) {
@@ -110,8 +118,7 @@ export async function GET(request: Request) {
       }
     }
 
-    return adminOk(context, {
-      data: rows.map((business) => ({
+    const data = rows.map((business) => ({
         ...business,
         customer: customerMap.get(business.platform_customer_id) || null,
         license: licenseMap.get(business.id) || null,
@@ -123,7 +130,34 @@ export async function GET(request: Request) {
               ? "Synchronized metadata"
               : "Not synchronized",
         last_reported_label: business.telemetry_reported_at || "Never",
-      })),
+      }))
+    if (exportMode) {
+      return csvResponse(
+        `bezgrow-platform-businesses-${new Date().toISOString().slice(0, 10)}.csv`,
+        [
+          "id",
+          "workspace_id",
+          "business_name",
+          "plan_name",
+          "status",
+          "platform",
+          "app_version",
+          "update_channel",
+          "cloud_mode",
+          "cloud_backup_enabled",
+          "last_sync_at",
+          "last_backup_at",
+          "telemetry_reported_at",
+          "local_data_state",
+          "created_at",
+          "updated_at",
+        ],
+        data
+      )
+    }
+
+    return adminOk(context, {
+      data,
       pagination: { page: list.page, limit: list.limit, total: result.count || 0 },
       unavailableFields: ["invoice revenue", "product count", "stock health", "retail customer count", "local billing activity"],
     })

@@ -20,6 +20,7 @@ export default function PlatformCustomersPage() {
   const [actionError, setActionError] = useState("")
   const filters = useMemo(() => ({ status }), [status])
   const list = useAdminList<Record<string, unknown>>("/api/admin/customers", filters)
+  const exportParams = new URLSearchParams({ format: "csv", search: list.search, status })
 
   async function editCustomer(row: Record<string, unknown>) {
     const notes = window.prompt("Internal customer notes", String(row.notes || ""))
@@ -53,6 +54,7 @@ export default function PlatformCustomersPage() {
       <AdminListControls
         search={list.search}
         onSearch={list.setSearch}
+        exportHref={`/api/admin/customers?${exportParams}`}
         filters={
           <select value={status} onChange={(event) => setStatus(event.target.value)} className="h-11 rounded-2xl border border-white/10 bg-black px-4 text-sm">
             <option value="">All statuses</option>

@@ -16,6 +16,8 @@ const listQuerySchema = z.object({
   channel: z.string().trim().max(40).default(""),
   version: z.string().trim().max(40).default(""),
   cloud: z.enum(["", "local_only", "cloud_backup", "metadata_sync"]).default(""),
+  sort: z.string().trim().regex(/^[a-z_]{1,80}$/).default("created_at"),
+  direction: z.enum(["asc", "desc"]).default("desc"),
   format: z.enum(["", "csv"]).default(""),
 })
 
@@ -33,6 +35,8 @@ export function parseAdminListQuery(request: Request): AdminListQuery {
     channel: params.get("channel") || undefined,
     version: params.get("version") || undefined,
     cloud: params.get("cloud") || undefined,
+    sort: params.get("sort") || undefined,
+    direction: params.get("direction") || undefined,
     format: params.get("format") || undefined,
   })
 }
@@ -40,6 +44,15 @@ export function parseAdminListQuery(request: Request): AdminListQuery {
 export function adminRange(query: AdminListQuery) {
   const from = (query.page - 1) * query.limit
   return { from, to: from + query.limit - 1 }
+}
+
+export function adminSort(
+  query: AdminListQuery,
+  allowed: readonly string[],
+  fallback: string
+) {
+  const column = allowed.includes(query.sort) ? query.sort : fallback
+  return { column, ascending: query.direction === "asc" }
 }
 
 export function requestMeta(context: AdminContext) {
@@ -96,18 +109,23 @@ export function unexpectedAdminError(
   return adminFail(context, `${fallback} Request ID: ${context.requestId}`, 500)
 }
 
-export function controlPlaneTableMissing(error: { code?: string; message?: string } | null | undefined) {
+export function controlPlaneSchemaIncomplete(error: { code?: string; message?: string } | null | undefined) {
   return Boolean(
     error &&
       (error.code === "42P01" ||
         error.code === "PGRST205" ||
-        /could not find the table|relation .* does not exist/i.test(error.message || ""))
+        error.code === "42703" ||
+        error.code === "42883" ||
+        error.code === "PGRST202" ||
+        /could not find the (?:table|function)|relation .* does not exist|column .* does not exist|function .* does not exist/i.test(
+          error.message || ""
+        ))
   )
 }
 
 export function controlPlaneErrorMessage(error: { code?: string; message?: string } | null | undefined, fallback: string) {
-  if (controlPlaneTableMissing(error)) {
-    return "The admin control-plane migration has not been applied to this Supabase project."
+  if (controlPlaneSchemaIncomplete(error)) {
+    return "The admin control plane is not ready in this Supabase project. Apply the production control-plane migration."
   }
   return fallback
 }

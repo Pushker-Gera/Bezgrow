@@ -1,12 +1,14 @@
 import "server-only"
 
 import { z } from "zod"
-import { requireAdmin, writeAdminAudit } from "@/lib/api/auth"
+import { requireAdminControlPlane, writeAdminAudit } from "@/lib/api/auth"
 import {
   adminFail,
   adminOk,
   adminRange,
+  adminSort,
   controlPlaneErrorMessage,
+  csvResponse,
   parseAdminListQuery,
   unexpectedAdminError,
 } from "@/lib/admin/control-plane"
@@ -36,26 +38,55 @@ function caseNumber() {
 }
 
 export async function GET(request: Request) {
-  const auth = await requireAdmin(request)
+  const auth = await requireAdminControlPlane(request)
   if (!auth.ok) return adminFail({ requestId: crypto.randomUUID() }, auth.error, auth.status)
   const context = auth.context
 
   try {
     const list = parseAdminListQuery(request)
     const { from, to } = adminRange(list)
+    const exportMode = list.format === "csv"
+    const sort = adminSort(
+      list,
+      ["updated_at", "created_at", "case_number", "status", "priority", "resolved_at"],
+      "updated_at"
+    )
     let query = adminSupabase
       .from("support_cases")
       .select("*,diagnostic_uploads(*)", { count: "exact" })
-      .order("updated_at", { ascending: false })
-      .range(from, to)
+      .order(sort.column, { ascending: sort.ascending })
     if (list.search) {
       const term = list.search.replaceAll(",", " ")
       query = query.or(`case_number.ilike.%${term}%,subject.ilike.%${term}%,description.ilike.%${term}%`)
     }
     if (list.status) query = query.eq("status", list.status)
+    query = exportMode ? query.limit(10000) : query.range(from, to)
     const result = await query
     if (result.error) {
       return adminFail(context, controlPlaneErrorMessage(result.error, "Support cases failed to load."), 500)
+    }
+
+    if (exportMode) {
+      return csvResponse(
+        `bezgrow-support-cases-${new Date().toISOString().slice(0, 10)}.csv`,
+        [
+          "id",
+          "case_number",
+          "subject",
+          "description",
+          "status",
+          "priority",
+          "platform_customer_id",
+          "registered_device_id",
+          "license_id",
+          "diagnostic_requested_at",
+          "assigned_admin_id",
+          "resolved_at",
+          "created_at",
+          "updated_at",
+        ],
+        result.data || []
+      )
     }
 
     return adminOk(context, {
@@ -70,7 +101,7 @@ export async function GET(request: Request) {
 }
 
 export async function POST(request: Request) {
-  const auth = await requireAdmin(request)
+  const auth = await requireAdminControlPlane(request)
   if (!auth.ok) return adminFail({ requestId: crypto.randomUUID() }, auth.error, auth.status)
   const context = auth.context
   const parsed = createCaseSchema.safeParse(await request.json().catch(() => null))
@@ -100,7 +131,7 @@ export async function POST(request: Request) {
 }
 
 export async function PATCH(request: Request) {
-  const auth = await requireAdmin(request)
+  const auth = await requireAdminControlPlane(request)
   if (!auth.ok) return adminFail({ requestId: crypto.randomUUID() }, auth.error, auth.status)
   const context = auth.context
   const parsed = updateCaseSchema.safeParse(await request.json().catch(() => null))

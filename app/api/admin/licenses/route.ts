@@ -1,11 +1,12 @@
 import "server-only"
 
 import { z } from "zod"
-import { requireAdmin } from "@/lib/api/auth"
+import { requireAdminControlPlane } from "@/lib/api/auth"
 import {
   adminFail,
   adminOk,
   adminRange,
+  adminSort,
   compactRecord,
   controlPlaneErrorMessage,
   csvResponse,
@@ -264,7 +265,7 @@ async function persistSignedLicense(
 }
 
 export async function GET(request: Request) {
-  const auth = await requireAdmin(request)
+  const auth = await requireAdminControlPlane(request)
   if (!auth.ok) return adminFail({ requestId: crypto.randomUUID() }, auth.error, auth.status)
   const context = auth.context
 
@@ -272,10 +273,15 @@ export async function GET(request: Request) {
     const list = parseAdminListQuery(request)
     const { from, to } = adminRange(list)
     const exportMode = list.format === "csv"
+    const sort = adminSort(
+      list,
+      ["created_at", "updated_at", "expiry_date", "customer_name", "business_name", "platform", "status"],
+      "created_at"
+    )
     let query = adminSupabase
       .from("license_control_plane")
       .select("*", { count: "exact" })
-      .order("created_at", { ascending: false })
+      .order(sort.column, { ascending: sort.ascending })
 
     if (list.search) {
       const term = list.search.replaceAll(",", " ")
@@ -331,7 +337,7 @@ export async function GET(request: Request) {
 }
 
 export async function POST(request: Request) {
-  const auth = await requireAdmin(request)
+  const auth = await requireAdminControlPlane(request)
   if (!auth.ok) return adminFail({ requestId: crypto.randomUUID() }, auth.error, auth.status)
   const context = auth.context
 
@@ -482,7 +488,7 @@ export async function POST(request: Request) {
 }
 
 export async function PATCH(request: Request) {
-  const auth = await requireAdmin(request)
+  const auth = await requireAdminControlPlane(request)
   if (!auth.ok) return adminFail({ requestId: crypto.randomUUID() }, auth.error, auth.status)
   const context = auth.context
   const parsed = updateLicenseSchema.safeParse(await request.json().catch(() => null))

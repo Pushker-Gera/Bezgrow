@@ -5,6 +5,7 @@ import { useEffect, useState } from "react"
 import {
   AdminNotice,
   AdminPageHeader,
+  AdminExportLink,
   adminMutation,
   useAdminOnline,
 } from "@/components/admin/ControlPlaneUi"
@@ -109,6 +110,7 @@ export default function PlatformSettingsPage() {
         eyebrow="Control-plane defaults"
         title="Platform settings"
         description="Licensing defaults, update channels, release visibility, optional backup and diagnostic policies, support details, and customer download locations."
+        action={<AdminExportLink href="/api/admin/settings?format=csv" />}
       />
       <AdminNotice>
         Settings for centrally hosted customer invoices, stock, or retail customers are intentionally absent. Server secrets and private signing keys are never displayed or returned.

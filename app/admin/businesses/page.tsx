@@ -24,6 +24,15 @@ export default function BusinessesPage() {
     [channel, cloud, licenseStatus, platform, version]
   )
   const list = useAdminList<Record<string, unknown>>("/api/admin/businesses", filters)
+  const exportParams = new URLSearchParams({
+    format: "csv",
+    search: list.search,
+    platform,
+    license_status: licenseStatus,
+    cloud,
+    channel,
+    version,
+  })
 
   return (
     <div className="space-y-6">
@@ -53,6 +62,7 @@ export default function BusinessesPage() {
       <AdminListControls
         search={list.search}
         onSearch={list.setSearch}
+        exportHref={`/api/admin/businesses?${exportParams}`}
         filters={
           <>
             <select value={licenseStatus} onChange={(event) => setLicenseStatus(event.target.value)} className="h-11 rounded-2xl border border-white/10 bg-black px-3 text-sm">

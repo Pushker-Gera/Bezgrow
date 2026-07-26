@@ -33,6 +33,7 @@ export default function SupportPage() {
   })
   const filters = useMemo(() => ({ status }), [status])
   const list = useAdminList<Record<string, unknown>>("/api/admin/support", filters)
+  const exportParams = new URLSearchParams({ format: "csv", search: list.search, status })
 
   async function createCase(event: FormEvent) {
     event.preventDefault()
@@ -88,6 +89,7 @@ export default function SupportPage() {
       <AdminListControls
         search={list.search}
         onSearch={list.setSearch}
+        exportHref={`/api/admin/support?${exportParams}`}
         filters={
           <select value={status} onChange={(event) => setStatus(event.target.value)} className="h-11 rounded-2xl border border-white/10 bg-black px-4 text-sm">
             <option value="">All cases</option>

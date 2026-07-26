@@ -4,6 +4,7 @@ import { useEffect, useState } from "react"
 import {
   AdminNotice,
   AdminPageHeader,
+  AdminExportLink,
   StatusPill,
   displayValue,
   formatAdminDate,
@@ -98,6 +99,7 @@ export default function AdminDashboardPage() {
         eyebrow="Control plane"
         title="Platform dashboard"
         description="Authoritative licenses, registered devices, releases, optional cloud services, support, and security events. Local customer ERP records are intentionally excluded."
+        action={<AdminExportLink href="/api/admin/dashboard?format=csv" />}
       />
 
       {error && <AdminNotice tone="danger">{error}</AdminNotice>}

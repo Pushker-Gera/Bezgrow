@@ -40,6 +40,7 @@ export default function ReleasesPage() {
   const [actionError, setActionError] = useState("")
   const filters = useMemo(() => ({ platform, status }), [platform, status])
   const list = useAdminList<Record<string, unknown>>("/api/admin/releases", filters)
+  const exportParams = new URLSearchParams({ format: "csv", search: list.search, platform, status })
 
   async function createRelease(event: FormEvent) {
     event.preventDefault()
@@ -99,6 +100,7 @@ export default function ReleasesPage() {
       <AdminListControls
         search={list.search}
         onSearch={list.setSearch}
+        exportHref={`/api/admin/releases?${exportParams}`}
         filters={
           <>
             <select value={platform} onChange={(event) => setPlatform(event.target.value)} className="h-11 rounded-2xl border border-white/10 bg-black px-4 text-sm">

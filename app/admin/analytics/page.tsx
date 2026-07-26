@@ -1,7 +1,7 @@
 "use client"
 
 import { useEffect, useState } from "react"
-import { AdminNotice, AdminPageHeader, useAdminOnline } from "@/components/admin/ControlPlaneUi"
+import { AdminExportLink, AdminNotice, AdminPageHeader, useAdminOnline } from "@/components/admin/ControlPlaneUi"
 
 type Point = { label: string; value: number }
 type AnalyticsPayload = {
@@ -69,12 +69,15 @@ export default function AnalyticsPage() {
         title="Analytics"
         description="License growth, activations, devices, releases, optional backup use, and support. Local customer sales, inventory value, and invoices are excluded."
         action={
-          <select value={days} onChange={(event) => setDays(event.target.value)} className="h-12 rounded-2xl border border-white/10 bg-black px-4 text-sm font-bold">
-            <option value="7">Last 7 days</option>
-            <option value="30">Last 30 days</option>
-            <option value="90">Last 90 days</option>
-            <option value="365">Last 365 days</option>
-          </select>
+          <div className="flex gap-2">
+            <select value={days} onChange={(event) => setDays(event.target.value)} className="h-12 rounded-2xl border border-white/10 bg-black px-4 text-sm font-bold">
+              <option value="7">Last 7 days</option>
+              <option value="30">Last 30 days</option>
+              <option value="90">Last 90 days</option>
+              <option value="365">Last 365 days</option>
+            </select>
+            <AdminExportLink href={`/api/admin/analytics?days=${days}&format=csv`} />
+          </div>
         }
       />
       <AdminNotice>{payload.dataNotice || "Only authoritative platform data is included."}</AdminNotice>

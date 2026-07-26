@@ -22,7 +22,7 @@ const protectedRoutes = [
 
 for (const route of protectedRoutes) {
   const source = read(route)
-  assert.match(source, /requireAdmin\(request\)/, `${route} must enforce server-side admin authorization.`)
+  assert.match(source, /requireAdmin(?:ControlPlane)?\(request\)/, `${route} must enforce server-side admin authorization.`)
   assert.match(source, /Cache-Control|adminOk|adminFail/, `${route} must opt out of unsafe caching and return controlled errors.`)
 }
 
@@ -40,10 +40,14 @@ for (const route of [
 }
 
 const auth = read("lib/api/auth.ts")
+const readiness = read("lib/admin/schema-readiness.ts")
 assert.match(auth, /validateMutationOrigin/, "Admin mutations must validate origins.")
 assert.match(auth, /x-bezgrow-desktop-admin/, "Desktop bearer access must require the explicit desktop bridge marker.")
 assert.match(auth, /checkRateLimit/, "Admin mutations must be rate limited.")
 assert.match(auth, /admin_audit_logs/, "Audit records must include full request context.")
+assert.match(auth, /verifyAdminControlPlaneSchema/, "Admin data routes must verify the complete schema before service-role access.")
+assert.match(readiness, /admin_control_plane_schema_status/, "Schema readiness must use the catalog-backed server RPC.")
+assert.doesNotMatch(readiness, /NEXT_PUBLIC_.*SERVICE_ROLE|NEXT_PUBLIC_.*PRIVATE/, "Readiness checks must not expose server secrets.")
 
 const licenseRoute = read("app/api/admin/licenses/route.ts")
 assert.match(licenseRoute, /signLicensePayload/, "License generation must be server-side.")

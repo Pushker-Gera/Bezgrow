@@ -348,6 +348,17 @@ export function AdminListControls({
   )
 }
 
+export function AdminExportLink({ href }: { href: string }) {
+  return (
+    <a
+      href={href}
+      className="flex h-12 items-center rounded-2xl border border-white/10 px-5 text-sm font-black"
+    >
+      Export CSV
+    </a>
+  )
+}
+
 export function AdminPagination({
   page,
   total,

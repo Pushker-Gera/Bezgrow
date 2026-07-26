@@ -1,12 +1,14 @@
 import "server-only"
 
 import { z } from "zod"
-import { requireAdmin, writeAdminAudit } from "@/lib/api/auth"
+import { requireAdminControlPlane, writeAdminAudit } from "@/lib/api/auth"
 import {
   adminFail,
   adminOk,
   adminRange,
+  adminSort,
   controlPlaneErrorMessage,
+  csvResponse,
   effectiveLicenseStatus,
   parseAdminListQuery,
   unexpectedAdminError,
@@ -23,18 +25,23 @@ const deviceActionSchema = z.object({
 })
 
 export async function GET(request: Request) {
-  const auth = await requireAdmin(request)
+  const auth = await requireAdminControlPlane(request)
   if (!auth.ok) return adminFail({ requestId: crypto.randomUUID() }, auth.error, auth.status)
   const context = auth.context
 
   try {
     const list = parseAdminListQuery(request)
     const { from, to } = adminRange(list)
+    const exportMode = list.format === "csv"
+    const sort = adminSort(
+      list,
+      ["created_at", "updated_at", "device_id", "activation_date", "last_reported_at", "app_version", "device_status"],
+      "created_at"
+    )
     let query = adminSupabase
       .from("registered_devices")
       .select("*", { count: "exact" })
-      .order("created_at", { ascending: false })
-      .range(from, to)
+      .order(sort.column, { ascending: sort.ascending })
     if (list.search) {
       const term = list.search.replaceAll(",", " ")
       query = query.or(`device_id.ilike.%${term}%,operating_system.ilike.%${term}%,app_version.ilike.%${term}%`)
@@ -43,6 +50,7 @@ export async function GET(request: Request) {
     if (list.platform) query = query.eq("platform", list.platform)
     if (list.channel) query = query.eq("release_channel", list.channel)
     if (list.version) query = query.eq("app_version", list.version)
+    query = exportMode ? query.limit(10000) : query.range(from, to)
 
     const result = await query
     if (result.error) {
@@ -72,14 +80,41 @@ export async function GET(request: Request) {
       (licenses.data || []).map((row) => [row.id, { ...row, effective_status: effectiveLicenseStatus(row) }])
     )
 
-    return adminOk(context, {
-      data: rows.map((device) => ({
+    const data = rows.map((device) => ({
         ...device,
         customer: customerMap.get(device.platform_customer_id) || null,
         business: businessMap.get(device.platform_business_id) || null,
         license: licenseMap.get(device.license_id) || null,
         presence_label: device.last_reported_at ? `Last reported: ${device.last_reported_at}` : "Last reported: Never",
-      })),
+      }))
+    if (exportMode) {
+      return csvResponse(
+        `bezgrow-registered-devices-${new Date().toISOString().slice(0, 10)}.csv`,
+        [
+          "id",
+          "device_id",
+          "license_id",
+          "platform",
+          "architecture",
+          "operating_system",
+          "app_version",
+          "device_status",
+          "activation_date",
+          "last_reported_at",
+          "last_update_check_at",
+          "release_channel",
+          "diagnostics_available",
+          "diagnostic_requested_at",
+          "replaced_by_device_id",
+          "created_at",
+          "updated_at",
+        ],
+        data
+      )
+    }
+
+    return adminOk(context, {
+      data,
       pagination: { page: list.page, limit: list.limit, total: result.count || 0 },
       monitoringNotice: "Devices report only during authenticated online contact. Offline devices are not monitored in real time.",
     })
@@ -89,7 +124,7 @@ export async function GET(request: Request) {
 }
 
 export async function PATCH(request: Request) {
-  const auth = await requireAdmin(request)
+  const auth = await requireAdminControlPlane(request)
   if (!auth.ok) return adminFail({ requestId: crypto.randomUUID() }, auth.error, auth.status)
   const context = auth.context
   const parsed = deviceActionSchema.safeParse(await request.json().catch(() => null))
