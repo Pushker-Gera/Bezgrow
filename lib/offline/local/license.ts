@@ -3,7 +3,8 @@
 import { normalizeLicenseEnvKey, parseLicenseInput, verifyLicenseSignature, type LicensePayload } from "@/lib/license/codec"
 import { evaluateStoredLicense, type LicensePolicyResult, type StoredLicenseRow } from "@/lib/license/policy"
 import { setDesktopAuthMarker } from "@/lib/desktop/session"
-import { invokeTauri, isTauriRuntimeAsync } from "@/lib/desktop/tauri"
+import { desktopArchitecture, invokeTauri, isTauriRuntimeAsync } from "@/lib/desktop/tauri"
+import packageJson from "@/package.json"
 import {
   createOfflineId,
   cacheWorkspaceBootstrap,
@@ -28,6 +29,12 @@ type LicenseVerificationResponse = {
   success: boolean
   error?: string
   valid?: boolean
+}
+
+type DeviceCheckinResponse = {
+  success?: boolean
+  requestId?: string
+  error?: string
 }
 
 function nowIso() {
@@ -383,6 +390,69 @@ async function verifyLicenseForActivation(input: unknown, parsed: ReturnType<typ
   }
 }
 
+export async function reportActivatedDevice(
+  parsed: ReturnType<typeof parseLicenseInput>,
+  options: {
+    updateCheckResult?: "success" | "failed" | "no_update" | "update_available"
+    signal?: AbortSignal
+  } = {}
+) {
+  if (typeof navigator === "undefined" || !navigator.onLine) {
+    return { reported: false, status: "offline" as const }
+  }
+  if (!(await isTauriRuntimeAsync().catch(() => false))) {
+    return { reported: false, status: "not_desktop" as const }
+  }
+
+  const platform = /windows/i.test(`${navigator.platform} ${navigator.userAgent}`)
+    ? "windows"
+    : "macos"
+  const architecture = desktopArchitecture() === "arm64" ? "arm64" : "x64"
+  const apiPath = `/api/desktop-proxy?path=${encodeURIComponent("/api/devices/checkin")}`
+  const timeoutSignal = options.signal || AbortSignal.timeout(8_000)
+  const response = await fetch(apiPath, {
+    method: "POST",
+    cache: "no-store",
+    keepalive: true,
+    signal: timeoutSignal,
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      license_key: parsed.licenseKey,
+      license_id: parsed.payload.license_id,
+      device_id: parsed.payload.device_id,
+      business_id: parsed.payload.business_id,
+      platform,
+      operating_system: navigator.userAgent.slice(0, 160),
+      architecture,
+      app_version: packageJson.version,
+      release_channel: "stable",
+      activation_status: "active",
+      timestamp: nowIso(),
+      update_check_result: options.updateCheckResult,
+      diagnostics_available: false,
+    }),
+  }).catch(() => null)
+  if (!response) return { reported: false, status: "network_error" as const }
+
+  const result = (await response.json().catch(() => null)) as DeviceCheckinResponse | null
+  if (!response.ok || !result?.success) {
+    console.warn("[offline/license] device check-in was not accepted", {
+      requestId: result?.requestId || null,
+      status: response.status,
+    })
+    return {
+      reported: false,
+      status: "rejected" as const,
+      requestId: result?.requestId || null,
+    }
+  }
+  return {
+    reported: true,
+    status: "reported" as const,
+    requestId: result.requestId || null,
+  }
+}
+
 export async function activateOfflineLicense(input: unknown) {
   const parsed = parseLicenseInput(input)
   const deviceId = await getOrCreateDeviceId()
@@ -405,6 +475,15 @@ export async function activateOfflineLicense(input: unknown) {
   await writeActivatedLicense(parsed.payload, parsed.licenseKey, parsed.signatureText)
   await writeDesktopSecret(LICENSE_SECRET_KEY, parsed.licenseKey)
   await createLocalWorkspaceFromLicense(parsed.payload)
+  // Online reporting is deliberately best-effort and runs only after the
+  // signed license has been accepted and persisted locally. A network or
+  // control-plane failure can never roll back or block offline ERP access.
+  await reportActivatedDevice(parsed).catch((error) => {
+    console.warn("[offline/license] device check-in failed after local activation", {
+      message: error instanceof Error ? error.message : "unknown",
+    })
+    return null
+  })
   return {
     license: parsed.payload,
     status: "active",

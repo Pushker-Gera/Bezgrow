@@ -29,6 +29,9 @@ const createReleaseSchema = z.object({
   file_url: httpsUrl,
   file_size: z.coerce.number().int().min(1).optional(),
   sha256: z.string().trim().regex(/^[a-fA-F0-9]{64}$/).optional(),
+  artifact_type: z.enum(["dmg", "nsis", "msi", "portable_exe", "portable_zip"]).optional(),
+  file_name: z.string().trim().min(1).max(240).optional(),
+  update_signature: z.string().trim().max(20000).optional(),
   minimum_supported_version: z.string().trim().max(40).optional(),
   release_notes: z.string().trim().max(10000).optional(),
   rollout_percentage: z.coerce.number().int().min(0).max(100).default(100),
@@ -37,7 +40,17 @@ const createReleaseSchema = z.object({
 
 const releaseActionSchema = z.object({
   id: z.string().uuid(),
-  action: z.enum(["publish", "pause", "resume", "mark_mandatory", "set_rollout", "retire", "verify_artifact"]),
+  action: z.enum([
+    "publish",
+    "pause",
+    "unpublish",
+    "resume",
+    "mark_mandatory",
+    "set_rollout",
+    "retire",
+    "archive",
+    "verify_artifact",
+  ]),
   rollout_percentage: z.coerce.number().int().min(0).max(100).optional(),
   mandatory: z.boolean().optional(),
 })
@@ -45,6 +58,7 @@ const releaseActionSchema = z.object({
 type ReleaseRow = {
   id: string
   platform: "macos" | "windows"
+  architecture: "arm64" | "x64"
   release_status: string
   active: boolean
   release_artifacts?: Array<{
@@ -56,6 +70,9 @@ type ReleaseRow = {
     signature_status: string
     notarization_status: string
     code_signing_status: string
+    artifact_type?: string | null
+    file_name?: string | null
+    update_signature?: string | null
   }>
 }
 
@@ -71,7 +88,20 @@ function publicationError(release: ReleaseRow) {
   return null
 }
 
-async function verifyArtifact(artifact: NonNullable<ReleaseRow["release_artifacts"]>[number]) {
+function inferredArtifactType(platform: ReleaseRow["platform"], fileName: string) {
+  const lower = fileName.toLowerCase()
+  if (platform === "macos") return lower.endsWith(".dmg") ? "dmg" : null
+  if (lower.endsWith(".msi")) return "msi"
+  if (lower.endsWith(".zip")) return "portable_zip"
+  if (lower.includes("portable") && lower.endsWith(".exe")) return "portable_exe"
+  if (lower.endsWith(".exe")) return "nsis"
+  return null
+}
+
+async function verifyArtifact(
+  artifact: NonNullable<ReleaseRow["release_artifacts"]>[number],
+  release: ReleaseRow
+) {
   const url = new URL(artifact.file_url)
   if (!(await isPublicHttpsUrl(url))) {
     return {
@@ -102,6 +132,18 @@ async function verifyArtifact(artifact: NonNullable<ReleaseRow["release_artifact
       validated_at: new Date().toISOString(),
     }
   }
+  const contentType = (response.headers.get("content-type") || "").toLowerCase()
+  if (
+    contentType.includes("text/html") ||
+    contentType.includes("application/json") ||
+    contentType.startsWith("text/")
+  ) {
+    return {
+      validation_status: "invalid",
+      validation_error: "Artifact URL returned a webpage or JSON response instead of an installer.",
+      validated_at: new Date().toISOString(),
+    }
+  }
 
   if (!response.body) {
     return {
@@ -113,11 +155,17 @@ async function verifyArtifact(artifact: NonNullable<ReleaseRow["release_artifact
 
   const hash = createHash("sha256")
   let actualSize = 0
+  let firstBytes = Buffer.alloc(0)
+  let trailingBytes = Buffer.alloc(0)
   const reader = response.body.getReader()
   while (true) {
     const { done, value } = await reader.read()
     if (done) break
     const bytes = Buffer.from(value)
+    if (firstBytes.byteLength < 32) {
+      firstBytes = Buffer.concat([firstBytes, bytes]).subarray(0, 32)
+    }
+    trailingBytes = Buffer.concat([trailingBytes, bytes]).subarray(-512)
     actualSize += bytes.byteLength
     if (actualSize > 2 * 1024 * 1024 * 1024) {
       await reader.cancel()
@@ -130,16 +178,47 @@ async function verifyArtifact(artifact: NonNullable<ReleaseRow["release_artifact
     hash.update(bytes)
   }
   const actualHash = hash.digest("hex")
+  const disposition = response.headers.get("content-disposition") || ""
+  const dispositionMatch = disposition.match(/filename\*?=(?:UTF-8''|")?([^";]+)/i)
+  const urlFileName = decodeURIComponent(url.pathname.split("/").pop() || "")
+  const actualFileName = (dispositionMatch?.[1] || urlFileName).replaceAll('"', "").trim()
+  const artifactType = inferredArtifactType(release.platform, actualFileName)
+  const expectedType = artifact.artifact_type || artifactType
+  const platformMatches =
+    release.platform === "macos"
+      ? artifactType === "dmg"
+      : artifactType === "nsis" ||
+        artifactType === "msi" ||
+        artifactType === "portable_exe" ||
+        artifactType === "portable_zip"
+  const magicMatches =
+    artifactType === "dmg"
+      ? trailingBytes.includes(Buffer.from("koly"))
+      : artifactType === "msi"
+        ? firstBytes.subarray(0, 8).equals(Buffer.from([0xd0, 0xcf, 0x11, 0xe0, 0xa1, 0xb1, 0x1a, 0xe1]))
+        : artifactType === "nsis" || artifactType === "portable_exe"
+          ? firstBytes.subarray(0, 2).toString("ascii") === "MZ"
+          : artifactType === "portable_zip"
+            ? firstBytes.subarray(0, 2).toString("ascii") === "PK"
+            : false
   const sizeMatches = !artifact.file_size || Number(artifact.file_size) === actualSize
   const hashMatches = !artifact.sha256 || artifact.sha256.toLowerCase() === actualHash
+  const typeMatches = !artifact.artifact_type || artifact.artifact_type === artifactType
+  const valid = sizeMatches && hashMatches && platformMatches && magicMatches && typeMatches
   return {
+    artifact_type: expectedType,
+    file_name: artifact.file_name || actualFileName,
     file_size: actualSize,
     sha256: artifact.sha256 || actualHash,
-    validation_status: sizeMatches && hashMatches ? "valid" : "invalid",
+    validation_status: valid ? "valid" : "invalid",
     validation_error: !sizeMatches
       ? "Artifact size does not match release metadata."
       : !hashMatches
         ? "Artifact SHA-256 does not match release metadata."
+        : !platformMatches || !typeMatches
+          ? "Artifact type does not match the selected platform."
+          : !magicMatches
+            ? "Artifact file signature does not match its installer type."
         : null,
     validated_at: new Date().toISOString(),
   }
@@ -203,6 +282,9 @@ export async function GET(request: Request) {
           "file_url",
           "file_size",
           "sha256",
+          "artifact_type",
+          "file_name",
+          "update_signature",
           "validation_status",
           "signature_status",
           "notarization_status",
@@ -261,6 +343,11 @@ export async function POST(request: Request) {
         file_url: input.file_url,
         file_size: input.file_size || null,
         sha256: input.sha256?.toLowerCase() || null,
+        artifact_type:
+          input.artifact_type ||
+          inferredArtifactType(input.platform, input.file_name || new URL(input.file_url).pathname),
+        file_name: input.file_name || decodeURIComponent(new URL(input.file_url).pathname.split("/").pop() || ""),
+        update_signature: input.update_signature || null,
         signature_status: "pending",
         notarization_status: input.platform === "windows" ? "not_applicable" : "pending",
         code_signing_status: "pending",
@@ -303,7 +390,7 @@ export async function PATCH(request: Request) {
     if (input.action === "verify_artifact") {
       const artifact = release.release_artifacts?.[0]
       if (!artifact) return adminFail(context, "Release artifact unavailable.", 404)
-      const verification = await verifyArtifact(artifact)
+      const verification = await verifyArtifact(artifact, release)
       const result = await adminSupabase
         .from("release_artifacts")
         .update(verification)
@@ -334,6 +421,10 @@ export async function PATCH(request: Request) {
       updates.release_status = "paused"
       updates.active = false
     }
+    if (input.action === "unpublish") {
+      updates.release_status = "paused"
+      updates.active = false
+    }
     if (input.action === "resume") {
       const error = publicationError(release)
       if (error) return adminFail(context, error, 422)
@@ -341,6 +432,10 @@ export async function PATCH(request: Request) {
       updates.active = true
     }
     if (input.action === "retire") {
+      updates.release_status = "retired"
+      updates.active = false
+    }
+    if (input.action === "archive") {
       updates.release_status = "retired"
       updates.active = false
     }
@@ -355,10 +450,12 @@ export async function PATCH(request: Request) {
     const actionMap: Record<string, string> = {
       publish: "RELEASE_PUBLISHED",
       pause: "RELEASE_PAUSED",
+      unpublish: "RELEASE_UNPUBLISHED",
       resume: "RELEASE_RESUMED",
       mark_mandatory: "RELEASE_MANDATORY_CHANGED",
       set_rollout: "RELEASE_ROLLOUT_CHANGED",
       retire: "RELEASE_RETIRED",
+      archive: "RELEASE_ARCHIVED",
     }
     await writeAdminAudit(context, {
       action: actionMap[input.action],

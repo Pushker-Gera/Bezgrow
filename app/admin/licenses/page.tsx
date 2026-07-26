@@ -38,6 +38,7 @@ const initialForm = {
   workspace_id: "",
   device_id: "",
   platform: "macos",
+  architecture: "arm64",
   app_version: "",
   plan_name: "Offline ERP",
   issue_date: today(),
@@ -233,7 +234,7 @@ export default function LicensesPage() {
             render: (row) => (
               <div>
                 <code className="text-xs text-cyan-100">{displayValue(row.device_id)}</code>
-                <p className="mt-1 text-xs text-neutral-500">{displayValue(row.platform)} · {displayValue(row.app_version, "Version not reported")}</p>
+                <p className="mt-1 text-xs text-neutral-500">{displayValue(row.platform)} · {displayValue(row.architecture, "Architecture not reported")} · {displayValue(row.app_version, "Version not reported")}</p>
               </div>
             ),
           },
@@ -323,6 +324,13 @@ export default function LicensesPage() {
               <select value={form.platform} onChange={(event) => setForm((current) => ({ ...current, platform: event.target.value }))} className="mt-2 h-11 w-full rounded-xl border border-white/10 bg-black px-3">
                 <option value="macos">macOS</option>
                 <option value="windows">Windows</option>
+              </select>
+            </label>
+            <label className="text-sm font-bold text-neutral-300">
+              Architecture
+              <select value={form.architecture} onChange={(event) => setForm((current) => ({ ...current, architecture: event.target.value }))} className="mt-2 h-11 w-full rounded-xl border border-white/10 bg-black px-3">
+                <option value="arm64">ARM64</option>
+                <option value="x64">x64</option>
               </select>
             </label>
           </div>

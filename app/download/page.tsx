@@ -2,9 +2,7 @@ import Link from "next/link"
 import type { Metadata } from "next"
 import type { ReactNode } from "react"
 import { BezgrowLogoMark } from "@/components/brand/BezgrowLogoMark"
-import { getPublicDesktopReleaseManifest } from "@/lib/releases/public"
-import packageJson from "@/package.json"
-import desktopReleaseManifest from "@/public/downloads/desktop-release.json"
+import { getDesktopReleaseAvailability } from "@/lib/releases/public"
 
 const macInstallerPath = "/downloads/Bezgrow-mac.dmg"
 const windowsInstallerPaths = ["/downloads/Bezgrow-windows.exe", "/downloads/Bezgrow-windows.msi"]
@@ -25,6 +23,8 @@ type InstallerInfo = {
   statusLabel: string
   notarized?: boolean
   signed?: boolean
+  version?: string | null
+  architecture?: string | null
 }
 
 type ManifestInstaller = {
@@ -36,6 +36,7 @@ type ManifestInstaller = {
   sha256?: string
   notarized?: boolean
   signed?: boolean
+  architecture?: string
 }
 
 type DesktopReleaseManifest = {
@@ -46,8 +47,6 @@ type DesktopReleaseManifest = {
   windowsMsi?: ManifestInstaller
   windowsArm64?: ManifestInstaller
 }
-
-const checkedInReleaseManifest = desktopReleaseManifest as DesktopReleaseManifest
 
 function formatFileSize(bytes: number) {
   const units = ["B", "KB", "MB", "GB"]
@@ -81,14 +80,16 @@ function getInstallerInfo(
 
   if (releaseHref && isSafeInstallerHref(releaseHref) && productionReady) {
     const sizeLabel = releaseInfo.size ? formatFileSize(releaseInfo.size) : null
-    const version = releaseInfo.version || releaseVersion || packageJson.version
+    const version = releaseInfo.version || releaseVersion || null
     return {
       available: true,
       href: releaseHref,
       sizeLabel,
       notarized: "notarized" in releaseInfo ? releaseInfo.notarized : undefined,
       signed: "signed" in releaseInfo ? releaseInfo.signed : undefined,
-      statusLabel: `Version ${version}${sizeLabel ? ` | ${sizeLabel}` : ""}`,
+      version,
+      architecture: releaseInfo.architecture || null,
+      statusLabel: `${version ? `Version ${version}` : "Published release"}${releaseInfo.architecture ? ` · ${releaseInfo.architecture.toUpperCase()}` : ""}${sizeLabel ? ` · ${sizeLabel}` : ""}`,
     }
   }
 
@@ -99,12 +100,21 @@ function getInstallerInfo(
       sizeLabel: releaseInfo?.size ? formatFileSize(releaseInfo.size) : null,
       notarized: releaseNotarized,
       signed: releaseInfo?.signed,
+      version: releaseInfo?.version || releaseVersion || null,
+      architecture: releaseInfo?.architecture || null,
       statusLabel: "Internal testing only — signing or notarization incomplete",
     }
   }
 
   const candidates = Array.isArray(paths) ? paths : [paths]
-  return { available: false, href: candidates[0], sizeLabel: null, statusLabel: missingStatusLabel }
+  return {
+    available: false,
+    href: candidates[0],
+    sizeLabel: null,
+    version: releaseInfo?.version || releaseVersion || null,
+    architecture: releaseInfo?.architecture || null,
+    statusLabel: missingStatusLabel,
+  }
 }
 
 function DownloadButton({
@@ -184,17 +194,25 @@ function MobileInstallCard({
 }
 
 export default async function DownloadPage() {
-  const cloudManifest = await getPublicDesktopReleaseManifest()
-  const releaseManifest = (cloudManifest || checkedInReleaseManifest) as DesktopReleaseManifest
-  const macInstaller = getInstallerInfo(macInstallerPath, "Mac installer not found.", releaseManifest.mac || releaseManifest.macX64, releaseManifest.version)
+  const availability = await getDesktopReleaseAvailability()
+  const releaseManifest = (availability.manifest || {}) as DesktopReleaseManifest
+  const macInstaller = getInstallerInfo(
+    macInstallerPath,
+    availability.mac.reason,
+    availability.mac.installer,
+    availability.mac.version || undefined
+  )
   const windowsInstaller = getInstallerInfo(
     windowsInstallerPaths,
-    "Windows installer not found on this build.",
-    releaseManifest.windows || releaseManifest.windowsMsi || releaseManifest.windowsArm64,
-    releaseManifest.version
+    availability.windows.reason,
+    availability.windows.installer,
+    availability.windows.version || undefined
   )
   const installersReady = macInstaller.available || windowsInstaller.available
-  const showMacNotarizationWarning = macInstaller.available && macInstaller.notarized !== true
+  const releaseNotes = [
+    availability.mac.releaseNotes,
+    availability.windows.releaseNotes,
+  ].filter((note, index, notes): note is string => Boolean(note) && notes.indexOf(note) === index)
 
   return (
     <main className="min-h-dvh overflow-x-hidden bg-[#020403] px-4 py-8 text-white sm:px-5 sm:py-10 lg:px-8">
@@ -212,25 +230,36 @@ export default async function DownloadPage() {
           </p>
 
           <div className="mt-6 inline-flex rounded-full border border-white/10 bg-black/35 px-4 py-2 text-sm font-bold text-white/65">
-            Version {releaseManifest.version || packageJson.version}
+            {releaseManifest.version ? `Published version ${releaseManifest.version}` : "No published desktop release"}
           </div>
 
           {!installersReady && (
             <div className="mt-6 break-words rounded-2xl border border-amber-300/25 bg-amber-300/10 px-4 py-3 text-sm font-bold text-amber-100 [overflow-wrap:anywhere]">
-              Desktop installers are being prepared. Please contact support.
-            </div>
-          )}
-
-          {showMacNotarizationWarning && (
-            <div className="mt-6 break-words rounded-2xl border border-amber-300/25 bg-amber-300/10 px-4 py-3 text-sm font-bold text-amber-100 [overflow-wrap:anywhere]">
-              The current macOS artifact is internal testing only and is not offered as a public download until signing and notarization complete.
+              No public desktop installer currently passes the release policy. Platform-specific reasons are shown below.
             </div>
           )}
 
           <div className="mt-7 grid gap-3 sm:grid-cols-2">
-            <InstallerCard href={macInstallerPath} info={macInstaller} label="Download for Mac" />
-            <InstallerCard href={windowsInstallerPaths[0]} info={windowsInstaller} label="Download for Windows" />
+            <InstallerCard
+              href={macInstallerPath}
+              info={macInstaller}
+              label={`Download for Mac${macInstaller.version ? ` · v${macInstaller.version}` : ""}`}
+            />
+            <InstallerCard
+              href={windowsInstallerPaths[0]}
+              info={windowsInstaller}
+              label={`Download for Windows${windowsInstaller.version ? ` · v${windowsInstaller.version}` : ""}`}
+            />
           </div>
+
+          {releaseNotes.length > 0 && (
+            <details className="mt-6 rounded-2xl border border-white/10 bg-black/25 p-4">
+              <summary className="cursor-pointer text-sm font-black text-cyan-100">Release notes</summary>
+              <div className="mt-3 space-y-2 text-sm leading-6 text-white/60">
+                {releaseNotes.map((note) => <p key={note}>{note}</p>)}
+              </div>
+            </details>
+          )}
 
           <div className="mt-5 grid gap-3 sm:grid-cols-2">
             <MobileInstallCard

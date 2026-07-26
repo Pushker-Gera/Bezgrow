@@ -1,7 +1,6 @@
 import { NextResponse } from "next/server"
 import { getPublicDesktopReleaseManifest } from "@/lib/releases/public"
 import { isPublicHttpsUrl } from "@/lib/security/public-url"
-import desktopReleaseManifest from "@/public/downloads/desktop-release.json"
 
 export const dynamic = "force-dynamic"
 
@@ -29,8 +28,6 @@ type DesktopReleaseManifest = {
   windowsMsi?: InstallerRelease
   windowsArm64?: InstallerRelease
 }
-
-const checkedInReleaseManifest = desktopReleaseManifest as DesktopReleaseManifest
 
 function jsonError(message: string, status = 404) {
   return NextResponse.json({ success: false, error: message }, { status, headers: { "Cache-Control": "no-store" } })
@@ -81,7 +78,7 @@ export async function GET(request: Request) {
   const url = new URL(request.url)
   const platform = url.searchParams.get("platform") === "mac" ? "mac" : "windows"
   const controlPlaneManifest = await getPublicDesktopReleaseManifest()
-  const releaseManifest = (controlPlaneManifest || checkedInReleaseManifest) as DesktopReleaseManifest
+  const releaseManifest = controlPlaneManifest as DesktopReleaseManifest | null
 
   const { releases, missing } = releasesForPlatform(platform, releaseManifest)
   const hrefs = releases

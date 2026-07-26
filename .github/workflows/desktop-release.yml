@@ -57,10 +57,30 @@ jobs:
 
       - run: npm run desktop:build:mac:public
 
+      - name: Record verified Mac artifact architecture
+        shell: bash
+        run: |
+          APP_BINARY="$(find src-tauri/target/release/bundle/macos -type f -path '*/Contents/MacOS/*' -perm -111 | head -n 1)"
+          if [ -z "$APP_BINARY" ]; then
+            echo "The built macOS application binary was not found."
+            exit 1
+          fi
+          ARCHS="$(lipo -archs "$APP_BINARY")"
+          case "$ARCHS" in
+            arm64) RELEASE_ARCHITECTURE="arm64" ;;
+            x86_64) RELEASE_ARCHITECTURE="x64" ;;
+            *)
+              echo "Unsupported or multi-architecture Mac artifact: $ARCHS"
+              exit 1
+              ;;
+          esac
+          echo "$RELEASE_ARCHITECTURE" > mac-architecture.txt
+
       - run: |
           mkdir -p release-artifacts
           cp public/downloads/Bezgrow-mac.dmg release-artifacts/Bezgrow-mac.dmg
           cp public/downloads/Bezgrow-mac.dmg.release.json release-artifacts/Bezgrow-mac.dmg.release.json
+          cp mac-architecture.txt release-artifacts/mac-architecture.txt
 
       - uses: actions/upload-artifact@v4
         with:
@@ -113,12 +133,22 @@ jobs:
         shell: pwsh
         run: choco install nsis --no-progress -y
 
-      - name: Install Windows signing certificate
+      - name: Resolve Windows signing mode
+        id: signing
         shell: pwsh
         run: |
-          if (-not $env:BEZGROW_WINDOWS_CERTIFICATE_BASE64 -or -not $env:BEZGROW_WINDOWS_CERTIFICATE_PASSWORD) {
-            throw "Windows release signing secrets are required."
+          $hasCertificate = -not [string]::IsNullOrWhiteSpace($env:BEZGROW_WINDOWS_CERTIFICATE_BASE64)
+          $hasPassword = -not [string]::IsNullOrWhiteSpace($env:BEZGROW_WINDOWS_CERTIFICATE_PASSWORD)
+          if ($hasCertificate -ne $hasPassword) {
+            throw "Windows signing configuration is incomplete: both certificate and password secrets are required."
           }
+          if (-not $hasCertificate) {
+            "status=unsigned" >> $env:GITHUB_OUTPUT
+            "Windows Authenticode credentials are unavailable; building an unsigned workflow artifact only." |
+              Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append
+            exit 0
+          }
+
           $certificatePath = Join-Path $env:RUNNER_TEMP "bezgrow-signing.pfx"
           [IO.File]::WriteAllBytes(
             $certificatePath,
@@ -133,6 +163,7 @@ jobs:
             throw "The Windows signing certificate could not be imported."
           }
           "BEZGROW_WINDOWS_CERTIFICATE_THUMBPRINT=$($certificate.Thumbprint)" >> $env:GITHUB_ENV
+          "status=valid" >> $env:GITHUB_OUTPUT
 
       - name: Download target Node runtime
         shell: pwsh
@@ -150,13 +181,21 @@ jobs:
           }
           "BEZGROW_DESKTOP_NODE_BINARY=$nodeBinary" >> $env:GITHUB_ENV
 
-      - name: Build signed installers and portable releases
+      - name: Build installers and portable releases
         shell: pwsh
-        run: >
-          node scripts/build-desktop.mjs
-          --public-windows
-          --bundles msi,nsis
-          --target ${{ matrix.target }}
+        run: |
+          $arguments = @(
+            "scripts/build-desktop.mjs",
+            "--bundles", "msi,nsis",
+            "--target", "${{ matrix.target }}"
+          )
+          if ("${{ steps.signing.outputs.status }}" -eq "valid") {
+            $arguments += "--public-windows"
+          }
+          & node $arguments
+          if ($LASTEXITCODE -ne 0) {
+            exit $LASTEXITCODE
+          }
 
       - name: Verify desktop startup budget
         if: matrix.arch == 'x64'
@@ -179,6 +218,8 @@ jobs:
           Copy-Item "$bundleRoot\msi\Bezgrow_*.msi" "release-artifacts\Bezgrow-windows-${{ matrix.arch }}.msi"
           Copy-Item "$bundleRoot\portable\Bezgrow-windows-${{ matrix.arch }}-portable.exe" release-artifacts
           Copy-Item "$bundleRoot\portable\Bezgrow-windows-${{ matrix.arch }}-portable.zip" release-artifacts
+          "${{ steps.signing.outputs.status }}" |
+            Set-Content "release-artifacts\windows-signing-status.txt"
 
       - uses: actions/upload-artifact@v4
         with:
@@ -218,15 +259,58 @@ jobs:
         id: release
         shell: bash
         run: |
+          PACKAGE_VERSION="$(node -p "require('./package.json').version")"
           VERSION="${{ inputs.version }}"
           if [ -z "$VERSION" ]; then
-            VERSION="$(node -p "require('./package.json').version")"
+            VERSION="$PACKAGE_VERSION"
           fi
-          TAG="v${VERSION#v}"
-          echo "version=${VERSION#v}" >> "$GITHUB_OUTPUT"
+          VERSION="${VERSION#v}"
+          if [ "$VERSION" != "$PACKAGE_VERSION" ]; then
+            echo "Requested release version $VERSION does not match package.json version $PACKAGE_VERSION."
+            exit 1
+          fi
+          TAG="v$VERSION"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
 
+      - name: Determine publication eligibility
+        id: eligibility
+        shell: bash
+        run: |
+          ELIGIBLE=true
+          REASON=""
+          shopt -s nullglob
+          WINDOWS_DIRS=(release-artifacts/windows-*)
+          for WINDOWS_DIR in "${WINDOWS_DIRS[@]}"; do
+            STATUS_FILE="$WINDOWS_DIR/windows-signing-status.txt"
+            ARCHITECTURE="${WINDOWS_DIR##*-}"
+            if [ ! -f "$STATUS_FILE" ]; then
+              ELIGIBLE=false
+              REASON="Windows $ARCHITECTURE signing status is missing."
+              break
+            fi
+            SIGNING_STATUS="$(tr -d '\r\n' < "$STATUS_FILE")"
+            if [ "$SIGNING_STATUS" != "valid" ]; then
+              ELIGIBLE=false
+              REASON="Windows $ARCHITECTURE artifact is unsigned because Authenticode credentials are unavailable."
+              break
+            fi
+          done
+          echo "eligible=$ELIGIBLE" >> "$GITHUB_OUTPUT"
+          echo "reason=$REASON" >> "$GITHUB_OUTPUT"
+          if [ "$ELIGIBLE" != "true" ]; then
+            echo "$REASON Stable publication and public downloads remain disabled." >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Compute release checksums
+        shell: bash
+        run: |
+          find release-artifacts -type f ! -name 'SHA256SUMS.txt' -print0 |
+            sort -z |
+            xargs -0 sha256sum > release-artifacts/SHA256SUMS.txt
+
       - name: Create or update GitHub release
+        if: steps.eligibility.outputs.eligible == 'true'
         shell: bash
         run: |
           TAG="${{ steps.release.outputs.tag }}"
@@ -242,16 +326,19 @@ jobs:
           gh release upload "$TAG" "${ASSETS[@]}" --clobber
 
       - name: Write download manifest
+        if: steps.eligibility.outputs.eligible == 'true'
         shell: bash
         run: |
           TAG="${{ steps.release.outputs.tag }}"
           VERSION="${{ steps.release.outputs.version }}"
           BASE_URL="https://github.com/$REPOSITORY/releases/download/$TAG"
-          MANIFEST_ARGS=(--version "$VERSION")
+          MANIFEST_ARGS=(--version "$VERSION" --replace true)
           if [ -f "release-artifacts/mac/Bezgrow-mac.dmg" ]; then
+            MAC_ARCHITECTURE="$(cat release-artifacts/mac/mac-architecture.txt)"
             MANIFEST_ARGS+=(
               --mac-url "$BASE_URL/Bezgrow-mac.dmg"
               --mac-file "release-artifacts/mac/Bezgrow-mac.dmg"
+              --mac-architecture "$MAC_ARCHITECTURE"
               --mac-notarized true
             )
           fi
@@ -283,7 +370,20 @@ jobs:
           fi
           node scripts/write-desktop-release-manifest.mjs "${MANIFEST_ARGS[@]}"
 
+      - name: Publish verified control-plane release metadata
+        if: steps.eligibility.outputs.eligible == 'true'
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+        run: >
+          node scripts/publish-release-metadata.mjs
+          --manifest public/downloads/desktop-release.json
+          --version "${{ steps.release.outputs.version }}"
+          --build-number "${{ github.run_number }}"
+          --channel stable
+
       - name: Commit manifest
+        if: steps.eligibility.outputs.eligible == 'true'
         shell: bash
         run: |
           if git diff --quiet -- public/downloads/desktop-release.json; then

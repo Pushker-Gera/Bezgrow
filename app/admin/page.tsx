@@ -12,9 +12,20 @@ import {
 } from "@/components/admin/ControlPlaneUi"
 
 type DashboardPayload = {
+  ok?: boolean
   success?: boolean
   error?: string
   requestId?: string
+  rangeDays?: number
+  loadTimeMs?: number
+  sections?: Record<
+    "licenses" | "devices" | "businesses" | "customers" | "releases" | "backups" | "support" | "audit" | "analytics",
+    {
+      status?: "ok" | "not_configured" | "never_reported" | "error"
+      message?: string
+      notes?: string
+    }
+  >
   summary?: {
     licenses?: Record<string, number>
     devices?: Record<string, number>
@@ -41,6 +52,7 @@ export default function AdminDashboardPage() {
   const [payload, setPayload] = useState<DashboardPayload>({})
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState("")
+  const [days, setDays] = useState("30")
 
   useEffect(() => {
     if (!online) return
@@ -49,7 +61,7 @@ export default function AdminDashboardPage() {
       setLoading(true)
       setError("")
     })
-    fetch("/api/admin/dashboard", {
+    fetch(`/api/admin/dashboard?days=${days}`, {
       credentials: "include",
       cache: "no-store",
       signal: controller.signal,
@@ -68,30 +80,31 @@ export default function AdminDashboardPage() {
         if (!controller.signal.aborted) setLoading(false)
       })
     return () => controller.abort()
-  }, [online])
+  }, [days, online])
 
   const summary = payload.summary || {}
   const licenses = summary.licenses || {}
   const devices = summary.devices || {}
-  const dashboardUnavailable = Boolean(error) && !loading
+  const sections = payload.sections
   const cards = [
-    ["Active Licenses", licenses.active],
-    ["Expiring in 7 days", licenses.expiring7],
-    ["Expiring in 30 days", licenses.expiring30],
-    ["Expiring in 90 days", licenses.expiring90],
-    ["Grace Period", licenses.gracePeriod],
-    ["Expired Licenses", licenses.expired],
-    ["Revoked Licenses", licenses.revoked],
-    ["Suspended Licenses", licenses.suspended],
-    ["Trial Licenses", licenses.trial],
-    ["Registered Devices", devices.total],
-    ["Activated Today", devices.activatedToday],
-    ["Active in 30 days", devices.active30Days],
-    ["Platform Customers", summary.customers],
-    ["Cloud Workspaces", summary.businesses],
-    ["Failed Update Checks", devices.failedUpdateChecks],
-    ["Support Attention", summary.supportAttention],
+    ["Active Licenses", licenses.active, "licenses"],
+    ["Expiring in 7 days", licenses.expiring7, "licenses"],
+    ["Expiring in 30 days", licenses.expiring30, "licenses"],
+    ["Expiring in 90 days", licenses.expiring90, "licenses"],
+    ["Grace Period", licenses.gracePeriod, "licenses"],
+    ["Expired Licenses", licenses.expired, "licenses"],
+    ["Revoked Licenses", licenses.revoked, "licenses"],
+    ["Suspended Licenses", licenses.suspended, "licenses"],
+    ["Trial Licenses", licenses.trial, "licenses"],
+    ["Registered Devices", devices.total, "devices"],
+    ["Activated Today", devices.activatedToday, "devices"],
+    ["Active in 30 days", devices.active30Days, "devices"],
+    ["Platform Customers", summary.customers, "customers"],
+    ["Cloud Workspaces", summary.businesses, "businesses"],
+    ["Failed Update Checks", devices.failedUpdateChecks, "devices"],
+    ["Support Attention", summary.supportAttention, "support"],
   ] as const
+  const sectionErrors = Object.entries(sections || {}).filter(([, section]) => section.status === "error")
 
   return (
     <div className="space-y-7">
@@ -99,20 +112,40 @@ export default function AdminDashboardPage() {
         eyebrow="Control plane"
         title="Platform dashboard"
         description="Authoritative licenses, registered devices, releases, optional cloud services, support, and security events. Local customer ERP records are intentionally excluded."
-        action={<AdminExportLink href="/api/admin/dashboard?format=csv" />}
+        action={
+          <div className="flex gap-2">
+            <select
+              aria-label="Dashboard date range"
+              value={days}
+              onChange={(event) => setDays(event.target.value)}
+              className="h-12 rounded-2xl border border-white/10 bg-black px-4 text-sm font-bold"
+            >
+              <option value="7">Last 7 days</option>
+              <option value="30">Last 30 days</option>
+              <option value="90">Last 90 days</option>
+              <option value="365">Last 365 days</option>
+            </select>
+            <AdminExportLink href={`/api/admin/dashboard?days=${days}&format=csv`} />
+          </div>
+        }
       />
 
       {error && <AdminNotice tone="danger">{error}</AdminNotice>}
+      {sectionErrors.map(([name, section]) => (
+        <AdminNotice key={name} tone="danger">
+          {section.message || `${name} metrics could not be loaded.`}
+        </AdminNotice>
+      ))}
 
       <section className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-        {cards.map(([label, value]) => (
+        {cards.map(([label, value, sectionName]) => (
           <article key={label} className="rounded-[24px] border border-white/10 bg-white/[0.035] p-5">
             <p className="text-xs font-black uppercase tracking-[0.12em] text-neutral-500">{label}</p>
             <p className="mt-4 text-3xl font-black text-white">
               {loading
                 ? <span className="inline-block h-9 w-16 animate-pulse rounded-lg bg-white/10" />
-                : dashboardUnavailable
-                  ? <span className="text-base text-neutral-500">Unavailable</span>
+                : sections?.[sectionName]?.status === "error"
+                  ? <span className="text-base text-red-200">Error</span>
                   : Number(value ?? 0).toLocaleString()}
             </p>
           </article>
@@ -130,8 +163,20 @@ export default function AdminDashboardPage() {
         </article>
         <article className="rounded-[28px] border border-white/10 bg-white/[0.03] p-6">
           <p className="text-xs font-black uppercase tracking-[0.16em] text-neutral-500">Optional Cloud Backup</p>
-          <p className="mt-4 text-2xl font-black">{dashboardUnavailable ? "Unavailable" : `${Number(summary.backup?.enabled ?? 0).toLocaleString()} enabled`}</p>
-          <p className="mt-2 text-sm text-neutral-400">{dashboardUnavailable ? "Status could not be loaded" : `${Number(summary.backup?.failed ?? 0).toLocaleString()} requiring attention`}</p>
+          <p className="mt-4 text-2xl font-black">
+            {sections?.backups?.status === "not_configured"
+              ? "Not configured"
+              : sections?.backups?.status === "error"
+                ? "Error"
+                : `${Number(summary.backup?.enabled ?? 0).toLocaleString()} enabled`}
+          </p>
+          <p className="mt-2 text-sm text-neutral-400">
+            {sections?.backups?.status === "not_configured"
+              ? "No workspace has opted in"
+              : sections?.backups?.status === "error"
+                ? "Backup metrics could not be loaded"
+                : `${Number(summary.backup?.failed ?? 0).toLocaleString()} requiring attention`}
+          </p>
           <p className="mt-4 text-xs leading-5 text-neutral-500">Only explicitly enabled backup metadata is counted.</p>
         </article>
       </section>
@@ -145,8 +190,8 @@ export default function AdminDashboardPage() {
           return (
             <article key={String(title)} className="rounded-[28px] border border-white/10 bg-white/[0.03] p-6">
               <p className="text-xs font-black uppercase tracking-[0.16em] text-neutral-500">{String(title)}</p>
-              {dashboardUnavailable ? (
-                <p className="mt-4 text-lg font-black text-neutral-500">Release status unavailable</p>
+              {sections?.releases?.status === "error" ? (
+                <p className="mt-4 text-lg font-black text-red-200">Release query failed</p>
               ) : row ? (
                 <div className="mt-4 flex flex-wrap items-center gap-3">
                   <p className="text-2xl font-black">v{displayValue(row.version)}</p>
@@ -155,7 +200,7 @@ export default function AdminDashboardPage() {
                   <span className="text-sm text-neutral-400">{displayValue(row.architecture)}</span>
                 </div>
               ) : (
-                <p className="mt-4 text-lg font-black text-neutral-300">No validated release published</p>
+                <p className="mt-4 text-lg font-black text-neutral-300">Not configured</p>
               )}
             </article>
           )

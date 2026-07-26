@@ -20,12 +20,12 @@ const desktopReleaseRoute = readFileSync("app/api/desktop-release/route.ts", "ut
 const publicReleaseSource = readFileSync("lib/releases/public.ts", "utf8");
 const releaseWorkflow = readFileSync(".github/workflows/desktop-release.yml", "utf8");
 const releaseManifestWriter = readFileSync("scripts/write-desktop-release-manifest.mjs", "utf8");
-assert.match(desktopReleaseRoute, /@\/public\/downloads\/desktop-release\.json/, "Desktop release API must bundle the checked-in manifest.");
+assert.doesNotMatch(desktopReleaseRoute, /@\/public\/downloads\/desktop-release\.json/, "Desktop release API must not fall back to checked-in release metadata.");
 assert.doesNotMatch(desktopReleaseRoute, /node:fs|readFileSync|existsSync/, "Desktop release API must not depend on serverless filesystem reads.");
-assert.match(desktopReleaseRoute, /getPublicDesktopReleaseManifest/, "Desktop update metadata must prefer validated control-plane releases.");
-assert.match(publicReleaseSource, /\.eq\("release_status", "published"\)/, "Public updates must only include published releases.");
-assert.match(publicReleaseSource, /\.eq\("active", true\)/, "Public updates must only include active releases.");
-assert.match(publicReleaseSource, /\.eq\("rollout_percentage", 100\)/, "Unauthenticated public feeds must not bypass staged rollouts.");
+assert.match(desktopReleaseRoute, /getDesktopReleaseAvailability/, "Desktop update metadata must use authoritative control-plane availability.");
+assert.match(publicReleaseSource, /release_status !== "published"/, "Public updates must only include published releases.");
+assert.match(publicReleaseSource, /!row\.active/, "Public updates must only include active releases.");
+assert.match(publicReleaseSource, /rollout_percentage \?\? 0\) !== 100/, "Unauthenticated public feeds must not bypass staged rollouts.");
 assert.match(publicReleaseSource, /validation_status !== "valid"/, "Public updates must reject unvalidated artifacts.");
 
 const desktopDownloadRoute = readFileSync("app/api/downloads/desktop/route.ts", "utf8");
@@ -40,7 +40,9 @@ assert.match(desktopDownloadRoute, /Location: location\.toString\(\)/, "Download
 assert.doesNotMatch(nextConfig, /source:\s*"\/api\/downloads\/desktop"[\s\S]*destination:\s*"\/downloads\/Bezgrow-mac\.dmg"/, "Routing must not bypass release validation for Mac downloads.");
 assert.match(desktopDownloadRoute, /release\.signed !== true/, "Download API must reject unsigned artifacts.");
 assert.match(desktopDownloadRoute, /platform === "mac" && release\.notarized !== true/, "Download API must reject unnotarized Mac artifacts.");
-assert.match(downloadPage, /Internal testing only/, "Unready release artifacts must be marked internal testing only.");
+assert.match(downloadPage, /availability\.mac\.reason/, "Mac download availability must show its authoritative platform-specific reason.");
+assert.match(downloadPage, /availability\.windows\.reason/, "Windows download availability must show its authoritative platform-specific reason.");
+assert.doesNotMatch(downloadPage, /checkedInReleaseManifest|desktop-release\.json/, "Download page must not use checked-in release metadata.");
 assert.match(appUpdates, /release\?\.signed === true/, "Desktop updates must reject unsigned artifacts.");
 assert.match(appUpdates, /api\/devices\/checkin/, "Desktop update checks must report through the authenticated device endpoint when a local license is available.");
 assert.doesNotMatch(downloadPage, /defaultWindowsRelease|githubReleaseBaseUrl/, "Download page must not mark missing Windows installers as available.");

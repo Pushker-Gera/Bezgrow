@@ -96,6 +96,32 @@ export async function authenticateDeviceReport(
       await recordFailure(request, requestId, input.deviceId, "stale_or_replaced_key")
       return { ok: false, status: 403, error: "This license key has been replaced.", requestId }
     }
+    if (licenseResult.data.device_id !== input.deviceId) {
+      await recordFailure(request, requestId, input.deviceId, "registered_device_mismatch")
+      return { ok: false, status: 403, error: "License device registration does not match.", requestId }
+    }
+    if (
+      licenseResult.data.subject_business_id &&
+      licenseResult.data.subject_business_id !== parsed.payload.business_id
+    ) {
+      await recordFailure(request, requestId, input.deviceId, "registered_business_mismatch")
+      return { ok: false, status: 403, error: "License business registration does not match.", requestId }
+    }
+    if (
+      licenseResult.data.subject_customer_id &&
+      licenseResult.data.subject_customer_id !== parsed.payload.customer_id
+    ) {
+      await recordFailure(request, requestId, input.deviceId, "registered_customer_mismatch")
+      return { ok: false, status: 403, error: "License customer registration does not match.", requestId }
+    }
+    if (
+      licenseResult.data.platform &&
+      parsed.payload.platform &&
+      licenseResult.data.platform !== parsed.payload.platform
+    ) {
+      await recordFailure(request, requestId, input.deviceId, "registered_platform_mismatch")
+      return { ok: false, status: 403, error: "License platform registration does not match.", requestId }
+    }
     const effectiveStatus = effectiveLicenseStatus(licenseResult.data)
     if (!["active", "trial", "expiring", "grace_period"].includes(effectiveStatus)) {
       await recordFailure(request, requestId, input.deviceId, effectiveStatus)
@@ -108,6 +134,22 @@ export async function authenticateDeviceReport(
       .eq("device_id", input.deviceId)
       .maybeSingle()
     if (deviceResult.error) throw deviceResult.error
+    if (
+      deviceResult.data &&
+      (
+        deviceResult.data.license_id !== licenseResult.data.id ||
+        deviceResult.data.platform_business_id !== licenseResult.data.platform_business_id ||
+        deviceResult.data.platform_customer_id !== licenseResult.data.platform_customer_id
+      )
+    ) {
+      await recordFailure(request, requestId, input.deviceId, "device_assigned_elsewhere")
+      return {
+        ok: false,
+        status: 409,
+        error: "Device is already assigned to another license or customer.",
+        requestId,
+      }
+    }
     if (deviceResult.data && ["revoked", "replaced"].includes(deviceResult.data.device_status)) {
       return { ok: false, status: 403, error: `Device is ${deviceResult.data.device_status}.`, requestId }
     }

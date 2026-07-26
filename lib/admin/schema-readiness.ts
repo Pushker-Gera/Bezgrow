@@ -2,7 +2,7 @@ import "server-only"
 
 import { adminSupabase } from "@/lib/supabase/admin"
 
-export const ADMIN_CONTROL_PLANE_SCHEMA_VERSION = 2026072601
+export const ADMIN_CONTROL_PLANE_SCHEMA_VERSION = 2026072701
 
 export type AdminControlPlaneSchemaStatus = {
   ready: boolean

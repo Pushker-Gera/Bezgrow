@@ -40,7 +40,7 @@ function readExistingManifest() {
   }
 }
 
-function buildInstaller(prefix, trustKey, version) {
+function buildInstaller(prefix, trustKey, version, architecture) {
   const url = readArg(`--${prefix}-url`);
   const downloadUrl = readArg(`--${prefix}-download-url`) || url;
   const file = readArg(`--${prefix}-file`);
@@ -56,6 +56,7 @@ function buildInstaller(prefix, trustKey, version) {
     url: downloadUrl,
     file: downloadUrl ? undefined : file.replace(/^public\//, "/"),
     version,
+    architecture,
     size,
     sha256: hash || undefined,
     [trustKey]: readBooleanArg(`--${prefix}-${trustKey}`),
@@ -63,21 +64,21 @@ function buildInstaller(prefix, trustKey, version) {
   };
 }
 
-const existingManifest = readExistingManifest();
+const existingManifest = readBooleanArg("--replace") ? {} : readExistingManifest();
 const version = readArg("--version") || existingManifest.version || packageJson.version;
-const mac = buildInstaller("mac", "notarized", version);
+const mac = buildInstaller("mac", "notarized", version, readArg("--mac-architecture"));
 if (mac) {
   // A successfully notarized macOS artifact is necessarily code signed.
   mac.signed = mac.notarized === true;
 }
-const windows = buildInstaller("windows", "signed", version);
-const windowsMsi = buildInstaller("windows-msi", "signed", version);
-const windowsArm64 = buildInstaller("windows-arm64", "signed", version);
-const windowsArm64Msi = buildInstaller("windows-arm64-msi", "signed", version);
-const windowsPortable = buildInstaller("windows-portable", "signed", version);
-const windowsPortableZip = buildInstaller("windows-portable-zip", "signed", version);
-const windowsArm64Portable = buildInstaller("windows-arm64-portable", "signed", version);
-const windowsArm64PortableZip = buildInstaller("windows-arm64-portable-zip", "signed", version);
+const windows = buildInstaller("windows", "signed", version, "x64");
+const windowsMsi = buildInstaller("windows-msi", "signed", version, "x64");
+const windowsArm64 = buildInstaller("windows-arm64", "signed", version, "arm64");
+const windowsArm64Msi = buildInstaller("windows-arm64-msi", "signed", version, "arm64");
+const windowsPortable = buildInstaller("windows-portable", "signed", version, "x64");
+const windowsPortableZip = buildInstaller("windows-portable-zip", "signed", version, "x64");
+const windowsArm64Portable = buildInstaller("windows-arm64-portable", "signed", version, "arm64");
+const windowsArm64PortableZip = buildInstaller("windows-arm64-portable-zip", "signed", version, "arm64");
 
 const nextManifest = {
   ...existingManifest,

@@ -158,11 +158,11 @@ export default function ReleasesPage() {
                   {Boolean(artifact?.file_url) && <button type="button" onClick={() => void navigator.clipboard.writeText(String(artifact?.file_url))} className="rounded-lg border border-white/10 px-2.5 py-1.5 text-xs font-bold">Copy URL</button>}
                   <button type="button" disabled={!artifact} onClick={() => void runAction(row, "verify_artifact")} className="rounded-lg border border-cyan-400/25 px-2.5 py-1.5 text-xs font-bold text-cyan-100 disabled:opacity-30">Verify artifact</button>
                   {row.release_status === "draft" && <button type="button" onClick={() => void runAction(row, "publish")} className="rounded-lg border border-emerald-400/25 px-2.5 py-1.5 text-xs font-bold text-emerald-100">Publish</button>}
-                  {row.release_status === "published" && <button type="button" onClick={() => void runAction(row, "pause")} className="rounded-lg border border-amber-400/25 px-2.5 py-1.5 text-xs font-bold text-amber-100">Pause</button>}
+                  {row.release_status === "published" && <button type="button" onClick={() => void runAction(row, "unpublish")} className="rounded-lg border border-amber-400/25 px-2.5 py-1.5 text-xs font-bold text-amber-100">Unpublish</button>}
                   {row.release_status === "paused" && <button type="button" onClick={() => void runAction(row, "resume")} className="rounded-lg border border-emerald-400/25 px-2.5 py-1.5 text-xs font-bold text-emerald-100">Resume</button>}
                   <button type="button" onClick={() => void runAction(row, "set_rollout")} className="rounded-lg border border-white/10 px-2.5 py-1.5 text-xs font-bold">Rollout %</button>
                   <button type="button" onClick={() => void runAction(row, "mark_mandatory")} className="rounded-lg border border-white/10 px-2.5 py-1.5 text-xs font-bold">{row.mandatory ? "Make optional" : "Mark mandatory"}</button>
-                  {row.release_status !== "retired" && <button type="button" onClick={() => void runAction(row, "retire")} className="rounded-lg border border-red-400/20 px-2.5 py-1.5 text-xs font-bold text-red-200">Retire</button>}
+                  {row.release_status !== "retired" && <button type="button" onClick={() => void runAction(row, "archive")} className="rounded-lg border border-red-400/20 px-2.5 py-1.5 text-xs font-bold text-red-200">Archive</button>}
                 </div>
               )
             },

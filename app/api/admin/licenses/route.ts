@@ -33,6 +33,7 @@ export const createLicenseSchema = z.object({
   workspace_id: z.string().trim().min(3).max(160).optional(),
   device_id: z.string().trim().min(8).max(180),
   platform: z.enum(["macos", "windows"]),
+  architecture: z.enum(["arm64", "x64"]).optional(),
   app_version: z.string().trim().max(40).optional().default(""),
   plan_name: z.string().trim().min(2).max(80),
   issue_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
@@ -77,11 +78,14 @@ type StoredLicense = {
   id: string
   platform_customer_id: string | null
   platform_business_id: string | null
+  subject_customer_id?: string | null
+  subject_business_id?: string | null
   customer_name: string
   customer_email: string | null
   business_name: string
   device_id: string
   platform: "macos" | "windows"
+  architecture?: "arm64" | "x64" | null
   app_version: string | null
   plan_name: string
   issue_date: string
@@ -98,6 +102,10 @@ type StoredLicense = {
   signature_algorithm: string | null
   issued_by_admin_id: string | null
   issued_by_admin_email: string | null
+  activation_date?: string | null
+  renewed_at?: string | null
+  revoked_at?: string | null
+  suspended_at?: string | null
   created_at: string
   updated_at: string
 }
@@ -112,10 +120,16 @@ function licensePayload(row: StoredLicense, adminLabel: string): LicensePayload 
   return {
     schema_version: LICENSE_SCHEMA_VERSION,
     license_id: row.id,
-    customer_id: row.platform_customer_id || `customer:${row.customer_email || row.customer_name}`,
+    customer_id:
+      row.subject_customer_id ||
+      row.platform_customer_id ||
+      `customer:${row.customer_email || row.customer_name}`,
     customer_name: row.customer_name,
     customer_email: row.customer_email,
-    business_id: row.platform_business_id || `business:${row.business_name}`,
+    business_id:
+      row.subject_business_id ||
+      row.platform_business_id ||
+      `business:${row.business_name}`,
     business_name: row.business_name,
     device_id: row.device_id,
     platform: row.platform,
@@ -373,6 +387,7 @@ export async function POST(request: Request) {
               platform_business_id: existingLicense.platform_business_id,
               license_id: existingLicense.id,
               platform: existingLicense.platform,
+              architecture: existingLicense.architecture,
               app_version: existingLicense.app_version,
               device_status: "registered",
               updated_at: new Date().toISOString(),
@@ -421,11 +436,14 @@ export async function POST(request: Request) {
         id: licenseId,
         platform_customer_id: customerId,
         platform_business_id: businessId,
+        subject_customer_id: customerId,
+        subject_business_id: businessId,
         customer_name: input.customer_name,
         customer_email: input.customer_email.toLowerCase(),
         business_name: input.business_name,
         device_id: input.device_id,
         platform: input.platform,
+        architecture: input.architecture || null,
         app_version: input.app_version || null,
         plan_name: input.plan_name,
         issue_date: input.issue_date,
@@ -453,6 +471,7 @@ export async function POST(request: Request) {
           platform_business_id: businessId,
           license_id: row.id,
           platform: input.platform,
+          architecture: input.architecture || null,
           app_version: input.app_version || null,
           activation_date: null,
           device_status: "registered",
@@ -517,11 +536,14 @@ export async function PATCH(request: Request) {
           id: replacementId,
           platform_customer_id: current.platform_customer_id,
           platform_business_id: current.platform_business_id,
+          subject_customer_id: current.subject_customer_id,
+          subject_business_id: current.subject_business_id,
           customer_name: current.customer_name,
           customer_email: current.customer_email,
           business_name: current.business_name,
           device_id: input.new_device_id,
           platform: current.platform,
+          architecture: current.architecture,
           app_version: current.app_version,
           plan_name: current.plan_name,
           issue_date: new Date().toISOString().slice(0, 10),
@@ -565,6 +587,7 @@ export async function PATCH(request: Request) {
           platform_business_id: current.platform_business_id,
           license_id: replacement.id,
           platform: current.platform,
+          architecture: current.architecture,
           app_version: current.app_version,
           device_status: "registered",
           updated_at: new Date().toISOString(),
@@ -592,8 +615,14 @@ export async function PATCH(request: Request) {
     }
 
     const updates: Record<string, unknown> = { updated_at: new Date().toISOString() }
-    if (input.action === "suspend") updates.status = "suspended"
-    if (input.action === "revoke") updates.status = "revoked"
+    if (input.action === "suspend") {
+      updates.status = "suspended"
+      updates.suspended_at = new Date().toISOString()
+    }
+    if (input.action === "revoke") {
+      updates.status = "revoked"
+      updates.revoked_at = new Date().toISOString()
+    }
     if (input.action === "notes") updates.internal_notes = input.internal_notes ?? ""
     if (input.action === "change_grace") {
       if (input.grace_days === undefined) return adminFail(context, "Grace days are required.", 422)
@@ -612,11 +641,13 @@ export async function PATCH(request: Request) {
       updates.expiry_date = input.expiry_date
       updates.issue_date = new Date().toISOString().slice(0, 10)
       updates.status = "active"
+      updates.renewed_at = new Date().toISOString()
     }
     if (input.action === "extend") {
       if (!input.extend_days) return adminFail(context, "Extension days are required.", 422)
       updates.expiry_date = dateAfter(current.expiry_date, input.extend_days)
       updates.status = "active"
+      updates.renewed_at = new Date().toISOString()
     }
 
     const signatureChanges = ["renew", "extend", "change_grace", "update_features"].includes(input.action)

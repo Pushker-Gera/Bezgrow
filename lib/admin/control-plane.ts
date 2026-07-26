@@ -68,7 +68,7 @@ export function requestMeta(context: AdminContext) {
 export function adminOk(context: AdminContext, payload: Record<string, unknown>, init?: ResponseInit) {
   const meta = requestMeta(context)
   return NextResponse.json(
-    { success: true, requestId: context.requestId, ...payload },
+    { ok: true, success: true, requestId: context.requestId, ...payload },
     {
       ...init,
       headers: {
@@ -85,8 +85,38 @@ export function adminFail(
   status: number,
   details?: Record<string, unknown>
 ) {
+  const requestedCode =
+    typeof details?.code === "string" && /^[A-Z][A-Z0-9_]{2,80}$/.test(details.code)
+      ? details.code
+      : null
+  const code =
+    requestedCode ||
+    (status === 401
+      ? "AUTHENTICATION_REQUIRED"
+      : status === 403
+        ? "ADMIN_ACCESS_REQUIRED"
+        : status === 404
+          ? "NOT_FOUND"
+          : status === 422
+            ? "VALIDATION_FAILED"
+            : status === 429
+              ? "RATE_LIMITED"
+              : status === 503
+                ? "CONTROL_PLANE_NOT_READY"
+                : "ADMIN_REQUEST_FAILED")
+  const safeDetails = details
+    ? Object.fromEntries(Object.entries(details).filter(([key]) => key !== "code"))
+    : {}
   return NextResponse.json(
-    { success: false, error: message, requestId: context.requestId, ...details },
+    {
+      ok: false,
+      success: false,
+      code,
+      message,
+      error: message,
+      requestId: context.requestId,
+      ...safeDetails,
+    },
     {
       status,
       headers: {
