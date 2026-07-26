@@ -66,6 +66,10 @@ function buildInstaller(prefix, trustKey, version) {
 const existingManifest = readExistingManifest();
 const version = readArg("--version") || existingManifest.version || packageJson.version;
 const mac = buildInstaller("mac", "notarized", version);
+if (mac) {
+  // A successfully notarized macOS artifact is necessarily code signed.
+  mac.signed = mac.notarized === true;
+}
 const windows = buildInstaller("windows", "signed", version);
 const windowsMsi = buildInstaller("windows-msi", "signed", version);
 const windowsArm64 = buildInstaller("windows-arm64", "signed", version);

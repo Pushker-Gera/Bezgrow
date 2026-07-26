@@ -18,6 +18,8 @@ assert.ok(manifest.version, "Desktop release manifest version is missing.");
 
 const desktopReleaseRoute = readFileSync("app/api/desktop-release/route.ts", "utf8");
 const publicReleaseSource = readFileSync("lib/releases/public.ts", "utf8");
+const releaseWorkflow = readFileSync(".github/workflows/desktop-release.yml", "utf8");
+const releaseManifestWriter = readFileSync("scripts/write-desktop-release-manifest.mjs", "utf8");
 assert.match(desktopReleaseRoute, /@\/public\/downloads\/desktop-release\.json/, "Desktop release API must bundle the checked-in manifest.");
 assert.doesNotMatch(desktopReleaseRoute, /node:fs|readFileSync|existsSync/, "Desktop release API must not depend on serverless filesystem reads.");
 assert.match(desktopReleaseRoute, /getPublicDesktopReleaseManifest/, "Desktop update metadata must prefer validated control-plane releases.");
@@ -43,6 +45,9 @@ assert.match(appUpdates, /release\?\.signed === true/, "Desktop updates must rej
 assert.match(appUpdates, /api\/devices\/checkin/, "Desktop update checks must report through the authenticated device endpoint when a local license is available.");
 assert.doesNotMatch(downloadPage, /defaultWindowsRelease|githubReleaseBaseUrl/, "Download page must not mark missing Windows installers as available.");
 assert.doesNotMatch(appUpdates, /fallbackWindowsRelease|github\.com\/Pushker-Gera\/Bezgrow/, "Update checks must not invent missing Windows installer URLs.");
+assert.match(releaseWorkflow, /platform:[\s\S]*type:\s*choice/, "Desktop releases must support platform-specific dispatches.");
+assert.match(releaseWorkflow, /inputs\.platform == 'all' \|\| inputs\.platform == 'windows'/, "Windows releases must run independently from macOS releases.");
+assert.match(releaseManifestWriter, /mac\.signed = mac\.notarized === true/, "Notarized Mac artifacts must be recorded as signed.");
 
 if (manifest.mac?.file) {
   const macPath = `public${manifest.mac.file}`;
