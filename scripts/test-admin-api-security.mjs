@@ -1,0 +1,86 @@
+import assert from "node:assert/strict"
+import { readFileSync } from "node:fs"
+
+const read = (path) => readFileSync(new URL(`../${path}`, import.meta.url), "utf8")
+
+const protectedRoutes = [
+  "app/api/admin/session/route.ts",
+  "app/api/admin/dashboard/route.ts",
+  "app/api/admin/licenses/route.ts",
+  "app/api/admin/licenses/[id]/download/route.ts",
+  "app/api/admin/licenses/[id]/events/route.ts",
+  "app/api/admin/devices/route.ts",
+  "app/api/admin/customers/route.ts",
+  "app/api/admin/businesses/route.ts",
+  "app/api/admin/releases/route.ts",
+  "app/api/admin/backups/route.ts",
+  "app/api/admin/support/route.ts",
+  "app/api/admin/audit-logs/route.ts",
+  "app/api/admin/analytics/route.ts",
+  "app/api/admin/settings/route.ts",
+]
+
+for (const route of protectedRoutes) {
+  const source = read(route)
+  assert.match(source, /requireAdmin\(request\)/, `${route} must enforce server-side admin authorization.`)
+  assert.match(source, /Cache-Control|adminOk|adminFail/, `${route} must opt out of unsafe caching and return controlled errors.`)
+}
+
+for (const route of [
+  "app/api/admin/licenses/route.ts",
+  "app/api/admin/devices/route.ts",
+  "app/api/admin/customers/route.ts",
+  "app/api/admin/releases/route.ts",
+  "app/api/admin/support/route.ts",
+  "app/api/admin/settings/route.ts",
+]) {
+  const source = read(route)
+  assert.match(source, /\.safeParse\(/, `${route} must schema-validate mutation input.`)
+  assert.match(source, /writeAdminAudit|recordLicenseEvent/, `${route} must audit mutations.`)
+}
+
+const auth = read("lib/api/auth.ts")
+assert.match(auth, /validateMutationOrigin/, "Admin mutations must validate origins.")
+assert.match(auth, /x-bezgrow-desktop-admin/, "Desktop bearer access must require the explicit desktop bridge marker.")
+assert.match(auth, /checkRateLimit/, "Admin mutations must be rate limited.")
+assert.match(auth, /admin_audit_logs/, "Audit records must include full request context.")
+
+const licenseRoute = read("app/api/admin/licenses/route.ts")
+assert.match(licenseRoute, /signLicensePayload/, "License generation must be server-side.")
+assert.match(licenseRoute, /\.from\("licenses"\)[\s\S]*\.insert/, "Generated licenses must be persisted.")
+assert.doesNotMatch(licenseRoute, /BEZGROW_LICENSE_PRIVATE_KEY/, "Admin route must not read or expose the private key directly.")
+
+for (const clientFile of [
+  "app/admin/licenses/page.tsx",
+  "components/desktop/PlatformAdminLauncher.tsx",
+  "lib/desktop/tauri.ts",
+  "src-tauri/src/lib.rs",
+]) {
+  assert.doesNotMatch(read(clientFile), /BEZGROW_LICENSE_PRIVATE_KEY|SUPABASE_SERVICE_ROLE_KEY/, `${clientFile} must not contain server secrets.`)
+}
+
+const releaseRoute = read("app/api/admin/releases/route.ts")
+const publicUrl = read("lib/security/public-url.ts")
+assert.match(releaseRoute, /publicationError/, "Release publication must use a validation gate.")
+assert.match(releaseRoute, /Artifact URL is not an allowed public HTTPS location/, "Artifact verification must block local/private URL targets.")
+assert.match(releaseRoute, /isPublicHttpsUrl/, "Artifact verification must validate public HTTPS destinations.")
+assert.match(publicUrl, /lookup\(url\.hostname/, "Artifact verification must resolve DNS before fetching.")
+assert.match(publicUrl, /addresses\.every\(\(\{ address \}\) => !isPrivateAddress\(address\)\)/, "Artifact verification must reject DNS results that resolve to private addresses.")
+assert.match(releaseRoute, /redirect:\s*"manual"/, "Artifact verification must not follow unchecked redirects.")
+assert.match(releaseRoute, /validation_status !== "valid"/, "Invalid artifacts must not publish.")
+assert.match(releaseRoute, /notarization_status !== "valid"/, "macOS releases must require notarization.")
+assert.match(releaseRoute, /code_signing_status !== "valid"/, "Public releases must require code signing.")
+
+const diagnostics = read("app/api/diagnostics/upload/route.ts")
+assert.match(diagnostics, /\.strict\(\)/, "Diagnostic packages must reject undeclared sensitive fields.")
+assert.match(diagnostics, /Support case is not linked to this device or license/, "Diagnostic uploads must not attach to unrelated support cases.")
+for (const secret of ["password", "refresh_token", "access_token", "private_key", "invoice", "customer_data"]) {
+  assert.doesNotMatch(diagnostics, new RegExp(`${secret}\\s*:`), `Diagnostics must not accept ${secret}.`)
+}
+
+const checkin = read("app/api/devices/checkin/route.ts")
+assert.match(checkin, /compareVersions\(release\.version, input\.app_version\) > 0/, "Update checks must not offer the installed version.")
+assert.match(checkin, /isInRollout\(input\.device_id, release\.id, release\.rollout_percentage\)/, "Update checks must apply deterministic rollout percentages.")
+assert.match(checkin, /minimum_supported_version/, "Update checks must enforce the minimum supported version policy.")
+
+console.log("admin-api-security-contract-ok")

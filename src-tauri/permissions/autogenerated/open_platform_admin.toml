@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-open-platform-admin"
+description = "Enables the open_platform_admin command without any pre-configured scope."
+commands.allow = ["open_platform_admin"]
+
+[[permission]]
+identifier = "deny-open-platform-admin"
+description = "Denies the open_platform_admin command without any pre-configured scope."
+commands.deny = ["open_platform_admin"]

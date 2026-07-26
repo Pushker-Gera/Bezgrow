@@ -1905,6 +1905,59 @@ fn open_external_url(url: String) -> Result<(), String> {
     }
 }
 
+fn validate_platform_admin_url(url: &str) -> Result<tauri::Url, String> {
+    let parsed = tauri::Url::parse(url).map_err(|error| format!("Invalid Platform Admin URL: {error}"))?;
+    let host = parsed.host_str().unwrap_or_default().to_ascii_lowercase();
+    let trusted_production_host = matches!(host.as_str(), "bezgrow.com" | "www.bezgrow.com");
+    let trusted_local_host = cfg!(debug_assertions) && matches!(host.as_str(), "127.0.0.1" | "localhost");
+    let trusted_scheme = parsed.scheme() == "https" || (trusted_local_host && parsed.scheme() == "http");
+    let trusted_path = parsed.path() == "/admin"
+        || parsed.path().starts_with("/admin/")
+        || parsed.path() == "/login";
+
+    if trusted_scheme && (trusted_production_host || trusted_local_host) && trusted_path {
+        return Ok(parsed);
+    }
+
+    Err("Platform Administration must use the trusted Bezgrow admin origin.".to_string())
+}
+
+#[tauri::command]
+fn open_platform_admin<R: tauri::Runtime>(
+    app: tauri::AppHandle<R>,
+    url: String,
+) -> Result<(), String> {
+    let parsed = validate_platform_admin_url(&url)?;
+
+    if let Some(window) = app.get_webview_window("platform-admin") {
+        window
+            .set_focus()
+            .map_err(|error| format!("Unable to focus Platform Administration: {error}"))?;
+        return Ok(());
+    }
+
+    let builder = tauri::WebviewWindowBuilder::new(
+        &app,
+        "platform-admin",
+        WebviewUrl::External(parsed),
+    )
+    .title("Bezgrow Platform Administration — Internet Required")
+    .inner_size(1440.0, 900.0)
+    .min_inner_size(1080.0, 700.0)
+    .resizable(true)
+    .fullscreen(false);
+
+    #[cfg(target_os = "windows")]
+    let builder = builder.data_directory(managed_data_directory(&app, "WebViewPlatformAdmin")?);
+
+    builder
+        .build()
+        .map_err(|error| format!("Unable to open Platform Administration: {error}"))?;
+
+    append_startup_log_handle(&app, "Online Platform Administration window opened");
+    Ok(())
+}
+
 #[tauri::command]
 fn desktop_reveal_file(path: String) -> Result<(), String> {
     let target = PathBuf::from(path);
@@ -2202,6 +2255,13 @@ pub fn run() {
         .on_window_event(|window, event| match event {
             tauri::WindowEvent::CloseRequested { api, .. } => {
                 let app = window.app_handle().clone();
+                if window.label() == "platform-admin" {
+                    append_startup_log_handle(
+                        &app,
+                        "Platform Administration window closed; local ERP remains open",
+                    );
+                    return;
+                }
                 api.prevent_close();
                 if window.label() == "startup-error" {
                     stop_next_server(&app);
@@ -2248,7 +2308,8 @@ pub fn run() {
             desktop_export_backup,
             desktop_restore_backup,
             desktop_exit,
-            open_external_url
+            open_external_url,
+            open_platform_admin
         ])
         .build(tauri::generate_context!())
         .expect("error while building Bezgrow ERP")

@@ -87,12 +87,12 @@ export default function CreateBusiness() {
 
             const payload = (await response.json()) as {
                 success?: boolean
-                profile?: { role?: string | null; approved?: boolean; business_created?: boolean }
+                profile?: { role?: string | null; business_created?: boolean }
                 organization?: { id?: string | null } | null
                 permissions?: { admin?: boolean }
             }
 
-            if (payload.permissions?.admin || payload.profile?.role === "admin") {
+            if (payload.permissions?.admin || ["admin", "platform_admin"].includes(payload.profile?.role || "")) {
                 router.push("/admin")
                 return
             }

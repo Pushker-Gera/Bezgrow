@@ -18,7 +18,6 @@ const loginSchema = z.object({
 
 type ProfileGate = {
   role: string | null
-  approved: boolean | null
   business_created: boolean | null
   is_suspended: boolean | null
   email?: string | null
@@ -56,6 +55,10 @@ function runtimeName(): LoginLogMeta["runtime"] {
 function safeNextPath(value: unknown) {
   if (typeof value !== "string") return "/dashboard"
   return value.startsWith("/") && !value.startsWith("//") ? value : "/dashboard"
+}
+
+function isAdminNext(value: string) {
+  return value === "/admin" || value.startsWith("/admin/") || value.startsWith("/admin?")
 }
 
 function newRequestId() {
@@ -108,7 +111,7 @@ async function optionalAdminClient(): Promise<SupabaseQueryClient | null> {
 async function readProfile(client: SupabaseQueryClient, userId: string) {
   return client
     .from("profiles")
-    .select("role, approved, business_created, is_suspended, email")
+    .select("role, business_created, is_suspended, email")
     .eq("id", userId)
     .maybeSingle()
 }
@@ -154,6 +157,35 @@ async function hasWorkspace(client: SupabaseQueryClient, userId: string) {
   return Boolean(membership?.organization_id || ownedOrganization?.id)
 }
 
+async function auditPlatformLogin(input: {
+  request: Request
+  requestId: string
+  action: "ADMIN_LOGIN" | "ADMIN_LOGIN_FAILED"
+  result: "success" | "failure"
+  email: string | null
+  userId?: string | null
+  reason?: string
+}) {
+  const client = await optionalAdminClient()
+  if (!client) return
+  await client.from("admin_audit_logs").insert({
+    admin_user_id: input.userId || null,
+    admin_email: input.email,
+    action: input.action,
+    target_type: "admin_session",
+    target_id: input.userId || null,
+    ip_address:
+      input.request.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ||
+      input.request.headers.get("x-real-ip") ||
+      null,
+    user_agent: input.request.headers.get("user-agent"),
+    previous_values: null,
+    new_values: input.reason ? { reason: input.reason } : null,
+    request_id: input.requestId,
+    result: input.result,
+  })
+}
+
 async function resolveDestination(client: SupabaseQueryClient, user: User, requestedNext: string) {
   const { data: profile, error: profileError, lookupClient } = await readProfileWithFallback(client, user.id)
   const admin = isConfiguredAdmin(user.email, profile?.role)
@@ -173,7 +205,7 @@ async function resolveDestination(client: SupabaseQueryClient, user: User, reque
     if (admin) {
       return {
         ok: true as const,
-        redirectTo: requestedNext === "/admin" || requestedNext.startsWith("/admin/") ? requestedNext : "/admin",
+        redirectTo: isAdminNext(requestedNext) ? requestedNext : "/admin",
         profileLookupSucceeded: false,
         workspaceLookupSucceeded: false,
       }
@@ -192,18 +224,7 @@ async function resolveDestination(client: SupabaseQueryClient, user: User, reque
   if (admin) {
     return {
       ok: true as const,
-      redirectTo: requestedNext === "/admin" || requestedNext.startsWith("/admin/") ? requestedNext : "/admin",
-      profileLookupSucceeded: true,
-      workspaceLookupSucceeded: false,
-    }
-  }
-
-  if (profile.approved === false) {
-    return {
-      ok: false as const,
-      status: 403,
-      code: "PENDING_APPROVAL",
-      message: "Your account is pending approval.",
+      redirectTo: isAdminNext(requestedNext) ? requestedNext : "/admin",
       profileLookupSucceeded: true,
       workspaceLookupSucceeded: false,
     }
@@ -219,10 +240,20 @@ async function resolveDestination(client: SupabaseQueryClient, user: User, reque
     }
   }
 
-  const unsafeAdminNext = requestedNext === "/admin" || requestedNext.startsWith("/admin/")
+  const unsafeAdminNext = isAdminNext(requestedNext)
+  if (unsafeAdminNext) {
+    return {
+      ok: false as const,
+      status: 403,
+      code: "ADMIN_ROLE_REQUIRED",
+      message: "This account is not authorized for Platform Administration.",
+      profileLookupSucceeded: true,
+      workspaceLookupSucceeded: true,
+    }
+  }
   return {
     ok: true as const,
-    redirectTo: unsafeAdminNext ? "/dashboard" : requestedNext,
+    redirectTo: requestedNext,
     profileLookupSucceeded: true,
     workspaceLookupSucceeded: true,
   }
@@ -296,6 +327,7 @@ export async function POST(request: Request) {
     })
     return safeError("Please enter a valid email and password.", 400, "INVALID_REQUEST", "parse_request", requestId)
   }
+  const adminLoginRequested = isAdminNext(safeNextPath(parsed.data.next))
 
   stage = "environment"
   if (!supabaseUrl || !supabaseAnonKey) {
@@ -356,6 +388,16 @@ export async function POST(request: Request) {
       workspaceLookupSucceeded: false,
       redirectTo: null,
     })
+    if (adminLoginRequested) {
+      await auditPlatformLogin({
+        request,
+        requestId,
+        action: "ADMIN_LOGIN_FAILED",
+        result: "failure",
+        email: parsed.data.email.toLowerCase(),
+        reason: code,
+      })
+    }
     return safeError(
       invalidCredentials ? "Incorrect email or password." : "Login could not be completed.",
       status,
@@ -405,6 +447,17 @@ export async function POST(request: Request) {
       workspaceLookupSucceeded: destination.workspaceLookupSucceeded,
       redirectTo: null,
     })
+    if (adminLoginRequested) {
+      await auditPlatformLogin({
+        request,
+        requestId,
+        action: "ADMIN_LOGIN_FAILED",
+        result: "failure",
+        email: user.email || parsed.data.email.toLowerCase(),
+        userId: user.id,
+        reason: destination.code,
+      })
+    }
     return safeError(destination.message, destination.status, destination.code, "destination_authorization", requestId)
   }
 
@@ -422,6 +475,16 @@ export async function POST(request: Request) {
     workspaceLookupSucceeded: destination.workspaceLookupSucceeded,
     redirectTo: destination.redirectTo,
   })
+  if (adminLoginRequested) {
+    await auditPlatformLogin({
+      request,
+      requestId,
+      action: "ADMIN_LOGIN",
+      result: "success",
+      email: user.email || parsed.data.email.toLowerCase(),
+      userId: user.id,
+    })
+  }
 
   return Response.json(
     {

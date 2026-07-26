@@ -322,7 +322,7 @@ export const seoLandingPages: SeoLandingPage[] = [
       },
       {
         heading: "Built for Launch and Growth",
-        body: "Approval-based access, organization controls, professional invoice pages, and dashboards help businesses operate with more confidence.",
+        body: "Device-bound licensing, local workspaces, professional invoice pages, and offline-first dashboards help businesses operate with more confidence.",
       },
     ],
     benefits: ["Inventory management", "Billing management", "Customer records", "Business analytics", ...commonBenefits],

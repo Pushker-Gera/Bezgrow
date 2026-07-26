@@ -28,6 +28,7 @@
     "allow-desktop-export-backup",
     "allow-desktop-restore-backup",
     "allow-desktop-exit",
-    "allow-open-external-url"
+    "allow-open-external-url",
+    "allow-open-platform-admin"
   ]
 }

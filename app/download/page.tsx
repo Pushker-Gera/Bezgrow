@@ -2,6 +2,7 @@ import Link from "next/link"
 import type { Metadata } from "next"
 import type { ReactNode } from "react"
 import { BezgrowLogoMark } from "@/components/brand/BezgrowLogoMark"
+import { getPublicDesktopReleaseManifest } from "@/lib/releases/public"
 import packageJson from "@/package.json"
 import desktopReleaseManifest from "@/public/downloads/desktop-release.json"
 
@@ -26,38 +27,27 @@ type InstallerInfo = {
   signed?: boolean
 }
 
-type DesktopReleaseManifest = {
+type ManifestInstaller = {
+  downloadUrl?: string
+  url?: string
+  file?: string
   version?: string
-  mac?: {
-    downloadUrl?: string
-    url?: string
-    file?: string
-    version?: string
-    size?: number
-    sha256?: string
-    notarized?: boolean
-  }
-  windows?: {
-    downloadUrl?: string
-    url?: string
-    file?: string
-    version?: string
-    size?: number
-    sha256?: string
-    signed?: boolean
-  }
-  windowsMsi?: {
-    downloadUrl?: string
-    url?: string
-    file?: string
-    version?: string
-    size?: number
-    sha256?: string
-    signed?: boolean
-  }
+  size?: number
+  sha256?: string
+  notarized?: boolean
+  signed?: boolean
 }
 
-const releaseManifest = desktopReleaseManifest as DesktopReleaseManifest
+type DesktopReleaseManifest = {
+  version?: string
+  mac?: ManifestInstaller
+  macX64?: ManifestInstaller
+  windows?: ManifestInstaller
+  windowsMsi?: ManifestInstaller
+  windowsArm64?: ManifestInstaller
+}
+
+const checkedInReleaseManifest = desktopReleaseManifest as DesktopReleaseManifest
 
 function formatFileSize(bytes: number) {
   const units = ["B", "KB", "MB", "GB"]
@@ -84,7 +74,12 @@ function getInstallerInfo(
 ): InstallerInfo {
   const releaseHref = releaseInfo?.downloadUrl || releaseInfo?.url || releaseInfo?.file
 
-  if (releaseHref && isSafeInstallerHref(releaseHref)) {
+  const signed = releaseInfo?.signed === true
+  const releaseNotarized = releaseInfo && "notarized" in releaseInfo ? releaseInfo.notarized : undefined
+  const notarized = releaseNotarized === undefined ? true : releaseNotarized === true
+  const productionReady = signed && notarized
+
+  if (releaseHref && isSafeInstallerHref(releaseHref) && productionReady) {
     const sizeLabel = releaseInfo.size ? formatFileSize(releaseInfo.size) : null
     const version = releaseInfo.version || releaseVersion || packageJson.version
     return {
@@ -94,6 +89,17 @@ function getInstallerInfo(
       notarized: "notarized" in releaseInfo ? releaseInfo.notarized : undefined,
       signed: "signed" in releaseInfo ? releaseInfo.signed : undefined,
       statusLabel: `Version ${version}${sizeLabel ? ` | ${sizeLabel}` : ""}`,
+    }
+  }
+
+  if (releaseHref && isSafeInstallerHref(releaseHref)) {
+    return {
+      available: false,
+      href: releaseHref,
+      sizeLabel: releaseInfo?.size ? formatFileSize(releaseInfo.size) : null,
+      notarized: releaseNotarized,
+      signed: releaseInfo?.signed,
+      statusLabel: "Internal testing only — signing or notarization incomplete",
     }
   }
 
@@ -177,13 +183,15 @@ function MobileInstallCard({
   )
 }
 
-export default function DownloadPage() {
-  const macInstaller = getInstallerInfo(macInstallerPath, "Mac installer not found.", releaseManifest?.mac, releaseManifest?.version)
+export default async function DownloadPage() {
+  const cloudManifest = await getPublicDesktopReleaseManifest()
+  const releaseManifest = (cloudManifest || checkedInReleaseManifest) as DesktopReleaseManifest
+  const macInstaller = getInstallerInfo(macInstallerPath, "Mac installer not found.", releaseManifest.mac || releaseManifest.macX64, releaseManifest.version)
   const windowsInstaller = getInstallerInfo(
     windowsInstallerPaths,
     "Windows installer not found on this build.",
-    releaseManifest?.windows || releaseManifest?.windowsMsi,
-    releaseManifest?.version
+    releaseManifest.windows || releaseManifest.windowsMsi || releaseManifest.windowsArm64,
+    releaseManifest.version
   )
   const installersReady = macInstaller.available || windowsInstaller.available
   const showMacNotarizationWarning = macInstaller.available && macInstaller.notarized !== true
@@ -204,7 +212,7 @@ export default function DownloadPage() {
           </p>
 
           <div className="mt-6 inline-flex rounded-full border border-white/10 bg-black/35 px-4 py-2 text-sm font-bold text-white/65">
-            Version {packageJson.version}
+            Version {releaseManifest.version || packageJson.version}
           </div>
 
           {!installersReady && (
@@ -215,7 +223,7 @@ export default function DownloadPage() {
 
           {showMacNotarizationWarning && (
             <div className="mt-6 break-words rounded-2xl border border-amber-300/25 bg-amber-300/10 px-4 py-3 text-sm font-bold text-amber-100 [overflow-wrap:anywhere]">
-              macOS may show a security warning until notarization is completed.
+              The current macOS artifact is internal testing only and is not offered as a public download until signing and notarization complete.
             </div>
           )}
 

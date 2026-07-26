@@ -117,3 +117,13 @@ export async function openExternalUrl(url: string) {
   await invokeTauri<void>("open_external_url", { url })
   return true
 }
+
+export async function openPlatformAdmin(url: string) {
+  if (!(await isTauriRuntimeAsync())) {
+    window.location.assign(url)
+    return false
+  }
+
+  await invokeTauri<void>("open_platform_admin", { url })
+  return true
+}

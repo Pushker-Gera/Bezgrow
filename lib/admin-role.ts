@@ -1,8 +1,4 @@
 export function isConfiguredAdmin(email: string | null | undefined, role?: string | null) {
-  if (role === "admin") return true
-
-  const configuredAdminEmail = process.env.ADMIN_EMAIL?.trim().toLowerCase()
-  if (!configuredAdminEmail || !email) return false
-
-  return email.trim().toLowerCase() === configuredAdminEmail
+  void email
+  return role === "admin" || role === "platform_admin"
 }

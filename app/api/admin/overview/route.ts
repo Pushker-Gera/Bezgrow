@@ -1,3 +1,3 @@
 export const dynamic = "force-dynamic"
 
-export { GET } from "@/app/api/admin/metrics/route"
+export { GET } from "@/app/api/admin/dashboard/route"

@@ -102,7 +102,7 @@ export async function GET(request: Request) {
 
     const { data: profile, error: profileError } = await adminSupabase
       .from("profiles")
-      .select("id, email, role, approved, business_created, is_suspended")
+      .select("id, email, role, business_created, is_suspended")
       .eq("id", user.id)
       .maybeSingle()
 
@@ -180,7 +180,6 @@ export async function GET(request: Request) {
       profile: {
         id: profile?.id ?? user.id,
         role: isAdmin ? "admin" : profile?.role || "user",
-        approved: true,
         is_suspended: Boolean(profile?.is_suspended),
         business_created: hasCompletedBusiness,
       },

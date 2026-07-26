@@ -26,7 +26,11 @@ async function proxyRequest(request: Request) {
   const requestUrl = new URL(request.url)
   const apiPath = requestUrl.searchParams.get("path") || ""
 
-  if (!apiPath.startsWith("/api/") || apiPath.startsWith("/api/desktop-proxy")) {
+  if (
+    !apiPath.startsWith("/api/") ||
+    apiPath.startsWith("/api/desktop-proxy") ||
+    apiPath.startsWith("/api/admin")
+  ) {
     return NextResponse.json({ error: "Invalid desktop proxy target." }, { status: 400 })
   }
 

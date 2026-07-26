@@ -22,7 +22,7 @@ function toLocalPath(value: string | undefined, fallback: string) {
 
 function desktopRedirectFromWorkspace(payload: WorkspaceBootstrapPayload | null, fallback: string) {
   if (!payload?.success) return "/login"
-  if (payload.permissions?.admin || payload.profile?.role === "admin") return "/admin"
+  if (payload.permissions?.admin || ["admin", "platform_admin"].includes(payload.profile?.role || "")) return "/admin"
   if (payload.profile?.is_suspended) return "/login?error=account_suspended"
 
   const hasBusiness = Boolean(payload.profile?.business_created || payload.organization?.id || payload.membership?.organization_id)

@@ -41,22 +41,26 @@ const nextConfig: NextConfig = {
   turbopack: {
     root: process.cwd(),
   },
-  async redirects() {
-    return [
-      {
-        source: "/api/downloads/desktop",
-        has: [{ type: "query", key: "platform", value: "mac" }],
-        destination: "/downloads/Bezgrow-mac.dmg",
-        permanent: false,
-      },
-    ]
-  },
   async headers() {
     return [
       ...iconSources.map((source) => ({
         source,
         headers: iconHeaders,
       })),
+      {
+        source: "/downloads/Bezgrow-mac.dmg",
+        headers: [
+          { key: "X-Bezgrow-Release-Status", value: "internal-testing" },
+          { key: "X-Robots-Tag", value: "noindex, nofollow" },
+        ],
+      },
+      {
+        source: "/admin/:path*",
+        headers: [
+          { key: "Cache-Control", value: "private, no-store, max-age=0" },
+          { key: "Pragma", value: "no-cache" },
+        ],
+      },
       {
         source: "/(.*)",
         headers: [

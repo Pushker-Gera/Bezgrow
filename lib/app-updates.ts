@@ -1,4 +1,5 @@
 import { desktopArchitecture, isTauriRuntimeAsync } from "@/lib/desktop/tauri"
+import { localLicenseSnapshot } from "@/lib/offline/local/license"
 
 type WindowsRelease = {
   downloadUrl?: string
@@ -9,6 +10,13 @@ type WindowsRelease = {
   sha256?: string
   signed?: boolean
   generatedAt?: string
+  mandatory?: boolean
+  minimumSupportedVersion?: string | null
+  releaseChannel?: string
+}
+
+type MacRelease = WindowsRelease & {
+  notarized?: boolean
 }
 
 export type DesktopReleaseManifest = {
@@ -16,16 +24,8 @@ export type DesktopReleaseManifest = {
   generatedAt?: string
   releaseNotes?: string[] | string
   notes?: string[] | string
-  mac?: {
-    downloadUrl?: string
-    url?: string
-    file?: string
-    version?: string
-    size?: number
-    sha256?: string
-    notarized?: boolean
-    generatedAt?: string
-  }
+  mac?: MacRelease
+  macX64?: MacRelease
   windows?: WindowsRelease
   windowsMsi?: WindowsRelease
   windowsArm64?: WindowsRelease
@@ -108,6 +108,7 @@ export function releaseGeneratedAt(manifest: DesktopReleaseManifest | null) {
   const timestamps = [
     manifest.generatedAt,
     manifest.mac?.generatedAt,
+    manifest.macX64?.generatedAt,
     manifest.windows?.generatedAt,
     manifest.windowsMsi?.generatedAt,
     manifest.windowsArm64?.generatedAt,
@@ -129,7 +130,9 @@ function currentPlatform() {
 
 export function releaseForCurrentPlatform(manifest: DesktopReleaseManifest | null) {
   if (!manifest) return null
-  if (currentPlatform() !== "windows") return manifest.mac || null
+  if (currentPlatform() !== "windows") {
+    return desktopArchitecture() === "x64" ? manifest.macX64 || manifest.mac || null : manifest.mac || manifest.macX64 || null
+  }
   if (desktopArchitecture() === "arm64") {
     return manifest.windowsArm64 || manifest.windowsArm64Msi || manifest.windows || manifest.windowsMsi || null
   }
@@ -147,7 +150,11 @@ export function latestVersionForCurrentPlatform(manifest: DesktopReleaseManifest
 
 export function isDesktopUpdateAvailable(manifest: DesktopReleaseManifest | null, currentVersion: string) {
   const latestVersion = latestVersionForCurrentPlatform(manifest)
-  return Boolean(latestVersion && releaseHref(releaseForCurrentPlatform(manifest)) && compareVersions(latestVersion, currentVersion) > 0)
+  const release = releaseForCurrentPlatform(manifest)
+  const trusted =
+    release?.signed === true &&
+    (currentPlatform() !== "mac" || ("notarized" in release && release.notarized === true))
+  return Boolean(latestVersion && trusted && releaseHref(release) && compareVersions(latestVersion, currentVersion) > 0)
 }
 
 export function installerHrefForCurrentPlatform(manifest: DesktopReleaseManifest | null) {
@@ -177,10 +184,98 @@ async function readManifest(url: string, signal?: AbortSignal) {
   return (await response.json().catch(() => null)) as DesktopReleaseManifest | null
 }
 
-export async function fetchDesktopReleaseManifest(signal?: AbortSignal) {
+async function authenticatedDeviceRelease(currentVersion: string, signal?: AbortSignal) {
+  const snapshot = await localLicenseSnapshot().catch(() => null)
+  const licenseKey = snapshot?.license?.license_key
+  if (!snapshot?.allowed || typeof licenseKey !== "string" || !licenseKey) return null
+
+  const platform = currentPlatform() === "windows" ? "windows" : "macos"
+  const architecture = desktopArchitecture() === "arm64" ? "arm64" : "x64"
+  const response = await fetch(`/api/desktop-proxy?path=${encodeURIComponent("/api/devices/checkin")}`, {
+    method: "POST",
+    cache: "no-store",
+    signal,
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      license_key: licenseKey,
+      device_id: snapshot.device_id,
+      platform,
+      operating_system: navigator.userAgent.slice(0, 160),
+      architecture,
+      app_version: currentVersion,
+      release_channel: "stable",
+      diagnostics_available: false,
+    }),
+  }).catch(() => null)
+  if (!response?.ok) return null
+
+  const payload = (await response.json().catch(() => null)) as {
+    success?: boolean
+    serverTime?: string
+    eligibleRelease?: {
+      version?: string
+      build_number?: string
+      minimum_supported_version?: string | null
+      release_notes?: string | null
+      mandatory?: boolean
+      release_channel?: string
+      published_at?: string | null
+      release_artifacts?: Array<{
+        file_url?: string
+        file_size?: number
+        sha256?: string
+        validated_at?: string | null
+      }>
+    } | null
+  } | null
+  if (!payload?.success) return null
+  if (!payload.eligibleRelease) {
+    return {
+      version: currentVersion,
+      generatedAt: payload.serverTime,
+      releaseNotes: [],
+    } satisfies DesktopReleaseManifest
+  }
+
+  const release = payload.eligibleRelease
+  const artifact = release.release_artifacts?.[0]
+  if (!release.version || !artifact?.file_url || !artifact.file_size || !artifact.sha256) return null
+  const installer: WindowsRelease = {
+    downloadUrl: artifact.file_url,
+    version: release.version,
+    size: Number(artifact.file_size),
+    sha256: artifact.sha256,
+    signed: true,
+    generatedAt: artifact.validated_at || release.published_at || payload.serverTime,
+    mandatory: Boolean(release.mandatory),
+    minimumSupportedVersion: release.minimum_supported_version || null,
+    releaseChannel: release.release_channel || "stable",
+  }
+  const manifest: DesktopReleaseManifest = {
+    version: release.version,
+    generatedAt: installer.generatedAt,
+    releaseNotes: release.release_notes ? [release.release_notes] : [],
+  }
+  if (platform === "macos") {
+    const macInstaller: MacRelease = { ...installer, notarized: true }
+    if (architecture === "arm64") manifest.mac = macInstaller
+    else manifest.macX64 = macInstaller
+  } else if (architecture === "arm64") {
+    manifest.windowsArm64 = installer
+  } else {
+    manifest.windows = installer
+  }
+  return manifest
+}
+
+export async function fetchDesktopReleaseManifest(signal?: AbortSignal, currentVersion = "") {
   if (!isOnline()) return null
 
   const desktopRuntime = await isTauriRuntimeAsync()
+  if (desktopRuntime && currentVersion) {
+    const authenticated = await authenticatedDeviceRelease(currentVersion, signal)
+    if (authenticated) return authenticated
+  }
   const manifestPath = "/api/desktop-release"
   const url = desktopRuntime
     ? `/api/desktop-proxy?path=${encodeURIComponent(manifestPath)}`

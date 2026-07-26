@@ -2,6 +2,7 @@ import "server-only"
 import type { User } from "@supabase/supabase-js"
 import { z } from "zod"
 import { isConfiguredAdmin } from "@/lib/admin-role"
+import { checkRateLimit, rateLimitKey } from "@/lib/security/rate-limit"
 import { adminSupabase } from "@/lib/supabase/admin"
 import { createServerSupabase } from "@/lib/supabase/server"
 
@@ -10,6 +11,25 @@ const bearerSchema = z.string().min(20)
 export type AdminContext = {
   adminUserId: string
   adminEmail: string | null
+  adminRole: "admin" | "platform_admin"
+  requestId: string
+  ipAddress: string | null
+  userAgent: string | null
+}
+
+export type AdminAuditInput = {
+  action: string
+  targetType?: string | null
+  targetId?: string | null
+  previousValues?: unknown
+  newValues?: unknown
+  result?: "success" | "failure"
+}
+
+export function requestId(request: Request) {
+  const supplied = request.headers.get("x-request-id")?.trim()
+  if (supplied && /^[a-zA-Z0-9._:-]{8,120}$/.test(supplied)) return supplied
+  return globalThis.crypto?.randomUUID?.() ?? Math.random().toString(36).slice(2)
 }
 
 export function getBearerToken(request: Request) {
@@ -25,13 +45,33 @@ function isSafeMethod(method: string) {
 
 export function validateMutationOrigin(request: Request) {
   if (isSafeMethod(request.method)) return true
-  if (getBearerToken(request)) return true
 
   const origin = request.headers.get("origin")
-  if (!origin) return false
+  if (!origin) return Boolean(getBearerToken(request))
 
   try {
-    return new URL(origin).origin === new URL(request.url).origin
+    const normalizedOrigin = new URL(origin).origin
+    const requestOrigin = new URL(request.url).origin
+    if (normalizedOrigin === requestOrigin) return true
+
+    const configuredOrigins = [
+      process.env.NEXT_PUBLIC_SITE_URL,
+      process.env.BEZGROW_ADMIN_ORIGIN,
+      "https://bezgrow.com",
+      "https://www.bezgrow.com",
+    ]
+      .map((value) => value?.trim())
+      .filter(Boolean)
+      .map((value) => new URL(value as string).origin)
+
+    if (configuredOrigins.includes(normalizedOrigin)) return true
+
+    const desktopOrigin = /^https?:\/\/(?:127\.0\.0\.1|localhost)(?::\d+)?$/i.test(normalizedOrigin)
+    return Boolean(
+      desktopOrigin &&
+      getBearerToken(request) &&
+      request.headers.get("x-bezgrow-desktop-admin") === "1"
+    )
   } catch {
     return false
   }
@@ -55,8 +95,20 @@ export async function requireAdmin(request: Request): Promise<
   | { ok: true; context: AdminContext }
   | { ok: false; status: number; error: string }
 > {
+  const currentRequestId = requestId(request)
   if (!validateMutationOrigin(request)) {
     return { ok: false, status: 403, error: "Invalid request origin." }
+  }
+
+  if (!isSafeMethod(request.method)) {
+    const limit = checkRateLimit({
+      key: rateLimitKey(request, "platform-admin.mutation"),
+      limit: 120,
+      windowMs: 60 * 1000,
+    })
+    if (!limit.allowed) {
+      return { ok: false, status: 429, error: "Too many admin changes. Please wait and try again." }
+    }
   }
 
   const user = await getAuthenticatedUser(request)
@@ -73,7 +125,7 @@ export async function requireAdmin(request: Request): Promise<
 
   const isAdmin = isConfiguredAdmin(user.email, profile?.role)
 
-  if (profileError || !isAdmin) {
+  if (profileError || !profile || !isAdmin) {
     return { ok: false, status: 403, error: "Admin access required." }
   }
 
@@ -86,8 +138,34 @@ export async function requireAdmin(request: Request): Promise<
     context: {
       adminUserId: user.id,
       adminEmail: user.email ?? null,
+      adminRole: profile.role as "admin" | "platform_admin",
+      requestId: currentRequestId,
+      ipAddress:
+        request.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ||
+        request.headers.get("x-real-ip") ||
+        null,
+      userAgent: request.headers.get("user-agent"),
     },
   }
+}
+
+export async function writeAdminAudit(context: AdminContext, input: AdminAuditInput) {
+  const payload = {
+    admin_user_id: context.adminUserId,
+    admin_email: context.adminEmail,
+    action: input.action,
+    target_type: input.targetType ?? null,
+    target_id: input.targetId ?? null,
+    ip_address: context.ipAddress,
+    user_agent: context.userAgent,
+    previous_values: input.previousValues ?? null,
+    new_values: input.newValues ?? null,
+    request_id: context.requestId,
+    result: input.result ?? "success",
+  }
+
+  const { error } = await adminSupabase.from("admin_audit_logs").insert(payload)
+  if (error) throw new Error("Admin action could not be audited.")
 }
 
 export async function writeAdminLog(input: {
@@ -97,11 +175,12 @@ export async function writeAdminLog(input: {
   organizationId?: string | null
   metadata?: Record<string, unknown>
 }) {
-  await adminSupabase.from("admin_logs").insert({
+  const { error } = await adminSupabase.from("admin_logs").insert({
     action: input.action,
     description: input.description,
     admin_user_id: input.adminUserId,
     organization_id: input.organizationId ?? null,
     metadata: input.metadata ?? {},
   })
+  if (error) throw new Error("Legacy admin log could not be written.")
 }

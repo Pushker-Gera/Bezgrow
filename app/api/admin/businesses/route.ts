@@ -1,130 +1,133 @@
-import { NextResponse } from "next/server"
+import "server-only"
+
 import { requireAdmin } from "@/lib/api/auth"
-import { fail } from "@/lib/api/responses"
-import { parsePagination, paginationRange } from "@/lib/api/tenant"
+import {
+  adminFail,
+  adminOk,
+  adminRange,
+  controlPlaneErrorMessage,
+  effectiveLicenseStatus,
+  parseAdminListQuery,
+  unexpectedAdminError,
+} from "@/lib/admin/control-plane"
+import { adminSupabase } from "@/lib/supabase/admin"
 
 export const dynamic = "force-dynamic"
 
-function missingColumnFromError(error: { message?: string | null } | null) {
-  if (!error?.message) return null
-  const match =
-    error.message.match(/Could not find the '([^']+)' column/i) ||
-    error.message.match(/column "([^"]+)" of relation/i) ||
-    error.message.match(/column "([^"]+)" does not exist/i)
-
-  return match?.[1] || null
-}
-
 export async function GET(request: Request) {
-  const admin = await requireAdmin(request)
-  if (!admin.ok) return fail(admin.error, admin.status)
+  const auth = await requireAdmin(request)
+  if (!auth.ok) return adminFail({ requestId: crypto.randomUUID() }, auth.error, auth.status)
+  const context = auth.context
 
-  const pagination = parsePagination(request)
-  const { from, to } = paginationRange(pagination)
-  const { adminSupabase } = await import("@/lib/supabase/admin")
-
-  const selectColumns = "id,name,industry,business_type,business_category,currency,timezone,locale,created_at,updated_at"
-  const legacySelectColumns = "id,name,industry,business_type,category,currency,timezone,locale,created_at,updated_at"
-
-  let query = adminSupabase
-    .from("organizations")
-    .select(selectColumns, { count: "exact" })
-    .order("created_at", { ascending: false })
-    .range(from, to)
-
-  if (pagination.search) {
-    const term = pagination.search.replaceAll(",", " ")
-    query = query.or(`name.ilike.%${term}%,industry.ilike.%${term}%,business_type.ilike.%${term}%,business_category.ilike.%${term}%,currency.ilike.%${term}%`)
-  }
-
-  let { data: organizations, error, count } = await query
-  if (missingColumnFromError(error) === "business_category") {
-    let legacyQuery = adminSupabase
-      .from("organizations")
-      .select(legacySelectColumns, { count: "exact" })
+  try {
+    const list = parseAdminListQuery(request)
+    const { from, to } = adminRange(list)
+    let licensedBusinessIds: string[] | null = null
+    if (list.license_status) {
+      const licenseFilter = await adminSupabase
+        .from("license_control_plane")
+        .select("platform_business_id,effective_status")
+        .eq("effective_status", list.license_status)
+        .limit(10000)
+      if (licenseFilter.error) {
+        return adminFail(context, "License filters failed to load.", 500)
+      }
+      licensedBusinessIds = Array.from(
+        new Set(
+          (licenseFilter.data || [])
+            .map((license) => license.platform_business_id)
+            .filter(Boolean)
+        )
+      )
+      if (licensedBusinessIds.length === 0) {
+        return adminOk(context, {
+          data: [],
+          pagination: { page: list.page, limit: list.limit, total: 0 },
+          unavailableFields: ["invoice revenue", "product count", "stock health", "retail customer count", "local billing activity"],
+        })
+      }
+    }
+    let query = adminSupabase
+      .from("platform_businesses")
+      .select("*", { count: "exact" })
       .order("created_at", { ascending: false })
       .range(from, to)
+    if (list.search) {
+      const term = list.search.replaceAll(",", " ")
+      query = query.or(`business_name.ilike.%${term}%,workspace_id.ilike.%${term}%,app_version.ilike.%${term}%`)
+    }
+    if (list.status) query = query.eq("status", list.status)
+    if (list.platform) query = query.eq("platform", list.platform)
+    if (list.channel) query = query.eq("update_channel", list.channel)
+    if (list.version) query = query.eq("app_version", list.version)
+    if (list.cloud) query = query.eq("cloud_mode", list.cloud)
+    if (licensedBusinessIds) query = query.in("id", licensedBusinessIds)
 
-    if (pagination.search) {
-      const term = pagination.search.replaceAll(",", " ")
-      legacyQuery = legacyQuery.or(`name.ilike.%${term}%,industry.ilike.%${term}%,business_type.ilike.%${term}%,category.ilike.%${term}%,currency.ilike.%${term}%`)
+    const result = await query
+    if (result.error) {
+      return adminFail(context, controlPlaneErrorMessage(result.error, "Businesses failed to load."), 500)
     }
 
-    const legacyResult = await legacyQuery
-    organizations = (legacyResult.data || []).map((organization) => ({
-      ...organization,
-      business_category: organization.category || null,
-    }))
-    error = legacyResult.error
-    count = legacyResult.count
-  }
-
-  if (error) return fail("Businesses failed to load.", 500)
-
-  const organizationIds = (organizations || []).map((org) => org.id)
-
-  const [memberResult, productResult, invoiceResult] = await Promise.all([
-    organizationIds.length
-      ? adminSupabase
-          .from("organization_members")
-          .select("organization_id,user_id,role")
-          .in("organization_id", organizationIds)
-      : Promise.resolve({ data: [], error: null }),
-    organizationIds.length
-      ? adminSupabase
-          .from("products")
-          .select("organization_id,stock,sale_rate,price,purchase_rate")
-          .in("organization_id", organizationIds)
-          .is("deleted_at", null)
-      : Promise.resolve({ data: [], error: null }),
-    organizationIds.length
-      ? adminSupabase
-          .from("invoices")
-          .select("organization_id,grand_total,total_amount,total,payment_status,status")
-          .in("organization_id", organizationIds)
-      : Promise.resolve({ data: [], error: null }),
-  ])
-
-  if (memberResult.error || productResult.error || invoiceResult.error) {
-    return fail("Business metrics failed to load.", 500)
-  }
-
-  const memberMap = new Map<string, number>()
-  ;(memberResult.data || []).forEach((member) => {
-    memberMap.set(member.organization_id, (memberMap.get(member.organization_id) || 0) + 1)
-  })
-
-  const productMap = new Map<string, { count: number; stockValue: number }>()
-  ;(productResult.data || []).forEach((product) => {
-    const current = productMap.get(product.organization_id) || { count: 0, stockValue: 0 }
-    current.count += 1
-    current.stockValue += Number(product.stock || 0) * Number(product.sale_rate || product.price || product.purchase_rate || 0)
-    productMap.set(product.organization_id, current)
-  })
-
-  const invoiceMap = new Map<string, { count: number; revenue: number; paid: number }>()
-  ;(invoiceResult.data || []).forEach((invoice) => {
-    const current = invoiceMap.get(invoice.organization_id) || { count: 0, revenue: 0, paid: 0 }
-    current.count += 1
-    current.revenue += Number(invoice.grand_total || invoice.total_amount || invoice.total || 0)
-    if (String(invoice.payment_status || invoice.status || "").toLowerCase() === "paid") {
-      current.paid += 1
+    const rows = result.data || []
+    const customerIds = rows.map((row) => row.platform_customer_id).filter(Boolean)
+    const businessIds = rows.map((row) => row.id)
+    const [customers, licenses, devices] = await Promise.all([
+      customerIds.length
+        ? adminSupabase.from("platform_customers").select("id,name,email").in("id", customerIds)
+        : Promise.resolve({ data: [], error: null }),
+      businessIds.length
+        ? adminSupabase
+            .from("licenses")
+            .select("id,platform_business_id,device_id,status,expiry_date,grace_days,plan_name")
+            .in("platform_business_id", businessIds)
+            .order("created_at", { ascending: false })
+        : Promise.resolve({ data: [], error: null }),
+      businessIds.length
+        ? adminSupabase
+            .from("registered_devices")
+            .select("id,platform_business_id,device_id,last_reported_at")
+            .in("platform_business_id", businessIds)
+        : Promise.resolve({ data: [], error: null }),
+    ])
+    if (customers.error || licenses.error || devices.error) {
+      return adminFail(context, "Business metadata relationships failed to load.", 500)
     }
-    invoiceMap.set(invoice.organization_id, current)
-  })
 
-  const data = (organizations || []).map((organization) => ({
-    ...organization,
-    memberCount: memberMap.get(organization.id) || 0,
-    productCount: productMap.get(organization.id)?.count || 0,
-    stockValue: productMap.get(organization.id)?.stockValue || 0,
-    invoiceCount: invoiceMap.get(organization.id)?.count || 0,
-    revenue: invoiceMap.get(organization.id)?.revenue || 0,
-    paidInvoices: invoiceMap.get(organization.id)?.paid || 0,
-  }))
+    const customerMap = new Map((customers.data || []).map((row) => [row.id, row]))
+    const licenseMap = new Map<string, Record<string, unknown>>()
+    for (const license of licenses.data || []) {
+      if (license.platform_business_id && !licenseMap.has(license.platform_business_id)) {
+        licenseMap.set(license.platform_business_id, {
+          ...license,
+          effective_status: effectiveLicenseStatus(license),
+        })
+      }
+    }
+    const deviceMap = new Map<string, Record<string, unknown>>()
+    for (const device of devices.data || []) {
+      if (device.platform_business_id && !deviceMap.has(device.platform_business_id)) {
+        deviceMap.set(device.platform_business_id, device)
+      }
+    }
 
-  return NextResponse.json(
-    { data, pagination: { ...pagination, total: count || 0 } },
-    { headers: { "Cache-Control": "no-store" } }
-  )
+    return adminOk(context, {
+      data: rows.map((business) => ({
+        ...business,
+        customer: customerMap.get(business.platform_customer_id) || null,
+        license: licenseMap.get(business.id) || null,
+        device: deviceMap.get(business.id) || null,
+        local_data_state:
+          business.cloud_mode === "local_only"
+            ? "Local-only data"
+            : business.telemetry_reported_at
+              ? "Synchronized metadata"
+              : "Not synchronized",
+        last_reported_label: business.telemetry_reported_at || "Never",
+      })),
+      pagination: { page: list.page, limit: list.limit, total: result.count || 0 },
+      unavailableFields: ["invoice revenue", "product count", "stock health", "retail customer count", "local billing activity"],
+    })
+  } catch (error) {
+    return unexpectedAdminError(context, error, "Businesses failed to load.")
+  }
 }

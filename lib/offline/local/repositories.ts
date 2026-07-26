@@ -1059,7 +1059,6 @@ export class SettingsRepository {
           email: text(row, ["email"]),
           full_name: text(row, ["full_name", "name"]),
           role: text(row, ["role"], "user"),
-          approved: bool(row, ["approved"], true),
           business_created: bool(row, ["business_created"], true),
           is_suspended: bool(row, ["is_suspended"], false),
           last_login_at: text(row, ["last_login_at"]),

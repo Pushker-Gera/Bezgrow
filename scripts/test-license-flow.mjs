@@ -153,6 +153,24 @@ async function main() {
     const expired = signPayload(basePayload({ expiry_date: "2020-01-01", grace_period_days: 0 }));
     await assert.rejects(() => activateLikeDesktop(expired.licenseKey), /expired/);
 
+    const grace = signPayload(basePayload({ expiry_date: "2026-07-08", grace_period_days: 7 }));
+    const graceActivation = await activateLikeDesktop(grace.licenseKey, DEVICE_ID, new Date("2026-07-09T00:00:00.000Z"));
+    assert.equal(graceActivation.status.allowed, true);
+    assert.match(graceActivation.status.reason, /grace period/i);
+
+    const renewed = signPayload(basePayload({ expiry_date: "2100-12-31", issued_at: "2026-07-10T00:00:00.000Z" }));
+    const renewedActivation = await activateLikeDesktop(renewed.licenseKey);
+    assert.equal(renewedActivation.status.allowed, true);
+
+    for (const blockedStatus of ["suspended", "revoked", "replaced"]) {
+      const blockedRow = { ...activated.row, status: blockedStatus };
+      const blocked = policy.evaluateStoredLicense([blockedRow], {
+        deviceId: DEVICE_ID,
+        now: new Date("2026-07-09T00:00:00.000Z"),
+      });
+      assert.equal(blocked.allowed, false, `${blockedStatus} license must reject writes.`);
+    }
+
     assert.equal(policy.isLicenseRestrictedCollection("products"), true);
     assert.equal(policy.isLicenseRestrictedCollection("customers"), true);
     assert.equal(policy.isLicenseRestrictedCollection("invoices"), true);

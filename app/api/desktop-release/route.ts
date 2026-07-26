@@ -1,8 +1,12 @@
 import { NextResponse } from "next/server"
+import { getPublicDesktopReleaseManifest } from "@/lib/releases/public"
 import desktopReleaseManifest from "@/public/downloads/desktop-release.json"
 
-export const dynamic = "force-static"
+export const dynamic = "force-dynamic"
 
 export async function GET() {
-  return NextResponse.json(desktopReleaseManifest, { headers: { "Cache-Control": "no-store" } })
+  const controlPlaneManifest = await getPublicDesktopReleaseManifest()
+  return NextResponse.json(controlPlaneManifest || desktopReleaseManifest, {
+    headers: { "Cache-Control": "public, max-age=30, stale-while-revalidate=60" },
+  })
 }

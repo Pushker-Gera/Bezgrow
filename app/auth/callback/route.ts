@@ -10,7 +10,6 @@ type SupabaseQueryClient = Pick<Awaited<ReturnType<typeof createServerSupabase>>
 
 type ProfileGate = {
   role: string | null
-  approved: boolean | null
   business_created: boolean | null
   is_suspended: boolean | null
 }
@@ -52,7 +51,7 @@ async function getOptionalAdminSupabase(): Promise<SupabaseQueryClient | null> {
 async function readProfile(client: SupabaseQueryClient, userId: string) {
   return client
     .from("profiles")
-    .select("role, approved, business_created, is_suspended")
+    .select("role, business_created, is_suspended")
     .eq("id", userId)
     .maybeSingle()
 }
@@ -83,7 +82,11 @@ async function getProfileRedirect(
   }
 
   let destination = "/dashboard"
-  let reason = "approved_user"
+  let reason = "licensed_user"
+  const adminRequested =
+    requestedNext === "/admin" ||
+    requestedNext.startsWith("/admin/") ||
+    requestedNext.startsWith("/admin?")
 
   if (requestedNext === "/reset-password") {
     destination = "/reset-password"
@@ -92,14 +95,14 @@ async function getProfileRedirect(
     destination = "/login?error=account_suspended"
     reason = "suspended"
   } else if (isConfiguredAdmin(email, profile?.role)) {
-    destination = "/admin"
-    reason = profile?.role === "admin" ? "profile_admin" : "configured_admin_email"
+    destination = adminRequested ? requestedNext : "/admin"
+    reason = "profile_platform_admin"
   } else if (profileError || !profile) {
     destination = "/login?error=profile_missing"
     reason = profileError ? "profile_lookup_error" : "profile_missing"
-  } else if (profile.approved === false) {
-    destination = "/pending-approval"
-    reason = "pending_approval"
+  } else if (adminRequested) {
+    destination = "/login?next=/admin&platform_admin=1&error=admin_required"
+    reason = "admin_role_required"
   } else if (!profile.business_created) {
     const [{ data: membership }, { data: ownedOrganization }] = await Promise.all([
       lookupClient
@@ -116,17 +119,16 @@ async function getProfileRedirect(
         .maybeSingle(),
     ])
     const hasBusiness = Boolean(membership?.organization_id || ownedOrganization?.id)
-    destination = hasBusiness ? (requestedNext === "/admin" ? "/dashboard" : requestedNext) : "/create-business"
-    reason = hasBusiness ? "approved_user_with_workspace" : "approved_user_needs_workspace"
+    destination = hasBusiness ? requestedNext : "/create-business"
+    reason = hasBusiness ? "licensed_user_with_workspace" : "licensed_user_needs_workspace"
   } else {
-    destination = requestedNext === "/admin" ? "/dashboard" : requestedNext
+    destination = requestedNext
   }
 
   console.info("[auth/callback] profile redirect", {
     userId,
     role: profile?.role || null,
-    adminEmailMatch: isConfiguredAdmin(email, null),
-    approved: profile?.approved ?? null,
+    platformAdmin: isConfiguredAdmin(email, profile?.role),
     businessCreated: profile?.business_created ?? null,
     destination,
     reason,

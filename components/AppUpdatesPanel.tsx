@@ -55,7 +55,7 @@ export default function AppUpdatesPanel() {
     setMessage("")
 
     try {
-      const nextManifest = await fetchDesktopReleaseManifest(controller.signal)
+      const nextManifest = await fetchDesktopReleaseManifest(controller.signal, currentVersion)
 
       setManifest(nextManifest)
 

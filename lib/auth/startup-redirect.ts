@@ -10,7 +10,7 @@ import type { WorkspaceBootstrapPayload } from "@/lib/workspaceBootstrapClient"
 
 function redirectFromWorkspace(payload: WorkspaceBootstrapPayload | null, fallback = "/dashboard") {
   if (!payload?.success) return ""
-  if (payload.permissions?.admin || payload.profile?.role === "admin") return "/admin"
+  if (payload.permissions?.admin || ["admin", "platform_admin"].includes(payload.profile?.role || "")) return "/admin"
   if (payload.profile?.is_suspended) return "/login?error=account_suspended"
 
   const hasBusiness = Boolean(payload.profile?.business_created || payload.organization?.id || payload.membership?.organization_id)

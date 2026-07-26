@@ -70,7 +70,6 @@ export async function POST(request: Request) {
       email,
       full_name: payload.fullName,
       role: "user",
-      approved: true,
       business_created: false,
       is_suspended: false,
       updated_at: new Date().toISOString(),
@@ -80,8 +79,6 @@ export async function POST(request: Request) {
       await adminSupabase.auth.admin.deleteUser(userId)
       return fail("Account profile could not be created. Please contact support.", 500)
     }
-
-    await adminSupabase.from("pending_users").delete().eq("email", email)
 
     return ok({ status: "active", message: "Account created. Activate Bezgrow with your license key to continue." })
   } catch {

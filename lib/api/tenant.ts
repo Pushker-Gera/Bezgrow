@@ -61,7 +61,7 @@ export async function requireWorkspace(request: Request): Promise<
 
   const { data: profile, error: profileError } = await adminSupabase
     .from("profiles")
-    .select("id, role, approved, business_created, is_suspended")
+    .select("id, role, business_created, is_suspended")
     .eq("id", userId)
     .maybeSingle()
 
@@ -130,7 +130,7 @@ export async function requireWorkspace(request: Request): Promise<
   }
 
   if (!workspaceOrganizationId) {
-    if (profile.business_created === false && profile.role !== "admin") {
+    if (profile.business_created === false && !["admin", "platform_admin"].includes(profile.role)) {
       return { ok: false, status: 403, error: "Business setup is required." }
     }
 

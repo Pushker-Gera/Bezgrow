@@ -18,7 +18,6 @@ type BootstrapResponse = {
     error?: string
     profile?: {
         role?: string | null
-        approved?: boolean
         is_suspended?: boolean
         business_created?: boolean
     }
@@ -67,6 +66,7 @@ export default function LoginPage() {
     const [successMessage, setSuccessMessage] = useState("")
     const [resetLoading, setResetLoading] = useState(false)
     const [checkingSession, setCheckingSession] = useState(true)
+    const [adminLoginView, setAdminLoginView] = useState(false)
     const sessionCheckStarted = useRef(false)
 
     const getSafeNextPath = useCallback((fallback: string) => {
@@ -80,6 +80,13 @@ export default function LoginPage() {
         }
 
         return requested
+    }, [])
+
+    const platformAdminRequested = useCallback(() => {
+        if (typeof window === "undefined") return false
+        const params = new URLSearchParams(window.location.search)
+        const requested = params.get("next") || ""
+        return params.get("platform_admin") === "1" || requested === "/admin" || requested.startsWith("/admin?")
     }, [])
 
     function showAuthError(message: string) {
@@ -170,6 +177,10 @@ export default function LoginPage() {
     }
 
     useEffect(() => {
+        setAdminLoginView(platformAdminRequested())
+    }, [platformAdminRequested])
+
+    useEffect(() => {
         if (sessionCheckStarted.current) return
         sessionCheckStarted.current = true
         let active = true
@@ -187,6 +198,10 @@ export default function LoginPage() {
                 setErrorMessage("Your login succeeded, but no profile was found for this account. Contact support to repair the admin profile.")
             } else if (urlError === "account_suspended") {
                 setErrorMessage("This account is suspended.")
+            } else if (urlError === "admin_required") {
+                setErrorMessage("This account is not authorized for Platform Administration.")
+            } else if (urlError === "session_expired") {
+                setErrorMessage("Admin authorization expired. Sign in again to continue.")
             }
 
             const desktopRuntime = (await withTimeout(isTauriRuntimeAsync(), 2500)) || false
@@ -218,6 +233,22 @@ export default function LoginPage() {
                 return
             }
 
+            if (platformAdminRequested()) {
+                const adminResponse = await withTimeout(fetch("/api/admin/session", {
+                    cache: "no-store",
+                    credentials: "include",
+                }), SESSION_CHECK_TIMEOUT_MS)
+                if (adminResponse?.ok) {
+                    navigate(getSafeNextPath("/admin"))
+                    return
+                }
+                if (adminResponse?.status === 403) {
+                    setErrorMessage("This account is not authorized for Platform Administration.")
+                    setCheckingSession(false)
+                    return
+                }
+            }
+
             const bootstrapResponse = await withTimeout(fetch("/api/workspace/bootstrap", {
                 cache: "no-store",
                 credentials: "include",
@@ -225,7 +256,7 @@ export default function LoginPage() {
             if (bootstrapResponse?.ok) {
                 const payload = (await bootstrapResponse.json()) as BootstrapResponse
                 if (payload.success) {
-                    if (payload.permissions?.admin || payload.profile?.role === "admin") {
+                    if (payload.permissions?.admin || ["admin", "platform_admin"].includes(payload.profile?.role || "")) {
                         navigate("/admin")
                         return
                     }
@@ -249,7 +280,7 @@ export default function LoginPage() {
         return () => {
             active = false
         }
-    }, [getSafeNextPath, router])
+    }, [getSafeNextPath, platformAdminRequested, router])
 
     async function login(event?: FormEvent<HTMLFormElement>) {
         event?.preventDefault()
@@ -420,9 +451,13 @@ export default function LoginPage() {
                         <BezgrowLogoMark className="h-10 w-10" size={40} priority />
                         <span className="min-w-0 text-base font-black">Bezgrow</span>
                     </div>
-                    <h1 className="mb-2 break-words text-2xl font-bold sm:text-3xl">Opening Bezgrow</h1>
+                    <h1 className="mb-2 break-words text-2xl font-bold sm:text-3xl">
+                        {adminLoginView ? "Opening Platform Administration" : "Opening Bezgrow"}
+                    </h1>
                     <p className="break-words text-sm leading-6 text-gray-400">
-                        Checking your saved desktop session.
+                        {adminLoginView
+                            ? "Checking your secure online administrator session."
+                            : "Checking your saved desktop session."}
                     </p>
                 </div>
             </div>
@@ -440,11 +475,13 @@ export default function LoginPage() {
                 </div>
 
                 <h1 className="mb-2 break-words text-2xl font-bold sm:text-3xl">
-                    Welcome Back
+                    {adminLoginView ? "Platform Admin Login" : "Welcome Back"}
                 </h1>
 
                 <p className="mb-5 break-words text-sm leading-6 text-gray-400 sm:mb-6">
-                    Login to manage your inventory, billing, customers, and business operations.
+                    {adminLoginView
+                        ? "Internet and an authorized admin or platform_admin account are required. Access is validated by the Bezgrow server."
+                        : "Login to manage your inventory, billing, customers, and business operations."}
                 </p>
 
                 {errorMessage && (
@@ -461,7 +498,7 @@ export default function LoginPage() {
 
                 <input
                     type="email"
-                    placeholder="Enter your business email"
+                    placeholder={adminLoginView ? "Enter your administrator email" : "Enter your business email"}
                     value={email}
                     className="mb-4 min-h-12 w-full rounded-lg border border-gray-700 bg-black p-3 outline-none focus:border-cyan-300"
                     onChange={(e) => setEmail(e.target.value)}
@@ -520,7 +557,9 @@ export default function LoginPage() {
                 </button>
 
                 <p className="mt-6 break-words text-center text-sm text-gray-500">
-                    Secure access for your business account.
+                    {adminLoginView
+                        ? "Online-only platform access. Customer ERP data remains local."
+                        : "Secure access for your business account."}
                 </p>
 
             </form>

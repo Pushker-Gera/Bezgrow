@@ -242,7 +242,6 @@ function workspaceFromLicense(payload: LicensePayload): WorkspaceBootstrapPayloa
     profile: {
       id: payload.customer_id,
       role: "user",
-      approved: true,
       is_suspended: false,
       business_created: true,
     },
@@ -302,7 +301,6 @@ function workspaceFromStoredLicense(row: StoredLicenseRow): WorkspaceBootstrapPa
     profile: {
       id: customerId,
       role: "user",
-      approved: true,
       is_suspended: false,
       business_created: true,
     },

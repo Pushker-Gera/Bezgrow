@@ -11,10 +11,16 @@ export type LicensePayload = {
   business_id: string
   business_name: string
   device_id: string
+  platform?: "macos" | "windows" | string | null
+  app_version?: string | null
   plan_name: string
+  issue_date?: string | null
   expiry_date: string
   grace_period_days: number
   allowed_features: string[]
+  maximum_users?: number | null
+  maximum_businesses?: number | null
+  maximum_branches?: number | null
   issued_by_admin: string
   issued_at: string
   signature_algorithm?: "ed25519" | "rsa-pss-sha256" | string | null
@@ -163,10 +169,24 @@ function assertPayload(value: unknown): LicensePayload {
     business_id: String(payload.business_id),
     business_name: String(payload.business_name),
     device_id: String(payload.device_id),
+    ...(payload.platform !== undefined ? { platform: payload.platform ? String(payload.platform) : null } : {}),
+    ...(payload.app_version !== undefined ? { app_version: payload.app_version ? String(payload.app_version) : null } : {}),
     plan_name: String(payload.plan_name),
+    ...(payload.issue_date !== undefined
+      ? { issue_date: payload.issue_date ? String(payload.issue_date).slice(0, 10) : null }
+      : {}),
     expiry_date: String(payload.expiry_date).slice(0, 10),
     grace_period_days: Math.max(0, Number(payload.grace_period_days || 0)),
     allowed_features: payload.allowed_features.map(String).filter(Boolean).sort(),
+    ...(payload.maximum_users !== undefined
+      ? { maximum_users: payload.maximum_users ? Math.max(1, Number(payload.maximum_users)) : null }
+      : {}),
+    ...(payload.maximum_businesses !== undefined
+      ? { maximum_businesses: payload.maximum_businesses ? Math.max(1, Number(payload.maximum_businesses)) : null }
+      : {}),
+    ...(payload.maximum_branches !== undefined
+      ? { maximum_branches: payload.maximum_branches ? Math.max(1, Number(payload.maximum_branches)) : null }
+      : {}),
     issued_by_admin: String(payload.issued_by_admin),
     issued_at: String(payload.issued_at),
     signature_algorithm: payload.signature_algorithm ? String(payload.signature_algorithm) : undefined,

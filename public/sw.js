@@ -1,4 +1,4 @@
-const CACHE_VERSION = "bezgrow-pwa-v5-perf-20260703"
+const CACHE_VERSION = "bezgrow-pwa-v6-admin-online-only-20260726"
 const STATIC_CACHE = `${CACHE_VERSION}:static`
 const SHELL_CACHE = `${CACHE_VERSION}:shell`
 
@@ -75,6 +75,19 @@ function isPrivateNavigation(requestUrl) {
   )
 }
 
+function adminOfflineResponse() {
+  return new Response(
+    `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>Platform Administration requires internet</title></head><body style="margin:0;background:#000;color:#fff;font-family:system-ui;display:grid;min-height:100vh;place-items:center"><main style="max-width:560px;padding:32px;text-align:center"><h1>Internet connection required for Platform Administration</h1><p style="color:#aaa;line-height:1.6">Admin pages and mutations are unavailable offline. The local Bezgrow ERP workspace is unchanged.</p></main></body></html>`,
+    {
+      status: 503,
+      headers: {
+        "Cache-Control": "no-store",
+        "Content-Type": "text/html; charset=utf-8",
+      },
+    }
+  )
+}
+
 self.addEventListener("fetch", (event) => {
   const { request } = event
   if (request.method !== "GET") return
@@ -97,6 +110,13 @@ self.addEventListener("fetch", (event) => {
   }
 
   if (request.mode === "navigate") {
+    if (requestUrl.pathname.startsWith("/admin")) {
+      event.respondWith(
+        fetch(request, { cache: "no-store" }).catch(() => adminOfflineResponse())
+      )
+      return
+    }
+
     event.respondWith(
       fetch(request)
         .then((response) => {

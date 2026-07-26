@@ -4,6 +4,7 @@ import Link from "next/link"
 import { useRouter } from "next/navigation"
 import { useEffect, useRef, useState } from "react"
 import LocalDatabaseRecovery from "@/components/offline/LocalDatabaseRecovery"
+import PlatformAdminLauncher from "@/components/desktop/PlatformAdminLauncher"
 import { isTauriRuntimeAsync } from "@/lib/desktop/tauri"
 import { activateOfflineLicense, localLicenseSnapshot, restoreLicensedWorkspaceContext } from "@/lib/offline/local/license"
 import { getLocalDatabaseService } from "@/lib/offline/local/service"
@@ -194,6 +195,7 @@ export default function OfflinePage() {
             </Link>
           </div>
         )}
+        <PlatformAdminLauncher className="mt-5" />
       </section>
     </main>
   )

@@ -6,6 +6,7 @@ import type { ReactNode } from "react"
 import { useEffect, useMemo, useRef, useState } from "react"
 import { BezgrowLogoMark } from "@/components/brand/BezgrowLogoMark"
 import DesktopBackButton from "@/components/desktop/DesktopBackButton"
+import PlatformAdminLauncher from "@/components/desktop/PlatformAdminLauncher"
 import LocalDatabaseRecovery from "@/components/offline/LocalDatabaseRecovery"
 import { clearDesktopSession } from "@/lib/desktop/session"
 import { isTauriRuntimeAsync } from "@/lib/desktop/tauri"
@@ -142,7 +143,7 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
 
                 setOwnerEmail(payload.user?.email || "owner@bezgrow.com")
 
-                const isAdmin = Boolean(payload.permissions?.admin || payload.profile?.role === "admin")
+                const isAdmin = Boolean(payload.permissions?.admin || ["admin", "platform_admin"].includes(payload.profile?.role || ""))
                 setCanShowAdmin(isAdmin)
                 if (isAdmin) {
                     router.replace("/admin")
@@ -280,6 +281,7 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
                 <div className="mt-5 rounded-[26px] border border-white/10 bg-white/[0.035] p-4">
                     <p className="truncate text-sm font-bold text-white">{businessName}</p>
                     <p className="mt-1 truncate text-xs text-neutral-500">{ownerEmail}</p>
+                    <PlatformAdminLauncher className="mt-4" />
                     <button onClick={handleLogout} className="mt-4 h-11 w-full rounded-2xl bg-red-500/15 text-sm font-bold text-red-200 hover:bg-red-500/25">
                         Logout
                     </button>

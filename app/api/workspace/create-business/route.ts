@@ -79,12 +79,12 @@ export async function POST(request: Request) {
   try {
     const { data: profile, error: profileError } = await adminSupabase
       .from("profiles")
-      .select("id,email,role,approved,business_created,is_suspended")
+      .select("id,email,role,business_created,is_suspended")
       .eq("id", user.id)
       .maybeSingle()
 
     if (profileError || !profile) return fail("Profile is not ready.", 403)
-    if (profile.role === "admin") return fail("Admins do not create customer workspaces here.", 403)
+    if (["admin", "platform_admin"].includes(profile.role)) return fail("Admins do not create customer workspaces here.", 403)
     if (profile.is_suspended) return fail("This account is suspended.", 403)
     if (profile.business_created) return fail("Business is already connected.", 409)
 
@@ -165,7 +165,6 @@ export async function POST(request: Request) {
     const { error: updateError } = await adminSupabase
       .from("profiles")
       .update({
-        approved: true,
         business_created: true,
         role: "user",
         updated_at: new Date().toISOString(),

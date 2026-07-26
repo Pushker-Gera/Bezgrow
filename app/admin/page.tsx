@@ -1,231 +1,225 @@
 "use client"
 
-import { useCallback, useEffect, useMemo, useState } from "react"
-import { useRouter } from "next/navigation"
-import { isTauriRuntimeAsync } from "@/lib/desktop/tauri"
-import { supabase } from "@/lib/supabase"
+import { useEffect, useState } from "react"
+import {
+  AdminNotice,
+  AdminPageHeader,
+  StatusPill,
+  displayValue,
+  formatAdminDate,
+  useAdminOnline,
+} from "@/components/admin/ControlPlaneUi"
 
-type PendingUser = {
-    id: string
-    email: string | null
-    full_name?: string | null
-    business_name: string | null
-    created_at?: string | null
+type DashboardPayload = {
+  success?: boolean
+  error?: string
+  requestId?: string
+  summary?: {
+    licenses?: Record<string, number>
+    devices?: Record<string, number>
+    customers?: number
+    businesses?: number
+    backup?: Record<string, number>
+    supportAttention?: number
+    latestMacRelease?: Record<string, unknown> | null
+    latestWindowsRelease?: Record<string, unknown> | null
+    recentAdminActions?: Array<Record<string, unknown>>
+    recentActivationFailures?: Array<Record<string, unknown>>
+    recentSecurityEvents?: Array<Record<string, unknown>>
+    supportCases?: Array<Record<string, unknown>>
+  }
+  revenue?: {
+    licenseValueLabel?: string
+    subscriptionRevenueLabel?: string
+  }
+  dataBoundaries?: Record<string, string>
 }
 
-type AdminMetricsResponse = {
-    success: boolean
-    error?: string
-    organizations?: unknown[]
-    profiles?: Array<{ approved: boolean | null; business_created: boolean | null; is_suspended?: boolean | null }>
-    pendingUsers?: PendingUser[]
-    usersCount?: number
-}
+export default function AdminDashboardPage() {
+  const { online } = useAdminOnline()
+  const [payload, setPayload] = useState<DashboardPayload>({})
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState("")
 
-type BootstrapResponse = {
-    success?: boolean
-    user?: {
-        email?: string | null
-    }
-    profile?: {
-        role?: string | null
-    }
-    permissions?: {
-        admin?: boolean
-    }
-}
-
-function formatDate(value: string | null | undefined) {
-    if (!value) return "New request"
-    return new Date(value).toLocaleDateString()
-}
-
-export default function AdminPage() {
-    const router = useRouter()
-
-    const [users, setUsers] = useState<PendingUser[]>([])
-    const [totalUsers, setTotalUsers] = useState(0)
-    const [totalBusinesses, setTotalBusinesses] = useState(0)
-    const [pendingCount, setPendingCount] = useState(0)
-    const [approvedUsers, setApprovedUsers] = useState(0)
-    const [loading, setLoading] = useState(true)
-    const [actionLoading, setActionLoading] = useState<string | null>(null)
-    const [notice, setNotice] = useState("")
-
-    const loadUsers = useCallback(async () => {
-        setLoading(true)
-
-        const {
-            data: { session },
-        } = await supabase.auth.getSession()
-
-        const response = await fetch("/api/admin/metrics", {
-            headers: session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : undefined,
-            cache: "no-store",
-        })
-        const payload = (await response.json()) as AdminMetricsResponse
-
-        if (!payload.success) {
-            setNotice(payload.error || "Admin metrics failed to load.")
-            setLoading(false)
-            return
+  useEffect(() => {
+    if (!online) return
+    const controller = new AbortController()
+    queueMicrotask(() => {
+      setLoading(true)
+      setError("")
+    })
+    fetch("/api/admin/dashboard", {
+      credentials: "include",
+      cache: "no-store",
+      signal: controller.signal,
+    })
+      .then(async (response) => {
+        const next = (await response.json().catch(() => ({}))) as DashboardPayload
+        if (!response.ok || !next.success) throw new Error(next.error || "Dashboard failed to load.")
+        setPayload(next)
+      })
+      .catch((requestError) => {
+        if (!controller.signal.aborted) {
+          setError(requestError instanceof Error ? requestError.message : "Dashboard failed to load.")
         }
+      })
+      .finally(() => {
+        if (!controller.signal.aborted) setLoading(false)
+      })
+    return () => controller.abort()
+  }, [online])
 
-        const profileRows = payload.profiles || []
-        const pendingRows = payload.pendingUsers || []
+  const summary = payload.summary || {}
+  const licenses = summary.licenses || {}
+  const devices = summary.devices || {}
+  const dashboardUnavailable = Boolean(error) && !loading
+  const cards = [
+    ["Active Licenses", licenses.active],
+    ["Expiring in 7 days", licenses.expiring7],
+    ["Expiring in 30 days", licenses.expiring30],
+    ["Expiring in 90 days", licenses.expiring90],
+    ["Grace Period", licenses.gracePeriod],
+    ["Expired Licenses", licenses.expired],
+    ["Revoked Licenses", licenses.revoked],
+    ["Suspended Licenses", licenses.suspended],
+    ["Trial Licenses", licenses.trial],
+    ["Registered Devices", devices.total],
+    ["Activated Today", devices.activatedToday],
+    ["Active in 30 days", devices.active30Days],
+    ["Platform Customers", summary.customers],
+    ["Cloud Workspaces", summary.businesses],
+    ["Failed Update Checks", devices.failedUpdateChecks],
+    ["Support Attention", summary.supportAttention],
+  ] as const
 
-        setUsers(pendingRows)
-        setPendingCount(pendingRows.length)
-        setTotalUsers(payload.usersCount || profileRows.length)
-        setApprovedUsers(profileRows.filter((profile) => profile.approved !== false && !profile.is_suspended).length)
-        setTotalBusinesses(payload.organizations?.length || 0)
-        setLoading(false)
-    }, [])
+  return (
+    <div className="space-y-7">
+      <AdminPageHeader
+        eyebrow="Control plane"
+        title="Platform dashboard"
+        description="Authoritative licenses, registered devices, releases, optional cloud services, support, and security events. Local customer ERP records are intentionally excluded."
+      />
 
-    const checkAdmin = useCallback(async () => {
-        const {
-            data: { session },
-        } = await supabase.auth.getSession()
+      {error && <AdminNotice tone="danger">{error}</AdminNotice>}
 
-        const bootstrapPath = "/api/workspace/bootstrap"
-        const desktopRuntime = await isTauriRuntimeAsync()
-        const response = await fetch(desktopRuntime ? `/api/desktop-proxy?path=${encodeURIComponent(bootstrapPath)}` : bootstrapPath, {
-            headers: session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : undefined,
-            cache: "no-store",
-        })
-        const payload = (await response.json()) as BootstrapResponse
+      <section className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+        {cards.map(([label, value]) => (
+          <article key={label} className="rounded-[24px] border border-white/10 bg-white/[0.035] p-5">
+            <p className="text-xs font-black uppercase tracking-[0.12em] text-neutral-500">{label}</p>
+            <p className="mt-4 text-3xl font-black text-white">
+              {loading
+                ? <span className="inline-block h-9 w-16 animate-pulse rounded-lg bg-white/10" />
+                : dashboardUnavailable
+                  ? <span className="text-base text-neutral-500">Unavailable</span>
+                  : Number(value ?? 0).toLocaleString()}
+            </p>
+          </article>
+        ))}
+      </section>
 
-        if (!payload.success || (!payload.permissions?.admin && payload.profile?.role !== "admin")) {
-            router.push(response.status === 401 ? "/login" : "/dashboard")
-            return
-        }
+      <section className="grid gap-4 lg:grid-cols-2">
+        <article className="rounded-[28px] border border-white/10 bg-white/[0.03] p-6">
+          <p className="text-xs font-black uppercase tracking-[0.16em] text-neutral-500">Subscription Revenue</p>
+          <p className="mt-4 text-2xl font-black">{payload.revenue?.subscriptionRevenueLabel || "Payment system not connected"}</p>
+          <p className="mt-2 text-sm text-neutral-400">License value: {payload.revenue?.licenseValueLabel || "Not configured"}</p>
+          <p className="mt-4 text-xs leading-5 text-neutral-500">
+            Customer invoices are business data, not Bezgrow platform revenue, and are never used in this metric.
+          </p>
+        </article>
+        <article className="rounded-[28px] border border-white/10 bg-white/[0.03] p-6">
+          <p className="text-xs font-black uppercase tracking-[0.16em] text-neutral-500">Optional Cloud Backup</p>
+          <p className="mt-4 text-2xl font-black">{dashboardUnavailable ? "Unavailable" : `${Number(summary.backup?.enabled ?? 0).toLocaleString()} enabled`}</p>
+          <p className="mt-2 text-sm text-neutral-400">{dashboardUnavailable ? "Status could not be loaded" : `${Number(summary.backup?.failed ?? 0).toLocaleString()} requiring attention`}</p>
+          <p className="mt-4 text-xs leading-5 text-neutral-500">Only explicitly enabled backup metadata is counted.</p>
+        </article>
+      </section>
 
-        await loadUsers()
-    }, [loadUsers, router])
-
-    useEffect(() => {
-        queueMicrotask(() => {
-            void checkAdmin()
-        })
-    }, [checkAdmin])
-
-    const accessHealth = useMemo(() => {
-        if (totalUsers === 0) return 100
-        return Math.round((approvedUsers / totalUsers) * 100)
-    }, [approvedUsers, totalUsers])
-
-    async function approveUser(user: PendingUser) {
-        const {
-            data: { session },
-        } = await supabase.auth.getSession()
-
-        setActionLoading(user.id)
-        const response = await fetch("/api/admin/users/approve", {
-            method: "POST",
-            headers: {
-                "Content-Type": "application/json",
-                ...(session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : {}),
-            },
-            body: JSON.stringify({ userId: user.id }),
-        })
-        const payload = (await response.json()) as { success: boolean; error?: string; message?: string }
-        setActionLoading(null)
-
-        if (!payload.success) {
-            setNotice(payload.error || "Unable to activate legacy user.")
-            return
-        }
-
-        setNotice(payload.message || `${user.email || "User"} activated successfully.`)
-        await loadUsers()
-    }
-
-    return (
-        <div className="space-y-8 text-white">
-            <section className="inventory-sheen relative overflow-hidden rounded-[40px] border border-white/10 bg-white/[0.035] p-8 shadow-[0_0_90px_rgba(0,0,0,0.5)] backdrop-blur-2xl">
-                <div className="relative z-10 flex flex-col gap-6 xl:flex-row xl:items-end xl:justify-between">
-                    <div>
-                        <div className="mb-5 inline-flex rounded-full border border-cyan-400/20 bg-cyan-500/10 px-4 py-2 text-xs font-semibold uppercase tracking-[0.22em] text-cyan-200">
-                            Platform Command Center
-                        </div>
-                        <h1 className="max-w-5xl text-4xl font-black leading-tight tracking-tight md:text-6xl">
-                            Admin operations for licenses, organizations, and SaaS growth.
-                        </h1>
-                        <p className="mt-5 max-w-3xl text-base leading-8 text-neutral-400">
-                            Monitor platform health, issue offline licenses, track workspace growth,
-                            and keep the ERP launch pipeline clean.
-                        </p>
-                    </div>
-                    <div className="rounded-[32px] border border-emerald-400/20 bg-emerald-500/10 p-6">
-                        <p className="text-xs font-bold uppercase tracking-[0.2em] text-emerald-200">
-                            Access Health
-                        </p>
-                        <p className="mt-3 text-5xl font-black text-emerald-200">{accessHealth}%</p>
-                    </div>
+      <section className="grid gap-4 xl:grid-cols-2">
+        {[
+          ["Latest macOS release", summary.latestMacRelease],
+          ["Latest Windows release", summary.latestWindowsRelease],
+        ].map(([title, release]) => {
+          const row = (release || null) as Record<string, unknown> | null
+          return (
+            <article key={String(title)} className="rounded-[28px] border border-white/10 bg-white/[0.03] p-6">
+              <p className="text-xs font-black uppercase tracking-[0.16em] text-neutral-500">{String(title)}</p>
+              {dashboardUnavailable ? (
+                <p className="mt-4 text-lg font-black text-neutral-500">Release status unavailable</p>
+              ) : row ? (
+                <div className="mt-4 flex flex-wrap items-center gap-3">
+                  <p className="text-2xl font-black">v{displayValue(row.version)}</p>
+                  <StatusPill value={row.release_channel} />
+                  <StatusPill value={row.release_status} />
+                  <span className="text-sm text-neutral-400">{displayValue(row.architecture)}</span>
                 </div>
-            </section>
+              ) : (
+                <p className="mt-4 text-lg font-black text-neutral-300">No validated release published</p>
+              )}
+            </article>
+          )
+        })}
+      </section>
 
-            {notice && (
-                <div className="rounded-3xl border border-cyan-400/25 bg-cyan-500/10 px-6 py-4 text-sm text-cyan-100">
-                    {notice}
-                </div>
-            )}
+      <section className="grid gap-4 xl:grid-cols-2">
+        <EventList title="Recent admin actions" rows={summary.recentAdminActions || []} />
+        <EventList title="Recent activation failures" rows={summary.recentActivationFailures || []} empty="No reported activation failures." />
+        <EventList title="Integrity and security events" rows={summary.recentSecurityEvents || []} empty="No recent security events." />
+        <EventList title="Support requiring attention" rows={summary.supportCases || []} empty="No support cases require attention." support />
+      </section>
 
-            <section className="grid grid-cols-1 gap-5 md:grid-cols-2 2xl:grid-cols-4">
-                {[
-                    ["Total Users", totalUsers, "text-white", "Registered profiles"],
-                    ["Active Users", approvedUsers, "text-emerald-200", "Active platform access"],
-                    ["Legacy Queue", pendingCount, "text-amber-200", "Old access requests"],
-                    ["Organizations", totalBusinesses, "text-cyan-200", "Business workspaces"],
-                ].map(([label, value, color, helper]) => (
-                    <div key={label} className="rounded-[32px] border border-white/10 bg-gradient-to-br from-zinc-950 via-black to-zinc-950 p-7">
-                        <p className="text-xs font-semibold uppercase tracking-[0.2em] text-neutral-500">{label}</p>
-                        <p className={`mt-5 text-4xl font-black tracking-tight ${color}`}>{value}</p>
-                        <p className="mt-4 text-sm text-neutral-500">{helper}</p>
-                    </div>
-                ))}
-            </section>
-
-            <section className="overflow-hidden rounded-[36px] border border-white/10 bg-gradient-to-br from-zinc-950/95 to-black shadow-[0_0_80px_rgba(0,0,0,0.4)]">
-                <div className="flex flex-col gap-3 border-b border-white/10 p-6 md:flex-row md:items-center md:justify-between">
-                    <div>
-                        <h2 className="text-3xl font-black">Legacy Access Queue</h2>
-                        <p className="mt-2 text-sm text-neutral-500">Review older cloud access requests. Desktop customers should use admin-issued licenses.</p>
-                    </div>
-                    <button onClick={() => void loadUsers()} className="h-12 rounded-2xl border border-white/10 px-5 text-sm font-bold text-white hover:border-cyan-400/30">
-                        Refresh
-                    </button>
-                </div>
-
-                {loading ? (
-                    <div className="p-12 text-center text-neutral-500">Loading platform data...</div>
-                ) : users.length === 0 ? (
-                    <div className="p-12 text-center">
-                        <h3 className="text-2xl font-black">No Pending Users</h3>
-                        <p className="mt-3 text-neutral-500">There are no old access requests waiting.</p>
-                    </div>
-                ) : (
-                    <div className="divide-y divide-white/5">
-                        {users.map((user) => (
-                            <div key={user.id} className="grid gap-5 px-6 py-5 md:grid-cols-[1fr,180px,140px] md:items-center">
-                                <div>
-                                    <p className="text-xl font-bold text-white">{user.full_name || "New Business Owner"}</p>
-                                    <p className="mt-1 text-sm text-neutral-400">{user.email || "No email"}</p>
-                                    <p className="mt-1 text-xs text-neutral-500">{user.business_name || "Business name pending"}</p>
-                                </div>
-                                <p className="text-sm text-neutral-500">{formatDate(user.created_at)}</p>
-                                <button
-                                    disabled={actionLoading === user.id}
-                                    onClick={() => void approveUser(user)}
-                                    className="h-12 rounded-2xl bg-white px-5 font-black text-black hover:bg-cyan-100 disabled:cursor-not-allowed disabled:opacity-60"
-                                >
-                                    {actionLoading === user.id ? "Activating..." : "Activate"}
-                                </button>
-                            </div>
-                        ))}
-                    </div>
-                )}
-            </section>
+      <section className="rounded-[28px] border border-cyan-400/15 bg-cyan-500/[0.06] p-6">
+        <p className="text-xs font-black uppercase tracking-[0.18em] text-cyan-200">Data boundaries</p>
+        <div className="mt-5 grid gap-4 sm:grid-cols-2 xl:grid-cols-5">
+          {Object.entries(payload.dataBoundaries || {}).map(([name, description]) => (
+            <div key={name}>
+              <p className="text-sm font-black capitalize">{name.replaceAll(/([A-Z])/g, " $1")}</p>
+              <p className="mt-2 text-xs leading-5 text-neutral-400">{description}</p>
+            </div>
+          ))}
         </div>
-    )
+      </section>
+    </div>
+  )
+}
+
+function EventList({
+  title,
+  rows,
+  empty = "No actions recorded yet.",
+  support = false,
+}: {
+  title: string
+  rows: Array<Record<string, unknown>>
+  empty?: string
+  support?: boolean
+}) {
+  return (
+    <article className="rounded-[28px] border border-white/10 bg-white/[0.03] p-6">
+      <h3 className="text-lg font-black">{title}</h3>
+      <div className="mt-4 space-y-3">
+        {rows.length ? (
+          rows.map((row, index) => (
+            <div key={String(row.id || index)} className="rounded-2xl border border-white/[0.08] bg-black/25 p-4">
+              <div className="flex items-start justify-between gap-3">
+                <div className="min-w-0">
+                  <p className="truncate text-sm font-black">
+                    {displayValue(support ? row.subject : row.action, support ? "Support case" : "Admin action")}
+                  </p>
+                  <p className="mt-1 truncate text-xs text-neutral-500">
+                    {support
+                      ? displayValue(row.case_number, "No case number")
+                      : `${displayValue(row.target_type, "platform")} · ${displayValue(row.target_id, "No target")}`}
+                  </p>
+                </div>
+                <StatusPill value={support ? row.priority : row.result} />
+              </div>
+              <p className="mt-3 text-xs text-neutral-500">{formatAdminDate(row.updated_at || row.created_at)}</p>
+            </div>
+          ))
+        ) : (
+          <p className="rounded-2xl border border-dashed border-white/10 px-4 py-8 text-center text-sm text-neutral-500">{empty}</p>
+        )}
+      </div>
+    </article>
+  )
 }

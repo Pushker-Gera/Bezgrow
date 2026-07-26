@@ -16,7 +16,6 @@ export type WorkspaceBootstrapPayload = {
   profile?: {
     id?: string
     role?: string | null
-    approved?: boolean
     is_suspended?: boolean
     business_created?: boolean
   }

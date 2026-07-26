@@ -1,93 +1,91 @@
+import "server-only"
+
 import { z } from "zod"
-import { requireAdmin, writeAdminLog } from "@/lib/api/auth"
-import { fail, ok, serverFail } from "@/lib/api/responses"
+import { requireAdmin, writeAdminAudit } from "@/lib/api/auth"
+import {
+  adminFail,
+  adminOk,
+  controlPlaneErrorMessage,
+  unexpectedAdminError,
+} from "@/lib/admin/control-plane"
 import { adminSupabase } from "@/lib/supabase/admin"
 
 export const dynamic = "force-dynamic"
 
 const settingsSchema = z.object({
-  id: z.string().trim().min(1).optional(),
   platform_name: z.string().trim().min(1).max(120),
   support_email: z.string().trim().email().max(254),
-  maintenance_mode: z.boolean(),
-  email_notifications: z.boolean(),
-  auto_approvals: z.boolean(),
-  inventory_tracking: z.boolean(),
-  billing_automation: z.boolean(),
-})
-
-const logSchema = z.object({
-  action: z.string().trim().min(2).max(120),
-  description: z.string().trim().min(2).max(500),
+  default_license_duration_days: z.coerce.number().int().min(1).max(3650),
+  default_grace_days: z.coerce.number().int().min(0).max(365),
+  default_allowed_features: z.array(z.string().trim().min(1).max(80)).max(100),
+  license_plans: z.array(
+    z.object({
+      name: z.string().trim().min(1).max(80),
+      features: z.array(z.string().trim().min(1).max(80)).max(100),
+      maximum_users: z.number().int().min(1).max(10000),
+      maximum_businesses: z.number().int().min(1).max(1000),
+      maximum_branches: z.number().int().min(1).max(10000),
+    })
+  ).max(100),
+  update_channels: z.array(z.string().trim().min(1).max(40)).min(1).max(20),
+  minimum_supported_version: z.string().trim().max(40).nullable(),
+  backup_policies: z.record(z.string(), z.unknown()),
+  diagnostic_upload_enabled: z.boolean(),
+  diagnostic_retention_days: z.coerce.number().int().min(1).max(3650),
+  maintenance_message: z.string().trim().max(1000).nullable(),
+  customer_download_urls: z.record(z.string(), z.string().url().or(z.literal(""))),
+  mac_release_status: z.enum(["not_configured", "internal_testing", "ready", "paused"]),
+  windows_release_status: z.enum(["not_configured", "internal_testing", "ready", "paused"]),
 })
 
 export async function GET(request: Request) {
-  const admin = await requireAdmin(request)
-  if (!admin.ok) return fail(admin.error, admin.status)
+  const auth = await requireAdmin(request)
+  if (!auth.ok) return adminFail({ requestId: crypto.randomUUID() }, auth.error, auth.status)
+  const context = auth.context
 
   try {
-    const { data, error } = await adminSupabase.from("platform_settings").select("*").maybeSingle()
-    if (error) return fail("Platform settings failed to load.", 500)
-
-    return ok({ settings: data || null }, { headers: { "Cache-Control": "no-store" } })
-  } catch {
-    return serverFail()
+    const result = await adminSupabase.from("platform_settings").select("*").limit(1).maybeSingle()
+    if (result.error) {
+      return adminFail(context, controlPlaneErrorMessage(result.error, "Platform settings failed to load."), 500)
+    }
+    return adminOk(context, { settings: result.data || null })
+  } catch (error) {
+    return unexpectedAdminError(context, error, "Platform settings failed to load.")
   }
 }
 
 export async function PATCH(request: Request) {
-  const admin = await requireAdmin(request)
-  if (!admin.ok) return fail(admin.error, admin.status)
-
+  const auth = await requireAdmin(request)
+  if (!auth.ok) return adminFail({ requestId: crypto.randomUUID() }, auth.error, auth.status)
+  const context = auth.context
   const parsed = settingsSchema.safeParse(await request.json().catch(() => null))
-  if (!parsed.success) {
-    return fail(parsed.error.issues[0]?.message || "Invalid platform settings.", 422)
-  }
+  if (!parsed.success) return adminFail(context, parsed.error.issues[0]?.message || "Invalid platform settings.", 422)
 
   try {
+    const current = await adminSupabase.from("platform_settings").select("*").limit(1).maybeSingle()
+    if (current.error) throw current.error
     const payload = {
       ...parsed.data,
       support_email: parsed.data.support_email.toLowerCase(),
+      default_allowed_features: [...new Set(parsed.data.default_allowed_features)].sort(),
+      update_channels: [...new Set(parsed.data.update_channels)].sort(),
+      updated_by_admin_id: context.adminUserId,
+      updated_at: new Date().toISOString(),
     }
-
-    const { data: existing } = await adminSupabase.from("platform_settings").select("id").maybeSingle()
-    const result = existing?.id
-      ? await adminSupabase.from("platform_settings").update(payload).eq("id", existing.id).select("*").single()
+    const result = current.data?.id
+      ? await adminSupabase.from("platform_settings").update(payload).eq("id", current.data.id).select("*").single()
       : await adminSupabase.from("platform_settings").insert(payload).select("*").single()
+    if (result.error) throw result.error
 
-    if (result.error) return fail("Platform settings could not be saved.", 500)
-
-    await writeAdminLog({
-      action: "SETTINGS_UPDATED",
-      description: "Platform settings updated from admin control center.",
-      adminUserId: admin.context.adminUserId,
-      metadata: { settings_id: result.data?.id ?? null },
+    await writeAdminAudit(context, {
+      action: "PLATFORM_SETTINGS_CHANGED",
+      targetType: "platform_settings",
+      targetId: result.data.id,
+      previousValues: current.data,
+      newValues: result.data,
     })
-
-    return ok({ settings: result.data })
-  } catch {
-    return serverFail()
-  }
-}
-
-export async function POST(request: Request) {
-  const admin = await requireAdmin(request)
-  if (!admin.ok) return fail(admin.error, admin.status)
-
-  const parsed = logSchema.safeParse(await request.json().catch(() => null))
-  if (!parsed.success) {
-    return fail(parsed.error.issues[0]?.message || "Invalid system action.", 422)
-  }
-
-  try {
-    await writeAdminLog({
-      action: parsed.data.action,
-      description: parsed.data.description,
-      adminUserId: admin.context.adminUserId,
-    })
-
-    return ok({ message: parsed.data.description })
-  } catch {
-    return serverFail()
+    return adminOk(context, { settings: result.data })
+  } catch (error) {
+    return unexpectedAdminError(context, error, "Platform settings could not be saved.")
   }
 }

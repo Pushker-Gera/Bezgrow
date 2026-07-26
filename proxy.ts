@@ -13,18 +13,13 @@ const supabaseServiceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY?.trim()
 
 type ProfileGate = {
   role: string | null
-  approved: boolean | null
   business_created: boolean | null
   is_suspended: boolean | null
 }
 
 function isConfiguredAdmin(email: string | null | undefined, role?: string | null) {
-  if (role === "admin") return true
-
-  const configuredAdminEmail = process.env.ADMIN_EMAIL?.trim().toLowerCase()
-  if (!configuredAdminEmail || !email) return false
-
-  return email.trim().toLowerCase() === configuredAdminEmail
+  void email
+  return role === "admin" || role === "platform_admin"
 }
 
 async function hasConnectedWorkspace(userId: string) {
@@ -104,7 +99,11 @@ export async function proxy(request: NextRequest) {
     return NextResponse.next()
   }
 
-  if (localDesktopHost && request.cookies.get(desktopAuthMarkerCookie)?.value === "1") {
+  if (localDesktopHost && adminRoute) {
+    return redirectWithCookies(request, NextResponse.next({ request }), "/platform-admin")
+  }
+
+  if (localDesktopHost && request.cookies.get(desktopAuthMarkerCookie)?.value === "1" && protectedRoute) {
     return NextResponse.next()
   }
 
@@ -152,7 +151,7 @@ export async function proxy(request: NextRequest) {
 
   const { data: userProfile } = await supabase
     .from("profiles")
-    .select("role, approved, business_created, is_suspended")
+    .select("role, business_created, is_suspended")
     .eq("id", user.id)
     .maybeSingle()
 
@@ -161,7 +160,7 @@ export async function proxy(request: NextRequest) {
   if (!profile && supabaseServiceRoleKey) {
     try {
       const profileResponse = await fetch(
-        `${supabaseUrl}/rest/v1/profiles?id=eq.${encodeURIComponent(user.id)}&select=role,approved,business_created,is_suspended`,
+        `${supabaseUrl}/rest/v1/profiles?id=eq.${encodeURIComponent(user.id)}&select=role,business_created,is_suspended`,
         {
           headers: {
             apikey: supabaseServiceRoleKey,
@@ -180,23 +179,15 @@ export async function proxy(request: NextRequest) {
     }
   }
 
-  if (!profile && adminRoute && isConfiguredAdmin(user.email, null)) {
-    return response
-  }
-
   if (!profile || profile.is_suspended) {
     return redirectWithCookies(request, response, profile?.is_suspended ? "/login?error=account_suspended" : "/login?error=profile_missing")
   }
 
   if (adminRoute) {
     if (!isConfiguredAdmin(user.email, profile.role)) {
-      return redirectWithCookies(request, response, "/dashboard")
+      return redirectWithCookies(request, response, "/login?next=/admin&platform_admin=1&error=admin_required")
     }
     return response
-  }
-
-  if (!profile.approved) {
-    return redirectWithCookies(request, response, "/pending-approval")
   }
 
   if (!profile.business_created && !(await hasConnectedWorkspace(user.id))) {

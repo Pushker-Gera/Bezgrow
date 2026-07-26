@@ -291,6 +291,12 @@
           "markdownDescription": "Enables the open_external_url command without any pre-configured scope."
         },
         {
+          "description": "Enables the open_platform_admin command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-open-platform-admin",
+          "markdownDescription": "Enables the open_platform_admin command without any pre-configured scope."
+        },
+        {
           "description": "Enables the read_secret command without any pre-configured scope.",
           "type": "string",
           "const": "allow-read-secret",
@@ -415,6 +421,12 @@
           "type": "string",
           "const": "deny-open-external-url",
           "markdownDescription": "Denies the open_external_url command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the open_platform_admin command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-open-platform-admin",
+          "markdownDescription": "Denies the open_platform_admin command without any pre-configured scope."
         },
         {
           "description": "Denies the read_secret command without any pre-configured scope.",
