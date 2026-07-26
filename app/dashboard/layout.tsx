@@ -222,6 +222,7 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
     const moreNavItems = canShowAdmin ? [...mobileMoreNav, ["Admin", "/admin"]] : mobileMoreNav
     const isActivePath = (href: string) => pathname === href || (href !== "/dashboard" && pathname.startsWith(`${href}/`))
     const isMoreActive = moreNavItems.some(([, href]) => isActivePath(href))
+    const isInvoicePrintWorkspace = /^\/dashboard\/invoices\/[^/]+\/print(?:\/|$)/.test(pathname)
 
     async function handleLogout() {
         clearWorkspaceBootstrapCache()
@@ -379,7 +380,7 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
                     </div>
                 </header>
 
-                <main className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden bg-black pb-28 md:pb-4">
+                <main className={`min-h-0 flex-1 overflow-x-hidden bg-black ${isInvoicePrintWorkspace ? "overflow-hidden p-0" : "overflow-y-auto pb-28 md:pb-4"}`}>
                     {offlinePrepMessage && (
                         <div className="border-b border-emerald-400/20 bg-emerald-500/10 px-3 py-2 text-sm font-semibold text-emerald-100">
                             <div className="mx-auto max-w-[1800px]">{offlinePrepMessage}</div>

@@ -1729,6 +1729,47 @@ fn desktop_reveal_file(path: String) -> Result<(), String> {
     }
 }
 
+#[tauri::command]
+fn desktop_open_file(path: String) -> Result<(), String> {
+    let target = PathBuf::from(path);
+    if !target.is_file() {
+        return Err("The saved file could not be found.".to_string());
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        Command::new("open")
+            .arg(&target)
+            .spawn()
+            .map_err(|error| format!("Unable to open the saved file: {error}"))?;
+        return Ok(());
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        Command::new("rundll32.exe")
+            .arg("url.dll,FileProtocolHandler")
+            .arg(&target)
+            .spawn()
+            .map_err(|error| format!("Unable to open the saved file: {error}"))?;
+        return Ok(());
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        Command::new("xdg-open")
+            .arg(&target)
+            .spawn()
+            .map_err(|error| format!("Unable to open the saved file: {error}"))?;
+        return Ok(());
+    }
+
+    #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
+    {
+        Err("Opening saved files is not supported on this platform.".to_string())
+    }
+}
+
 #[cfg(not(debug_assertions))]
 fn wait_for_local_server(child: &mut Child, port: u16) -> Result<(), String> {
     for _ in 0..240 {
@@ -1943,6 +1984,7 @@ pub fn run() {
             desktop_read_local_asset,
             desktop_print_current_webview,
             desktop_reveal_file,
+            desktop_open_file,
             desktop_export_backup,
             desktop_restore_backup,
             open_external_url

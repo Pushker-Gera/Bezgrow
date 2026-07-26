@@ -78,10 +78,16 @@ export function buildPrintInvoice({
   const discount = numberFrom(invoice, ["discount_amount", "discount_total"]) || itemDiscount
   const subtotal = numberFrom(invoice, ["subtotal", "sub_total"]) || itemBaseSubtotal
   const taxableAmount = numberFrom(invoice, ["taxable_amount"]) || Math.max(0, subtotal - discount)
-  const gstSplit = taxTotal / 2
   const paid = numberFrom(invoice, ["paid_amount"]) ||
     (stringFrom(invoice, ["payment_status", "status"]).toLowerCase() === "paid" ? grandTotal : 0)
-  const dueAmount = Math.max(0, grandTotal - paid)
+  const dueAmount = numberFrom(invoice, ["outstanding_amount", "due_amount"]) || Math.max(0, grandTotal - paid)
+  const organizationStateCode = stringFrom(organization, ["state_code", "gst_state_code"])
+  const customerStateCode = stringFrom(customer, ["state_code", "gst_state_code"])
+  const supplyType = stringFrom(invoice, ["supply_type", "tax_type"]).toLowerCase()
+  const isInterstate =
+    supplyType === "interstate" ||
+    supplyType === "igst" ||
+    Boolean(organizationStateCode && customerStateCode && organizationStateCode !== customerStateCode)
 
   const mappedItems: PrintInvoiceItem[] = items.map((item, index) => {
     const product = productMap.get(stringFrom(item, ["product_id"])) || null
@@ -93,7 +99,10 @@ export function buildPrintInvoice({
     const taxableValue = numberFrom(item, ["line_total"]) || base - discountAmount
     const itemTax = numberFrom(item, ["gst_amount", "tax_amount"])
     const taxPercent = numberFrom(item, ["tax_percent", "gst"])
-    const isInterstate = false
+    const directCgst = numberFrom(item, ["cgst_amount"])
+    const directSgst = numberFrom(item, ["sgst_amount"])
+    const directIgst = numberFrom(item, ["igst_amount"])
+    const hasDirectTaxSplit = directCgst > 0 || directSgst > 0 || directIgst > 0
 
     return {
       id: item.id || `${invoice.id}-${index}`,
@@ -111,15 +120,25 @@ export function buildPrintInvoice({
       discountPercent,
       discountAmount,
       taxableValue,
-      cgstPercent: isInterstate ? 0 : taxPercent / 2,
-      cgstAmount: isInterstate ? 0 : itemTax / 2,
-      sgstPercent: isInterstate ? 0 : taxPercent / 2,
-      sgstAmount: isInterstate ? 0 : itemTax / 2,
-      igstPercent: isInterstate ? taxPercent : 0,
-      igstAmount: isInterstate ? itemTax : 0,
+      cgstPercent: directCgst > 0 || (!hasDirectTaxSplit && !isInterstate) ? taxPercent / 2 : 0,
+      cgstAmount: hasDirectTaxSplit ? directCgst : isInterstate ? 0 : itemTax / 2,
+      sgstPercent: directSgst > 0 || (!hasDirectTaxSplit && !isInterstate) ? taxPercent / 2 : 0,
+      sgstAmount: hasDirectTaxSplit ? directSgst : isInterstate ? 0 : itemTax / 2,
+      igstPercent: directIgst > 0 || (!hasDirectTaxSplit && isInterstate) ? taxPercent : 0,
+      igstAmount: hasDirectTaxSplit ? directIgst : isInterstate ? itemTax : 0,
       finalAmount: taxableValue + itemTax,
     }
   })
+  const mappedCgst = mappedItems.reduce((sum, item) => sum + item.cgstAmount, 0)
+  const mappedSgst = mappedItems.reduce((sum, item) => sum + item.sgstAmount, 0)
+  const mappedIgst = mappedItems.reduce((sum, item) => sum + item.igstAmount, 0)
+  const explicitCgst = numberFrom(invoice, ["cgst_amount", "cgst_total"])
+  const explicitSgst = numberFrom(invoice, ["sgst_amount", "sgst_total"])
+  const explicitIgst = numberFrom(invoice, ["igst_amount", "igst_total"])
+  const hasMappedTax = mappedCgst > 0 || mappedSgst > 0 || mappedIgst > 0
+  const cgst = explicitCgst || mappedCgst || (!hasMappedTax && !isInterstate ? taxTotal / 2 : 0)
+  const sgst = explicitSgst || mappedSgst || (!hasMappedTax && !isInterstate ? taxTotal / 2 : 0)
+  const igst = explicitIgst || mappedIgst || (!hasMappedTax && isInterstate ? taxTotal : 0)
 
   const invoiceNumber = stringFrom(invoice, ["invoice_number"]) || invoice.id
   void origin
@@ -166,9 +185,9 @@ export function buildPrintInvoice({
       subtotal,
       discount,
       taxableAmount,
-      cgst: gstSplit,
-      sgst: gstSplit,
-      igst: 0,
+      cgst,
+      sgst,
+      igst,
       roundOff: numberFrom(invoice, ["round_off"]),
       grandTotal,
       amountInWords: amountInIndianWords(grandTotal),

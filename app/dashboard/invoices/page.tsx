@@ -6,9 +6,9 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { useDebounce } from "use-debounce"
 import { apiFetch } from "@/lib/api/client-fetch"
 import { getOrganizationId } from "@/lib/getOrganization"
-import { exportInvoicesCsv } from "@/lib/invoice-csv-export"
 import { createOfflineId, getOfflineData, putOfflineData, queueOfflineAction } from "@/lib/offline/db"
 import { shouldUseWebOfflineFallback } from "@/lib/offline/network"
+import { InvoiceExportModal } from "@/components/invoices/InvoiceExportModal"
 
 type InvoiceRow = Record<string, unknown> & {
   id: string
@@ -139,6 +139,7 @@ function SelectShell({
 export default function InvoicesPage() {
   const [organizationId, setOrganizationId] = useState<string | null>(null)
   const [invoices, setInvoices] = useState<InvoiceRow[]>([])
+  const [allInvoices, setAllInvoices] = useState<InvoiceRow[]>([])
   const [customers, setCustomers] = useState<CustomerRow[]>([])
   const [items, setItems] = useState<InvoiceItemRow[]>([])
   const [loading, setLoading] = useState(true)
@@ -152,6 +153,7 @@ export default function InvoicesPage() {
   const [riskFilter, setRiskFilter] = useState("all")
   const [currentPage, setCurrentPage] = useState(1)
   const [serverTotal, setServerTotal] = useState(0)
+  const [exportKind, setExportKind] = useState<"csv" | "pdf" | null>(null)
   const skipNextInvoicesRefresh = useRef(false)
   const billingRequest = useRef<AbortController | null>(null)
 
@@ -205,6 +207,8 @@ export default function InvoicesPage() {
         await putOfflineData(orgId, "customers", nextCustomers)
       }
       setInvoices(nextInvoices)
+      const localInvoices = await getOfflineData<InvoiceRow[]>(orgId, "invoices", nextInvoices).catch(() => nextInvoices)
+      setAllInvoices(localInvoices.length ? localInvoices : nextInvoices)
       setCustomers(nextCustomers)
       setItems([])
       setServerTotal(invoiceResult.pagination?.total || nextInvoices.length)
@@ -222,6 +226,7 @@ export default function InvoicesPage() {
         getOfflineData<InvoiceItemRow[]>(orgId, "invoice_items", []),
       ])
       setInvoices(cachedInvoices)
+      setAllInvoices(cachedInvoices)
       setCustomers(cachedCustomers)
       setItems(cachedItems)
       setServerTotal(cachedInvoices.length)
@@ -350,16 +355,31 @@ export default function InvoicesPage() {
   const visibleInvoices = filteredInvoices
 
   const analytics = useMemo(() => {
-    const paid = enrichedInvoices.filter((invoice) => invoice.statusLabel === "paid")
-    const partial = enrichedInvoices.filter((invoice) => invoice.statusLabel === "partial")
-    const unpaid = enrichedInvoices.filter((invoice) => invoice.statusLabel === "unpaid")
-    const overdue = enrichedInvoices.filter((invoice) => invoice.dueState === "overdue")
-    const revenue = enrichedInvoices.reduce((sum, invoice) => sum + invoice.amount, 0)
-    const paidRevenue = paid.reduce((sum, invoice) => sum + invoice.amount, 0)
-    const outstanding = [...partial, ...unpaid, ...overdue].reduce((sum, invoice) => sum + invoice.amount, 0)
-    const tax = enrichedInvoices.reduce((sum, invoice) => sum + invoice.tax, 0)
-    const today = enrichedInvoices.filter(
-      (invoice) => invoice.created_at && new Date(invoice.created_at).toDateString() === new Date().toDateString()
+    const source = allInvoices.length ? allInvoices : enrichedInvoices
+    const rows = source.map((invoice) => {
+      const amount = numberFrom(invoice, ["grand_total", "total_amount", "total"])
+      const status = normalizeStatus(invoice)
+      const paidAmount = numberFrom(invoice, ["paid_amount"]) || (status === "paid" ? amount : 0)
+      return {
+        invoice,
+        amount,
+        status,
+        paidAmount: Math.min(amount, paidAmount),
+        outstandingAmount: numberFrom(invoice, ["outstanding_amount", "due_amount"]) || Math.max(0, amount - paidAmount),
+        tax: numberFrom(invoice, ["tax_amount", "tax_total", "item_tax"]),
+        due: dueState(invoice),
+      }
+    })
+    const paid = rows.filter((row) => row.status === "paid")
+    const partial = rows.filter((row) => row.status === "partial")
+    const unpaid = rows.filter((row) => row.status === "unpaid")
+    const overdue = rows.filter((row) => row.due === "overdue")
+    const revenue = rows.reduce((sum, row) => sum + row.amount, 0)
+    const paidRevenue = rows.reduce((sum, row) => sum + row.paidAmount, 0)
+    const outstanding = rows.reduce((sum, row) => sum + row.outstandingAmount, 0)
+    const tax = rows.reduce((sum, row) => sum + row.tax, 0)
+    const today = rows.filter(
+      ({ invoice }) => invoice.created_at && new Date(invoice.created_at).toDateString() === new Date().toDateString()
     )
 
     return {
@@ -367,16 +387,16 @@ export default function InvoicesPage() {
       paidRevenue,
       outstanding,
       tax,
-      invoiceCount: serverTotal || enrichedInvoices.length,
+      invoiceCount: source.length || serverTotal,
       paidCount: paid.length,
       partialCount: partial.length,
       unpaidCount: unpaid.length,
       overdueCount: overdue.length,
       todayCount: today.length,
-      averageInvoice: enrichedInvoices.length ? revenue / enrichedInvoices.length : 0,
+      averageInvoice: rows.length ? revenue / rows.length : 0,
       collectionRate: revenue ? Math.round((paidRevenue / revenue) * 100) : 0,
     }
-  }, [enrichedInvoices, serverTotal])
+  }, [allInvoices, enrichedInvoices, serverTotal])
 
   async function updatePaymentStatus(invoiceId: string, status: string) {
     if (!organizationId) return
@@ -419,6 +439,7 @@ export default function InvoicesPage() {
         payload: { invoiceId, paymentStatus: status },
       })
       setInvoices(nextInvoices)
+      setAllInvoices(nextInvoices)
       setNotice("Invoice status saved locally.")
       setSavingId(null)
       return
@@ -431,27 +452,14 @@ export default function InvoicesPage() {
           : invoice
       )
     )
+    setAllInvoices((current) =>
+      current.map((invoice) =>
+        invoice.id === invoiceId
+          ? { ...invoice, payment_status: status, status, updated_at: new Date().toISOString() }
+          : invoice
+      )
+    )
     setSavingId(null)
-  }
-
-  async function exportCSV() {
-    if (!organizationId) {
-      setNotice("No active business is available for export.")
-      return
-    }
-    try {
-      const { result, rowCount } = await exportInvoicesCsv(organizationId, {
-        search: debouncedSearch,
-        status: statusFilter,
-        period: periodFilter,
-        customerId: customerFilter,
-        risk: riskFilter,
-      })
-      if (!result) return
-      setNotice(`Exported ${rowCount} invoice${rowCount === 1 ? "" : "s"} to ${result.path || result.filename}.`)
-    } catch (error) {
-      setNotice(error instanceof Error ? error.message : "Invoice CSV export failed.")
-    }
   }
 
   return (
@@ -493,14 +501,14 @@ export default function InvoicesPage() {
                 </div>
               </div>
               <div className="mt-5 grid grid-cols-3 gap-4">
-              <Link
-                href="/dashboard/billing"
+              <button
+                onClick={() => setExportKind("pdf")}
                 className="flex min-h-14 items-center justify-center rounded-lg border border-white/10 bg-white/[0.06] px-2 text-center text-sm font-black leading-tight text-white shadow-[0_18px_55px_rgba(0,0,0,0.25)] transition-all duration-300 hover:-translate-y-1 hover:border-cyan-400/30 hover:bg-cyan-500/10 sm:min-h-[82px] sm:rounded-[26px] sm:px-5 sm:text-xl"
               >
-                Billing Overview
-              </Link>
+                Export PDF
+              </button>
               <button
-                onClick={exportCSV}
+                onClick={() => setExportKind("csv")}
                 className="min-h-14 rounded-lg border border-white/10 bg-white/[0.06] px-2 text-center text-sm font-black leading-tight text-white shadow-[0_18px_55px_rgba(0,0,0,0.25)] transition-all duration-300 hover:-translate-y-1 hover:border-cyan-400/30 hover:bg-white/[0.09] sm:min-h-[82px] sm:rounded-[26px] sm:px-5 sm:text-xl"
               >
                 Export CSV
@@ -811,6 +819,19 @@ export default function InvoicesPage() {
           </aside>
         </section>
       </main>
+      {exportKind && organizationId && (
+        <InvoiceExportModal
+          kind={exportKind}
+          organizationId={organizationId}
+          customers={customers}
+          initialSearch={debouncedSearch}
+          initialStatus={statusFilter}
+          initialPeriod={periodFilter}
+          initialCustomerId={customerFilter}
+          onClose={() => setExportKind(null)}
+          onNotice={setNotice}
+        />
+      )}
     </div>
   )
 }

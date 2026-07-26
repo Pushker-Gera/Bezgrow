@@ -5,7 +5,15 @@ import path from "node:path"
 import { PDFDocument } from "pdf-lib"
 import { buildCsvBytes, buildCsvText, escapeCsvCell, safeSpreadsheetText } from "../lib/desktop-file-export"
 import { createInvoicePdf } from "../lib/pdf-invoice"
-import { buildInvoiceExportRows } from "../lib/invoice-csv-export"
+import {
+  buildInvoiceExportRows,
+  buildProfessionalInvoiceCsvBytes,
+  buildProfessionalInvoiceCsvText,
+  resolveInvoiceDateRange,
+  summarizeInvoiceExport,
+  type InvoiceExportDataset,
+} from "../lib/invoice-csv-export"
+import { createInvoiceReportPdf } from "../lib/invoice-report-pdf"
 import { defaultPrintSettings } from "../components/print/settings/defaults"
 import type { PrintInvoice } from "../components/print/types"
 import { compareVersions } from "../lib/app-updates"
@@ -141,6 +149,79 @@ assert.equal(invoiceExportRows[0].paidAmount, 118)
 assert.equal(invoiceExportRows[0].cgst, 9)
 assert.equal(invoiceExportRows[0].sgst, 9)
 
+const detailedRows = buildInvoiceExportRows(
+  [
+    { id: "invoice-1", invoice_number: "INV-00004", invoice_date: "2026-07-26", customer_id: "customer-1", payment_status: "partial", payment_method: "UPI", subtotal: 100, tax_amount: 18, grand_total: 118, paid_amount: 50 },
+    { id: "invoice-2", invoice_number: "INV-00005", invoice_date: "2026-06-30", customer_id: "customer-2", payment_status: "paid", payment_method: "Cash", grand_total: 200 },
+  ],
+  [
+    { id: "customer-1", name: "=Formula customer", phone: "9876543210", email: "one@example.test" },
+    { id: "customer-2", name: "Other customer" },
+  ],
+  [
+    { id: "item-1", invoice_id: "invoice-1", product_name: "Quoted, \"product\"", hsn_code: "0001", quantity: 1, rate: 100, line_total: 100, gst_amount: 18 },
+  ],
+  {
+    datePreset: "custom",
+    fromDate: "2026-07-01",
+    toDate: "2026-07-31",
+    statuses: ["partial", "unpaid"],
+    customerIds: ["customer-1"],
+    paymentMethods: ["UPI"],
+    minimumAmount: 100,
+    maximumAmount: 150,
+    invoiceType: "gst",
+  },
+  {
+    mode: "detailed",
+    includeCustomerContacts: true,
+    includeGstBreakdown: true,
+    includePaymentDetails: true,
+    includeNotes: true,
+    includeTimestamps: true,
+  },
+  new Date("2026-07-26T10:00:00+05:30"),
+)
+assert.equal(detailedRows.length, 1)
+assert.equal(detailedRows[0].productName, "Quoted, \"product\"")
+assert.equal(detailedRows[0].dueAmount, 68)
+assert.equal(detailedRows[0].lineCgst, 9)
+assert.equal(detailedRows[0].lineSgst, 9)
+assert.deepEqual(resolveInvoiceDateRange({ datePreset: "financial-year" }, new Date("2026-07-26T10:00:00+05:30")), {
+  preset: "financial-year",
+  from: "2026-04-01",
+  to: "2026-07-26",
+  label: "01/04/2026 to 26/07/2026",
+})
+
+const professionalDataset: InvoiceExportDataset = {
+  businessName: "R & G Healthcare",
+  organization: { id: "business", name: "R & G Healthcare" },
+  rows: [...detailedRows],
+  invoiceRows: [...detailedRows.invoiceRows],
+  summary: summarizeInvoiceExport(detailedRows.invoiceRows),
+  periodLabel: "01/07/2026 to 31/07/2026",
+  filtersLabel: "Partially paid and Unpaid | Selected customer | UPI",
+  filenameStem: "R-G-Healthcare_Invoice-Register_2026-07-01_to_2026-07-31",
+}
+const professionalCsv = buildProfessionalInvoiceCsvText(professionalDataset, {
+  mode: "detailed",
+  includeCustomerContacts: true,
+  includeGstBreakdown: true,
+  includePaymentDetails: true,
+  includeNotes: true,
+  includeTimestamps: true,
+}, new Date("2026-07-26T03:40:00+05:30"))
+const professionalCsvBytes = buildProfessionalInvoiceCsvBytes(professionalDataset)
+assert.deepEqual(Array.from(professionalCsvBytes.slice(0, 3)), [0xef, 0xbb, 0xbf])
+assert.match(professionalCsv, /"Business Name:","R & G Healthcare"/)
+assert.match(professionalCsv, /"Report:","Detailed Invoice Lines"/)
+assert.match(professionalCsv, /"Summary"/)
+assert.match(professionalCsv, /"Invoice Number","Invoice Date"/)
+assert.match(professionalCsv, /"'=Formula customer"/)
+assert.match(professionalCsv, /"Quoted, ""product"""/)
+assert.match(professionalCsv, /,118,50,68,/)
+
 assert.equal(normalizeWhatsAppPhone("98765 43210"), "919876543210")
 assert.equal(normalizeWhatsAppPhone("+44 7700 900123"), "447700900123")
 assert.equal(normalizeWhatsAppPhone("12345"), "")
@@ -160,6 +241,10 @@ const shareInput = {
 assert.match(createInvoiceShareText(shareInput), /attach it before sending/)
 assert.match(createWhatsAppInvoiceUrl(shareInput), /^https:\/\/wa\.me\/919876543210\?text=/)
 assert.match(createInvoiceEmailDraft(shareInput).mailtoUrl, /^mailto:/)
+const linkedShareInput = { ...shareInput, secureInvoiceUrl: "https://www.bezgrow.com/i/secure-token" }
+assert.match(createInvoiceShareText(linkedShareInput), /Thank you for your purchase from Business\./)
+assert.match(createInvoiceShareText(linkedShareInput), /View or download your invoice:\nhttps:\/\/www\.bezgrow\.com\/i\/secure-token/)
+assert.doesNotMatch(createInvoiceShareText(linkedShareInput), /attach it before sending/)
 
 assert.equal(compareVersions("1.10.0", "1.9.9"), 1)
 assert.equal(compareVersions("1.0.0", "1.0.0"), 0)
@@ -205,7 +290,54 @@ async function run() {
   assert.equal(new TextDecoder().decode(repeated.slice(0, 5)), "%PDF-")
   await assert.rejects(writeFile(path.join(testDirectory, "missing", "denied.pdf"), repeated))
 
-  console.log(`Final offline export/PDF/share tests passed (${testDirectory}).`)
+  const reportRows = Array.from({ length: 180 }, (_, index) => ({
+    ...professionalDataset.invoiceRows[0],
+    invoiceId: `report-invoice-${index}`,
+    invoiceNumber: `INV-${String(index + 1).padStart(5, "0")}`,
+    customerName: `Customer ${index + 1}`,
+  }))
+  const reportDataset: InvoiceExportDataset = {
+    ...professionalDataset,
+    rows: reportRows,
+    invoiceRows: reportRows,
+    summary: summarizeInvoiceExport(reportRows),
+  }
+  const report = await createInvoiceReportPdf(reportDataset, {
+    reportType: "invoice-register",
+    orientation: "auto",
+    pageSize: "A4",
+    includeGstDetails: true,
+    includeLineItems: false,
+    includeCustomerContacts: true,
+    includePaymentSummary: true,
+    includeCharts: false,
+  })
+  assert.equal(new TextDecoder().decode(report.bytes.slice(0, 5)), "%PDF-")
+  const reportDocument = await PDFDocument.load(report.bytes)
+  assert.ok(reportDocument.getPageCount() >= 5)
+  assert.match(report.filename, /R-G-Healthcare_Invoice-Register_2026-07-01_to_2026-07-31\.pdf/)
+  await writeFile(path.join(testDirectory, report.filename), report.bytes)
+  await writeFile(
+    path.join(testDirectory, "R-G-Healthcare_Invoice-Register_2026-07-01_to_2026-07-31.csv"),
+    professionalCsvBytes,
+  )
+
+  const tenThousandInvoices = Array.from({ length: 10_000 }, (_, index) => ({
+    id: `perf-${index}`,
+    invoice_number: `INV-${String(index + 1).padStart(6, "0")}`,
+    invoice_date: "2026-07-26",
+    payment_status: index % 2 ? "paid" : "unpaid",
+    grand_total: 118,
+    paid_amount: index % 2 ? 118 : 0,
+    tax_amount: 18,
+  }))
+  const performanceStart = performance.now()
+  const performanceRows = buildInvoiceExportRows(tenThousandInvoices, [], [], { datePreset: "today" }, undefined, new Date("2026-07-26T10:00:00+05:30"))
+  const performanceMs = performance.now() - performanceStart
+  assert.equal(performanceRows.length, 10_000)
+  assert.ok(performanceMs < 5_000, `10,000-row export filtering took ${performanceMs.toFixed(1)}ms`)
+
+  console.log(`Final offline export/PDF/share tests passed (${testDirectory}); 10,000-row filter ${performanceMs.toFixed(1)}ms.`)
 }
 
 void run()

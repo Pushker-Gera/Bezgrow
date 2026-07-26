@@ -24,6 +24,12 @@ SUPABASE_SERVICE_ROLE_KEY=
 NEXT_PUBLIC_DESKTOP_API_ORIGIN=https://www.bezgrow.com
 ```
 
+`NEXT_PUBLIC_DESKTOP_API_ORIGIN` is used only for explicit online desktop actions such as
+creating or revoking secure invoice links. The hosted API must have
+`SUPABASE_SERVICE_ROLE_KEY` configured server-side and migration
+`20260726090000_secure_invoice_shares.sql` applied. The desktop bundle never contains the
+service-role key. Invoice PDFs remain local until the user confirms the upload.
+
 Payments are not enabled for the current launch. Desktop access is license-based through admin-issued offline licenses, with suspension, business creation, and organization membership checks still available for cloud/admin workflows.
 
 Never expose `SUPABASE_SERVICE_ROLE_KEY` or `BEZGROW_LICENSE_PRIVATE_KEY` to client-side code.

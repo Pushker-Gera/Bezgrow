@@ -2,7 +2,7 @@
 
 import type { PrintInvoice, PrintSettings } from "@/components/print/types"
 import { formatDate, formatMoney } from "@/components/print/utils"
-import { BusinessLogo, GeneratedByFooter } from "./PrintBlocks"
+import { BusinessLogo, CodesBlock, GeneratedByFooter, SignatureBlock } from "./PrintBlocks"
 
 function joinFilled(parts: string[]) {
   return parts.filter((part) => part.trim() && !part.endsWith(": -")).join(" | ")
@@ -85,6 +85,10 @@ export function HalfTopTemplate({ invoice, settings }: { invoice: PrintInvoice; 
             <p className="half-top-grand"><span>Total</span><strong>{formatMoney(invoice.totals.grandTotal)}</strong></p>
           </div>
         </section>
+        <div className="half-top-reference">
+          <CodesBlock invoice={invoice} settings={settings} />
+          <SignatureBlock settings={settings} />
+        </div>
         <GeneratedByFooter compact />
       </div>
       <div className="manual-notes-space">
