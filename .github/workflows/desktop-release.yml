@@ -26,7 +26,7 @@ concurrency:
 
 jobs:
   mac:
-    name: Build Notarized Mac DMG
+    name: Build Mac DMG
     if: inputs.platform == 'all' || inputs.platform == 'mac'
     runs-on: macos-14
     timeout-minutes: 90
@@ -55,7 +55,38 @@ jobs:
 
       - run: npm run lint
 
-      - run: npm run desktop:build:mac:public
+      - name: Resolve Mac signing and notarization mode
+        id: trust
+        shell: bash
+        run: |
+          HAS_SIGNING=false
+          HAS_NOTARY=false
+          if [ -n "$BEZGROW_MAC_SIGNING_IDENTITY" ] || { [ -n "$APPLE_CERTIFICATE" ] && [ -n "$APPLE_CERTIFICATE_PASSWORD" ]; }; then
+            HAS_SIGNING=true
+          fi
+          if { [ -n "$APPLE_ID" ] && [ -n "$APPLE_PASSWORD" ] && [ -n "$APPLE_TEAM_ID" ]; } ||
+             { [ -n "$APPLE_API_KEY" ] && [ -n "$APPLE_API_ISSUER" ] && [ -n "$APPLE_API_KEY_PATH" ]; }; then
+            HAS_NOTARY=true
+          fi
+          if [ "$HAS_SIGNING" = "true" ] && [ "$HAS_NOTARY" = "true" ]; then
+            echo "signed=true" >> "$GITHUB_OUTPUT"
+            echo "notarized=true" >> "$GITHUB_OUTPUT"
+            echo "channel=stable" >> "$GITHUB_OUTPUT"
+          else
+            echo "signed=false" >> "$GITHUB_OUTPUT"
+            echo "notarized=false" >> "$GITHUB_OUTPUT"
+            echo "channel=internal" >> "$GITHUB_OUTPUT"
+            echo "Apple signing or notarization credentials are incomplete. The DMG will still be built and published as internal/testing." >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Build Mac installer
+        shell: bash
+        run: |
+          if [ "${{ steps.trust.outputs.notarized }}" = "true" ]; then
+            npm run desktop:build:mac:public
+          else
+            npm run desktop:build:mac
+          fi
 
       - name: Record verified Mac artifact architecture
         shell: bash
@@ -76,11 +107,20 @@ jobs:
           esac
           echo "$RELEASE_ARCHITECTURE" > mac-architecture.txt
 
-      - run: |
+      - name: Verify and stage Mac installer
+        shell: bash
+        run: |
           mkdir -p release-artifacts
           cp public/downloads/Bezgrow-mac.dmg release-artifacts/Bezgrow-mac.dmg
           cp public/downloads/Bezgrow-mac.dmg.release.json release-artifacts/Bezgrow-mac.dmg.release.json
           cp mac-architecture.txt release-artifacts/mac-architecture.txt
+          echo "${{ steps.trust.outputs.signed }}" > release-artifacts/mac-signing-status.txt
+          echo "${{ steps.trust.outputs.notarized }}" > release-artifacts/mac-notarization-status.txt
+          node scripts/verify-release-artifact.mjs \
+            --file release-artifacts/Bezgrow-mac.dmg \
+            --platform macos \
+            --architecture "$(cat mac-architecture.txt)" \
+            --version "$(node -p "require('./package.json').version")"
 
       - uses: actions/upload-artifact@v4
         with:
@@ -220,6 +260,17 @@ jobs:
           Copy-Item "$bundleRoot\portable\Bezgrow-windows-${{ matrix.arch }}-portable.zip" release-artifacts
           "${{ steps.signing.outputs.status }}" |
             Set-Content "release-artifacts\windows-signing-status.txt"
+          $version = node -p "require('./package.json').version"
+          node scripts/verify-release-artifact.mjs `
+            --file "release-artifacts\Bezgrow-windows-${{ matrix.arch }}-setup.exe" `
+            --platform windows `
+            --architecture "${{ matrix.arch }}" `
+            --version $version
+          node scripts/verify-release-artifact.mjs `
+            --file "release-artifacts\Bezgrow-windows-${{ matrix.arch }}.msi" `
+            --platform windows `
+            --architecture "${{ matrix.arch }}" `
+            --version $version
 
       - uses: actions/upload-artifact@v4
         with:
@@ -236,8 +287,6 @@ jobs:
     if: >-
       always() &&
       !cancelled() &&
-      (needs.mac.result == 'success' || needs.mac.result == 'skipped') &&
-      (needs.windows.result == 'success' || needs.windows.result == 'skipped') &&
       (needs.mac.result == 'success' || needs.windows.result == 'success')
     timeout-minutes: 30
     env:
@@ -269,37 +318,46 @@ jobs:
             echo "Requested release version $VERSION does not match package.json version $PACKAGE_VERSION."
             exit 1
           fi
-          TAG="v$VERSION"
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
-          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
 
-      - name: Determine publication eligibility
-        id: eligibility
+      - name: Determine release trust labels
+        id: trust
         shell: bash
         run: |
-          ELIGIBLE=true
-          REASON=""
+          PRODUCTION_TRUSTED=true
+          if [ -f "release-artifacts/mac/mac-signing-status.txt" ]; then
+            MAC_SIGNED="$(tr -d '\r\n' < release-artifacts/mac/mac-signing-status.txt)"
+            MAC_NOTARIZED="$(tr -d '\r\n' < release-artifacts/mac/mac-notarization-status.txt)"
+            if [ "$MAC_SIGNED" != "true" ] || [ "$MAC_NOTARIZED" != "true" ]; then
+              PRODUCTION_TRUSTED=false
+              echo "The macOS artifact is an internal/testing build and is not notarized." >> "$GITHUB_STEP_SUMMARY"
+            fi
+          fi
           shopt -s nullglob
           WINDOWS_DIRS=(release-artifacts/windows-*)
           for WINDOWS_DIR in "${WINDOWS_DIRS[@]}"; do
             STATUS_FILE="$WINDOWS_DIR/windows-signing-status.txt"
             ARCHITECTURE="${WINDOWS_DIR##*-}"
             if [ ! -f "$STATUS_FILE" ]; then
-              ELIGIBLE=false
-              REASON="Windows $ARCHITECTURE signing status is missing."
-              break
-            fi
-            SIGNING_STATUS="$(tr -d '\r\n' < "$STATUS_FILE")"
-            if [ "$SIGNING_STATUS" != "valid" ]; then
-              ELIGIBLE=false
-              REASON="Windows $ARCHITECTURE artifact is unsigned because Authenticode credentials are unavailable."
-              break
+              PRODUCTION_TRUSTED=false
+              echo "Windows $ARCHITECTURE signing status is missing; treating it as internal/testing." >> "$GITHUB_STEP_SUMMARY"
+            else
+              SIGNING_STATUS="$(tr -d '\r\n' < "$STATUS_FILE")"
+              if [ "$SIGNING_STATUS" != "valid" ]; then
+                PRODUCTION_TRUSTED=false
+                echo "Windows $ARCHITECTURE is an internal/testing build because Authenticode credentials are unavailable." >> "$GITHUB_STEP_SUMMARY"
+              fi
             fi
           done
-          echo "eligible=$ELIGIBLE" >> "$GITHUB_OUTPUT"
-          echo "reason=$REASON" >> "$GITHUB_OUTPUT"
-          if [ "$ELIGIBLE" != "true" ]; then
-            echo "$REASON Stable publication and public downloads remain disabled." >> "$GITHUB_STEP_SUMMARY"
+          VERSION="${{ steps.release.outputs.version }}"
+          if [ "$PRODUCTION_TRUSTED" = "true" ]; then
+            echo "channel=stable" >> "$GITHUB_OUTPUT"
+            echo "tag=v$VERSION" >> "$GITHUB_OUTPUT"
+            echo "prerelease=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "channel=internal" >> "$GITHUB_OUTPUT"
+            echo "tag=v$VERSION-internal.${{ github.run_number }}" >> "$GITHUB_OUTPUT"
+            echo "prerelease=true" >> "$GITHUB_OUTPUT"
           fi
 
       - name: Compute release checksums
@@ -310,15 +368,22 @@ jobs:
             xargs -0 sha256sum > release-artifacts/SHA256SUMS.txt
 
       - name: Create or update GitHub release
-        if: steps.eligibility.outputs.eligible == 'true'
         shell: bash
         run: |
-          TAG="${{ steps.release.outputs.tag }}"
+          TAG="${{ steps.trust.outputs.tag }}"
           VERSION="${{ steps.release.outputs.version }}"
           if ! gh release view "$TAG" >/dev/null 2>&1; then
-            gh release create "$TAG" --title "Bezgrow $VERSION" --notes "Bezgrow desktop installers."
+            if [ "${{ steps.trust.outputs.prerelease }}" = "true" ]; then
+              gh release create "$TAG" --prerelease --title "Bezgrow $VERSION internal/testing" --notes "Integrity-verified internal/testing desktop installers. Operating-system trust warnings may appear for unsigned or unnotarized artifacts."
+            else
+              gh release create "$TAG" --title "Bezgrow $VERSION" --notes "Integrity-verified, production-trusted Bezgrow desktop installers."
+            fi
           fi
-          mapfile -d '' ASSETS < <(find release-artifacts -type f -print0)
+          mapfile -d '' ASSETS < <(
+            find release-artifacts -type f \
+              \( -name '*.dmg' -o -name '*.exe' -o -name '*.msi' -o -name '*.msix' -o -name '*.zip' -o -name 'SHA256SUMS.txt' \) \
+              -print0
+          )
           if [ "${#ASSETS[@]}" -eq 0 ]; then
             echo "No release assets were downloaded."
             exit 1
@@ -326,64 +391,108 @@ jobs:
           gh release upload "$TAG" "${ASSETS[@]}" --clobber
 
       - name: Write download manifest
-        if: steps.eligibility.outputs.eligible == 'true'
         shell: bash
         run: |
-          TAG="${{ steps.release.outputs.tag }}"
+          TAG="${{ steps.trust.outputs.tag }}"
           VERSION="${{ steps.release.outputs.version }}"
           BASE_URL="https://github.com/$REPOSITORY/releases/download/$TAG"
           MANIFEST_ARGS=(--version "$VERSION" --replace true)
           if [ -f "release-artifacts/mac/Bezgrow-mac.dmg" ]; then
             MAC_ARCHITECTURE="$(cat release-artifacts/mac/mac-architecture.txt)"
+            MAC_SIGNED="$(tr -d '\r\n' < release-artifacts/mac/mac-signing-status.txt)"
+            MAC_NOTARIZED="$(tr -d '\r\n' < release-artifacts/mac/mac-notarization-status.txt)"
+            MAC_CHANNEL="internal"
+            if [ "$MAC_SIGNED" = "true" ] && [ "$MAC_NOTARIZED" = "true" ]; then
+              MAC_CHANNEL="stable"
+            fi
             MANIFEST_ARGS+=(
               --mac-url "$BASE_URL/Bezgrow-mac.dmg"
               --mac-file "release-artifacts/mac/Bezgrow-mac.dmg"
               --mac-architecture "$MAC_ARCHITECTURE"
-              --mac-notarized true
+              --mac-signed "$MAC_SIGNED"
+              --mac-notarized "$MAC_NOTARIZED"
+              --mac-channel "$MAC_CHANNEL"
             )
           fi
           if [ -f "release-artifacts/windows-x64/Bezgrow-windows-x64-setup.exe" ]; then
+            WINDOWS_SIGNING="$(tr -d '\r\n' < release-artifacts/windows-x64/windows-signing-status.txt)"
+            WINDOWS_SIGNED=false
+            WINDOWS_CHANNEL=internal
+            if [ "$WINDOWS_SIGNING" = "valid" ]; then
+              WINDOWS_SIGNED=true
+              WINDOWS_CHANNEL=stable
+            fi
             MANIFEST_ARGS+=(
               --windows-url "$BASE_URL/Bezgrow-windows-x64-setup.exe"
               --windows-file "release-artifacts/windows-x64/Bezgrow-windows-x64-setup.exe"
-              --windows-signed true
+              --windows-signed "$WINDOWS_SIGNED"
+              --windows-channel "$WINDOWS_CHANNEL"
+            )
+          fi
+          if [ -f "release-artifacts/windows-x64/Bezgrow-windows-x64.msi" ]; then
+            WINDOWS_SIGNING="$(tr -d '\r\n' < release-artifacts/windows-x64/windows-signing-status.txt)"
+            WINDOWS_SIGNED=false
+            WINDOWS_CHANNEL=internal
+            if [ "$WINDOWS_SIGNING" = "valid" ]; then
+              WINDOWS_SIGNED=true
+              WINDOWS_CHANNEL=stable
+            fi
+            MANIFEST_ARGS+=(
               --windows-msi-url "$BASE_URL/Bezgrow-windows-x64.msi"
               --windows-msi-file "release-artifacts/windows-x64/Bezgrow-windows-x64.msi"
-              --windows-msi-signed true
-              --windows-portable-url "$BASE_URL/Bezgrow-windows-x64-portable.exe"
-              --windows-portable-file "release-artifacts/windows-x64/Bezgrow-windows-x64-portable.exe"
-              --windows-portable-signed true
-              --windows-portable-zip-url "$BASE_URL/Bezgrow-windows-x64-portable.zip"
-              --windows-portable-zip-file "release-artifacts/windows-x64/Bezgrow-windows-x64-portable.zip"
+              --windows-msi-signed "$WINDOWS_SIGNED"
+              --windows-msi-channel "$WINDOWS_CHANNEL"
+            )
+          fi
+          if [ -f "release-artifacts/windows-arm64/Bezgrow-windows-arm64-setup.exe" ]; then
+            WINDOWS_ARM_SIGNING="$(tr -d '\r\n' < release-artifacts/windows-arm64/windows-signing-status.txt)"
+            WINDOWS_ARM_SIGNED=false
+            WINDOWS_ARM_CHANNEL=internal
+            if [ "$WINDOWS_ARM_SIGNING" = "valid" ]; then
+              WINDOWS_ARM_SIGNED=true
+              WINDOWS_ARM_CHANNEL=stable
+            fi
+            MANIFEST_ARGS+=(
               --windows-arm64-url "$BASE_URL/Bezgrow-windows-arm64-setup.exe"
               --windows-arm64-file "release-artifacts/windows-arm64/Bezgrow-windows-arm64-setup.exe"
-              --windows-arm64-signed true
+              --windows-arm64-signed "$WINDOWS_ARM_SIGNED"
+              --windows-arm64-channel "$WINDOWS_ARM_CHANNEL"
+            )
+          fi
+          if [ -f "release-artifacts/windows-arm64/Bezgrow-windows-arm64.msi" ]; then
+            WINDOWS_ARM_SIGNING="$(tr -d '\r\n' < release-artifacts/windows-arm64/windows-signing-status.txt)"
+            WINDOWS_ARM_SIGNED=false
+            WINDOWS_ARM_CHANNEL=internal
+            if [ "$WINDOWS_ARM_SIGNING" = "valid" ]; then
+              WINDOWS_ARM_SIGNED=true
+              WINDOWS_ARM_CHANNEL=stable
+            fi
+            MANIFEST_ARGS+=(
               --windows-arm64-msi-url "$BASE_URL/Bezgrow-windows-arm64.msi"
               --windows-arm64-msi-file "release-artifacts/windows-arm64/Bezgrow-windows-arm64.msi"
-              --windows-arm64-msi-signed true
-              --windows-arm64-portable-url "$BASE_URL/Bezgrow-windows-arm64-portable.exe"
-              --windows-arm64-portable-file "release-artifacts/windows-arm64/Bezgrow-windows-arm64-portable.exe"
-              --windows-arm64-portable-signed true
-              --windows-arm64-portable-zip-url "$BASE_URL/Bezgrow-windows-arm64-portable.zip"
-              --windows-arm64-portable-zip-file "release-artifacts/windows-arm64/Bezgrow-windows-arm64-portable.zip"
+              --windows-arm64-msi-signed "$WINDOWS_ARM_SIGNED"
+              --windows-arm64-msi-channel "$WINDOWS_ARM_CHANNEL"
             )
           fi
           node scripts/write-desktop-release-manifest.mjs "${MANIFEST_ARGS[@]}"
 
-      - name: Publish verified control-plane release metadata
-        if: steps.eligibility.outputs.eligible == 'true'
+      - name: Publish integrity-verified control-plane release metadata
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
-        run: >
-          node scripts/publish-release-metadata.mjs
-          --manifest public/downloads/desktop-release.json
-          --version "${{ steps.release.outputs.version }}"
-          --build-number "${{ github.run_number }}"
-          --channel stable
+        shell: bash
+        run: |
+          if [ -z "$SUPABASE_URL" ] || [ -z "$SUPABASE_SERVICE_ROLE_KEY" ]; then
+            echo "Supabase publication secrets are unavailable. GitHub release URLs and the checked-in manifest were still published." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          node scripts/publish-release-metadata.mjs \
+            --manifest public/downloads/desktop-release.json \
+            --version "${{ steps.release.outputs.version }}" \
+            --build-number "${{ github.run_number }}" \
+            --channel "${{ steps.trust.outputs.channel }}"
 
       - name: Commit manifest
-        if: steps.eligibility.outputs.eligible == 'true'
         shell: bash
         run: |
           if git diff --quiet -- public/downloads/desktop-release.json; then

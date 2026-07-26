@@ -8,6 +8,10 @@ export async function GET() {
   return NextResponse.json({
     success: true,
     ...(availability.manifest || {}),
+    platforms: {
+      macos: availability.mac,
+      windows: availability.windows,
+    },
     availability: {
       mac: availability.mac,
       windows: availability.windows,

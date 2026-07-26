@@ -51,11 +51,11 @@ assert.match(pages.security, /AdminListControls/, "Security search and filters m
 assert.match(pages.analytics, /onChange=\{\(event\) => setDays/, "Analytics range selector must trigger a reload.")
 assert.match(pages.download, /available=\{info\.available\}/, "Download buttons must reflect independent availability.")
 assert.match(pages.download, /href=\{webAppUrl\}/, "Open Web App must be a real link.")
-assert.match(pages.download, /<span[\s\S]*cursor-not-allowed/, "Disabled downloads must not render enabled links.")
+assert.match(pages.download, /<button[\s\S]*disabled[\s\S]*cursor-not-allowed/, "Unavailable downloads must render disabled buttons.")
 assert.doesNotMatch(pages.download, /checkedInReleaseManifest/, "Download buttons must not use stale checked-in metadata.")
 
 for (const [name, source] of Object.entries(pages)) {
-  assert.doesNotMatch(source, /<button(?![^>]*(?:onClick|type="submit"))[^>]*>/, `${name} contains a button without a handler or submit behavior.`)
+  assert.doesNotMatch(source, /<button(?![^>]*(?:onClick|type="submit"|disabled))[^>]*>/, `${name} contains a button without a handler, submit behavior, or disabled state.`)
 }
 
 console.log("admin-button-coverage-ok buttons=16")

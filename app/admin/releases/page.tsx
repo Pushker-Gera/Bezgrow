@@ -21,7 +21,8 @@ const initialRelease = {
   build_number: "",
   platform: "macos",
   architecture: "arm64",
-  release_channel: "stable",
+  release_channel: "internal",
+  artifact_type: "dmg",
   file_url: "",
   file_size: "",
   sha256: "",
@@ -89,11 +90,11 @@ export default function ReleasesPage() {
       <AdminPageHeader
         eyebrow="Desktop distribution"
         title="Releases and updates"
-        description="Separate signed artifacts by operating system and architecture. Public publication is blocked until artifact, signature, and code-signing validation succeeds; macOS also requires notarization."
+        description="Register and validate each platform independently. A real installer can be published as internal/testing without signing; stable production releases still require code signing and macOS notarization."
         action={<button type="button" onClick={() => setCreateOpen(true)} className="h-12 rounded-2xl bg-cyan-300 px-5 text-sm font-black text-black">Create draft release</button>}
       />
       <AdminNotice tone="warning">
-        A Windows download is never published without a real validated Windows installer. Unsigned or unnotarized Mac builds remain internal testing only.
+        Integrity validation is always required. Unsigned or unnotarized installers can only be published on the clearly labelled internal/testing channel.
       </AdminNotice>
       {notice && <AdminNotice tone="success">{notice}</AdminNotice>}
       {actionError && <AdminNotice tone="danger">{actionError}</AdminNotice>}
@@ -124,7 +125,7 @@ export default function ReleasesPage() {
           {
             key: "version",
             label: "Release",
-            render: (row) => <div><p className="font-black text-white">v{displayValue(row.version)} ({displayValue(row.build_number)})</p><p className="mt-1 text-xs text-neutral-500">{displayValue(row.platform)} · {displayValue(row.architecture)} · {displayValue(row.release_channel)}</p><p className="mt-1 text-xs text-neutral-600">Minimum: {displayValue(row.minimum_supported_version, "Not configured")}</p></div>,
+            render: (row) => <div><p className="font-black text-white">v{displayValue(row.version)} ({displayValue(row.build_number)})</p><p className="mt-1 text-xs text-neutral-500">{displayValue(row.platform)} · {displayValue(row.architecture)} · {row.release_channel === "internal" ? "internal/testing" : displayValue(row.release_channel)}</p><p className="mt-1 text-xs text-neutral-600">Minimum: {displayValue(row.minimum_supported_version, "Not configured")}</p></div>,
           },
           {
             key: "artifact",
@@ -160,6 +161,8 @@ export default function ReleasesPage() {
                   {row.release_status === "draft" && <button type="button" onClick={() => void runAction(row, "publish")} className="rounded-lg border border-emerald-400/25 px-2.5 py-1.5 text-xs font-bold text-emerald-100">Publish</button>}
                   {row.release_status === "published" && <button type="button" onClick={() => void runAction(row, "unpublish")} className="rounded-lg border border-amber-400/25 px-2.5 py-1.5 text-xs font-bold text-amber-100">Unpublish</button>}
                   {row.release_status === "paused" && <button type="button" onClick={() => void runAction(row, "resume")} className="rounded-lg border border-emerald-400/25 px-2.5 py-1.5 text-xs font-bold text-emerald-100">Resume</button>}
+                  {row.release_channel !== "internal" && <button type="button" onClick={() => void runAction(row, "mark_internal")} className="rounded-lg border border-amber-400/25 px-2.5 py-1.5 text-xs font-bold text-amber-100">Mark internal/testing</button>}
+                  {row.release_channel === "internal" && <button type="button" onClick={() => void runAction(row, "mark_stable")} className="rounded-lg border border-white/10 px-2.5 py-1.5 text-xs font-bold">Mark stable</button>}
                   <button type="button" onClick={() => void runAction(row, "set_rollout")} className="rounded-lg border border-white/10 px-2.5 py-1.5 text-xs font-bold">Rollout %</button>
                   <button type="button" onClick={() => void runAction(row, "mark_mandatory")} className="rounded-lg border border-white/10 px-2.5 py-1.5 text-xs font-bold">{row.mandatory ? "Make optional" : "Mark mandatory"}</button>
                   {row.release_status !== "retired" && <button type="button" onClick={() => void runAction(row, "archive")} className="rounded-lg border border-red-400/20 px-2.5 py-1.5 text-xs font-bold text-red-200">Archive</button>}
@@ -195,12 +198,39 @@ export default function ReleasesPage() {
             ].map(([key, label, options]) => (
               <label key={String(key)} className="text-sm font-bold text-neutral-300">
                 {String(label)}
-                <select value={form[key as keyof typeof form]} onChange={(event) => setForm((current) => ({ ...current, [String(key)]: event.target.value }))} className="mt-2 h-11 w-full rounded-xl border border-white/10 bg-black px-3">
+                <select
+                  value={form[key as keyof typeof form]}
+                  onChange={(event) =>
+                    setForm((current) => ({
+                      ...current,
+                      [String(key)]: event.target.value,
+                      ...(key === "platform"
+                        ? { artifact_type: event.target.value === "macos" ? "dmg" : "nsis" }
+                        : {}),
+                    }))
+                  }
+                  className="mt-2 h-11 w-full rounded-xl border border-white/10 bg-black px-3"
+                >
                   {(options as string[]).map((option) => <option key={option} value={option}>{option.replaceAll("_", " ")}</option>)}
                 </select>
               </label>
             ))}
+            <label className="text-sm font-bold text-neutral-300">
+              Installer type
+              <select
+                value={form.artifact_type}
+                onChange={(event) => setForm((current) => ({ ...current, artifact_type: event.target.value }))}
+                className="mt-2 h-11 w-full rounded-xl border border-white/10 bg-black px-3"
+              >
+                {(form.platform === "macos" ? ["dmg"] : ["nsis", "msi", "msix"]).map((option) => (
+                  <option key={option} value={option}>{option.toUpperCase()}</option>
+                ))}
+              </select>
+            </label>
           </div>
+          <p className="text-xs leading-5 text-neutral-500">
+            “Verify artifact” downloads the registered URL, rejects HTML and wrong-platform files, and calculates and stores its exact size and SHA-256.
+          </p>
           <label className="block text-sm font-bold text-neutral-300">
             Release notes
             <textarea value={form.release_notes} onChange={(event) => setForm((current) => ({ ...current, release_notes: event.target.value }))} className="mt-2 min-h-28 w-full rounded-xl border border-white/10 bg-black/50 p-3 outline-none focus:border-cyan-400/40" />

@@ -1,33 +1,7 @@
 import { NextResponse } from "next/server"
-import { getPublicDesktopReleaseManifest } from "@/lib/releases/public"
-import { isPublicHttpsUrl } from "@/lib/security/public-url"
+import { getDesktopReleaseAvailability } from "@/lib/releases/public"
 
 export const dynamic = "force-dynamic"
-
-type InstallerRelease = {
-  downloadUrl?: string
-  url?: string
-  file?: string
-  version?: string
-  size?: number
-  sha256?: string
-  signed?: boolean
-  notarized?: boolean
-}
-
-type PlatformRelease = {
-  releases: InstallerRelease[]
-  missing: string
-}
-
-type DesktopReleaseManifest = {
-  version?: string
-  mac?: InstallerRelease
-  macX64?: InstallerRelease
-  windows?: InstallerRelease
-  windowsMsi?: InstallerRelease
-  windowsArm64?: InstallerRelease
-}
 
 function jsonError(message: string, status = 404) {
   return NextResponse.json({ success: false, error: message }, { status, headers: { "Cache-Control": "no-store" } })
@@ -44,26 +18,6 @@ function redirectToInstaller(href: string, request: Request) {
   })
 }
 
-function releasesForPlatform(platform: string, manifest: DesktopReleaseManifest | null): PlatformRelease {
-  if (platform === "mac") {
-    return {
-      releases: [manifest?.mac, manifest?.macX64]
-        .filter(Boolean) as InstallerRelease[],
-      missing: "Mac installer is unavailable.",
-    }
-  }
-
-  return {
-    releases: [
-      manifest?.windows,
-      manifest?.windowsMsi,
-      manifest?.windowsArm64,
-    ]
-      .filter(Boolean) as InstallerRelease[],
-    missing: "Windows installer is unavailable.",
-  }
-}
-
 function redirectToRemoteInstaller(href: string) {
   return new NextResponse(null, {
     status: 302,
@@ -76,41 +30,28 @@ function redirectToRemoteInstaller(href: string) {
 
 export async function GET(request: Request) {
   const url = new URL(request.url)
-  const platform = url.searchParams.get("platform") === "mac" ? "mac" : "windows"
-  const controlPlaneManifest = await getPublicDesktopReleaseManifest()
-  const releaseManifest = controlPlaneManifest as DesktopReleaseManifest | null
+  const requestedPlatform = url.searchParams.get("platform")
+  if (!requestedPlatform || !["mac", "macos", "windows"].includes(requestedPlatform)) {
+    return jsonError("Query parameter platform must be mac or windows.", 400)
+  }
+  const platform = requestedPlatform === "windows" ? "windows" : "mac"
+  const availability = await getDesktopReleaseAvailability()
+  const release = platform === "mac" ? availability.mac : availability.windows
+  const href = release.installer?.downloadUrl
 
-  const { releases, missing } = releasesForPlatform(platform, releaseManifest)
-  const hrefs = releases
-    .filter((release) => {
-      if (release.signed !== true) return false
-      if (platform === "mac" && release.notarized !== true) return false
-      return Boolean(release.sha256 && release.size)
-    })
-    .map((release) => release.downloadUrl || release.url || release.file || "")
-    .filter(Boolean)
-
-  if (hrefs.length === 0) {
-    return jsonError(`${missing} No signed and validated public artifact is configured.`)
+  if (!release.available || !href) {
+    return jsonError(
+      release.blockedReason ||
+        release.reason ||
+        `${platform === "mac" ? "Mac" : "Windows"} installer is unavailable.`
+    )
+  }
+  if (/^https:\/\//i.test(href)) {
+    return redirectToRemoteInstaller(href)
+  }
+  if (href.startsWith("/downloads/") && !href.includes("..")) {
+    return redirectToInstaller(href, request)
   }
 
-  let sawRemote = false
-  for (const href of hrefs) {
-    if (/^https?:\/\//i.test(href)) {
-      sawRemote = true
-      const remoteUrl = new URL(href)
-      if (!(await isPublicHttpsUrl(remoteUrl))) continue
-      const head = await fetch(href, { method: "HEAD", cache: "no-store", redirect: "manual" }).catch(() => null)
-      if (head?.ok) return redirectToRemoteInstaller(href)
-      continue
-    }
-
-    if (href.startsWith("/downloads/") && !href.includes("..")) {
-      return redirectToInstaller(href, request)
-    }
-  }
-
-  return sawRemote
-    ? jsonError(`${missing} The published download URL did not respond.`, 502)
-    : jsonError(`${missing} The file was not found on this build.`)
+  return jsonError("Validated installer URL is not a supported download location.", 502)
 }

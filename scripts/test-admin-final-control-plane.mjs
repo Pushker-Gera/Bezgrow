@@ -8,8 +8,8 @@ const dashboard = read("app/api/admin/dashboard/route.ts")
 const checkin = read("app/api/devices/checkin/route.ts")
 const deviceAuth = read("lib/device/report-auth.ts")
 const offlineLicense = read("lib/offline/local/license.ts")
-const releases = read("app/api/admin/releases/route.ts")
 const publicReleases = read("lib/releases/public.ts")
+const artifactValidation = read("lib/releases/artifact-validation.ts")
 const workflow = read(".github/workflows/desktop-release.yml")
 const publication = read("scripts/publish-release-metadata.mjs")
 
@@ -33,11 +33,11 @@ assert.match(offlineLicense, /can never roll back or block offline ERP access/, 
 for (const field of ["artifact_type", "file_name", "update_signature"]) {
   assert.match(correctiveMigration, new RegExp(field), `Release artifact field missing: ${field}`)
 }
-assert.match(releases, /Artifact URL returned a webpage or JSON/, "Artifact verifier must reject non-installer responses.")
-assert.match(releases, /Artifact type does not match the selected platform/, "Artifact verifier must reject wrong platforms.")
-assert.match(releases, /SHA-256 does not match/, "Artifact verifier must reject checksum mismatch.")
-assert.match(publicReleases, /notarization_incomplete/, "Public release availability must report notarization blockers.")
-assert.match(publicReleases, /signing_incomplete/, "Public release availability must report signing blockers.")
+assert.match(artifactValidation, /HTML, JSON, or text/, "Artifact verifier must reject non-installer responses.")
+assert.match(artifactValidation, /not a macOS .* installer|not a Windows .* installer/, "Artifact verifier must reject wrong platforms.")
+assert.match(artifactValidation, /SHA-256 does not match/, "Artifact verifier must reject checksum mismatch.")
+assert.match(publicReleases, /validateInstallerCandidate/, "Public releases must use independent integrity validation.")
+assert.match(artifactValidation, /productionRecommended/, "Public release trust must be independent from availability.")
 
 assert.match(workflow, /runs-on:\s*windows-latest/, "Windows release must run on windows-latest.")
 assert.match(workflow, /npm ci[\s\S]*npm run build/, "Windows workflow must install and build.")

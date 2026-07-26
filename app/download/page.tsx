@@ -2,11 +2,16 @@ import Link from "next/link"
 import type { Metadata } from "next"
 import type { ReactNode } from "react"
 import { BezgrowLogoMark } from "@/components/brand/BezgrowLogoMark"
-import { getDesktopReleaseAvailability } from "@/lib/releases/public"
+import {
+  getDesktopReleaseAvailability,
+  type PublicReleaseAvailability,
+} from "@/lib/releases/public"
 
 const macInstallerPath = "/downloads/Bezgrow-mac.dmg"
-const windowsInstallerPaths = ["/downloads/Bezgrow-windows.exe", "/downloads/Bezgrow-windows.msi"]
+const windowsInstallerPath = "/downloads/Bezgrow-windows.exe"
 const webAppUrl = "https://www.bezgrow.com"
+
+export const dynamic = "force-dynamic"
 
 export const metadata: Metadata = {
   title: "Download Bezgrow Desktop App",
@@ -21,31 +26,11 @@ type InstallerInfo = {
   href: string
   sizeLabel: string | null
   statusLabel: string
-  notarized?: boolean
-  signed?: boolean
+  warning: string | null
+  blockedReason: string | null
+  platform: "macos" | "windows"
   version?: string | null
   architecture?: string | null
-}
-
-type ManifestInstaller = {
-  downloadUrl?: string
-  url?: string
-  file?: string
-  version?: string
-  size?: number
-  sha256?: string
-  notarized?: boolean
-  signed?: boolean
-  architecture?: string
-}
-
-type DesktopReleaseManifest = {
-  version?: string
-  mac?: ManifestInstaller
-  macX64?: ManifestInstaller
-  windows?: ManifestInstaller
-  windowsMsi?: ManifestInstaller
-  windowsArm64?: ManifestInstaller
 }
 
 function formatFileSize(bytes: number) {
@@ -61,59 +46,27 @@ function formatFileSize(bytes: number) {
   return `${size >= 10 || unitIndex === 0 ? size.toFixed(0) : size.toFixed(1)} ${units[unitIndex]}`
 }
 
-function isSafeInstallerHref(href: string) {
-  return /^https?:\/\//i.test(href) || (href.startsWith("/downloads/") && !href.includes(".."))
-}
-
 function getInstallerInfo(
-  paths: string | string[],
-  missingStatusLabel: string,
-  releaseInfo?: DesktopReleaseManifest["mac"] | DesktopReleaseManifest["windows"] | null,
-  releaseVersion?: string
+  release: PublicReleaseAvailability,
+  fallbackHref: string
 ): InstallerInfo {
-  const releaseHref = releaseInfo?.downloadUrl || releaseInfo?.url || releaseInfo?.file
-
-  const signed = releaseInfo?.signed === true
-  const releaseNotarized = releaseInfo && "notarized" in releaseInfo ? releaseInfo.notarized : undefined
-  const notarized = releaseNotarized === undefined ? true : releaseNotarized === true
-  const productionReady = signed && notarized
-
-  if (releaseHref && isSafeInstallerHref(releaseHref) && productionReady) {
-    const sizeLabel = releaseInfo.size ? formatFileSize(releaseInfo.size) : null
-    const version = releaseInfo.version || releaseVersion || null
-    return {
-      available: true,
-      href: releaseHref,
-      sizeLabel,
-      notarized: "notarized" in releaseInfo ? releaseInfo.notarized : undefined,
-      signed: "signed" in releaseInfo ? releaseInfo.signed : undefined,
-      version,
-      architecture: releaseInfo.architecture || null,
-      statusLabel: `${version ? `Version ${version}` : "Published release"}${releaseInfo.architecture ? ` · ${releaseInfo.architecture.toUpperCase()}` : ""}${sizeLabel ? ` · ${sizeLabel}` : ""}`,
-    }
-  }
-
-  if (releaseHref && isSafeInstallerHref(releaseHref)) {
-    return {
-      available: false,
-      href: releaseHref,
-      sizeLabel: releaseInfo?.size ? formatFileSize(releaseInfo.size) : null,
-      notarized: releaseNotarized,
-      signed: releaseInfo?.signed,
-      version: releaseInfo?.version || releaseVersion || null,
-      architecture: releaseInfo?.architecture || null,
-      statusLabel: "Internal testing only — signing or notarization incomplete",
-    }
-  }
-
-  const candidates = Array.isArray(paths) ? paths : [paths]
+  const sizeLabel = release.size ? formatFileSize(release.size) : null
+  const statusParts = [
+    release.version ? `Version ${release.version}` : null,
+    release.architecture ? release.architecture.toUpperCase() : null,
+    sizeLabel,
+    release.checksumVerified ? "SHA-256 verified" : null,
+  ].filter(Boolean)
   return {
-    available: false,
-    href: candidates[0],
-    sizeLabel: null,
-    version: releaseInfo?.version || releaseVersion || null,
-    architecture: releaseInfo?.architecture || null,
-    statusLabel: missingStatusLabel,
+    available: release.available,
+    href: release.downloadUrl || fallbackHref,
+    sizeLabel,
+    warning: release.warning,
+    blockedReason: release.blockedReason,
+    platform: release.platform,
+    version: release.version,
+    architecture: release.architecture,
+    statusLabel: release.available ? statusParts.join(" · ") : release.blockedReason || release.reason,
   }
 }
 
@@ -131,9 +84,13 @@ function DownloadButton({
 
   if (!available) {
     return (
-      <span className={`${className} cursor-not-allowed border border-white/10 bg-white/[0.04] text-white/35`}>
+      <button
+        type="button"
+        disabled
+        className={`${className} w-full cursor-not-allowed border border-white/10 bg-white/[0.04] text-white/35`}
+      >
         {children}
-      </span>
+      </button>
     )
   }
 
@@ -163,6 +120,21 @@ function InstallerCard({
       <p className="mt-2 text-center text-xs font-bold text-white/45">
         {info.statusLabel}
       </p>
+      {info.warning && (
+        <div className="mt-3 rounded-2xl border border-amber-300/25 bg-amber-300/10 px-4 py-3 text-sm font-bold leading-6 text-amber-100">
+          <p>{info.warning}</p>
+          {info.platform === "macos" && (
+            <p className="mt-1 text-xs font-semibold text-amber-100/70">
+              If macOS blocks the first launch, right-click the Bezgrow app, choose Open, then confirm.
+            </p>
+          )}
+        </div>
+      )}
+      {!info.available && info.blockedReason && (
+        <div className="mt-3 rounded-2xl border border-red-300/20 bg-red-300/10 px-4 py-3 text-xs font-bold leading-5 text-red-100">
+          {info.blockedReason}
+        </div>
+      )}
     </div>
   )
 }
@@ -195,19 +167,9 @@ function MobileInstallCard({
 
 export default async function DownloadPage() {
   const availability = await getDesktopReleaseAvailability()
-  const releaseManifest = (availability.manifest || {}) as DesktopReleaseManifest
-  const macInstaller = getInstallerInfo(
-    macInstallerPath,
-    availability.mac.reason,
-    availability.mac.installer,
-    availability.mac.version || undefined
-  )
-  const windowsInstaller = getInstallerInfo(
-    windowsInstallerPaths,
-    availability.windows.reason,
-    availability.windows.installer,
-    availability.windows.version || undefined
-  )
+  const releaseManifest = availability.manifest
+  const macInstaller = getInstallerInfo(availability.mac, macInstallerPath)
+  const windowsInstaller = getInstallerInfo(availability.windows, windowsInstallerPath)
   const installersReady = macInstaller.available || windowsInstaller.available
   const releaseNotes = [
     availability.mac.releaseNotes,
@@ -230,12 +192,14 @@ export default async function DownloadPage() {
           </p>
 
           <div className="mt-6 inline-flex rounded-full border border-white/10 bg-black/35 px-4 py-2 text-sm font-bold text-white/65">
-            {releaseManifest.version ? `Published version ${releaseManifest.version}` : "No published desktop release"}
+            {releaseManifest?.version
+              ? `Available desktop release ${releaseManifest.version}`
+              : "No validated desktop installer available"}
           </div>
 
           {!installersReady && (
             <div className="mt-6 break-words rounded-2xl border border-amber-300/25 bg-amber-300/10 px-4 py-3 text-sm font-bold text-amber-100 [overflow-wrap:anywhere]">
-              No public desktop installer currently passes the release policy. Platform-specific reasons are shown below.
+              No genuine desktop installer currently passes file-integrity validation. Platform-specific reasons are shown below.
             </div>
           )}
 
@@ -246,7 +210,7 @@ export default async function DownloadPage() {
               label={`Download for Mac${macInstaller.version ? ` · v${macInstaller.version}` : ""}`}
             />
             <InstallerCard
-              href={windowsInstallerPaths[0]}
+              href={windowsInstallerPath}
               info={windowsInstaller}
               label={`Download for Windows${windowsInstaller.version ? ` · v${windowsInstaller.version}` : ""}`}
             />

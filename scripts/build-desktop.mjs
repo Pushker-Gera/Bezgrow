@@ -36,6 +36,35 @@ function envBoolean(name) {
   return value === "1" || value === "true" || value === "yes";
 }
 
+function buildArchitecture() {
+  if (/aarch64|arm64/i.test(targetTriple)) return "arm64";
+  if (/x86_64|x64|amd64/i.test(targetTriple)) return "x64";
+  return process.arch === "arm64" ? "arm64" : "x64";
+}
+
+function releaseTrustMetadata({ platform, filename, signed, notarized = false, productionTrusted = false }) {
+  const warning =
+    platform === "macos" && (!signed || !notarized)
+      ? "Internal/testing build: this macOS installer is not notarized and macOS may show a security warning."
+      : platform === "windows" && !signed
+        ? "Internal/testing build: Windows SmartScreen may display a warning because this installer is not code-signed."
+        : null;
+  return {
+    filename,
+    platform,
+    architecture: buildArchitecture(),
+    available: true,
+    signed,
+    notarized,
+    checksumVerified: true,
+    metadataValid: true,
+    productionRecommended: productionTrusted,
+    warning,
+    blockedReason: null,
+    releaseChannel: productionTrusted ? "stable" : "internal",
+  };
+}
+
 function hasAppleIdNotaryCredentials() {
   return Boolean(process.env.APPLE_ID && process.env.APPLE_PASSWORD && process.env.APPLE_TEAM_ID);
 }
@@ -178,7 +207,13 @@ function verifyPublicMacDmg() {
         version: packageVersion,
         sha256,
         size: bytes.length,
-        notarized: true,
+        ...releaseTrustMetadata({
+          platform: "macos",
+          filename: "Bezgrow-mac.dmg",
+          signed: true,
+          notarized: true,
+          productionTrusted: true,
+        }),
         generatedAt,
       },
       null,
@@ -192,7 +227,13 @@ function verifyPublicMacDmg() {
       version: packageVersion,
       sha256,
       size: bytes.length,
-      notarized: true,
+      ...releaseTrustMetadata({
+        platform: "macos",
+        filename: "Bezgrow-mac.dmg",
+        signed: true,
+        notarized: true,
+        productionTrusted: true,
+      }),
       generatedAt,
     },
   });
@@ -276,7 +317,12 @@ function verifyPublicWindowsInstaller() {
     version: packageVersion,
     sha256: exeSha256,
     size: exeBytes.length,
-    signed,
+    ...releaseTrustMetadata({
+      platform: "windows",
+      filename: "Bezgrow-windows.exe",
+      signed,
+      productionTrusted: true,
+    }),
     generatedAt,
   });
   writeInstallerReleaseManifest(publicWindowsMsiReleaseManifest, {
@@ -285,7 +331,12 @@ function verifyPublicWindowsInstaller() {
     version: packageVersion,
     sha256: msiSha256,
     size: msiBytes.length,
-    signed,
+    ...releaseTrustMetadata({
+      platform: "windows",
+      filename: "Bezgrow-windows.msi",
+      signed,
+      productionTrusted: true,
+    }),
     generatedAt,
   });
   writeDesktopReleaseManifest({
@@ -295,7 +346,12 @@ function verifyPublicWindowsInstaller() {
       version: packageVersion,
       sha256: exeSha256,
       size: exeBytes.length,
-      signed,
+      ...releaseTrustMetadata({
+        platform: "windows",
+        filename: "Bezgrow-windows.exe",
+        signed,
+        productionTrusted: true,
+      }),
       generatedAt,
     },
     windowsMsi: {
@@ -304,7 +360,12 @@ function verifyPublicWindowsInstaller() {
       version: packageVersion,
       sha256: msiSha256,
       size: msiBytes.length,
-      signed,
+      ...releaseTrustMetadata({
+        platform: "windows",
+        filename: "Bezgrow-windows.msi",
+        signed,
+        productionTrusted: true,
+      }),
       generatedAt,
     },
   });
@@ -332,6 +393,7 @@ function copyGeneratedInstallersForDownloads() {
     const sha256 = createHash("sha256").update(bytes).digest("hex");
     const generatedAt = new Date().toISOString();
     const notarized = Boolean(publicMacBuild);
+    const signed = Boolean(publicMacBuild);
     writeInstallerReleaseManifest(
       publicMacReleaseManifest,
       {
@@ -340,7 +402,13 @@ function copyGeneratedInstallersForDownloads() {
         version: packageVersion,
         sha256,
         size: bytes.length,
-        notarized,
+        ...releaseTrustMetadata({
+          platform: "macos",
+          filename: "Bezgrow-mac.dmg",
+          signed,
+          notarized,
+          productionTrusted: Boolean(publicMacBuild),
+        }),
         generatedAt,
       }
     );
@@ -351,7 +419,13 @@ function copyGeneratedInstallersForDownloads() {
         version: packageVersion,
         sha256,
         size: bytes.length,
-        notarized,
+        ...releaseTrustMetadata({
+          platform: "macos",
+          filename: "Bezgrow-mac.dmg",
+          signed,
+          notarized,
+          productionTrusted: Boolean(publicMacBuild),
+        }),
         generatedAt,
       },
     });
@@ -370,7 +444,12 @@ function copyGeneratedInstallersForDownloads() {
       version: packageVersion,
       sha256,
       size: bytes.length,
-      signed,
+      ...releaseTrustMetadata({
+        platform: "windows",
+        filename: "Bezgrow-windows.exe",
+        signed,
+        productionTrusted: Boolean(publicWindowsBuild && signed),
+      }),
       generatedAt,
     });
     writeDesktopReleaseManifest({
@@ -380,7 +459,12 @@ function copyGeneratedInstallersForDownloads() {
         version: packageVersion,
         sha256,
         size: bytes.length,
-        signed,
+        ...releaseTrustMetadata({
+          platform: "windows",
+          filename: "Bezgrow-windows.exe",
+          signed,
+          productionTrusted: Boolean(publicWindowsBuild && signed),
+        }),
         generatedAt,
       },
     });
@@ -399,7 +483,12 @@ function copyGeneratedInstallersForDownloads() {
       version: packageVersion,
       sha256,
       size: bytes.length,
-      signed,
+      ...releaseTrustMetadata({
+        platform: "windows",
+        filename: "Bezgrow-windows.msi",
+        signed,
+        productionTrusted: Boolean(publicWindowsBuild && signed),
+      }),
       generatedAt,
     });
     writeDesktopReleaseManifest({
@@ -409,7 +498,12 @@ function copyGeneratedInstallersForDownloads() {
         version: packageVersion,
         sha256,
         size: bytes.length,
-        signed,
+        ...releaseTrustMetadata({
+          platform: "windows",
+          filename: "Bezgrow-windows.msi",
+          signed,
+          productionTrusted: Boolean(publicWindowsBuild && signed),
+        }),
         generatedAt,
       },
     });

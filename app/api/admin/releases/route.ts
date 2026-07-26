@@ -1,6 +1,5 @@
 import "server-only"
 
-import { createHash } from "node:crypto"
 import { z } from "zod"
 import { requireAdminControlPlane, writeAdminAudit } from "@/lib/api/auth"
 import {
@@ -13,7 +12,7 @@ import {
   parseAdminListQuery,
   unexpectedAdminError,
 } from "@/lib/admin/control-plane"
-import { isPublicHttpsUrl } from "@/lib/security/public-url"
+import { validateInstallerCandidate } from "@/lib/releases/artifact-validation"
 import { adminSupabase } from "@/lib/supabase/admin"
 
 export const dynamic = "force-dynamic"
@@ -29,7 +28,7 @@ const createReleaseSchema = z.object({
   file_url: httpsUrl,
   file_size: z.coerce.number().int().min(1).optional(),
   sha256: z.string().trim().regex(/^[a-fA-F0-9]{64}$/).optional(),
-  artifact_type: z.enum(["dmg", "nsis", "msi", "portable_exe", "portable_zip"]).optional(),
+  artifact_type: z.enum(["dmg", "nsis", "msi", "msix", "portable_exe", "portable_zip"]).optional(),
   file_name: z.string().trim().min(1).max(240).optional(),
   update_signature: z.string().trim().max(20000).optional(),
   minimum_supported_version: z.string().trim().max(40).optional(),
@@ -50,6 +49,8 @@ const releaseActionSchema = z.object({
     "retire",
     "archive",
     "verify_artifact",
+    "mark_internal",
+    "mark_stable",
   ]),
   rollout_percentage: z.coerce.number().int().min(0).max(100).optional(),
   mandatory: z.boolean().optional(),
@@ -59,6 +60,9 @@ type ReleaseRow = {
   id: string
   platform: "macos" | "windows"
   architecture: "arm64" | "x64"
+  version: string
+  build_number: string
+  release_channel: string
   release_status: string
   active: boolean
   release_artifacts?: Array<{
@@ -80,10 +84,12 @@ function publicationError(release: ReleaseRow) {
   const artifact = release.release_artifacts?.[0]
   if (!artifact) return "Release artifact unavailable."
   if (artifact.validation_status !== "valid") return "Download artifact failed validation."
-  if (artifact.signature_status !== "valid") return "Release signature has not been validated."
-  if (artifact.code_signing_status !== "valid") return "Code signing has not been validated."
-  if (release.platform === "macos" && artifact.notarization_status !== "valid") {
-    return "macOS release has not passed notarization."
+  const productionTrusted =
+    artifact.signature_status === "valid" &&
+    artifact.code_signing_status === "valid" &&
+    (release.platform === "windows" || artifact.notarization_status === "valid")
+  if (!productionTrusted && release.release_channel !== "internal") {
+    return "Unsigned or unnotarized builds can only be published on the internal channel."
   }
   return null
 }
@@ -92,6 +98,7 @@ function inferredArtifactType(platform: ReleaseRow["platform"], fileName: string
   const lower = fileName.toLowerCase()
   if (platform === "macos") return lower.endsWith(".dmg") ? "dmg" : null
   if (lower.endsWith(".msi")) return "msi"
+  if (lower.endsWith(".msix")) return "msix"
   if (lower.endsWith(".zip")) return "portable_zip"
   if (lower.includes("portable") && lower.endsWith(".exe")) return "portable_exe"
   if (lower.endsWith(".exe")) return "nsis"
@@ -102,124 +109,36 @@ async function verifyArtifact(
   artifact: NonNullable<ReleaseRow["release_artifacts"]>[number],
   release: ReleaseRow
 ) {
-  const url = new URL(artifact.file_url)
-  if (!(await isPublicHttpsUrl(url))) {
-    return {
-      validation_status: "invalid",
-      validation_error: "Artifact URL is not an allowed public HTTPS location.",
-      validated_at: new Date().toISOString(),
-    }
-  }
-
-  const response = await fetch(artifact.file_url, {
-    method: "GET",
-    cache: "no-store",
-    redirect: "manual",
-    headers: { Range: "bytes=0-" },
-    signal: AbortSignal.timeout(30_000),
-  })
-  if (response.status >= 300 && response.status < 400) {
-    return {
-      validation_status: "invalid",
-      validation_error: "Artifact redirects are not accepted; use the final public HTTPS URL.",
-      validated_at: new Date().toISOString(),
-    }
-  }
-  if (!response.ok) {
-    return {
-      validation_status: response.status === 404 ? "missing" : "invalid",
-      validation_error: `Artifact returned HTTP ${response.status}.`,
-      validated_at: new Date().toISOString(),
-    }
-  }
-  const contentType = (response.headers.get("content-type") || "").toLowerCase()
-  if (
-    contentType.includes("text/html") ||
-    contentType.includes("application/json") ||
-    contentType.startsWith("text/")
-  ) {
-    return {
-      validation_status: "invalid",
-      validation_error: "Artifact URL returned a webpage or JSON response instead of an installer.",
-      validated_at: new Date().toISOString(),
-    }
-  }
-
-  if (!response.body) {
-    return {
-      validation_status: "invalid",
-      validation_error: "Artifact response did not include a readable body.",
-      validated_at: new Date().toISOString(),
-    }
-  }
-
-  const hash = createHash("sha256")
-  let actualSize = 0
-  let firstBytes = Buffer.alloc(0)
-  let trailingBytes = Buffer.alloc(0)
-  const reader = response.body.getReader()
-  while (true) {
-    const { done, value } = await reader.read()
-    if (done) break
-    const bytes = Buffer.from(value)
-    if (firstBytes.byteLength < 32) {
-      firstBytes = Buffer.concat([firstBytes, bytes]).subarray(0, 32)
-    }
-    trailingBytes = Buffer.concat([trailingBytes, bytes]).subarray(-512)
-    actualSize += bytes.byteLength
-    if (actualSize > 2 * 1024 * 1024 * 1024) {
-      await reader.cancel()
-      return {
-        validation_status: "invalid",
-        validation_error: "Artifact exceeds the 2 GB validation limit.",
-        validated_at: new Date().toISOString(),
-      }
-    }
-    hash.update(bytes)
-  }
-  const actualHash = hash.digest("hex")
-  const disposition = response.headers.get("content-disposition") || ""
-  const dispositionMatch = disposition.match(/filename\*?=(?:UTF-8''|")?([^";]+)/i)
-  const urlFileName = decodeURIComponent(url.pathname.split("/").pop() || "")
-  const actualFileName = (dispositionMatch?.[1] || urlFileName).replaceAll('"', "").trim()
+  const validation = await validateInstallerCandidate(
+    {
+      platform: release.platform,
+      architecture: release.architecture,
+      version: release.version,
+      downloadUrl: artifact.file_url,
+      filename: artifact.file_name,
+      size: artifact.file_size,
+      sha256: artifact.sha256,
+      signed:
+        artifact.signature_status === "valid" && artifact.code_signing_status === "valid",
+      notarized:
+        release.platform === "macos" && artifact.notarization_status === "valid",
+      releaseChannel: release.release_channel,
+    },
+    { cache: false }
+  )
+  const actualFileName = validation.filename || artifact.file_name || ""
   const artifactType = inferredArtifactType(release.platform, actualFileName)
-  const expectedType = artifact.artifact_type || artifactType
-  const platformMatches =
-    release.platform === "macos"
-      ? artifactType === "dmg"
-      : artifactType === "nsis" ||
-        artifactType === "msi" ||
-        artifactType === "portable_exe" ||
-        artifactType === "portable_zip"
-  const magicMatches =
-    artifactType === "dmg"
-      ? trailingBytes.includes(Buffer.from("koly"))
-      : artifactType === "msi"
-        ? firstBytes.subarray(0, 8).equals(Buffer.from([0xd0, 0xcf, 0x11, 0xe0, 0xa1, 0xb1, 0x1a, 0xe1]))
-        : artifactType === "nsis" || artifactType === "portable_exe"
-          ? firstBytes.subarray(0, 2).toString("ascii") === "MZ"
-          : artifactType === "portable_zip"
-            ? firstBytes.subarray(0, 2).toString("ascii") === "PK"
-            : false
-  const sizeMatches = !artifact.file_size || Number(artifact.file_size) === actualSize
-  const hashMatches = !artifact.sha256 || artifact.sha256.toLowerCase() === actualHash
-  const typeMatches = !artifact.artifact_type || artifact.artifact_type === artifactType
-  const valid = sizeMatches && hashMatches && platformMatches && magicMatches && typeMatches
   return {
-    artifact_type: expectedType,
+    artifact_type: artifact.artifact_type || artifactType,
     file_name: artifact.file_name || actualFileName,
-    file_size: actualSize,
-    sha256: artifact.sha256 || actualHash,
-    validation_status: valid ? "valid" : "invalid",
-    validation_error: !sizeMatches
-      ? "Artifact size does not match release metadata."
-      : !hashMatches
-        ? "Artifact SHA-256 does not match release metadata."
-        : !platformMatches || !typeMatches
-          ? "Artifact type does not match the selected platform."
-          : !magicMatches
-            ? "Artifact file signature does not match its installer type."
-        : null,
+    file_size: validation.size,
+    sha256: artifact.sha256 || validation.sha256,
+    validation_status: validation.available
+      ? "valid"
+      : /HTTP 404|not found|missing/i.test(validation.blockedReason || "")
+        ? "missing"
+        : "invalid",
+    validation_error: validation.blockedReason,
     validated_at: new Date().toISOString(),
   }
 }
@@ -300,7 +219,7 @@ export async function GET(request: Request) {
       data: result.data || [],
       pagination: { page: list.page, limit: list.limit, total: result.count || 0 },
       publicationPolicy:
-        "Public downloads require a validated artifact, signature, and code signing. macOS also requires notarization.",
+        "Validated internal/testing artifacts may be downloaded with trust warnings. Stable production releases additionally require code signing and macOS notarization.",
     })
   } catch (error) {
     return unexpectedAdminError(context, error, "Releases failed to load.")
@@ -444,6 +363,8 @@ export async function PATCH(request: Request) {
       if (input.rollout_percentage === undefined) return adminFail(context, "Rollout percentage is required.", 422)
       updates.rollout_percentage = input.rollout_percentage
     }
+    if (input.action === "mark_internal") updates.release_channel = "internal"
+    if (input.action === "mark_stable") updates.release_channel = "stable"
 
     const result = await adminSupabase.from("desktop_releases").update(updates).eq("id", input.id).select("*").single()
     if (result.error) throw result.error
@@ -456,6 +377,8 @@ export async function PATCH(request: Request) {
       set_rollout: "RELEASE_ROLLOUT_CHANGED",
       retire: "RELEASE_RETIRED",
       archive: "RELEASE_ARCHIVED",
+      mark_internal: "RELEASE_MARKED_INTERNAL",
+      mark_stable: "RELEASE_MARKED_STABLE",
     }
     await writeAdminAudit(context, {
       action: actionMap[input.action],

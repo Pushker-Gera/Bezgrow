@@ -141,7 +141,7 @@ src-tauri/target/release/bundle/
 
 Packaging note: desktop installers include a Node runtime generated on the build machine, so installed users are not asked to install Node manually. Build macOS installers on macOS and Windows installers on Windows so the bundled runtime matches the target platform.
 
-macOS signing note: local macOS builds are ad-hoc signed only for testing. Do not upload a local `npm run desktop:build:mac` DMG to the website because Chrome quarantine will make macOS show `"Bezgrow" is damaged and can't be opened.` Public website distribution must be built with:
+macOS signing note: local macOS builds are ad-hoc signed only for internal/testing. They may be published only with the internal/testing label and the visible macOS security warning; users may need to use right-click → Open. A production-recommended website distribution must be built with:
 
 ```bash
 BEZGROW_MAC_SIGNING_IDENTITY="Developer ID Application: Your Company (TEAMID)" \
@@ -161,10 +161,12 @@ BEZGROW_MAC_PROVIDER_SHORT_NAME optional
 APPLE_CERTIFICATE and APPLE_CERTIFICATE_PASSWORD, or a Developer ID identity already available on the runner
 APPLE_ID, APPLE_PASSWORD, APPLE_TEAM_ID
 or APPLE_API_KEY, APPLE_API_ISSUER, APPLE_API_KEY_PATH
-BEZGROW_WINDOWS_SIGNED optional, set to true/1 after adding Windows code signing
+BEZGROW_WINDOWS_CERTIFICATE_BASE64 and BEZGROW_WINDOWS_CERTIFICATE_PASSWORD
+BEZGROW_WINDOWS_TIMESTAMP_URL optional
+SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY optional for control-plane metadata publication
 ```
 
-The workflow builds a notarized Mac DMG on macOS, builds the Windows NSIS installer on Windows, uploads both installers to a GitHub Release, and commits `public/downloads/desktop-release.json` with the download URLs, file sizes, hashes, and trust flags. The `/download` page enables Mac and Windows buttons only when a real local installer exists in `public/downloads/` or the release manifest contains a real GitHub Release URL. Local Mac test builds are not blocked by notarization, but the page shows a macOS warning until the manifest marks the DMG as notarized.
+The workflow builds the Mac DMG on macOS and Windows NSIS/MSI installers on `windows-latest`, verifies installer signatures and file bytes, calculates SHA-256, uploads artifacts to a GitHub Release, and commits `public/downloads/desktop-release.json` with download URLs and independent integrity/trust flags. Missing signing credentials produce a clearly labelled prerelease/internal build instead of discarding a genuine installer. The `/download` page enables each platform only after the artifact is reachable and passes type, non-zero-size, installer-magic, architecture/version metadata, and checksum checks. Signing and notarization affect warnings and `productionRecommended`, not basic download availability.
 
 Windows installers must be built on Windows. From a Windows machine, run `npm run desktop:build:windows` to generate artifacts under `src-tauri/target/release/bundle/`, or run `npm run desktop:build:windows:public` to copy the NSIS installer to `public/downloads/Bezgrow-windows.exe` and write release metadata. From macOS, use the **Desktop Release** GitHub Actions workflow; macOS cannot produce the Windows `.exe`/`.msi` installer for this Tauri app. Installer binaries are ignored by git; do not commit `.dmg`, `.exe`, or `.msi` files directly.
 

@@ -36,16 +36,22 @@ const definitions = [
   { key: "macX64", platform: "macos", architecture: "x64", artifactType: "dmg" },
   { key: "windows", platform: "windows", architecture: "x64", artifactType: "nsis" },
   { key: "windowsMsi", platform: "windows", architecture: "x64", artifactType: "msi" },
+  { key: "windowsMsix", platform: "windows", architecture: "x64", artifactType: "msix" },
   { key: "windowsPortable", platform: "windows", architecture: "x64", artifactType: "portable_exe" },
   { key: "windowsPortableZip", platform: "windows", architecture: "x64", artifactType: "portable_zip" },
   { key: "windowsArm64", platform: "windows", architecture: "arm64", artifactType: "nsis" },
   { key: "windowsArm64Msi", platform: "windows", architecture: "arm64", artifactType: "msi" },
+  { key: "windowsArm64Msix", platform: "windows", architecture: "arm64", artifactType: "msix" },
   { key: "windowsArm64Portable", platform: "windows", architecture: "arm64", artifactType: "portable_exe" },
   { key: "windowsArm64PortableZip", platform: "windows", architecture: "arm64", artifactType: "portable_zip" },
 ]
 
 const artifacts = definitions
-  .map((definition) => ({ ...definition, installer: manifest[definition.key] }))
+  .map((definition) => ({
+    ...definition,
+    installer: manifest[definition.key],
+    channel: manifest[definition.key]?.releaseChannel || releaseChannel,
+  }))
   .filter(({ installer }) => installer)
 
 if (artifacts.length === 0) {
@@ -63,12 +69,13 @@ for (const entry of artifacts) {
   if (!installer.size || !/^[a-f0-9]{64}$/i.test(installer.sha256 || "")) {
     throw new Error(`Verified size and SHA-256 are required for ${entry.key}.`)
   }
-  if (entry.platform === "macos") {
-    if (installer.signed !== true || installer.notarized !== true) {
-      throw new Error("macOS metadata cannot be published until signing and notarization are verified.")
-    }
-  } else if (installer.signed !== true) {
-    throw new Error(`Windows metadata cannot be published until Authenticode is verified for ${entry.key}.`)
+  const productionTrusted =
+    installer.signed === true &&
+    (entry.platform === "windows" || installer.notarized === true)
+  if (!productionTrusted && entry.channel !== "internal") {
+    throw new Error(
+      `${entry.key} is unsigned or unnotarized and can only be published as an internal/testing release.`
+    )
   }
 
   const response = await fetch(installer.downloadUrl, {
@@ -87,7 +94,7 @@ for (const entry of artifacts) {
 
 const grouped = Map.groupBy(
   artifacts,
-  (entry) => `${entry.platform}:${entry.architecture}`
+  (entry) => `${entry.platform}:${entry.architecture}:${entry.channel}`
 )
 
 for (const entries of grouped.values()) {
@@ -97,7 +104,7 @@ for (const entries of grouped.values()) {
     build_number: buildNumber,
     platform: first.platform,
     architecture: first.architecture,
-    release_channel: releaseChannel,
+    release_channel: first.channel,
   }
   const releaseResult = await supabase
     .from("desktop_releases")
@@ -129,14 +136,19 @@ for (const entries of grouped.values()) {
       {
         release_id: releaseResult.data.id,
         artifact_type: entry.artifactType,
-        file_name: basename(new URL(installer.downloadUrl).pathname),
+        file_name: installer.filename || basename(new URL(installer.downloadUrl).pathname),
         file_url: installer.downloadUrl,
         file_size: installer.size,
         sha256: installer.sha256.toLowerCase(),
         update_signature: installer.updateSignature || null,
-        signature_status: "valid",
-        notarization_status: entry.platform === "macos" ? "valid" : "not_applicable",
-        code_signing_status: "valid",
+        signature_status: installer.signed === true ? "valid" : "invalid",
+        notarization_status:
+          entry.platform === "macos"
+            ? installer.notarized === true
+              ? "valid"
+              : "invalid"
+            : "not_applicable",
+        code_signing_status: installer.signed === true ? "valid" : "invalid",
         validation_status: "valid",
         validated_at: new Date().toISOString(),
         validation_error: null,
@@ -165,4 +177,4 @@ for (const entries of grouped.values()) {
   if (audit.error) throw audit.error
 }
 
-console.log(`Published verified control-plane metadata for ${artifacts.length} installer artifacts.`)
+console.log(`Published integrity-verified control-plane metadata for ${artifacts.length} installer artifacts.`)

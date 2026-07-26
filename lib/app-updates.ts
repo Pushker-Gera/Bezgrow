@@ -28,8 +28,10 @@ export type DesktopReleaseManifest = {
   macX64?: MacRelease
   windows?: WindowsRelease
   windowsMsi?: WindowsRelease
+  windowsMsix?: WindowsRelease
   windowsArm64?: WindowsRelease
   windowsArm64Msi?: WindowsRelease
+  windowsArm64Msix?: WindowsRelease
 }
 
 export type AppUpdateStatus =
@@ -111,8 +113,10 @@ export function releaseGeneratedAt(manifest: DesktopReleaseManifest | null) {
     manifest.macX64?.generatedAt,
     manifest.windows?.generatedAt,
     manifest.windowsMsi?.generatedAt,
+    manifest.windowsMsix?.generatedAt,
     manifest.windowsArm64?.generatedAt,
     manifest.windowsArm64Msi?.generatedAt,
+    manifest.windowsArm64Msix?.generatedAt,
   ]
     .map((value) => (value ? Date.parse(value) : 0))
     .filter((value) => Number.isFinite(value))
@@ -134,9 +138,9 @@ export function releaseForCurrentPlatform(manifest: DesktopReleaseManifest | nul
     return desktopArchitecture() === "x64" ? manifest.macX64 || manifest.mac || null : manifest.mac || manifest.macX64 || null
   }
   if (desktopArchitecture() === "arm64") {
-    return manifest.windowsArm64 || manifest.windowsArm64Msi || manifest.windows || manifest.windowsMsi || null
+    return manifest.windowsArm64 || manifest.windowsArm64Msi || manifest.windowsArm64Msix || manifest.windows || manifest.windowsMsi || manifest.windowsMsix || null
   }
-  return manifest.windows || manifest.windowsMsi || null
+  return manifest.windows || manifest.windowsMsi || manifest.windowsMsix || null
 }
 
 function releaseHref(release: ReturnType<typeof releaseForCurrentPlatform>) {
