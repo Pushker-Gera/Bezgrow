@@ -223,7 +223,15 @@ jobs:
 
       - name: Install Windows packaging prerequisites
         shell: pwsh
-        run: choco install nsis --no-progress -y
+        run: |
+          choco install nsis --no-progress -y
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $nsisDirectory = Join-Path ${env:ProgramFiles(x86)} "NSIS"
+          $makeNsis = Join-Path $nsisDirectory "makensis.exe"
+          if (-not (Test-Path -LiteralPath $makeNsis)) {
+            throw "Chocolatey completed, but makensis.exe is missing from $nsisDirectory."
+          }
+          $nsisDirectory | Out-File $env:GITHUB_PATH -Encoding utf8 -Append
 
       - name: Verify Windows build prerequisites
         shell: pwsh

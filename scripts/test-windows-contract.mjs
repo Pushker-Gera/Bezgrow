@@ -59,6 +59,7 @@ assert.match(updatesPanel, /Code signing:[\s\S]*SHA-256:/, "The update card must
 assert.match(workflow, /npm run lint[\s\S]*npm run typecheck[\s\S]*npm test[\s\S]*npm run build/, "Windows CI must run the complete validation pipeline.")
 assert.match(workflow, /push:[\s\S]*tags:[\s\S]*v\*/, "Version tags must trigger the genuine Windows release workflow.")
 assert.match(workflow, /npm run desktop:validate-env/, "Windows CI must reject incomplete public desktop configuration.")
+assert.match(workflow, /makensis\.exe[\s\S]*GITHUB_PATH/, "Windows CI must add the installed NSIS directory to later build steps.")
 assert.match(workflow, /cargo fmt[\s\S]*cargo check/, "Windows CI must compile-check the native application.")
 assert.match(workflow, /verify-production-windows-download\.mjs/, "Release CI must verify the deployed Windows binary endpoint.")
 assert.match(workflow, /test-windows-installer\.ps1/, "Windows CI must validate the installer lifecycle.")
