@@ -4,7 +4,10 @@ use std::{
     io::{Cursor, Read, Write},
     path::{Component, Path, PathBuf},
     process::{Child, Command},
-    sync::Mutex,
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Mutex,
+    },
     time::{SystemTime, UNIX_EPOCH},
 };
 
@@ -38,7 +41,31 @@ const WINDOWS_APP_DATA_DIR: &str = "Bezgrow";
 #[cfg(not(debug_assertions))]
 const DESKTOP_SERVER_PORT: u16 = 43124;
 
-struct NextServerState(Mutex<Option<Child>>);
+struct NextServerProcess {
+    child: Child,
+    #[cfg(not(debug_assertions))]
+    port: u16,
+}
+
+struct NextServerState {
+    process: Mutex<Option<NextServerProcess>>,
+    startup: Mutex<()>,
+    shutting_down: AtomicBool,
+    #[cfg(not(debug_assertions))]
+    supervisor_started: AtomicBool,
+}
+
+impl NextServerState {
+    fn new() -> Self {
+        Self {
+            process: Mutex::new(None),
+            startup: Mutex::new(()),
+            shutting_down: AtomicBool::new(false),
+            #[cfg(not(debug_assertions))]
+            supervisor_started: AtomicBool::new(false),
+        }
+    }
+}
 
 fn terminate_child_process(child: &mut Child) {
     #[cfg(target_os = "windows")]
@@ -62,12 +89,18 @@ fn stop_next_server<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
     let Some(state) = app.try_state::<NextServerState>() else {
         return;
     };
+    state.shutting_down.store(true, Ordering::SeqCst);
 
-    let Some(mut child) = state.0.lock().expect("next server state poisoned").take() else {
+    let Some(mut process) = state
+        .process
+        .lock()
+        .expect("next server state poisoned")
+        .take()
+    else {
         return;
     };
 
-    terminate_child_process(&mut child);
+    terminate_child_process(&mut process.child);
 }
 
 #[tauri::command]
@@ -101,8 +134,8 @@ fn managed_data_directory<R: tauri::Runtime>(
     managed_app_data_root(manager).map(|root| root.join(name))
 }
 
-fn startup_log_path(app: &tauri::App) -> PathBuf {
-    managed_data_directory(app, "Logs")
+fn startup_log_path<R: tauri::Runtime>(manager: &impl Manager<R>) -> PathBuf {
+    managed_data_directory(manager, "Logs")
         .unwrap_or_else(|_| std::env::temp_dir().join(WINDOWS_APP_DATA_DIR))
         .join("bezgrow-startup.log")
 }
@@ -140,8 +173,8 @@ fn append_early_startup_log(message: impl AsRef<str>) {
     let _ = writeln!(file, "[{}] {}", unix_timestamp(), message.as_ref());
 }
 
-fn append_startup_log(app: &tauri::App, message: impl AsRef<str>) {
-    let path = startup_log_path(app);
+fn append_startup_log<R: tauri::Runtime>(manager: &impl Manager<R>, message: impl AsRef<str>) {
+    let path = startup_log_path(manager);
 
     if let Some(parent) = path.parent() {
         let _ = fs::create_dir_all(parent);
@@ -185,8 +218,8 @@ fn append_startup_log_handle<R: tauri::Runtime>(
     let _ = writeln!(file, "[{timestamp}] {}", message.as_ref());
 }
 
-fn create_startup_error_window(
-    app: &mut tauri::App,
+fn create_startup_error_window<R: tauri::Runtime>(
+    app: &tauri::AppHandle<R>,
     startup_error: &str,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let log_path = startup_log_path(app);
@@ -195,6 +228,16 @@ fn create_startup_error_window(
         "logPath": log_path.to_string_lossy(),
     })
     .to_string();
+
+    if let Some(window) = app.get_webview_window("startup-error") {
+        window.eval(format!(
+            "window.__BEZGROW_SET_STARTUP_ERROR__?.({diagnostics});"
+        ))?;
+        window.show()?;
+        window.unminimize()?;
+        window.set_focus()?;
+        return Ok(());
+    }
 
     tauri::WebviewWindowBuilder::new(
         app,
@@ -1852,6 +1895,76 @@ mod database_transaction_tests {
         );
         let _ = fs::remove_dir_all(fixture_root);
     }
+
+    #[test]
+    fn native_backup_snapshot_and_restore_preserve_authoritative_data() {
+        let fixture_root = std::env::temp_dir().join(format!(
+            "bezgrow-backup-restore-{}-{}",
+            std::process::id(),
+            unix_timestamp()
+        ));
+        fs::create_dir_all(&fixture_root).expect("create backup fixture directory");
+        let database_path = fixture_root.join("current.db");
+        let snapshot_path = fixture_root.join("snapshot.db");
+
+        tauri::async_runtime::block_on(async {
+            let options = SqliteConnectOptions::new()
+                .filename(&database_path)
+                .create_if_missing(true);
+            let mut connection = SqliteConnection::connect_with(&options)
+                .await
+                .expect("create backup fixture");
+            sqlx::query("CREATE TABLE records (id INTEGER PRIMARY KEY, value TEXT NOT NULL)")
+                .execute(&mut connection)
+                .await
+                .expect("create backup fixture table");
+            sqlx::query("INSERT INTO records (id, value) VALUES (1, 'backed-up')")
+                .execute(&mut connection)
+                .await
+                .expect("insert backup fixture row");
+            connection.close().await.expect("close backup fixture");
+
+            create_consistent_database_snapshot(&database_path, &snapshot_path)
+                .await
+                .expect("create consistent SQLite snapshot");
+
+            let options = SqliteConnectOptions::new()
+                .filename(&database_path)
+                .create_if_missing(false);
+            let mut connection = SqliteConnection::connect_with(&options)
+                .await
+                .expect("open active fixture for mutation");
+            sqlx::query("UPDATE records SET value = 'changed-after-backup' WHERE id = 1")
+                .execute(&mut connection)
+                .await
+                .expect("mutate active fixture after backup");
+            connection.close().await.expect("close mutated fixture");
+
+            restore_database_contents(&database_path, &snapshot_path)
+                .await
+                .expect("restore the verified SQLite snapshot");
+
+            let options = SqliteConnectOptions::new()
+                .filename(&database_path)
+                .create_if_missing(false);
+            let mut connection = SqliteConnection::connect_with(&options)
+                .await
+                .expect("reopen restored fixture");
+            let restored: (String,) = sqlx::query_as("SELECT value FROM records WHERE id = 1")
+                .fetch_one(&mut connection)
+                .await
+                .expect("read restored row");
+            assert_eq!(restored.0, "backed-up");
+            let integrity: (String,) = sqlx::query_as("PRAGMA quick_check")
+                .fetch_one(&mut connection)
+                .await
+                .expect("check restored database integrity");
+            assert_eq!(integrity.0.to_ascii_lowercase(), "ok");
+            connection.close().await.expect("close restored fixture");
+        });
+
+        let _ = fs::remove_dir_all(fixture_root);
+    }
 }
 
 #[tauri::command]
@@ -1886,7 +1999,7 @@ fn validate_external_url(url: &str) -> Result<(), String> {
         return Ok(());
     }
 
-    if parsed.scheme() == "http" {
+    if cfg!(debug_assertions) && parsed.scheme() == "http" {
         let host = parsed.host_str().unwrap_or_default();
         if matches!(host, "127.0.0.1" | "localhost") {
             return Ok(());
@@ -2110,27 +2223,35 @@ fn desktop_open_file(path: String) -> Result<(), String> {
 }
 
 #[cfg(not(debug_assertions))]
+fn local_server_responds(port: u16) -> bool {
+    let Ok(mut stream) = TcpStream::connect(("127.0.0.1", port)) else {
+        return false;
+    };
+    let timeout = Some(Duration::from_millis(500));
+    let _ = stream.set_read_timeout(timeout);
+    let _ = stream.set_write_timeout(timeout);
+    if stream
+        .write_all(
+            b"GET /api/desktop-health HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n",
+        )
+        .is_err()
+    {
+        return false;
+    }
+
+    let mut response = [0_u8; 64];
+    let Ok(bytes) = stream.read(&mut response) else {
+        return false;
+    };
+    let status = String::from_utf8_lossy(&response[..bytes]);
+    status.starts_with("HTTP/1.1 200")
+}
+
+#[cfg(not(debug_assertions))]
 fn wait_for_local_server(child: &mut Child, port: u16) -> Result<(), String> {
     for _ in 0..240 {
-        if let Ok(mut stream) = TcpStream::connect(("127.0.0.1", port)) {
-            let timeout = Some(Duration::from_millis(500));
-            let _ = stream.set_read_timeout(timeout);
-            let _ = stream.set_write_timeout(timeout);
-            if stream
-                .write_all(b"GET /login HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n")
-                .is_ok()
-            {
-                let mut response = [0_u8; 64];
-                if let Ok(bytes) = stream.read(&mut response) {
-                    let status = String::from_utf8_lossy(&response[..bytes]);
-                    if status.starts_with("HTTP/1.1 2")
-                        || status.starts_with("HTTP/1.1 3")
-                        || status.starts_with("HTTP/1.1 4")
-                    {
-                        return Ok(());
-                    }
-                }
-            }
+        if local_server_responds(port) {
+            return Ok(());
         }
 
         if let Some(status) = child
@@ -2149,7 +2270,9 @@ fn wait_for_local_server(child: &mut Child, port: u16) -> Result<(), String> {
 }
 
 #[cfg(not(debug_assertions))]
-fn reserve_local_port(app: &tauri::App) -> Result<u16, Box<dyn std::error::Error>> {
+fn reserve_local_port<R: tauri::Runtime>(
+    app: &tauri::AppHandle<R>,
+) -> Result<u16, Box<dyn std::error::Error>> {
     let listener = match TcpListener::bind(("127.0.0.1", DESKTOP_SERVER_PORT)) {
         Ok(listener) => listener,
         Err(fixed_port_error) => {
@@ -2194,7 +2317,9 @@ fn external_process_path(path: PathBuf) -> PathBuf {
 }
 
 #[cfg(not(debug_assertions))]
-fn bundled_node_path(app: &tauri::App) -> Result<PathBuf, Box<dyn std::error::Error>> {
+fn bundled_node_path<R: tauri::Runtime>(
+    app: &tauri::AppHandle<R>,
+) -> Result<PathBuf, Box<dyn std::error::Error>> {
     let executable_name = if cfg!(windows) { "node.exe" } else { "node" };
     let node_path = app
         .path()
@@ -2214,13 +2339,17 @@ fn bundled_node_path(app: &tauri::App) -> Result<PathBuf, Box<dyn std::error::Er
 }
 
 #[cfg(debug_assertions)]
-fn start_next_server(app: &mut tauri::App) -> Result<u16, Box<dyn std::error::Error>> {
+fn start_next_server<R: tauri::Runtime>(
+    app: &tauri::AppHandle<R>,
+) -> Result<u16, Box<dyn std::error::Error>> {
     append_startup_log(app, "Using Next.js dev server at http://localhost:3000");
     Ok(3000)
 }
 
 #[cfg(not(debug_assertions))]
-fn start_next_server(app: &mut tauri::App) -> Result<u16, Box<dyn std::error::Error>> {
+fn start_next_server<R: tauri::Runtime>(
+    app: &tauri::AppHandle<R>,
+) -> Result<u16, Box<dyn std::error::Error>> {
     let port = reserve_local_port(app)?;
     let resource_dir = external_process_path(app.path().resource_dir()?);
     let server_dir = resource_dir.join("next-server");
@@ -2284,13 +2413,17 @@ fn start_next_server(app: &mut tauri::App) -> Result<u16, Box<dyn std::error::Er
     }
 
     let state = app.state::<NextServerState>();
-    *state.0.lock().expect("next server state poisoned") = Some(child);
+    *state.process.lock().expect("next server state poisoned") =
+        Some(NextServerProcess { child, port });
     append_startup_log(app, format!("Bundled Next server is ready on port {port}"));
 
     Ok(port)
 }
 
-fn create_main_window(app: &mut tauri::App, port: u16) -> Result<(), Box<dyn std::error::Error>> {
+fn create_main_window<R: tauri::Runtime>(
+    app: &tauri::AppHandle<R>,
+    port: u16,
+) -> Result<(), Box<dyn std::error::Error>> {
     let url = tauri::Url::parse(&format!("http://127.0.0.1:{port}/login"))?;
     let runtime_mode = if cfg!(debug_assertions) {
         "tauri-dev"
@@ -2305,6 +2438,14 @@ fn create_main_window(app: &mut tauri::App, port: u16) -> Result<(), Box<dyn std
     let runtime_script = format!(
         "window.__BEZGROW_DESKTOP__ = true; window.__BEZGROW_RUNTIME__ = \"{runtime_mode}\"; window.__BEZGROW_ARCH__ = \"{runtime_architecture}\"; window.isTauri = true;"
     );
+
+    if let Some(window) = app.get_webview_window("main") {
+        window.navigate(url)?;
+        window.show()?;
+        window.unminimize()?;
+        window.set_focus()?;
+        return Ok(());
+    }
 
     let builder = tauri::WebviewWindowBuilder::new(app, "main", WebviewUrl::External(url))
         .title("Bezgrow ERP")
@@ -2322,6 +2463,164 @@ fn create_main_window(app: &mut tauri::App, port: u16) -> Result<(), Box<dyn std
     Ok(())
 }
 
+fn start_server_with_retries<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> Result<u16, String> {
+    let state = app.state::<NextServerState>();
+    let _startup_guard = state
+        .startup
+        .lock()
+        .map_err(|_| "The Bezgrow runtime startup lock is unavailable.".to_string())?;
+    state.shutting_down.store(false, Ordering::SeqCst);
+
+    #[cfg(debug_assertions)]
+    {
+        return start_next_server(app).map_err(|error| error.to_string());
+    }
+
+    #[cfg(not(debug_assertions))]
+    {
+        const RETRY_DELAYS: [Duration; 2] =
+            [Duration::from_millis(350), Duration::from_millis(900)];
+        let mut errors = Vec::new();
+
+        for attempt in 1..=3 {
+            match start_next_server(app) {
+                Ok(port) => {
+                    if attempt > 1 {
+                        append_startup_log(
+                            app,
+                            format!(
+                                "Bundled Next server recovered successfully on startup attempt {attempt}"
+                            ),
+                        );
+                    }
+                    return Ok(port);
+                }
+                Err(error) => {
+                    let message = error.to_string().replace(['\r', '\n'], " ");
+                    append_startup_log(
+                        app,
+                        format!(
+                            "Bundled Next server startup attempt {attempt}/3 failed: {message}"
+                        ),
+                    );
+                    errors.push(format!("attempt {attempt}: {message}"));
+                    if let Some(delay) = RETRY_DELAYS.get(attempt - 1) {
+                        thread::sleep(*delay);
+                    }
+                }
+            }
+        }
+
+        Err(format!(
+            "The bundled Bezgrow runtime did not recover after 3 attempts. {}",
+            errors.join(" | ")
+        ))
+    }
+}
+
+fn launch_desktop_ui<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> Result<(), String> {
+    let port = start_server_with_retries(app)?;
+    create_main_window(app, port).map_err(|error| error.to_string())?;
+    if let Some(recovery) = app.get_webview_window("startup-error") {
+        let _ = recovery.hide();
+    }
+    append_startup_log(
+        app,
+        format!("Bezgrow desktop window opened successfully on managed runtime port {port}"),
+    );
+    Ok(())
+}
+
+#[tauri::command]
+fn desktop_retry_startup<R: tauri::Runtime>(app: tauri::AppHandle<R>) -> Result<(), String> {
+    append_startup_log_handle(&app, "Customer requested bundled runtime recovery");
+    launch_desktop_ui(&app)?;
+    start_runtime_supervisor(app);
+    Ok(())
+}
+
+#[cfg(not(debug_assertions))]
+fn start_runtime_supervisor<R: tauri::Runtime>(app: tauri::AppHandle<R>) {
+    let state = app.state::<NextServerState>();
+    if state.supervisor_started.swap(true, Ordering::SeqCst) {
+        return;
+    }
+
+    thread::spawn(move || {
+        let mut failed_health_checks = 0_u8;
+        loop {
+            thread::sleep(Duration::from_secs(1));
+            let state = app.state::<NextServerState>();
+            if state.shutting_down.load(Ordering::SeqCst) {
+                return;
+            }
+
+            let (port, exited) = {
+                let mut process_guard = state.process.lock().expect("next server state poisoned");
+                let Some(process) = process_guard.as_mut() else {
+                    continue;
+                };
+                let exited = process.child.try_wait().ok().flatten();
+                (process.port, exited)
+            };
+
+            if exited.is_none() && local_server_responds(port) {
+                failed_health_checks = 0;
+                continue;
+            }
+            failed_health_checks = failed_health_checks.saturating_add(1);
+            if exited.is_none() && failed_health_checks < 3 {
+                continue;
+            }
+            failed_health_checks = 0;
+
+            let failed_process = state
+                .process
+                .lock()
+                .expect("next server state poisoned")
+                .take();
+            if let Some(mut failed_process) = failed_process {
+                terminate_child_process(&mut failed_process.child);
+            }
+
+            append_startup_log_handle(
+                &app,
+                format!(
+                    "Bundled runtime health check failed on port {port}; hiding the ERP window and starting automatic recovery"
+                ),
+            );
+            if let Some(main) = app.get_webview_window("main") {
+                let _ = main.hide();
+            }
+            let initial_message =
+                "Bezgrow detected that its bundled runtime stopped responding. Automatic recovery is in progress.";
+            let _ = create_startup_error_window(&app, initial_message);
+
+            match launch_desktop_ui(&app) {
+                Ok(()) => {
+                    append_startup_log_handle(
+                        &app,
+                        "Bundled runtime supervisor restored the ERP window",
+                    );
+                }
+                Err(error) => {
+                    append_startup_log_handle(
+                        &app,
+                        format!(
+                            "Automatic bundled runtime recovery failed: {}",
+                            error.replace(['\r', '\n'], " ")
+                        ),
+                    );
+                    let _ = create_startup_error_window(&app, &error);
+                }
+            }
+        }
+    });
+}
+
+#[cfg(debug_assertions)]
+fn start_runtime_supervisor<R: tauri::Runtime>(_app: tauri::AppHandle<R>) {}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     #[cfg(target_os = "windows")]
@@ -2337,7 +2636,7 @@ pub fn run() {
         }))
         .setup(|app| {
             append_startup_log(app, "Tauri setup entered");
-            app.manage(NextServerState(Mutex::new(None)));
+            app.manage(NextServerState::new());
             if let Err(error) = prepare_managed_data(&app.handle()) {
                 append_startup_log(
                     app,
@@ -2346,18 +2645,18 @@ pub fn run() {
                 return Err(error.into());
             }
 
-            match start_next_server(app).and_then(|port| create_main_window(app, port)) {
+            let app_handle = app.handle().clone();
+            match launch_desktop_ui(&app_handle) {
                 Ok(()) => {
-                    append_startup_log(app, "Bezgrow desktop window opened successfully");
+                    start_runtime_supervisor(app_handle);
                 }
                 Err(error) => {
-                    let startup_error = error.to_string();
                     append_startup_log(
                         app,
-                        format!("Startup failed before main window opened: {startup_error}"),
+                        format!("Startup failed before main window opened: {error}"),
                     );
 
-                    if let Err(window_error) = create_startup_error_window(app, &startup_error) {
+                    if let Err(window_error) = create_startup_error_window(&app.handle(), &error) {
                         append_startup_log(
                             app,
                             format!("Unable to show startup error window: {window_error}"),
@@ -2417,6 +2716,7 @@ pub fn run() {
             desktop_export_backup,
             desktop_restore_backup,
             desktop_exit,
+            desktop_retry_startup,
             open_external_url,
             open_platform_admin
         ])

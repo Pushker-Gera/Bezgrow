@@ -20,6 +20,7 @@ fn main() {
         "desktop_export_backup",
         "desktop_restore_backup",
         "desktop_exit",
+        "desktop_retry_startup",
         "open_external_url",
     ]);
     tauri_build::try_build(tauri_build::Attributes::new().app_manifest(app_manifest))

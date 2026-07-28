@@ -345,15 +345,18 @@ async function availabilityForPlatform(
   rows: ReleaseRow[],
   controlPlaneError: string | null
 ): Promise<PublicReleaseAvailability> {
-  const platformRows = rows.filter((row) => row.platform === platform)
-  const controlCandidates = publishedRows(rows, platform)
+  const currentVersion = packageVersion()
+  const platformRows = rows.filter(
+    (row) => row.platform === platform && (!currentVersion || row.version === currentVersion)
+  )
+  const controlCandidates = publishedRows(platformRows, platform)
     .map(controlPlaneCandidate)
     .filter((candidate): candidate is InstallerCandidate => Boolean(candidate))
   const candidates = deduplicateCandidates([
     ...controlCandidates,
     ...checkedInCandidates(platform),
     ...configuredCandidates(platform),
-  ])
+  ]).filter((candidate) => !currentVersion || candidate.version === currentVersion)
 
   if (candidates.length === 0) {
     if (platformRows.length > 0) {
@@ -376,7 +379,7 @@ async function availabilityForPlatform(
     return missingAvailability(
       platform,
       controlPlaneError ||
-        `No genuine ${platform === "macos" ? "macOS" : "Windows"} installer was found in local downloads, release metadata, or configured URLs.`
+        `No genuine ${platform === "macos" ? "macOS" : "Windows"} installer for Bezgrow ${currentVersion || "current"} was found in local downloads, release metadata, or configured URLs.`
     )
   }
 

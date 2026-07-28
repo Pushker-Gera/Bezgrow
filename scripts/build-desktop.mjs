@@ -7,6 +7,9 @@ import { fileURLToPath } from "node:url";
 const root = dirname(dirname(fileURLToPath(import.meta.url)));
 const packageJson = JSON.parse(readFileSync(join(root, "package.json"), "utf8"));
 const packageVersion = packageJson.version;
+const releaseNotes =
+  (process.env.BEZGROW_RELEASE_NOTES || "").trim() ||
+  `Bezgrow ${packageVersion} supervises the bundled production runtime, recovers before exposing a browser error, and preserves the authoritative offline SQLite database.`;
 const tauriConfigPath = join(root, "src-tauri", "tauri.conf.json");
 const generatedConfigDir = join(root, "src-tauri");
 const generatedConfigPath = join(generatedConfigDir, "tauri.generated.conf.json");
@@ -259,6 +262,23 @@ function writeDesktopReleaseManifest(partialManifest) {
   const existing = existsSync(desktopReleaseManifest)
     ? JSON.parse(readFileSync(desktopReleaseManifest, "utf8"))
     : {};
+  for (const key of [
+    "mac",
+    "windows",
+    "windowsMsi",
+    "windowsMsix",
+    "windowsArm64",
+    "windowsArm64Msi",
+    "windowsArm64Msix",
+    "windowsPortable",
+    "windowsPortableZip",
+    "windowsArm64Portable",
+    "windowsArm64PortableZip",
+  ]) {
+    if (existing[key]?.version && existing[key].version !== packageVersion) {
+      delete existing[key];
+    }
+  }
 
   mkdirSync(publicDownloadsDir, { recursive: true });
   writeFileSync(
@@ -267,6 +287,8 @@ function writeDesktopReleaseManifest(partialManifest) {
       {
         ...existing,
         version: packageVersion,
+        releaseNotes: [releaseNotes],
+        generatedAt: new Date().toISOString(),
         ...partialManifest,
       },
       null,

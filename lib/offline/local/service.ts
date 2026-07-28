@@ -421,18 +421,9 @@ export class LocalDatabaseService {
   private async runMigrations(db: SqlExecutor) {
     const tableRows = await db.select<{ name: string }>("SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?", [MIGRATION_TABLE])
     const migrationTableExists = tableRows.length > 0
-
-    if (!migrationTableExists) {
-      await db.execute(`
-        CREATE TABLE IF NOT EXISTS schema_migrations (
-          version INTEGER PRIMARY KEY,
-          name TEXT NOT NULL,
-          applied_at TEXT NOT NULL DEFAULT (datetime('now'))
-        )
-      `)
-    }
-
-    const appliedRows = await db.select<{ version: number }>("SELECT version FROM schema_migrations")
+    const appliedRows = migrationTableExists
+      ? await db.select<{ version: number }>("SELECT version FROM schema_migrations")
+      : []
     const applied = new Set(appliedRows.map((row) => Number(row.version)))
     const pending = localMigrations.filter((migration) => !applied.has(migration.version))
 
@@ -453,6 +444,18 @@ export class LocalDatabaseService {
     })
 
     const statements: DesktopSqlStatement[] = []
+    if (!migrationTableExists) {
+      statements.push({
+        query: `
+          CREATE TABLE schema_migrations (
+            version INTEGER PRIMARY KEY,
+            name TEXT NOT NULL,
+            applied_at TEXT NOT NULL DEFAULT (datetime('now'))
+          )
+        `,
+        bindValues: [],
+      })
+    }
     for (const migration of pending) {
       for (const statement of migration.sql) {
         statements.push({

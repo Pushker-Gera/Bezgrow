@@ -114,6 +114,34 @@
         color: #94a3b8;
         font-size: 13px;
       }
+
+      .actions {
+        align-items: center;
+        display: flex;
+        gap: 12px;
+        margin-top: 18px;
+      }
+
+      button {
+        background: #0891b2;
+        border: 0;
+        border-radius: 6px;
+        color: white;
+        cursor: pointer;
+        font: inherit;
+        font-weight: 700;
+        min-width: 150px;
+        padding: 11px 16px;
+      }
+
+      button:disabled {
+        cursor: wait;
+        opacity: 0.65;
+      }
+
+      #status {
+        margin: 0;
+      }
     </style>
   </head>
   <body>
@@ -127,20 +155,48 @@
       </div>
 
       <section class="panel">
-        <p>Please restart Bezgrow. If this keeps happening, share the startup log with support so the bundled runtime can be diagnosed.</p>
+        <p>Use the recovery action below. If this keeps happening, share the startup log with support so the bundled runtime can be diagnosed.</p>
         <p class="muted">No passwords or service role secrets are written to this log.</p>
         <div class="detail" id="diagnostics">Loading diagnostics...</div>
+        <div class="actions">
+          <button id="retry" type="button">Retry Bezgrow</button>
+          <p class="muted" id="status" role="status" aria-live="polite"></p>
+        </div>
       </section>
     </main>
 
     <script>
-      const diagnostics = window.__BEZGROW_STARTUP_ERROR__ || {};
-      const lines = [
-        diagnostics.message ? `Error: ${diagnostics.message}` : "Error details were not available.",
-        diagnostics.logPath ? `Log: ${diagnostics.logPath}` : "Log path was not available.",
-      ];
+      const detail = document.getElementById("diagnostics");
+      const retry = document.getElementById("retry");
+      const status = document.getElementById("status");
 
-      document.getElementById("diagnostics").textContent = lines.join("\n");
+      window.__BEZGROW_SET_STARTUP_ERROR__ = (diagnostics = {}) => {
+        const lines = [
+          diagnostics.message ? `Error: ${diagnostics.message}` : "Error details were not available.",
+          diagnostics.logPath ? `Log: ${diagnostics.logPath}` : "Log path was not available.",
+        ];
+        detail.textContent = lines.join("\n");
+        retry.disabled = false;
+        status.textContent = "";
+      };
+
+      window.__BEZGROW_SET_STARTUP_ERROR__(window.__BEZGROW_STARTUP_ERROR__ || {});
+
+      retry.addEventListener("click", async () => {
+        retry.disabled = true;
+        status.textContent = "Recovering the bundled application…";
+        try {
+          const invoke = window.__TAURI_INTERNALS__?.invoke;
+          if (typeof invoke !== "function") {
+            throw new Error("The desktop recovery bridge is unavailable.");
+          }
+          await invoke("desktop_retry_startup");
+          status.textContent = "Bezgrow recovered.";
+        } catch (error) {
+          retry.disabled = false;
+          status.textContent = error instanceof Error ? error.message : String(error);
+        }
+      });
     </script>
   </body>
 </html>

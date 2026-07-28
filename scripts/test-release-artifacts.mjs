@@ -51,6 +51,7 @@ assert.match(validator, /Installer SHA-256 does not match release metadata/, "Ch
 assert.match(validator, /Installer architecture .* does not match metadata architecture/, "Architecture mismatch must block downloads.")
 assert.match(publicReleaseSource, /checkedInCandidates/, "Local public/downloads artifacts must be discovered.")
 assert.match(publicReleaseSource, /configuredCandidates/, "Configured installer URLs must be discovered.")
+assert.match(publicReleaseSource, /candidate\.version === currentVersion/, "The download page must not expose an installer from an older application version.")
 assert.match(desktopReleaseRoute, /platforms:/, "Desktop release API must return independent platform records.")
 assert.match(desktopDownloadRoute, /release\.available/, "Download route must gate on integrity availability.")
 assert.match(desktopDownloadRoute, /binaryInstallerResponse/, "Validated installers must be returned as binary responses.")

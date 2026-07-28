@@ -21,6 +21,7 @@ const runtime = read("lib/desktop/tauri.ts");
 const loginPage = read("app/login/page.tsx");
 const authCallback = read("app/auth/callback/route.ts");
 const desktopAuthCallbackRoute = read("app/api/desktop-auth/callback/route.ts");
+const desktopHealthRoute = read("app/api/desktop-health/route.ts");
 
 for (const script of [
   "desktop:prepare",
@@ -56,6 +57,7 @@ for (const command of [
   "desktop_print_current_webview",
   "desktop_open_file",
   "desktop_exit",
+  "desktop_retry_startup",
   "open_external_url",
 ]) {
   const permission = `allow-${command.replaceAll("_", "-")}`;
@@ -85,6 +87,17 @@ assert.match(rust, /TcpListener::bind\(\("127\.0\.0\.1", DESKTOP_SERVER_PORT\)\)
 assert.match(rust, /TcpListener::bind\(\("127\.0\.0\.1", 0\)\)/, "Desktop startup must recover from an orphaned fixed-port server.");
 assert.match(rust, /reserve_local_port\(app\)/, "Fallback-port selection must write to the packaged startup log.");
 assert.doesNotMatch(rust, /Close the other Bezgrow instance and reopen the app/, "A stale bundled server must not block desktop startup.");
+assert.match(rust, /fn start_server_with_retries[\s\S]*for attempt in 1\.\.=3/, "Packaged runtime startup must use bounded automatic retries.");
+assert.match(rust, /fn start_runtime_supervisor[\s\S]*local_server_responds\(port\)/, "The bundled runtime must remain health-checked after the window opens.");
+assert.match(rust, /GET \/api\/desktop-health[\s\S]*HTTP\/1\.1 200/, "The native health check must require the embedded server's dedicated HTTP 200 route.");
+assert.match(desktopHealthRoute, /BEZGROW_DESKTOP_BUILD[\s\S]*bezgrow-embedded/, "The embedded health route must not be exposed as a normal hosted-site endpoint.");
+assert.match(rust, /main\.hide\(\)[\s\S]*create_startup_error_window/, "A failed bundled runtime must hide the ERP webview before showing recovery.");
+assert.match(rust, /desktop_retry_startup/, "The customer recovery screen must be able to restart the bundled runtime.");
+assert.match(
+  rust,
+  /cfg!\(debug_assertions\)\s*&&\s*parsed\.scheme\(\)\s*==\s*"http"/,
+  "A packaged build must never send an embedded loopback URL to an external browser."
+);
 
 if (existsSync(".next/standalone/server.js")) {
   assert.ok(existsSync(".next/standalone/.next/static"), "Standalone output is missing static assets.");

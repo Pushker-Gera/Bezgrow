@@ -46,5 +46,10 @@ assert.match(bootstrap, /const pageSize = 100/, "Offline preparation must page n
 assert.match(bootstrap, /page <= 1000/, "Offline preparation must cap page loops.");
 assert.match(repositories, /ORDER BY datetime\(updated_at\) DESC/, "Backup exports should stream organizations in deterministic recent order.");
 assert.match(repositories, /SELECT name FROM sqlite_master WHERE type = 'table' AND name = \? LIMIT 1/, "Legacy import table checks must be indexed metadata probes.");
+for (const query of ["queryNormalizedProducts", "queryNormalizedCustomers", "queryNormalizedInvoices"]) {
+  assert.match(repositories, new RegExp(`export async function ${query}`), `${query} must query SQLite directly.`);
+}
+assert.match(repositories, /LIMIT \? OFFSET \?/, "Desktop list queries must be bounded in SQLite.");
+assert.match(repositories, /COUNT\(\*\) AS total/, "Desktop pagination totals must come from SQLite.");
 
 console.log("performance-contract-ok");

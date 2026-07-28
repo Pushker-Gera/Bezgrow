@@ -255,6 +255,12 @@
           "markdownDescription": "Enables the desktop_restore_backup command without any pre-configured scope."
         },
         {
+          "description": "Enables the desktop_retry_startup command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-desktop-retry-startup",
+          "markdownDescription": "Enables the desktop_retry_startup command without any pre-configured scope."
+        },
+        {
           "description": "Enables the desktop_reveal_file command without any pre-configured scope.",
           "type": "string",
           "const": "allow-desktop-reveal-file",
@@ -385,6 +391,12 @@
           "type": "string",
           "const": "deny-desktop-restore-backup",
           "markdownDescription": "Denies the desktop_restore_backup command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the desktop_retry_startup command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-desktop-retry-startup",
+          "markdownDescription": "Denies the desktop_retry_startup command without any pre-configured scope."
         },
         {
           "description": "Denies the desktop_reveal_file command without any pre-configured scope.",

@@ -1,6 +1,6 @@
 {
   "name": "saas-project",
-  "version": "0.1.6",
+  "version": "0.1.7",
   "private": true,
   "engines": {
     "node": ">=22 <23"
@@ -26,6 +26,7 @@
     "test:integration": "node scripts/test-desktop-runtime-config.mjs",
     "test:windows": "node scripts/test-windows-contract.mjs",
     "test:desktop-sqlite": "node scripts/test-desktop-sqlite-bootstrap.mjs",
+    "test:desktop-startup": "node scripts/test-desktop-startup.mjs",
     "test:desktop-sqlite-regression": "node --disable-warning=ExperimentalWarning scripts/test-desktop-sqlite-regression.mjs",
     "test:desktop-hardening": "node scripts/test-desktop-hardening-contract.mjs",
     "test:release-artifacts": "node scripts/test-release-artifacts.mjs",
@@ -37,7 +38,7 @@
     "test:local-lists": "node scripts/test-local-list-contract.mjs",
     "test:invoice-print": "node scripts/test-invoice-print-contract.mjs",
     "test:final-offline-network": "node scripts/test-final-offline-network.mjs",
-    "test:final-offline-exports": "tsx scripts/test-final-offline-exports.ts",
+    "test:final-offline-exports": "node --import tsx scripts/test-final-offline-exports.ts",
     "test:performance": "node scripts/test-performance-contract.mjs",
     "icons:generate": "node scripts/generate-bezgrow-icons.mjs",
     "desktop:validate-env": "node scripts/validate-desktop-build-env.mjs",

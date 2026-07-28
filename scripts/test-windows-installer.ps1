@@ -22,6 +22,19 @@ $diagnosticsRoot = if ([string]::IsNullOrWhiteSpace($env:RUNNER_TEMP)) {
 $installedNode = Join-Path $installDirectory "node\node.exe"
 $installedServer = Join-Path $installDirectory "next-server\server.js"
 
+Add-Type @"
+using System;
+using System.Runtime.InteropServices;
+public static class BezgrowWindowTest {
+  [DllImport("user32.dll")]
+  public static extern bool ShowWindowAsync(IntPtr hWnd, int nCmdShow);
+  [DllImport("user32.dll")]
+  public static extern bool IsIconic(IntPtr hWnd);
+  [DllImport("user32.dll")]
+  public static extern bool IsZoomed(IntPtr hWnd);
+}
+"@
+
 function Assert-Path([string]$Path, [string]$Message) {
   if (-not (Test-Path -LiteralPath $Path)) {
     throw "$Message Missing path: $Path"
@@ -45,6 +58,31 @@ function Get-BezgrowNodeProcesses {
         $_.ExecutablePath.StartsWith($installDirectory, [System.StringComparison]::OrdinalIgnoreCase)
       }
   )
+}
+
+function Get-ExternalBrowserProcessIds {
+  return @(
+    Get-Process -Name "chrome", "msedge", "firefox" -ErrorAction SilentlyContinue |
+      ForEach-Object { $_.Id }
+  )
+}
+
+function Test-BezgrowWindowControls([System.Diagnostics.Process]$ApplicationProcess, [int]$Cycle) {
+  Wait-Until {
+    $ApplicationProcess.Refresh()
+    $ApplicationProcess.MainWindowHandle -ne [IntPtr]::Zero
+  } 20 "Launch cycle $Cycle did not expose a native application window."
+
+  $handle = $ApplicationProcess.MainWindowHandle
+  [BezgrowWindowTest]::ShowWindowAsync($handle, 6) | Out-Null
+  Wait-Until { [BezgrowWindowTest]::IsIconic($handle) } 10 "Launch cycle $Cycle could not minimize."
+  [BezgrowWindowTest]::ShowWindowAsync($handle, 3) | Out-Null
+  Wait-Until { [BezgrowWindowTest]::IsZoomed($handle) } 10 "Launch cycle $Cycle could not maximize."
+  [BezgrowWindowTest]::ShowWindowAsync($handle, 9) | Out-Null
+  Wait-Until {
+    -not [BezgrowWindowTest]::IsIconic($handle) -and
+    -not [BezgrowWindowTest]::IsZoomed($handle)
+  } 10 "Launch cycle $Cycle could not restore."
 }
 
 function Invoke-Installer([string[]]$Arguments) {
@@ -130,8 +168,9 @@ function Write-SmokeDiagnostics(
     Write-Host
 }
 
-function Invoke-AppLaunchCycle([int]$Cycle) {
+function Invoke-AppLaunchCycle([int]$Cycle, [switch]$TestRuntimeRecovery) {
   $beforeNodeIds = @(Get-BezgrowNodeProcesses | ForEach-Object { $_.ProcessId })
+  $beforeBrowserIds = @(Get-ExternalBrowserProcessIds)
   $initialLogLength = if (Test-Path -LiteralPath $startupLog) {
     (Get-Item -LiteralPath $startupLog).Length
   } else {
@@ -172,6 +211,14 @@ function Invoke-AppLaunchCycle([int]$Cycle) {
     throw "Launch cycle $Cycle did not record its loopback port."
   }
   $port = [int]$portMatches[$portMatches.Count - 1].Groups[1].Value
+  $health = Invoke-WebRequest `
+    -Uri "http://127.0.0.1:$port/api/desktop-health" `
+    -UseBasicParsing `
+    -MaximumRedirection 0 `
+    -SkipHttpErrorCheck
+  if ($health.StatusCode -ne 200 -or $health.Content -notmatch '"runtime":"bezgrow-embedded"') {
+    throw "Launch cycle $Cycle embedded health route did not return the expected Bezgrow runtime identity."
+  }
   $response = Invoke-WebRequest `
     -Uri "http://127.0.0.1:$port/login" `
     -UseBasicParsing `
@@ -180,11 +227,53 @@ function Invoke-AppLaunchCycle([int]$Cycle) {
   if ($response.StatusCode -lt 200 -or $response.StatusCode -ge 500) {
     throw "Launch cycle $Cycle local route returned HTTP $($response.StatusCode)."
   }
+  $newBrowserIds = @(
+    Get-ExternalBrowserProcessIds |
+      Where-Object { $beforeBrowserIds -notcontains $_ }
+  )
+  if ($newBrowserIds.Count -gt 0) {
+    throw "Launch cycle $Cycle opened an external browser process: $($newBrowserIds -join ', ')."
+  }
 
   Wait-Until {
     (Test-Path -LiteralPath $database) -and
     (Get-Item -LiteralPath $database).Length -gt 0
   } 30 "Launch cycle $Cycle did not create or reopen the authoritative SQLite database."
+
+  Test-BezgrowWindowControls $appProcess $Cycle
+
+  if ($TestRuntimeRecovery) {
+    $recoveryLogLength = (Get-Item -LiteralPath $startupLog).Length
+    $bundledProcess = Get-BezgrowNodeProcesses |
+      Where-Object { $beforeNodeIds -notcontains $_.ProcessId } |
+      Select-Object -First 1
+    if (-not $bundledProcess) {
+      throw "Launch cycle $Cycle could not find the supervised bundled Node process."
+    }
+    Stop-Process -Id $bundledProcess.ProcessId -Force
+    Wait-Until {
+      $currentLog = Get-Content -LiteralPath $startupLog -Raw
+      $recoveryLog = if ($currentLog.Length -gt $recoveryLogLength) {
+        $currentLog.Substring($recoveryLogLength)
+      } else {
+        ""
+      }
+      $recoveryLog -match "Bundled runtime supervisor restored the ERP window"
+    } 75 "Launch cycle $Cycle did not recover after the bundled runtime was terminated."
+    Wait-Until {
+      $replacement = @(
+        Get-BezgrowNodeProcesses |
+          Where-Object {
+            $_.ProcessId -ne $bundledProcess.ProcessId -and
+            $beforeNodeIds -notcontains $_.ProcessId
+          }
+      )
+      $replacement.Count -eq 1
+    } 20 "Launch cycle $Cycle did not replace the terminated bundled runtime cleanly."
+    if ($appProcess.HasExited) {
+      throw "Launch cycle $Cycle closed the desktop process during bundled runtime recovery."
+    }
+  }
 
   if (-not $appProcess.CloseMainWindow()) {
     throw "Launch cycle $Cycle could not request a normal window close."
@@ -220,7 +309,7 @@ if (-not $uninstallEntry) {
 
 New-Item -ItemType Directory -Force $dataRoot | Out-Null
 Set-Content -LiteralPath $sentinel -Value "preserve-across-update-and-uninstall" -Encoding UTF8
-Invoke-AppLaunchCycle 1
+Invoke-AppLaunchCycle 1 -TestRuntimeRecovery
 Invoke-AppLaunchCycle 2
 Invoke-AppLaunchCycle 3
 
@@ -241,4 +330,4 @@ Assert-Path $sentinel "Reinstall did not preserve Bezgrow user data."
 Assert-Path $database "Reinstall did not preserve the Bezgrow SQLite database."
 Invoke-AppLaunchCycle 4
 
-Write-Host "windows-installer-smoke-ok cycles=4 route=ok sqlite=ok orphan_processes=0"
+Write-Host "windows-installer-smoke-ok cycles=4 health=ok route=ok sqlite=ok runtime_recovery=ok window_controls=ok external_browser=none orphan_processes=0"

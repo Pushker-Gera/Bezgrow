@@ -46,8 +46,8 @@ try {
   let response
   while (performance.now() - startedAt < 3000) {
     try {
-      response = await fetch(`http://127.0.0.1:${port}/login`, { redirect: "manual" })
-      if (response.status >= 200 && response.status < 500) break
+      response = await fetch(`http://127.0.0.1:${port}/api/desktop-health`, { redirect: "manual" })
+      if (response.status === 200 && (await response.json()).runtime === "bezgrow-embedded") break
     } catch {
       // The bundled server has not bound its loopback socket yet.
     }
@@ -55,7 +55,7 @@ try {
   }
 
   const startupMs = performance.now() - startedAt
-  if (!response || response.status >= 500) {
+  if (!response || response.status !== 200) {
     throw new Error(`Desktop server did not become ready within 3000ms.\n${stderr}`)
   }
   if (startupMs >= 3000) {

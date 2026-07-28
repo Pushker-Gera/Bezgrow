@@ -88,6 +88,9 @@ assert.match(installerTest, /ProgramFiles[\s\S]*CommonDesktopDirectory[\s\S]*Com
 assert.match(installerTest, /update-preservation-test[\s\S]*\/UPDATE[\s\S]*Uninstall removed Bezgrow user data/, "Installer QA must verify update and uninstall data preservation.")
 assert.match(installerTest, /bundled server[\s\S]*\/login[\s\S]*authoritative SQLite database/i, "Installer QA must launch the installed app and verify its local server and database.")
 assert.match(installerTest, /orphan bundled Node process/i, "Installer QA must reject orphaned background server processes.")
+assert.match(installerTest, /Stop-Process[\s\S]*Bundled runtime supervisor restored the ERP window/, "Installer QA must prove recovery after the embedded server is terminated.")
+assert.match(installerTest, /ShowWindowAsync[\s\S]*IsIconic[\s\S]*IsZoomed/, "Installer QA must exercise minimize, maximize, and restore.")
+assert.match(installerTest, /Get-ExternalBrowserProcessIds[\s\S]*opened an external browser process/, "Installer QA must reject an externally opened browser.")
 assert.match(
   iconGenerator,
   /windowsIconSizes = \[16, 20, 24, 32, 40, 48, 64, 128, 256\]/,
