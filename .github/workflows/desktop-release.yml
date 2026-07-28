@@ -368,6 +368,15 @@ jobs:
           if (-not $installer) { throw "NSIS installer was not generated." }
           .\scripts\test-windows-installer.ps1 -InstallerPath $installer.FullName
 
+      - name: Upload installed-app smoke diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-installed-app-diagnostics
+          path: ${{ runner.temp }}/bezgrow-installer-smoke/*
+          if-no-files-found: ignore
+          retention-days: 7
+
       - name: Stage and validate genuine Windows artifacts
         shell: pwsh
         run: |
@@ -675,6 +684,17 @@ jobs:
                 --windows-portable-signed "$WINDOWS_SIGNED"
                 --windows-portable-channel "$WINDOWS_CHANNEL"
                 --windows-portable-installer-type "portable-exe"
+              )
+            fi
+            if [ -n "$WINDOWS_PORTABLE_ZIP" ]; then
+              WINDOWS_PORTABLE_ZIP_NAME="$(basename "$WINDOWS_PORTABLE_ZIP")"
+              MANIFEST_ARGS+=(
+                --windows-portable-zip-url "$BASE_URL/$WINDOWS_PORTABLE_ZIP_NAME"
+                --windows-portable-zip-file "$WINDOWS_PORTABLE_ZIP"
+                --windows-portable-zip-filename "$WINDOWS_PORTABLE_ZIP_NAME"
+                --windows-portable-zip-signed "false"
+                --windows-portable-zip-channel "$WINDOWS_CHANNEL"
+                --windows-portable-zip-installer-type "portable-zip"
               )
             fi
           fi

@@ -14,6 +14,13 @@ $dataRoot = Join-Path $env:LOCALAPPDATA "Bezgrow"
 $database = Join-Path $dataRoot "Database\bezgrow-offline.db"
 $startupLog = Join-Path $dataRoot "Logs\bezgrow-startup.log"
 $sentinel = Join-Path $dataRoot "update-preservation-test.txt"
+$diagnosticsRoot = if ([string]::IsNullOrWhiteSpace($env:RUNNER_TEMP)) {
+  Join-Path $env:TEMP "bezgrow-installer-smoke"
+} else {
+  Join-Path $env:RUNNER_TEMP "bezgrow-installer-smoke"
+}
+$installedNode = Join-Path $installDirectory "node\node.exe"
+$installedServer = Join-Path $installDirectory "next-server\server.js"
 
 function Assert-Path([string]$Path, [string]$Message) {
   if (-not (Test-Path -LiteralPath $Path)) {
@@ -47,16 +54,110 @@ function Invoke-Installer([string[]]$Arguments) {
   }
 }
 
+function Write-SmokeDiagnostics(
+  [string]$Reason,
+  [System.Diagnostics.Process]$ApplicationProcess
+) {
+  New-Item -ItemType Directory -Force $diagnosticsRoot | Out-Null
+  $status = @(
+    "reason=$Reason"
+    "application=$application"
+    "applicationExists=$(Test-Path -LiteralPath $application)"
+    "startupLog=$startupLog"
+    "startupLogExists=$(Test-Path -LiteralPath $startupLog)"
+    "localAppData=$env:LOCALAPPDATA"
+    "appData=$env:APPDATA"
+    "temp=$env:TEMP"
+  )
+  if ($ApplicationProcess) {
+    $ApplicationProcess.Refresh()
+    $status += "applicationPid=$($ApplicationProcess.Id)"
+    $status += "applicationExited=$($ApplicationProcess.HasExited)"
+    if ($ApplicationProcess.HasExited) {
+      $status += "applicationExitCode=$($ApplicationProcess.ExitCode)"
+    }
+  }
+  $status | Set-Content -LiteralPath (Join-Path $diagnosticsRoot "status.txt")
+
+  if (Test-Path -LiteralPath $startupLog) {
+    Copy-Item -LiteralPath $startupLog -Destination (Join-Path $diagnosticsRoot "bezgrow-startup.log") -Force
+  }
+  $temporaryLog = Join-Path $env:TEMP "Bezgrow\bezgrow-startup.log"
+  if ((Test-Path -LiteralPath $temporaryLog) -and $temporaryLog -ne $startupLog) {
+    Copy-Item -LiteralPath $temporaryLog -Destination (Join-Path $diagnosticsRoot "bezgrow-temporary-startup.log") -Force
+  }
+
+  Get-ChildItem -LiteralPath $installDirectory -Recurse -Force -ErrorAction SilentlyContinue |
+    Select-Object FullName, Length, LastWriteTimeUtc |
+    Format-Table -AutoSize |
+    Out-String -Width 4096 |
+    Set-Content -LiteralPath (Join-Path $diagnosticsRoot "installed-files.txt")
+
+  Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
+    Where-Object {
+      $_.Name -in @("Bezgrow.exe", "node.exe") -or
+      ($_.ExecutablePath -and $_.ExecutablePath.StartsWith($installDirectory, [System.StringComparison]::OrdinalIgnoreCase))
+    } |
+    Select-Object Name, ProcessId, ParentProcessId, ExecutablePath, CommandLine |
+    Format-List |
+    Out-String -Width 4096 |
+    Set-Content -LiteralPath (Join-Path $diagnosticsRoot "processes.txt")
+
+  Get-WinEvent -FilterHashtable @{
+    LogName = "Application"
+    StartTime = (Get-Date).AddMinutes(-10)
+  } -ErrorAction SilentlyContinue |
+    Where-Object {
+      $_.ProviderName -in @("Application Error", "Windows Error Reporting", ".NET Runtime") -or
+      $_.Message -match "Bezgrow\.exe"
+    } |
+    Select-Object TimeCreated, ProviderName, Id, LevelDisplayName, Message |
+    Format-List |
+    Out-String -Width 4096 |
+    Set-Content -LiteralPath (Join-Path $diagnosticsRoot "windows-application-events.txt")
+
+  Write-Host "Bezgrow installer smoke diagnostics:"
+  $status | ForEach-Object { Write-Host $_ }
+  if (Test-Path -LiteralPath $startupLog) {
+    Write-Host "Bezgrow startup log:"
+    Get-Content -LiteralPath $startupLog -Tail 200 | ForEach-Object { Write-Host $_ }
+  }
+  Write-Host "Installed runtime roots:"
+  Get-ChildItem -LiteralPath $installDirectory -Force -ErrorAction SilentlyContinue |
+    Select-Object Name, Length, Mode |
+    Format-Table -AutoSize |
+    Out-String |
+    Write-Host
+}
+
 function Invoke-AppLaunchCycle([int]$Cycle) {
   $beforeNodeIds = @(Get-BezgrowNodeProcesses | ForEach-Object { $_.ProcessId })
+  $initialLogLength = if (Test-Path -LiteralPath $startupLog) {
+    (Get-Item -LiteralPath $startupLog).Length
+  } else {
+    0
+  }
   $appProcess = Start-Process -FilePath $application -PassThru
-  Wait-Until {
-    -not $appProcess.HasExited -and
-    (Test-Path -LiteralPath $startupLog) -and
-    ((Get-Content -LiteralPath $startupLog -Raw) -match "Bundled Next server is ready on port")
-  } 45 "Launch cycle $Cycle did not report a ready bundled server."
+  try {
+    Wait-Until {
+      if ($appProcess.HasExited -or -not (Test-Path -LiteralPath $startupLog)) {
+        return $false
+      }
+      $currentLog = Get-Content -LiteralPath $startupLog -Raw
+      $cycleLog = if ($currentLog.Length -gt $initialLogLength) {
+        $currentLog.Substring($initialLogLength)
+      } else {
+        ""
+      }
+      $cycleLog -match "Bundled Next server is ready on port"
+    } 60 "Launch cycle $Cycle did not report a new ready bundled server."
+  } catch {
+    Write-SmokeDiagnostics "Launch cycle $Cycle failed readiness: $($_.Exception.Message)" $appProcess
+    throw
+  }
 
   if ($appProcess.HasExited) {
+    Write-SmokeDiagnostics "Launch cycle $Cycle exited before smoke verification." $appProcess
     throw "Launch cycle $Cycle exited before smoke verification."
   }
   $logText = Get-Content -LiteralPath $startupLog -Raw
@@ -98,6 +199,8 @@ function Invoke-AppLaunchCycle([int]$Cycle) {
 Invoke-Installer @("/S")
 Assert-Path $application "Program Files application was not installed."
 Assert-Path $uninstaller "Uninstaller was not registered."
+Assert-Path $installedNode "Bundled Node runtime was not installed."
+Assert-Path $installedServer "Bundled Next server was not installed."
 Assert-Path $desktopShortcut "The all-users desktop shortcut was not created."
 Assert-Path $startMenuShortcut "The Start Menu shortcut was not created."
 

@@ -107,6 +107,39 @@ fn startup_log_path(app: &tauri::App) -> PathBuf {
         .join("bezgrow-startup.log")
 }
 
+#[cfg(target_os = "windows")]
+fn early_startup_log_path() -> PathBuf {
+    if let Some(local_app_data) = std::env::var_os("LOCALAPPDATA") {
+        return PathBuf::from(local_app_data)
+            .join(WINDOWS_APP_DATA_DIR)
+            .join("Logs")
+            .join("bezgrow-startup.log");
+    }
+    if let Some(app_data) = std::env::var_os("APPDATA") {
+        return PathBuf::from(app_data)
+            .join(WINDOWS_APP_DATA_DIR)
+            .join("Logs")
+            .join("bezgrow-startup.log");
+    }
+
+    std::env::temp_dir()
+        .join(WINDOWS_APP_DATA_DIR)
+        .join("bezgrow-startup.log")
+}
+
+#[cfg(target_os = "windows")]
+fn append_early_startup_log(message: impl AsRef<str>) {
+    let path = early_startup_log_path();
+    if let Some(parent) = path.parent() {
+        let _ = fs::create_dir_all(parent);
+    }
+
+    let Ok(mut file) = OpenOptions::new().create(true).append(true).open(path) else {
+        return;
+    };
+    let _ = writeln!(file, "[{}] {}", unix_timestamp(), message.as_ref());
+}
+
 fn append_startup_log(app: &tauri::App, message: impl AsRef<str>) {
     let path = startup_log_path(app);
 
@@ -2274,6 +2307,9 @@ fn create_main_window(app: &mut tauri::App, port: u16) -> Result<(), Box<dyn std
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    #[cfg(target_os = "windows")]
+    append_early_startup_log("Bezgrow native process entered");
+
     tauri::Builder::default()
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
             if let Some(window) = app.get_webview_window("main") {
@@ -2283,8 +2319,15 @@ pub fn run() {
             }
         }))
         .setup(|app| {
+            append_startup_log(app, "Tauri setup entered");
             app.manage(NextServerState(Mutex::new(None)));
-            prepare_managed_data(&app.handle())?;
+            if let Err(error) = prepare_managed_data(&app.handle()) {
+                append_startup_log(
+                    app,
+                    format!("Managed data preparation failed before server startup: {error}"),
+                );
+                return Err(error.into());
+            }
 
             match start_next_server(app).and_then(|port| create_main_window(app, port)) {
                 Ok(()) => {
