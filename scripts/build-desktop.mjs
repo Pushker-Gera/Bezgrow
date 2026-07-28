@@ -10,6 +10,7 @@ const packageVersion = packageJson.version;
 const tauriConfigPath = join(root, "src-tauri", "tauri.conf.json");
 const generatedConfigDir = join(root, "src-tauri");
 const generatedConfigPath = join(generatedConfigDir, "tauri.generated.conf.json");
+const tauriCli = join(root, "node_modules", "@tauri-apps", "cli", "tauri.js");
 const publicDownloadsDir = join(root, "public", "downloads");
 const publicMacDmg = join(publicDownloadsDir, "Bezgrow-mac.dmg");
 const publicMacReleaseManifest = join(root, "public", "downloads", "Bezgrow-mac.dmg.release.json");
@@ -522,7 +523,10 @@ if (process.env.BEZGROW_DESKTOP_PREPARED === "1") {
 }
 writeFileSync(generatedConfigPath, `${JSON.stringify(config, null, 2)}\n`);
 
-run("tauri", ["build", "--config", generatedConfigPath, ...tauriArgs]);
+if (!existsSync(tauriCli)) {
+  throw new Error(`The project-local Tauri CLI is missing: ${tauriCli}`);
+}
+run(process.execPath, [tauriCli, "build", "--config", generatedConfigPath, ...tauriArgs]);
 if (process.platform === "win32") {
   run(process.execPath, [
     join(root, "scripts", "build-windows-portable.mjs"),

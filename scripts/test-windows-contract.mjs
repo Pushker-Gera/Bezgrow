@@ -14,6 +14,7 @@ const updates = read("lib/app-updates.ts")
 const updatesPanel = read("components/AppUpdatesPanel.tsx")
 const installerHook = read("src-tauri/windows/installer-hooks.nsh")
 const portable = read("scripts/build-windows-portable.mjs")
+const desktopBuild = read("scripts/build-desktop.mjs")
 const workflow = read(".github/workflows/desktop-release.yml")
 const installerTest = read("scripts/test-windows-installer.ps1")
 const iconGenerator = read("scripts/generate-bezgrow-icons.mjs")
@@ -50,6 +51,11 @@ assert.match(portable, /portable\.zip/, "A Windows ZIP release must be generated
 assert.match(portable, /portable\.exe/, "A single-file portable Windows release must be generated.")
 assert.match(portable, /signtool\.exe/, "Portable public executables must be Authenticode signed.")
 assert.match(portable, /Get-AuthenticodeSignature/, "Portable executable signatures must be verified.")
+assert.match(
+  desktopBuild,
+  /node_modules", "@tauri-apps", "cli", "tauri\.js"[\s\S]*run\(process\.execPath, \[tauriCli/,
+  "Windows packaging must invoke the project-local Tauri CLI without relying on a global PATH entry."
+)
 assert.match(workflow, /x86_64-pc-windows-msvc/, "Windows x64 release target is missing.")
 assert.doesNotMatch(workflow, /matrix:/, "The production Windows workflow must build one explicit x64 target.")
 assert.match(rust, /__BEZGROW_ARCH__[\s\S]*runtime_architecture/, "The native runtime must expose its architecture.")
