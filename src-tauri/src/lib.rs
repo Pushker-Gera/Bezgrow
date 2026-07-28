@@ -8,7 +8,7 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
-#[cfg(target_os = "windows")]
+#[cfg(any(target_os = "windows", not(debug_assertions)))]
 use std::process::Stdio;
 
 #[cfg(not(debug_assertions))]
@@ -2176,6 +2176,23 @@ fn reserve_local_port(app: &tauri::App) -> Result<u16, Box<dyn std::error::Error
     Ok(port)
 }
 
+#[cfg(all(not(debug_assertions), target_os = "windows"))]
+fn external_process_path(path: PathBuf) -> PathBuf {
+    let path_text = path.to_string_lossy();
+    if let Some(network_path) = path_text.strip_prefix(r"\\?\UNC\") {
+        return PathBuf::from(format!(r"\\{network_path}"));
+    }
+    if let Some(standard_path) = path_text.strip_prefix(r"\\?\") {
+        return PathBuf::from(standard_path);
+    }
+    path
+}
+
+#[cfg(all(not(debug_assertions), not(target_os = "windows")))]
+fn external_process_path(path: PathBuf) -> PathBuf {
+    path
+}
+
 #[cfg(not(debug_assertions))]
 fn bundled_node_path(app: &tauri::App) -> Result<PathBuf, Box<dyn std::error::Error>> {
     let executable_name = if cfg!(windows) { "node.exe" } else { "node" };
@@ -2205,10 +2222,10 @@ fn start_next_server(app: &mut tauri::App) -> Result<u16, Box<dyn std::error::Er
 #[cfg(not(debug_assertions))]
 fn start_next_server(app: &mut tauri::App) -> Result<u16, Box<dyn std::error::Error>> {
     let port = reserve_local_port(app)?;
-    let resource_dir = app.path().resource_dir()?;
-    let server_dir = app.path().resource_dir()?.join("next-server");
+    let resource_dir = external_process_path(app.path().resource_dir()?);
+    let server_dir = resource_dir.join("next-server");
     let server_entry = server_dir.join("server.js");
-    let node_path = bundled_node_path(app)?;
+    let node_path = external_process_path(bundled_node_path(app)?);
     let log_path = startup_log_path(app);
     let temporary_directory = managed_data_directory(app, "Temporary")?;
 

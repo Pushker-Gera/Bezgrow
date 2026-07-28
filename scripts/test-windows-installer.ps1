@@ -149,6 +149,9 @@ function Invoke-AppLaunchCycle([int]$Cycle) {
       } else {
         ""
       }
+      if ($cycleLog -match "Startup failed before main window opened") {
+        throw "Launch cycle $Cycle logged a fatal native startup error."
+      }
       $cycleLog -match "Bundled Next server is ready on port"
     } 60 "Launch cycle $Cycle did not report a new ready bundled server."
   } catch {

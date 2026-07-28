@@ -34,6 +34,11 @@ assert.match(cargo, /"tray-icon"[\s\S]*"image-png"/, "The Windows notification-a
 
 assert.match(rust, /var_os\("LOCALAPPDATA"\)[\s\S]*WINDOWS_APP_DATA_DIR/, "Windows data must resolve from %LOCALAPPDATA%\\Bezgrow.")
 assert.match(rust, /var_os\("APPDATA"\)[\s\S]*copy_directory_missing/, "Legacy %APPDATA% data must migrate without deletion.")
+assert.match(
+  rust,
+  /fn external_process_path[\s\S]*strip_prefix[\s\S]*fn start_next_server[\s\S]*external_process_path\(app\.path\(\)\.resource_dir/,
+  "Windows must normalize verbatim resource paths before passing the bundled server path to Node."
+)
 for (const directory of ["Database", "business-assets/logos", "Settings", "PDFs", "Exports", "Temporary", "Backups", "Logs", "WebView"]) {
   assert.ok(rust.includes(`"${directory}"`), `Managed Windows data folder missing: ${directory}`)
 }
