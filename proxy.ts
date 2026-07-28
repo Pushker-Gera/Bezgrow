@@ -99,11 +99,13 @@ export async function proxy(request: NextRequest) {
     return NextResponse.next()
   }
 
-  if (localDesktopHost && adminRoute) {
+  const desktopAuthMarked = request.cookies.get(desktopAuthMarkerCookie)?.value === "1"
+
+  if (localDesktopHost && adminRoute && (desktopServerBuild || desktopAuthMarked)) {
     return redirectWithCookies(request, NextResponse.next({ request }), "/platform-admin")
   }
 
-  if (localDesktopHost && request.cookies.get(desktopAuthMarkerCookie)?.value === "1" && protectedRoute) {
+  if (localDesktopHost && desktopAuthMarked && protectedRoute) {
     return NextResponse.next()
   }
 

@@ -2387,19 +2387,12 @@ pub fn run() {
                 append_startup_log_handle(
                     &app,
                     format!(
-                        "Native close requested for window={}; waiting for SQLite shutdown checkpoint",
+                        "Native close requested for window={}; SQLite command connections are closed and full shutdown started",
                         window.label()
                     ),
                 );
-                std::thread::spawn(move || {
-                    std::thread::sleep(std::time::Duration::from_secs(3));
-                    append_startup_log_handle(
-                        &app,
-                        "Shutdown checkpoint timed out; native fallback exit started",
-                    );
-                    stop_next_server(&app);
-                    app.exit(0);
-                });
+                stop_next_server(&app);
+                app.exit(0);
             }
             _ => {}
         })

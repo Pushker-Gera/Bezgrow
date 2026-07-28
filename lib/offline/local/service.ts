@@ -249,20 +249,6 @@ export class LocalDatabaseService {
     return this.ensureReady()
   }
 
-  async closeForAppShutdown() {
-    await this.transactionTail.catch(() => undefined)
-    if (this.primaryConnectionPromise) {
-      await invokeTauri<number>("desktop_execute", {
-        statement: {
-          query: "PRAGMA wal_checkpoint(TRUNCATE)",
-          bindValues: [],
-        },
-      }).catch((error) => this.recordOperationFailure("sqlite_shutdown_checkpoint", error, "desktop_execute"))
-    }
-    this.primaryConnectionPromise = null
-    this.startupPromise = null
-  }
-
   async recordOperationFailure(operation: string, error: unknown, command?: string) {
     const diagnostic: OperationDiagnostic = {
       operation,

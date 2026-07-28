@@ -42,13 +42,16 @@ export function isTauriRuntime() {
   return Boolean(
     tauriGlobal.__BEZGROW_DESKTOP__ ||
       tauriWindow.__BEZGROW_DESKTOP__ ||
-      tauriGlobal.isTauri ||
-      tauriWindow.isTauri ||
-      tauriGlobal.__TAURI_INTERNALS__?.invoke ||
-      tauriWindow.__TAURI_INTERNALS__?.invoke ||
-      tauriGlobal.__TAURI__ ||
-      tauriWindow.__TAURI__
+      tauriGlobal.__BEZGROW_RUNTIME__ === "tauri-dev" ||
+      tauriGlobal.__BEZGROW_RUNTIME__ === "tauri-packaged" ||
+      tauriWindow.__BEZGROW_RUNTIME__ === "tauri-dev" ||
+      tauriWindow.__BEZGROW_RUNTIME__ === "tauri-packaged"
   )
+}
+
+function isLocalDesktopOrigin() {
+  if (typeof window === "undefined") return false
+  return ["127.0.0.1", "localhost", "[::1]"].includes(window.location.hostname)
 }
 
 export function runtimeMode(): RuntimeMode {
@@ -89,6 +92,7 @@ export function desktopArchitecture() {
 
 export async function isTauriRuntimeAsync() {
   if (isTauriRuntime()) return true
+  if (!isLocalDesktopOrigin()) return false
   if (tauriRuntimePromise) return tauriRuntimePromise
 
   tauriRuntimePromise = import("@tauri-apps/api/core")

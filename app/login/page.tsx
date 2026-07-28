@@ -1,12 +1,17 @@
 "use client"
 
 import type { FormEvent } from "react"
-import { useCallback, useEffect, useRef, useState } from "react"
+import { useCallback, useEffect, useState } from "react"
 import type { Session } from "@supabase/supabase-js"
 import { useRouter } from "next/navigation"
 import { BezgrowLogoMark } from "@/components/brand/BezgrowLogoMark"
 import { completeDesktopAuthCallback } from "@/lib/desktop/auth-callback"
-import { hasCachedDesktopSession, persistDesktopSession } from "@/lib/desktop/session"
+import {
+    hasCachedDesktopSession,
+    isDesktopExplicitlyLoggedOut,
+    markDesktopSessionActive,
+    persistDesktopSession,
+} from "@/lib/desktop/session"
 import { isTauriRuntimeAsync, openExternalUrl } from "@/lib/desktop/tauri"
 import { getCachedWorkspaceBootstrap } from "@/lib/offline/db"
 import { localLicenseSnapshot, restoreLicensedWorkspaceContext } from "@/lib/offline/local/license"
@@ -67,7 +72,6 @@ export default function LoginPage() {
     const [resetLoading, setResetLoading] = useState(false)
     const [checkingSession, setCheckingSession] = useState(true)
     const [adminLoginView, setAdminLoginView] = useState(false)
-    const sessionCheckStarted = useRef(false)
 
     const getSafeNextPath = useCallback((fallback: string) => {
         if (typeof window === "undefined") {
@@ -181,8 +185,6 @@ export default function LoginPage() {
     }, [platformAdminRequested])
 
     useEffect(() => {
-        if (sessionCheckStarted.current) return
-        sessionCheckStarted.current = true
         let active = true
 
         async function checkUser() {
@@ -206,6 +208,10 @@ export default function LoginPage() {
 
             const desktopRuntime = (await withTimeout(isTauriRuntimeAsync(), 2500)) || false
             if (desktopRuntime) {
+                if (isDesktopExplicitlyLoggedOut()) {
+                    if (active) setCheckingSession(false)
+                    return
+                }
                 await withTimeout(getLocalDatabaseService().ensureReady(), 5000)
                 const workspace = await withTimeout(restoreLicensedWorkspaceContext().catch(() => null), 5000)
                 const organizationId = workspace?.organization?.id || workspace?.membership?.organization_id || undefined
@@ -329,6 +335,7 @@ export default function LoginPage() {
                 return
             }
 
+            markDesktopSessionActive()
             router.replace(toLocalPath(payload.redirectTo, getSafeNextPath("/dashboard")))
 
         } catch (error) {

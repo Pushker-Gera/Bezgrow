@@ -5,20 +5,38 @@ import { isTauriRuntimeAsync, openPlatformAdmin } from "@/lib/desktop/tauri"
 
 export default function PlatformAdminLauncher({ className = "" }: { className?: string }) {
   const [desktop, setDesktop] = useState(false)
+  const [authorized, setAuthorized] = useState(false)
   const [opening, setOpening] = useState(false)
   const [notice, setNotice] = useState("")
 
   useEffect(() => {
     let active = true
-    void isTauriRuntimeAsync().then((value) => {
-      if (active) setDesktop(value)
+    void isTauriRuntimeAsync().then(async (value) => {
+      if (!active) return
+      setDesktop(value)
+      if (!value || !navigator.onLine) return
+
+      const response = await fetch("/api/admin/session", {
+        cache: "no-store",
+        credentials: "include",
+      }).catch(() => null)
+      if (!active || !response?.ok) return
+      const payload = (await response.json().catch(() => null)) as {
+        success?: boolean
+        admin?: { role?: string | null }
+      } | null
+      if (active) {
+        setAuthorized(
+          Boolean(payload?.success && (payload.admin?.role === "platform_admin" || payload.admin?.role === "admin"))
+        )
+      }
     })
     return () => {
       active = false
     }
   }, [])
 
-  if (!desktop) return null
+  if (!desktop || !authorized) return null
 
   async function launch() {
     if (!navigator.onLine) {

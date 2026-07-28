@@ -25,7 +25,11 @@ async function transpileSource(relativePath) {
   });
 
   await mkdir(dirname(outputPath), { recursive: true });
-  await writeFile(outputPath, output.outputText);
+  const outputText = output.outputText.replace(
+    /from "zod";/g,
+    `from "${import.meta.resolve("zod")}";`,
+  );
+  await writeFile(outputPath, outputText);
   return pathToFileURL(outputPath).href;
 }
 
@@ -95,6 +99,7 @@ async function main() {
   try {
     const codec = await import(await transpileSource("lib/license/codec.ts"));
     const policy = await import(await transpileSource("lib/license/policy.ts"));
+    const adminValidation = await import(await transpileSource("lib/license/admin-license-validation.ts"));
     const keys = generateRawKeys();
 
     function signPayload(payload) {
@@ -176,7 +181,83 @@ async function main() {
     assert.equal(policy.isLicenseRestrictedCollection("invoices"), true);
     assert.equal(activated.row.license_key, generated.licenseKey);
 
-    console.log("license-flow-ok");
+    const licenseFormBase = {
+      customer_name: "Matrix Customer",
+      customer_email: "matrix@example.com",
+      customer_phone: "",
+      customer_company: "",
+      customer_country: "",
+      business_name: "Matrix Business",
+      workspace_id: "",
+      device_id: DEVICE_ID,
+      app_version: "",
+      issue_date: "2026-07-28",
+      grace_days: 7,
+      allowed_features: ["billing", "customers", "inventory"],
+      maximum_users: 1,
+      maximum_businesses: 1,
+      maximum_branches: 1,
+      internal_notes: "",
+      status: "active",
+    };
+    const durations = [
+      ["monthly", "2026-08-28"],
+      ["yearly", "2027-07-28"],
+    ];
+    let matrixCount = 0;
+
+    for (const [duration, expiryDate] of durations) {
+      for (const platform of ["windows", "macos"]) {
+        for (const architecture of ["x64", "arm64"]) {
+          for (const planName of ["Starter", "Professional", "Enterprise"]) {
+            const parsedForm = adminValidation.createLicenseSchema.safeParse({
+              ...licenseFormBase,
+              platform,
+              architecture,
+              plan_name: planName,
+              expiry_date: expiryDate,
+            });
+            assert.equal(
+              parsedForm.success,
+              true,
+              `${duration}/${platform}/${architecture}/${planName} must pass license validation.`,
+            );
+            assert.equal(parsedForm.data.workspace_id, undefined, "An empty optional Workspace ID must be omitted.");
+            assert.equal(parsedForm.data.internal_notes, "", "Empty optional Internal notes must remain valid.");
+
+            const signed = signPayload(basePayload({
+              license_id: `lic_matrix_${matrixCount}`,
+              platform,
+              plan_name: planName,
+              issue_date: parsedForm.data.issue_date,
+              expiry_date: parsedForm.data.expiry_date,
+              notes: parsedForm.data.internal_notes || null,
+            }));
+            const verified = await activateLikeDesktop(signed.licenseKey);
+            assert.equal(verified.status.allowed, true);
+            assert.equal(verified.parsed.payload.platform, platform);
+            assert.equal(verified.parsed.payload.plan_name, planName);
+            matrixCount += 1;
+          }
+        }
+      }
+    }
+    assert.equal(matrixCount, 24, "The complete license duration/platform/architecture/plan matrix must run.");
+
+    const invalidWorkspace = adminValidation.createLicenseSchema.safeParse({
+      ...licenseFormBase,
+      workspace_id: "ab",
+      platform: "macos",
+      architecture: "arm64",
+      plan_name: "Starter",
+      expiry_date: "2027-07-28",
+    });
+    assert.equal(invalidWorkspace.success, false);
+    const invalidWorkspaceIssue = adminValidation.licenseValidationIssue(invalidWorkspace.error.issues[0]);
+    assert.equal(invalidWorkspaceIssue.field, "workspace_id");
+    assert.equal(invalidWorkspaceIssue.error, "Workspace ID: Enter at least 3 characters.");
+
+    console.log(`license-flow-ok matrix=${matrixCount}`);
   } finally {
     await rm(outDir, { recursive: true, force: true });
   }

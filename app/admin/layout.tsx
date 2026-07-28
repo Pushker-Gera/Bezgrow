@@ -6,6 +6,7 @@ import type { ReactNode } from "react"
 import { useEffect, useState } from "react"
 import { AdminOnlineProvider } from "@/components/admin/ControlPlaneUi"
 import { BezgrowLogoMark } from "@/components/brand/BezgrowLogoMark"
+import { clearServerAuthSession } from "@/lib/desktop/session"
 import { supabase } from "@/lib/supabase"
 
 type AdminSession = {
@@ -107,7 +108,13 @@ export default function AdminLayout({ children }: { children: ReactNode }) {
   }
 
   async function handleLogout() {
-    await supabase.auth.signOut()
+    await clearServerAuthSession()
+    await supabase.auth.signOut().catch((error) => {
+      console.warn("Admin cloud sign-out warning:", error)
+    })
+    setAdminEmail("")
+    setAdminRole("")
+    sessionStorage.removeItem("bezgrow:platform-admin-window")
     router.replace("/login?next=/admin&platform_admin=1")
   }
 

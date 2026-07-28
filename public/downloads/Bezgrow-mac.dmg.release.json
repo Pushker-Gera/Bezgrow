@@ -1,12 +1,12 @@
 {
   "file": "/downloads/Bezgrow-mac.dmg",
   "downloadUrl": "/downloads/Bezgrow-mac.dmg",
-  "filename": "Bezgrow-mac.dmg",
   "version": "0.1.6",
+  "sha256": "ccb97f5bb1753801e313bab72fb16e61dd0c9b7f45eafa0dccb6336dff4f47cc",
+  "size": 102643827,
+  "filename": "Bezgrow-mac.dmg",
   "platform": "macos",
   "architecture": "arm64",
-  "sha256": "4bd6886d659e94e435189463bd33a474fe601063d08efe05787dbbafb9128eb0",
-  "size": 94866502,
   "available": true,
   "signed": false,
   "notarized": false,
@@ -16,5 +16,5 @@
   "warning": "Internal/testing build: this macOS installer is not notarized and macOS may show a security warning.",
   "blockedReason": null,
   "releaseChannel": "internal",
-  "generatedAt": "2026-07-26T21:42:40.000Z"
+  "generatedAt": "2026-07-28T15:55:56.524Z"
 }

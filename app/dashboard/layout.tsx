@@ -8,7 +8,7 @@ import { BezgrowLogoMark } from "@/components/brand/BezgrowLogoMark"
 import DesktopBackButton from "@/components/desktop/DesktopBackButton"
 import PlatformAdminLauncher from "@/components/desktop/PlatformAdminLauncher"
 import LocalDatabaseRecovery from "@/components/offline/LocalDatabaseRecovery"
-import { clearDesktopSession } from "@/lib/desktop/session"
+import { clearDesktopSession, clearServerAuthSession } from "@/lib/desktop/session"
 import { isTauriRuntimeAsync } from "@/lib/desktop/tauri"
 import { getLocalDatabaseService } from "@/lib/offline/local/service"
 import { localLicenseSnapshot, restoreLicensedWorkspaceContext } from "@/lib/offline/local/license"
@@ -227,14 +227,12 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
 
     async function handleLogout() {
         clearWorkspaceBootstrapCache()
-        await clearDesktopSession()
+        await Promise.all([clearDesktopSession(), clearServerAuthSession()])
         router.replace("/login")
-        if (!(await isTauriRuntimeAsync())) {
-            const { supabase } = await import("@/lib/supabase")
-            void supabase.auth.signOut().catch((error) => {
-                console.warn("Cloud sign-out warning:", error)
-            })
-        }
+        const { supabase } = await import("@/lib/supabase")
+        void supabase.auth.signOut().catch((error) => {
+            console.warn("Cloud sign-out warning:", error)
+        })
     }
 
     if (desktopDatabase.status === "initializing" || desktopDatabase.status === "database-ready" || desktopDatabase.status === "license-valid") {

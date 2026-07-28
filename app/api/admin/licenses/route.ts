@@ -15,6 +15,7 @@ import {
   recordLicenseEvent,
   unexpectedAdminError,
 } from "@/lib/admin/control-plane"
+import { createLicenseSchema, licenseValidationIssue } from "@/lib/license/admin-license-validation"
 import { LICENSE_SCHEMA_VERSION, type LicensePayload } from "@/lib/license/codec"
 import { createLicenseId, hasLicenseSigningKey, licenseSigningStatus, signLicensePayload } from "@/lib/license/server"
 import { adminSupabase } from "@/lib/supabase/admin"
@@ -22,31 +23,6 @@ import { adminSupabase } from "@/lib/supabase/admin"
 export const dynamic = "force-dynamic"
 
 const featureSchema = z.array(z.string().trim().min(1).max(80)).min(1).max(80)
-
-export const createLicenseSchema = z.object({
-  customer_name: z.string().trim().min(2).max(160),
-  customer_email: z.string().trim().email().max(254),
-  customer_phone: z.string().trim().max(30).optional().default(""),
-  customer_company: z.string().trim().max(160).optional().default(""),
-  customer_country: z.string().trim().max(80).optional().default(""),
-  business_name: z.string().trim().min(2).max(160),
-  workspace_id: z.string().trim().min(3).max(160).optional(),
-  device_id: z.string().trim().min(8).max(180),
-  platform: z.enum(["macos", "windows"]),
-  architecture: z.enum(["arm64", "x64"]).optional(),
-  app_version: z.string().trim().max(40).optional().default(""),
-  plan_name: z.string().trim().min(2).max(80),
-  issue_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
-  expiry_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
-  grace_days: z.coerce.number().int().min(0).max(365).default(7),
-  allowed_features: featureSchema,
-  maximum_users: z.coerce.number().int().min(1).max(10000).default(1),
-  maximum_businesses: z.coerce.number().int().min(1).max(1000).default(1),
-  maximum_branches: z.coerce.number().int().min(1).max(10000).default(1),
-  internal_notes: z.string().trim().max(2000).optional().default(""),
-  status: z.enum(["draft", "active", "trial"]).default("active"),
-  idempotency_key: z.string().trim().min(8).max(160).optional(),
-})
 
 const updateLicenseSchema = z.object({
   id: z.string().trim().min(8).max(160),
@@ -363,7 +339,12 @@ export async function POST(request: Request) {
 
   const parsed = createLicenseSchema.safeParse(await request.json().catch(() => null))
   if (!parsed.success) {
-    return adminFail(context, parsed.error.issues[0]?.message || "Invalid license request.", 422)
+    const validation = licenseValidationIssue(parsed.error.issues[0])
+    return adminFail(context, validation.error, 422, {
+      field: validation.field,
+      fieldName: validation.fieldName,
+      validationMessage: validation.message,
+    })
   }
 
   try {

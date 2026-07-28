@@ -15,6 +15,12 @@ import {
   formatAdminDate,
   useAdminList,
 } from "@/components/admin/ControlPlaneUi"
+import {
+  createLicenseSchema,
+  licenseValidationErrors,
+  licenseValidationIssue,
+  type LicenseFieldName,
+} from "@/lib/license/admin-license-validation"
 
 const availableFeatures = ["billing", "customers", "inventory", "products", "reports", "orders", "backup", "multi_branch"]
 
@@ -62,25 +68,38 @@ export default function LicensesPage() {
   const [historyTitle, setHistoryTitle] = useState("")
   const [notice, setNotice] = useState("")
   const [actionError, setActionError] = useState("")
+  const [fieldErrors, setFieldErrors] = useState<Partial<Record<LicenseFieldName, string>>>({})
   const createRequestKey = useRef("")
   const filters = useMemo(() => ({ status, platform }), [platform, status])
   const list = useAdminList<Record<string, unknown>>("/api/admin/licenses", filters)
 
   async function submitLicense(event: FormEvent) {
     event.preventDefault()
-    setSaving(true)
     setActionError("")
     setNotice("")
+    const validation = createLicenseSchema.safeParse({
+      ...form,
+      grace_days: Number(form.grace_days),
+      maximum_users: Number(form.maximum_users),
+      maximum_businesses: Number(form.maximum_businesses),
+      maximum_branches: Number(form.maximum_branches),
+      allowed_features: features,
+      status: "active",
+      idempotency_key: createRequestKey.current || undefined,
+    })
+    if (!validation.success) {
+      const firstIssue = licenseValidationIssue(validation.error.issues[0])
+      setFieldErrors(licenseValidationErrors(validation.error))
+      setActionError(firstIssue.error)
+      return
+    }
+
+    setFieldErrors({})
+    setSaving(true)
     try {
       if (!createRequestKey.current) createRequestKey.current = crypto.randomUUID()
       const payload = await adminMutation<{ license?: Record<string, unknown> }>("/api/admin/licenses", "POST", {
-        ...form,
-        grace_days: Number(form.grace_days),
-        maximum_users: Number(form.maximum_users),
-        maximum_businesses: Number(form.maximum_businesses),
-        maximum_branches: Number(form.maximum_branches),
-        allowed_features: features,
-        status: "active",
+        ...validation.data,
         idempotency_key: createRequestKey.current,
       })
       const key = String(payload.license?.signed_license_key || "")
@@ -88,6 +107,7 @@ export default function LicensesPage() {
       setNotice("License generated, stored, audited, and copied to the clipboard.")
       setCreateOpen(false)
       setForm(initialForm)
+      setFieldErrors({})
       createRequestKey.current = ""
       list.reload()
     } catch (error) {
@@ -178,7 +198,7 @@ export default function LicensesPage() {
         title="Licenses"
         description="Generate and manage server-signed licenses that remain verifiable offline. Signing uses the server-only private key; desktop and browser bundles receive only the public verification key."
         action={
-          <button type="button" onClick={() => { createRequestKey.current = ""; setCreateOpen(true) }} className="h-12 rounded-2xl bg-cyan-300 px-5 text-sm font-black text-black">
+          <button type="button" onClick={() => { createRequestKey.current = ""; setFieldErrors({}); setActionError(""); setCreateOpen(true) }} className="h-12 rounded-2xl bg-cyan-300 px-5 text-sm font-black text-black">
             Generate license
           </button>
         }
@@ -314,21 +334,27 @@ export default function LicensesPage() {
                   type={type}
                   value={form[key as keyof typeof form]}
                   required={!["customer_phone", "customer_company", "customer_country", "workspace_id", "app_version"].includes(key)}
-                  onChange={(event) => setForm((current) => ({ ...current, [key]: event.target.value }))}
-                  className="mt-2 h-11 w-full rounded-xl border border-white/10 bg-black/50 px-3 outline-none focus:border-cyan-400/40"
+                  aria-invalid={Boolean(fieldErrors[key as LicenseFieldName])}
+                  aria-describedby={fieldErrors[key as LicenseFieldName] ? `${key}-error` : undefined}
+                  onChange={(event) => {
+                    setForm((current) => ({ ...current, [key]: event.target.value }))
+                    setFieldErrors((current) => ({ ...current, [key]: undefined }))
+                  }}
+                  className={`mt-2 h-11 w-full rounded-xl border bg-black/50 px-3 outline-none focus:border-cyan-400/40 ${fieldErrors[key as LicenseFieldName] ? "border-red-400/60" : "border-white/10"}`}
                 />
+                {fieldErrors[key as LicenseFieldName] && <span id={`${key}-error`} className="mt-1 block text-xs text-red-200">{fieldErrors[key as LicenseFieldName]}</span>}
               </label>
             ))}
             <label className="text-sm font-bold text-neutral-300">
               Platform
-              <select value={form.platform} onChange={(event) => setForm((current) => ({ ...current, platform: event.target.value }))} className="mt-2 h-11 w-full rounded-xl border border-white/10 bg-black px-3">
+              <select value={form.platform} onChange={(event) => { setForm((current) => ({ ...current, platform: event.target.value })); setFieldErrors((current) => ({ ...current, platform: undefined })) }} className="mt-2 h-11 w-full rounded-xl border border-white/10 bg-black px-3">
                 <option value="macos">macOS</option>
                 <option value="windows">Windows</option>
               </select>
             </label>
             <label className="text-sm font-bold text-neutral-300">
               Architecture
-              <select value={form.architecture} onChange={(event) => setForm((current) => ({ ...current, architecture: event.target.value }))} className="mt-2 h-11 w-full rounded-xl border border-white/10 bg-black px-3">
+              <select value={form.architecture} onChange={(event) => { setForm((current) => ({ ...current, architecture: event.target.value })); setFieldErrors((current) => ({ ...current, architecture: undefined })) }} className="mt-2 h-11 w-full rounded-xl border border-white/10 bg-black px-3">
                 <option value="arm64">ARM64</option>
                 <option value="x64">x64</option>
               </select>
@@ -344,7 +370,10 @@ export default function LicensesPage() {
                     <input
                       type="checkbox"
                       checked={checked}
-                      onChange={() => setFeatures((current) => checked ? current.filter((item) => item !== feature) : [...current, feature])}
+                      onChange={() => {
+                        setFeatures((current) => checked ? current.filter((item) => item !== feature) : [...current, feature])
+                        setFieldErrors((current) => ({ ...current, allowed_features: undefined }))
+                      }}
                       className="sr-only"
                     />
                     {feature.replaceAll("_", " ")}
@@ -352,10 +381,12 @@ export default function LicensesPage() {
                 )
               })}
             </div>
+            {fieldErrors.allowed_features && <p className="mt-2 text-xs text-red-200">{fieldErrors.allowed_features}</p>}
           </fieldset>
           <label className="block text-sm font-bold text-neutral-300">
-            Internal notes
-            <textarea value={form.internal_notes} onChange={(event) => setForm((current) => ({ ...current, internal_notes: event.target.value }))} className="mt-2 min-h-24 w-full rounded-xl border border-white/10 bg-black/50 p-3 outline-none focus:border-cyan-400/40" />
+            Internal notes (optional)
+            <textarea value={form.internal_notes} aria-invalid={Boolean(fieldErrors.internal_notes)} onChange={(event) => { setForm((current) => ({ ...current, internal_notes: event.target.value })); setFieldErrors((current) => ({ ...current, internal_notes: undefined })) }} className={`mt-2 min-h-24 w-full rounded-xl border bg-black/50 p-3 outline-none focus:border-cyan-400/40 ${fieldErrors.internal_notes ? "border-red-400/60" : "border-white/10"}`} />
+            {fieldErrors.internal_notes && <span className="mt-1 block text-xs text-red-200">{fieldErrors.internal_notes}</span>}
           </label>
           {actionError && <AdminNotice tone="danger">{actionError}</AdminNotice>}
           <button type="submit" disabled={saving || features.length === 0} className="h-12 w-full rounded-2xl bg-cyan-300 text-sm font-black text-black disabled:opacity-40">

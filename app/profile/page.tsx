@@ -3,8 +3,7 @@
 import { useCallback, useEffect, useState } from "react"
 import Link from "next/link"
 import { BezgrowLogoMark } from "@/components/brand/BezgrowLogoMark"
-import { clearDesktopSession } from "@/lib/desktop/session"
-import { isTauriRuntimeAsync } from "@/lib/desktop/tauri"
+import { clearDesktopSession, clearServerAuthSession } from "@/lib/desktop/session"
 import { clearWorkspaceBootstrapCache, getWorkspaceBootstrap } from "@/lib/workspaceBootstrapClient"
 import { useRouter } from "next/navigation"
 
@@ -43,12 +42,12 @@ export default function ProfilePage() {
 
   async function logout() {
     clearWorkspaceBootstrapCache()
-    await clearDesktopSession()
-    if (!(await isTauriRuntimeAsync())) {
-      const { supabase } = await import("@/lib/supabase")
-      await supabase.auth.signOut()
-    }
-    router.push("/login")
+    await Promise.all([clearDesktopSession(), clearServerAuthSession()])
+    router.replace("/login")
+    const { supabase } = await import("@/lib/supabase")
+    void supabase.auth.signOut().catch((error) => {
+      console.warn("Cloud sign-out warning:", error)
+    })
   }
 
   if (loading) {
