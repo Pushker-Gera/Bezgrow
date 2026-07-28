@@ -93,6 +93,10 @@ assert.match(
   /windowsIconSizes = \[16, 20, 24, 32, 40, 48, 64, 128, 256\]/,
   "The Windows ICO generator must include every required resolution."
 )
-assert.match(artifactVerifier, /peOffset[\s\S]*toString\("binary"\)[\s\S]*0x8664/, "Windows artifacts must be verified as genuine x64 PE binaries.")
+assert.match(
+  artifactVerifier,
+  /peOffset[\s\S]*toString\("binary"\)[\s\S]*0x14c[\s\S]*0x8664[\s\S]*is32BitInstallerBootstrap/,
+  "Windows artifacts must verify native x64 PE files and genuine NSIS bootstrap PE wrappers."
+)
 
 console.log("windows-contract-ok")

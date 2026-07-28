@@ -1,6 +1,8 @@
 import assert from "node:assert/strict"
 import { createHash } from "node:crypto"
-import { existsSync, readFileSync, statSync } from "node:fs"
+import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs"
+import { tmpdir } from "node:os"
+import { join } from "node:path"
 import { spawnSync } from "node:child_process"
 
 const read = (path) => readFileSync(path, "utf8")
@@ -38,6 +40,12 @@ assert.match(validator, /trailingBytes\.includes\(Buffer\.from\("koly"\)\)/, "DM
 assert.match(validator, /peArchitecture\(firstBytes\)/, "Windows PE validation is missing.")
 assert.match(validator, /Buffer\.from\(\[0x50, 0x45, 0, 0\]\)/, "Windows PE signature validation is missing.")
 assert.match(validator, /machine === 0x8664/, "Windows x64 machine validation is missing.")
+assert.match(validator, /machine === 0x14c/, "Windows installer bootstrap PE validation is missing.")
+assert.match(
+  validator,
+  /is32BitInstallerBootstrap[\s\S]*-setup[\s\S]*portable/,
+  "32-bit NSIS bootstrap allowance must be limited to setup and portable installer wrappers."
+)
 assert.match(validator, /application\/json/, "HTML/JSON installer rejection is missing.")
 assert.match(validator, /Installer SHA-256 does not match release metadata/, "Checksum mismatch must block downloads.")
 assert.match(validator, /Installer architecture .* does not match metadata architecture/, "Architecture mismatch must block downloads.")
@@ -70,6 +78,55 @@ assert.doesNotMatch(releaseWorkflow, /Stable publication and public downloads re
 assert.match(releaseManifestWriter, /productionRecommended/, "Manifest writer must separate availability from production trust.")
 assert.match(publication, /can only be published as an internal\/testing release/, "Unsigned CI metadata must be restricted to internal/testing.")
 assert.match(publication, /signature_status: installer\.signed === true \? "valid" : "invalid"/, "CI metadata must preserve signing truth.")
+
+const peFixtureDirectory = mkdtempSync(join(tmpdir(), "bezgrow-pe-validator-"))
+try {
+  const nsisStub = Buffer.alloc(1024 * 1024)
+  nsisStub.write("MZ", 0, "ascii")
+  nsisStub.writeUInt32LE(0x80, 0x3c)
+  nsisStub.write("PE\u0000\u0000", 0x80, "binary")
+  nsisStub.writeUInt16LE(0x14c, 0x84)
+  const setupFixture = join(peFixtureDirectory, "Bezgrow_0.1.6_x64-setup.exe")
+  const nativeFixture = join(peFixtureDirectory, "Bezgrow_0.1.6_x64.exe")
+  writeFileSync(setupFixture, nsisStub)
+  writeFileSync(nativeFixture, nsisStub)
+
+  const setupVerification = spawnSync(
+    process.execPath,
+    [
+      "scripts/verify-release-artifact.mjs",
+      "--file",
+      setupFixture,
+      "--platform",
+      "windows",
+      "--architecture",
+      "x64",
+      "--version",
+      "0.1.6",
+    ],
+    { encoding: "utf8" }
+  )
+  assert.equal(setupVerification.status, 0, setupVerification.stderr || "NSIS x86 bootstrap validation failed.")
+
+  const nativeVerification = spawnSync(
+    process.execPath,
+    [
+      "scripts/verify-release-artifact.mjs",
+      "--file",
+      nativeFixture,
+      "--platform",
+      "windows",
+      "--architecture",
+      "x64",
+      "--version",
+      "0.1.6",
+    ],
+    { encoding: "utf8" }
+  )
+  assert.notEqual(nativeVerification.status, 0, "An x86 native executable must not be accepted as x64.")
+} finally {
+  rmSync(peFixtureDirectory, { recursive: true, force: true })
+}
 
 if (manifest.mac?.file) {
   const macPath = `public${manifest.mac.file}`

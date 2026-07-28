@@ -67,6 +67,8 @@ type ValidationOptions = {
   cache?: boolean
 }
 
+type PeArchitecture = InstallerArchitecture | "x86"
+
 const MAX_ARTIFACT_BYTES = 2 * 1024 * 1024 * 1024
 const HEADER_BYTES = 4096
 const LOCAL_CACHE_MS = 30_000
@@ -132,7 +134,7 @@ function magicMatches(extension: string, firstBytes: Buffer, trailingBytes: Buff
   return false
 }
 
-function peArchitecture(bytes: Buffer): InstallerArchitecture | null {
+function peArchitecture(bytes: Buffer): PeArchitecture | null {
   if (bytes.length < 64 || bytes.subarray(0, 2).toString("ascii") !== "MZ") return null
   const peOffset = bytes.readUInt32LE(0x3c)
   if (
@@ -143,9 +145,15 @@ function peArchitecture(bytes: Buffer): InstallerArchitecture | null {
     return null
   }
   const machine = bytes.readUInt16LE(peOffset + 4)
+  if (machine === 0x14c) return "x86"
   if (machine === 0x8664) return "x64"
   if (machine === 0xaa64) return "arm64"
   return null
+}
+
+function is32BitInstallerBootstrap(filename: string, architecture: PeArchitecture | null) {
+  const lower = filename.toLowerCase()
+  return architecture === "x86" && (lower.includes("-setup") || lower.includes("portable"))
 }
 
 function minimumArtifactBytes(extension: string) {
@@ -352,13 +360,19 @@ async function validateUncached(candidate: InstallerCandidate): Promise<Validate
 
   const filenameArchitecture = inferredArchitecture(filename)
   const binaryArchitecture = extension === ".exe" ? peArchitecture(bytes.firstBytes) : null
+  const installerBootstrap = is32BitInstallerBootstrap(filename, binaryArchitecture)
   if (candidate.architecture && filenameArchitecture && candidate.architecture !== filenameArchitecture) {
     return unavailable(
       { ...candidate, filename, size: bytes.size, sha256: bytes.sha256 },
       `Installer architecture ${filenameArchitecture} does not match metadata architecture ${candidate.architecture}.`
     )
   }
-  if (candidate.architecture && binaryArchitecture && candidate.architecture !== binaryArchitecture) {
+  if (
+    candidate.architecture &&
+    binaryArchitecture &&
+    !installerBootstrap &&
+    candidate.architecture !== binaryArchitecture
+  ) {
     return unavailable(
       { ...candidate, filename, size: bytes.size, sha256: bytes.sha256 },
       `Installer PE architecture ${binaryArchitecture} does not match metadata architecture ${candidate.architecture}.`
@@ -414,7 +428,10 @@ async function validateUncached(candidate: InstallerCandidate): Promise<Validate
   return {
     version: candidate.version || filenameVersion,
     platform: candidate.platform,
-    architecture: candidate.architecture || binaryArchitecture || filenameArchitecture,
+    architecture:
+      candidate.architecture ||
+      (binaryArchitecture === "x86" ? null : binaryArchitecture) ||
+      filenameArchitecture,
     downloadUrl: href,
     filename,
     contentType: contentTypes[extension] || bytes.contentType,

@@ -62,17 +62,21 @@ function peArchitecture(bytes) {
     return ""
   }
   const machine = bytes.readUInt16LE(peOffset + 4)
+  if (machine === 0x14c) return "x86"
   if (machine === 0x8664) return "x64"
   if (machine === 0xaa64) return "arm64"
   return "unsupported"
 }
 
 const executableArchitecture = extension === ".exe" ? peArchitecture(firstBytes) : ""
+const is32BitInstallerBootstrap =
+  executableArchitecture === "x86" &&
+  (filename.toLowerCase().includes("-setup") || filename.toLowerCase().includes("portable"))
 const magicValid =
   extension === ".dmg"
     ? trailingBytes.includes(Buffer.from("koly"))
     : extension === ".exe"
-      ? executableArchitecture === "x64" || executableArchitecture === "arm64"
+      ? ["x86", "x64", "arm64"].includes(executableArchitecture)
       : extension === ".msi"
         ? firstBytes
             .subarray(0, 8)
@@ -109,6 +113,7 @@ if (
   architecture &&
   executableArchitecture &&
   executableArchitecture !== "unsupported" &&
+  !is32BitInstallerBootstrap &&
   architecture !== executableArchitecture
 ) {
   fail(
