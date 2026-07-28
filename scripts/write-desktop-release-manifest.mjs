@@ -83,12 +83,26 @@ function buildInstaller(prefix, version, architecture) {
     checksumVerified &&
     metadataValid &&
     releaseChannel === "stable";
+  const installerType =
+    readArg(`--${prefix}-installer-type`) ||
+    (filename.toLowerCase().endsWith(".dmg")
+      ? "dmg"
+      : filename.toLowerCase().endsWith(".msi")
+        ? "msi"
+        : filename.toLowerCase().endsWith(".msix")
+          ? "msix"
+          : filename.toLowerCase().includes("portable")
+            ? "portable-exe"
+            : "nsis");
+  const generatedAt = new Date().toISOString();
 
   return {
     downloadUrl,
+    publicUrl: downloadUrl,
     url: downloadUrl,
     ...(downloadUrl ? {} : { file: file.replace(/^public\//, "/") }),
     filename,
+    installerType,
     version,
     platform,
     architecture,
@@ -103,7 +117,22 @@ function buildInstaller(prefix, version, architecture) {
     warning: installerWarning(platform, signed, notarized),
     blockedReason: size && hash ? null : "Installer size or SHA-256 is missing.",
     releaseChannel,
-    generatedAt: new Date().toISOString(),
+    generatedAt,
+    createdAt: generatedAt,
+    releaseNotes: readArg("--release-notes") || undefined,
+    minimumSupportedVersion: readArg("--minimum-supported-version") || undefined,
+    minimumSupportedWindowsVersion:
+      platform === "windows"
+        ? readArg("--minimum-supported-windows-version") ||
+          "Windows 10 version 1809 (64-bit)"
+        : undefined,
+    updaterCompatibility:
+      readArg(`--${prefix}-updater-compatibility`) ||
+      readArg("--updater-compatibility") ||
+      "manual-installer",
+    updateSignature: readArg(`--${prefix}-update-signature`) || undefined,
+    buildCommit: readArg("--build-commit") || undefined,
+    workflowRunId: readArg("--workflow-run-id") || undefined,
   };
 }
 
@@ -124,11 +153,30 @@ const installers = {
   windowsArm64PortableZip: buildInstaller("windows-arm64-portable-zip", version, "arm64"),
 };
 
-const nextManifest = { ...existingManifest, version };
+const releaseNotes = readArg("--release-notes");
+const nextManifest = {
+  ...existingManifest,
+  version,
+  ...(releaseNotes ? { releaseNotes: [releaseNotes] } : {}),
+  generatedAt: new Date().toISOString(),
+};
 for (const [key, installer] of Object.entries(installers)) {
   if (installer) nextManifest[key] = installer;
 }
 
 mkdirSync(dirname(manifestPath), { recursive: true });
 writeFileSync(manifestPath, `${JSON.stringify(nextManifest, null, 2)}\n`);
+
+for (const [key, filename] of [
+  ["windows", "Bezgrow-windows.exe.release.json"],
+  ["windowsMsi", "Bezgrow-windows.msi.release.json"],
+  ["windowsMsix", "Bezgrow-windows.msix.release.json"],
+]) {
+  if (nextManifest[key]) {
+    writeFileSync(
+      join(dirname(manifestPath), filename),
+      `${JSON.stringify(nextManifest[key], null, 2)}\n`
+    );
+  }
+}
 console.log(`Wrote ${manifestPath}`);

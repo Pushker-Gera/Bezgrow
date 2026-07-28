@@ -13,6 +13,8 @@ type WindowsRelease = {
   mandatory?: boolean
   minimumSupportedVersion?: string | null
   releaseChannel?: string
+  checksumVerified?: boolean
+  installerType?: string
 }
 
 type MacRelease = WindowsRelease & {
@@ -130,6 +132,12 @@ function currentPlatform() {
   const platform = navigator.platform.toLowerCase()
   const userAgent = navigator.userAgent.toLowerCase()
   return platform.includes("win") || userAgent.includes("windows") ? "windows" : "mac"
+}
+
+export function verifiedInstallerRouteForCurrentPlatform() {
+  return currentPlatform() === "windows"
+    ? "/api/downloads/desktop?platform=windows"
+    : "/api/downloads/desktop?platform=mac"
 }
 
 export function releaseForCurrentPlatform(manifest: DesktopReleaseManifest | null) {

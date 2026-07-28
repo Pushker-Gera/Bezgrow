@@ -35,7 +35,9 @@ for (const field of [
   assert.match(validator, new RegExp(field), `Independent release status is missing: ${field}`)
 }
 assert.match(validator, /trailingBytes\.includes\(Buffer\.from\("koly"\)\)/, "DMG trailer validation is missing.")
-assert.match(validator, /toString\("ascii"\) === "MZ"/, "Windows PE validation is missing.")
+assert.match(validator, /peArchitecture\(firstBytes\)/, "Windows PE validation is missing.")
+assert.match(validator, /Buffer\.from\(\[0x50, 0x45, 0, 0\]\)/, "Windows PE signature validation is missing.")
+assert.match(validator, /machine === 0x8664/, "Windows x64 machine validation is missing.")
 assert.match(validator, /application\/json/, "HTML/JSON installer rejection is missing.")
 assert.match(validator, /Installer SHA-256 does not match release metadata/, "Checksum mismatch must block downloads.")
 assert.match(validator, /Installer architecture .* does not match metadata architecture/, "Architecture mismatch must block downloads.")
@@ -43,6 +45,8 @@ assert.match(publicReleaseSource, /checkedInCandidates/, "Local public/downloads
 assert.match(publicReleaseSource, /configuredCandidates/, "Configured installer URLs must be discovered.")
 assert.match(desktopReleaseRoute, /platforms:/, "Desktop release API must return independent platform records.")
 assert.match(desktopDownloadRoute, /release\.available/, "Download route must gate on integrity availability.")
+assert.match(desktopDownloadRoute, /binaryInstallerResponse/, "Validated installers must be returned as binary responses.")
+assert.match(desktopDownloadRoute, /status:\s*200/, "Validated installer responses must return HTTP 200.")
 assert.doesNotMatch(desktopDownloadRoute, /signed\s*!==\s*true|notarized\s*!==\s*true/, "Download route must not block solely on trust status.")
 assert.match(downloadPage, /available:\s*release\.available/, "Download buttons must use independent integrity availability.")
 assert.match(

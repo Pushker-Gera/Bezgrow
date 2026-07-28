@@ -79,7 +79,7 @@ function browserDownload(bytes: Uint8Array, filename: string, mimeType: string) 
 export async function saveDesktopBytes(
   filename: string,
   bytes: Uint8Array,
-  fileKind: "csv" | "pdf"
+  fileKind: "csv" | "pdf" | "json"
 ): Promise<DesktopSavedFile | null> {
   if (await isTauriRuntimeAsync()) {
     return invokeTauri<DesktopSavedFile | null>("desktop_save_file", {
@@ -89,16 +89,30 @@ export async function saveDesktopBytes(
     })
   }
 
-  const mimeType = fileKind === "csv" ? "text/csv;charset=utf-8" : "application/pdf"
-  const pickerMimeType = fileKind === "csv" ? "text/csv" : "application/pdf"
-  const extension = fileKind === "csv" ? ".csv" : ".pdf"
+  const mimeType =
+    fileKind === "csv"
+      ? "text/csv;charset=utf-8"
+      : fileKind === "json"
+        ? "application/json;charset=utf-8"
+        : "application/pdf"
+  const pickerMimeType =
+    fileKind === "csv" ? "text/csv" : fileKind === "json" ? "application/json" : "application/pdf"
+  const extension = fileKind === "csv" ? ".csv" : fileKind === "json" ? ".json" : ".pdf"
   const picker = (window as SaveFilePickerWindow).showSaveFilePicker
   if (!picker) return browserDownload(bytes, filename, mimeType)
 
   try {
     const handle = await picker({
       suggestedName: filename,
-      types: [{ description: fileKind === "csv" ? "CSV spreadsheet" : "PDF document", accept: { [pickerMimeType]: [extension] } }],
+      types: [{
+        description:
+          fileKind === "csv"
+            ? "CSV spreadsheet"
+            : fileKind === "json"
+              ? "JSON diagnostics"
+              : "PDF document",
+        accept: { [pickerMimeType]: [extension] },
+      }],
     })
     const writable = await handle.createWritable()
     const blob = new Blob([bytes.slice().buffer as ArrayBuffer], { type: mimeType })

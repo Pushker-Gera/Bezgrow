@@ -4,7 +4,6 @@ import { dirname, join, relative, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const root = dirname(dirname(fileURLToPath(import.meta.url)));
-const npmCommand = process.platform === "win32" ? "npm.cmd" : "npm";
 const standaloneDir = join(root, ".next", "standalone");
 const desktopServerDir = join(root, "desktop-runtime", "next-server");
 const desktopNodeDir = join(root, "desktop-runtime", "node");
@@ -13,13 +12,20 @@ rmSync(standaloneDir, { recursive: true, force: true });
 rmSync(desktopServerDir, { recursive: true, force: true });
 rmSync(desktopNodeDir, { recursive: true, force: true });
 
-const build = spawnSync(npmCommand, ["run", "build"], {
+const build = spawnSync(process.execPath, [join(root, "scripts", "build-next.mjs")], {
   cwd: root,
   env: {
     ...process.env,
     BEZGROW_DESKTOP_BUILD: "1",
     NEXT_TELEMETRY_DISABLED: "1",
     SUPABASE_SERVICE_ROLE_KEY: "",
+    BEZGROW_LICENSE_PRIVATE_KEY: "",
+    WINDOWS_CERTIFICATE_BASE64: "",
+    WINDOWS_CERTIFICATE_PASSWORD: "",
+    BEZGROW_WINDOWS_CERTIFICATE_BASE64: "",
+    BEZGROW_WINDOWS_CERTIFICATE_PASSWORD: "",
+    GH_TOKEN: "",
+    GITHUB_TOKEN: "",
   },
   stdio: "inherit",
 });
@@ -96,5 +102,5 @@ if (!existsSync(nodeSource)) {
 const nodeExecutableName = targetsWindows ? "node.exe" : "node";
 const nodeTarget = join(desktopNodeDir, nodeExecutableName);
 copyFileSync(nodeSource, nodeTarget);
-chmodSync(nodeTarget, 0o755);
+if (process.platform !== "win32") chmodSync(nodeTarget, 0o755);
 writeFileSync(join(desktopNodeDir, ".gitkeep"), "");

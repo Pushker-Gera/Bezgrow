@@ -8,10 +8,12 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
+#[cfg(target_os = "windows")]
+use std::process::Stdio;
+
 #[cfg(not(debug_assertions))]
 use std::{
     net::{TcpListener, TcpStream},
-    process::Stdio,
     thread,
     time::Duration,
 };
@@ -38,6 +40,24 @@ const DESKTOP_SERVER_PORT: u16 = 43124;
 
 struct NextServerState(Mutex<Option<Child>>);
 
+fn terminate_child_process(child: &mut Child) {
+    #[cfg(target_os = "windows")]
+    {
+        let pid = child.id().to_string();
+        let _ = Command::new("taskkill.exe")
+            .args(["/PID", &pid, "/T", "/F"])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status();
+    }
+
+    if child.try_wait().ok().flatten().is_none() {
+        let _ = child.kill();
+    }
+    let _ = child.wait();
+}
+
 fn stop_next_server<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
     let Some(state) = app.try_state::<NextServerState>() else {
         return;
@@ -47,8 +67,7 @@ fn stop_next_server<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
         return;
     };
 
-    let _ = child.kill();
-    let _ = child.wait();
+    terminate_child_process(&mut child);
 }
 
 #[tauri::command]
@@ -61,6 +80,9 @@ fn desktop_exit<R: tauri::Runtime>(app: tauri::AppHandle<R>) {
 fn managed_app_data_root<R: tauri::Runtime>(manager: &impl Manager<R>) -> Result<PathBuf, String> {
     #[cfg(target_os = "windows")]
     {
+        if let Some(local_app_data) = std::env::var_os("LOCALAPPDATA") {
+            return Ok(PathBuf::from(local_app_data).join(WINDOWS_APP_DATA_DIR));
+        }
         if let Some(app_data) = std::env::var_os("APPDATA") {
             return Ok(PathBuf::from(app_data).join(WINDOWS_APP_DATA_DIR));
         }
@@ -297,6 +319,12 @@ fn prepare_managed_data<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> Result<
 
     #[cfg(target_os = "windows")]
     {
+        if let Some(roaming_app_data) = std::env::var_os("APPDATA") {
+            let previous_root = PathBuf::from(roaming_app_data).join(WINDOWS_APP_DATA_DIR);
+            if previous_root != root && previous_root.is_dir() {
+                copy_directory_missing(&previous_root, &root)?;
+            }
+        }
         let legacy_config = app.path().app_config_dir().map_err(|error| {
             format!("Unable to inspect the previous Bezgrow database folder: {error}")
         })?;
@@ -406,6 +434,7 @@ fn save_bytes_with_dialog<R: tauri::Runtime>(
     let (description, extension, fallback) = match kind {
         "pdf" => ("PDF document", "pdf", "Invoice.pdf"),
         "csv" => ("CSV spreadsheet", "csv", "bezgrow-export.csv"),
+        "json" => ("JSON diagnostics", "json", "bezgrow-diagnostics.json"),
         "backup" => (
             "Bezgrow backup",
             "bezgrow-backup",
@@ -417,6 +446,7 @@ fn save_bytes_with_dialog<R: tauri::Runtime>(
     let default_directory = match kind {
         "pdf" => managed_data_directory(app, "PDFs"),
         "csv" => managed_data_directory(app, "Exports"),
+        "json" => managed_data_directory(app, "Logs"),
         "backup" => managed_data_directory(app, "Backups"),
         _ => managed_app_data_root(app),
     }?;
@@ -522,6 +552,10 @@ fn desktop_save_file<R: tauri::Runtime>(
     }
     if file_kind == "csv" && !bytes.starts_with(&[0xef, 0xbb, 0xbf]) {
         return Err("The CSV export must be UTF-8 with an Excel-compatible BOM.".to_string());
+    }
+    if file_kind == "json" {
+        serde_json::from_slice::<serde_json::Value>(&bytes)
+            .map_err(|_| "The diagnostic export must be valid JSON.".to_string())?;
     }
     save_bytes_with_dialog(&app, &filename, &bytes, &file_kind)
 }
@@ -1292,7 +1326,7 @@ fn desktop_database_diagnostics<R: tauri::Runtime>(
 }
 
 #[tauri::command]
-fn desktop_database_backup<R: tauri::Runtime>(
+async fn desktop_database_backup<R: tauri::Runtime>(
     app: tauri::AppHandle<R>,
     reason: Option<String>,
 ) -> Result<Option<DesktopDatabaseBackup>, String> {
@@ -1317,8 +1351,7 @@ fn desktop_database_backup<R: tauri::Runtime>(
         created_at
     ));
 
-    fs::copy(&database_path, &backup_path)
-        .map_err(|error| format!("Unable to create desktop database backup: {error}"))?;
+    create_consistent_database_snapshot(&database_path, &backup_path).await?;
     let metadata = fs::metadata(&backup_path)
         .map_err(|error| format!("Unable to inspect desktop database backup: {error}"))?;
     let checksum_sha256 = sha256_file(&backup_path)?;
@@ -1906,11 +1939,14 @@ fn open_external_url(url: String) -> Result<(), String> {
 }
 
 fn validate_platform_admin_url(url: &str) -> Result<tauri::Url, String> {
-    let parsed = tauri::Url::parse(url).map_err(|error| format!("Invalid Platform Admin URL: {error}"))?;
+    let parsed =
+        tauri::Url::parse(url).map_err(|error| format!("Invalid Platform Admin URL: {error}"))?;
     let host = parsed.host_str().unwrap_or_default().to_ascii_lowercase();
     let trusted_production_host = matches!(host.as_str(), "bezgrow.com" | "www.bezgrow.com");
-    let trusted_local_host = cfg!(debug_assertions) && matches!(host.as_str(), "127.0.0.1" | "localhost");
-    let trusted_scheme = parsed.scheme() == "https" || (trusted_local_host && parsed.scheme() == "http");
+    let trusted_local_host =
+        cfg!(debug_assertions) && matches!(host.as_str(), "127.0.0.1" | "localhost");
+    let trusted_scheme =
+        parsed.scheme() == "https" || (trusted_local_host && parsed.scheme() == "http");
     let trusted_path = parsed.path() == "/admin"
         || parsed.path().starts_with("/admin/")
         || parsed.path() == "/login";
@@ -1936,16 +1972,13 @@ fn open_platform_admin<R: tauri::Runtime>(
         return Ok(());
     }
 
-    let builder = tauri::WebviewWindowBuilder::new(
-        &app,
-        "platform-admin",
-        WebviewUrl::External(parsed),
-    )
-    .title("Bezgrow Platform Administration — Internet Required")
-    .inner_size(1440.0, 900.0)
-    .min_inner_size(1080.0, 700.0)
-    .resizable(true)
-    .fullscreen(false);
+    let builder =
+        tauri::WebviewWindowBuilder::new(&app, "platform-admin", WebviewUrl::External(parsed))
+            .title("Bezgrow Platform Administration — Internet Required")
+            .inner_size(1440.0, 900.0)
+            .min_inner_size(1080.0, 700.0)
+            .resizable(true)
+            .fullscreen(false);
 
     #[cfg(target_os = "windows")]
     let builder = builder.data_directory(managed_data_directory(&app, "WebViewPlatformAdmin")?);
@@ -2046,8 +2079,25 @@ fn desktop_open_file(path: String) -> Result<(), String> {
 #[cfg(not(debug_assertions))]
 fn wait_for_local_server(child: &mut Child, port: u16) -> Result<(), String> {
     for _ in 0..240 {
-        if TcpStream::connect(("127.0.0.1", port)).is_ok() {
-            return Ok(());
+        if let Ok(mut stream) = TcpStream::connect(("127.0.0.1", port)) {
+            let timeout = Some(Duration::from_millis(500));
+            let _ = stream.set_read_timeout(timeout);
+            let _ = stream.set_write_timeout(timeout);
+            if stream
+                .write_all(b"GET /login HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n")
+                .is_ok()
+            {
+                let mut response = [0_u8; 64];
+                if let Ok(bytes) = stream.read(&mut response) {
+                    let status = String::from_utf8_lossy(&response[..bytes]);
+                    if status.starts_with("HTTP/1.1 2")
+                        || status.starts_with("HTTP/1.1 3")
+                        || status.starts_with("HTTP/1.1 4")
+                    {
+                        return Ok(());
+                    }
+                }
+            }
         }
 
         if let Some(status) = child
@@ -2179,8 +2229,7 @@ fn start_next_server(app: &mut tauri::App) -> Result<u16, Box<dyn std::error::Er
         })?;
 
     if let Err(error) = wait_for_local_server(&mut child, port) {
-        let _ = child.kill();
-        let _ = child.wait();
+        terminate_child_process(&mut child);
         return Err(error.into());
     }
 
@@ -2226,6 +2275,13 @@ fn create_main_window(app: &mut tauri::App, port: u16) -> Result<(), Box<dyn std
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+            if let Some(window) = app.get_webview_window("main") {
+                let _ = window.show();
+                let _ = window.unminimize();
+                let _ = window.set_focus();
+            }
+        }))
         .setup(|app| {
             app.manage(NextServerState(Mutex::new(None)));
             prepare_managed_data(&app.handle())?;

@@ -12,6 +12,7 @@ import {
   latestVersionForCurrentPlatform,
   normalizeReleaseNotes,
   releaseForCurrentPlatform,
+  verifiedInstallerRouteForCurrentPlatform,
   type AppUpdateStatus,
   type DesktopReleaseManifest,
 } from "@/lib/app-updates"
@@ -84,10 +85,14 @@ export default function AppUpdatesPanel() {
 
   async function updateNow() {
     setStatus("downloading")
-    setMessage("Opening the latest Bezgrow installer.")
+    setMessage("Opening the SHA-256 verified Bezgrow installer.")
 
     try {
-      await openExternalUrl(absoluteInstallerUrl(installerHref))
+      await openExternalUrl(
+        absoluteInstallerUrl(
+          installerHref ? verifiedInstallerRouteForCurrentPlatform() : installerHref
+        )
+      )
       setStatus("ready")
       setMessage("Ready to install. Finish the installer when it opens; your local database and license stay on this device.")
     } catch {
@@ -133,6 +138,10 @@ export default function AppUpdatesPanel() {
               <h3 className="text-lg font-black text-cyan-100">New Bezgrow update available</h3>
               <p className="mt-1 text-sm leading-6 text-neutral-300">
                 Current version {currentVersion} · Latest version {latestVersion}{releaseSize ? ` · ${releaseSize}` : ""}
+              </p>
+              <p className="mt-1 text-xs font-bold text-cyan-100/75">
+                Code signing: {platformRelease?.signed ? "verified" : "not verified"} · SHA-256:
+                verified by the Bezgrow download service
               </p>
             </div>
             <div className="grid grid-cols-2 gap-2 sm:min-w-64">

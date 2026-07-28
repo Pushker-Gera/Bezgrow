@@ -515,6 +515,11 @@ mkdirSync(generatedConfigDir, { recursive: true });
 const config = configureWindowsSigning(
   configureMacSigning(JSON.parse(readFileSync(tauriConfigPath, "utf8")))
 );
+config.version = packageVersion;
+if (process.env.BEZGROW_DESKTOP_PREPARED === "1") {
+  config.build ??= {};
+  config.build.beforeBuildCommand = "";
+}
 writeFileSync(generatedConfigPath, `${JSON.stringify(config, null, 2)}\n`);
 
 run("tauri", ["build", "--config", generatedConfigPath, ...tauriArgs]);

@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from "react"
 import { useDebounce } from "use-debounce"
 import AppUpdatesPanel from "@/components/AppUpdatesPanel"
+import DesktopDiagnosticsPanel from "@/components/settings/DesktopDiagnosticsPanel"
 import { loadStoredPrintSettings, persistPrintSettings, readStoredPrintSettings, saveStoredPrintSettings } from "@/components/print/settings/defaults"
 import type { PrintFormat, PrintSettings } from "@/components/print/types"
 import { LocalDataExportsPanel } from "@/components/settings/LocalDataExportsPanel"
@@ -857,6 +858,8 @@ export default function SettingsPage() {
             </div>
 
             <AppUpdatesPanel />
+
+            <DesktopDiagnosticsPanel />
 
             <LocalDataExportsPanel organizationId={organizationId} />
 

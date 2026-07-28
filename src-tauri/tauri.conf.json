@@ -35,6 +35,7 @@
       "../public/icon-512.png"
     ],
     "category": "Business",
+    "publisher": "Bezgrow",
     "copyright": "Copyright © 2026 Bezgrow. All rights reserved.",
     "shortDescription": "Bezgrow ERP",
     "longDescription": "Offline-first Bezgrow inventory, billing, invoice, customer, and ERP desktop app.",

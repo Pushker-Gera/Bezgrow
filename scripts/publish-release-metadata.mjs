@@ -14,6 +14,7 @@ const manifest = JSON.parse(readFileSync(manifestPath, "utf8"))
 const version = arg("--version", manifest.version)
 const buildNumber = arg("--build-number", process.env.GITHUB_RUN_NUMBER || "")
 const releaseChannel = arg("--channel", "stable")
+const platformFilter = arg("--platform", "all")
 const supabaseUrl = process.env.SUPABASE_URL || process.env.NEXT_PUBLIC_SUPABASE_URL
 const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY
 const requestId = `github-release-${process.env.GITHUB_RUN_ID || "local"}-${process.env.GITHUB_RUN_ATTEMPT || "1"}`
@@ -52,10 +53,13 @@ const artifacts = definitions
     installer: manifest[definition.key],
     channel: manifest[definition.key]?.releaseChannel || releaseChannel,
   }))
-  .filter(({ installer }) => installer)
+  .filter(
+    ({ installer, platform }) =>
+      installer && (platformFilter === "all" || platform === platformFilter)
+  )
 
 if (artifacts.length === 0) {
-  throw new Error("No installer metadata exists in the release manifest.")
+  throw new Error(`No ${platformFilter} installer metadata exists in the release manifest.`)
 }
 
 for (const entry of artifacts) {

@@ -7,8 +7,8 @@ import {
   type PublicReleaseAvailability,
 } from "@/lib/releases/public"
 
-const macInstallerPath = "/downloads/Bezgrow-mac.dmg"
-const windowsInstallerPath = "/downloads/Bezgrow-windows.exe"
+const macInstallerPath = "/api/downloads/desktop?platform=mac"
+const windowsInstallerPath = "/api/downloads/desktop?platform=windows"
 const webAppUrl = "https://www.bezgrow.com"
 
 export const dynamic = "force-dynamic"
@@ -56,10 +56,16 @@ function getInstallerInfo(
     release.architecture ? release.architecture.toUpperCase() : null,
     sizeLabel,
     release.checksumVerified ? "SHA-256 verified" : null,
+    release.signed ? "Code signed" : "Unsigned",
+    release.filename?.toLowerCase().endsWith(".msi")
+      ? "MSI"
+      : release.platform === "windows"
+        ? "NSIS EXE"
+        : "DMG",
   ].filter(Boolean)
   return {
     available: release.available,
-    href: release.downloadUrl || fallbackHref,
+    href: fallbackHref,
     sizeLabel,
     warning: release.warning,
     blockedReason: release.blockedReason,

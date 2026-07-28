@@ -1,6 +1,7 @@
 "use client"
 
 import { useState } from "react"
+import { saveDesktopBytes } from "@/lib/desktop-file-export"
 import { getLocalDatabaseService } from "@/lib/offline/local/service"
 
 type LocalDatabaseRecoveryProps = {
@@ -28,18 +29,6 @@ async function buildDiagnostics(): Promise<DiagnosticsPayload> {
   }
 }
 
-function downloadJson(payload: unknown) {
-  const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" })
-  const url = URL.createObjectURL(blob)
-  const link = document.createElement("a")
-  link.href = url
-  link.download = `bezgrow-local-db-diagnostics-${new Date().toISOString().slice(0, 10)}.json`
-  document.body.appendChild(link)
-  link.click()
-  document.body.removeChild(link)
-  URL.revokeObjectURL(url)
-}
-
 export default function LocalDatabaseRecovery({ checking = false, errorMessage, onRetry }: LocalDatabaseRecoveryProps) {
   const [status, setStatus] = useState("")
 
@@ -55,8 +44,14 @@ export default function LocalDatabaseRecovery({ checking = false, errorMessage, 
 
   async function exportDiagnostics() {
     try {
-      downloadJson(await buildDiagnostics())
-      setStatus("Diagnostics downloaded.")
+      const diagnostics = await buildDiagnostics()
+      const bytes = new TextEncoder().encode(JSON.stringify(diagnostics, null, 2))
+      const saved = await saveDesktopBytes(
+        `bezgrow-local-db-diagnostics-${new Date().toISOString().slice(0, 10)}.json`,
+        bytes,
+        "json"
+      )
+      setStatus(saved ? `Diagnostics saved to ${saved.path}.` : "Diagnostic export cancelled.")
     } catch {
       setStatus("Diagnostics could not be exported.")
     }

@@ -68,6 +68,7 @@ type ValidationOptions = {
 }
 
 const MAX_ARTIFACT_BYTES = 2 * 1024 * 1024 * 1024
+const HEADER_BYTES = 4096
 const LOCAL_CACHE_MS = 30_000
 const REMOTE_CACHE_MS = 5 * 60_000
 const validationCache = new Map<string, { expiresAt: number; result: Promise<ValidatedInstaller> }>()
@@ -121,7 +122,7 @@ function looksLikeHtmlOrText(bytes: Buffer) {
 
 function magicMatches(extension: string, firstBytes: Buffer, trailingBytes: Buffer) {
   if (extension === ".dmg") return trailingBytes.includes(Buffer.from("koly"))
-  if (extension === ".exe") return firstBytes.subarray(0, 2).toString("ascii") === "MZ"
+  if (extension === ".exe") return peArchitecture(firstBytes) !== null
   if (extension === ".msi") {
     return firstBytes
       .subarray(0, 8)
@@ -129,6 +130,26 @@ function magicMatches(extension: string, firstBytes: Buffer, trailingBytes: Buff
   }
   if (extension === ".msix") return firstBytes.subarray(0, 2).toString("ascii") === "PK"
   return false
+}
+
+function peArchitecture(bytes: Buffer): InstallerArchitecture | null {
+  if (bytes.length < 64 || bytes.subarray(0, 2).toString("ascii") !== "MZ") return null
+  const peOffset = bytes.readUInt32LE(0x3c)
+  if (
+    peOffset < 64 ||
+    peOffset + 6 > bytes.length ||
+    !bytes.subarray(peOffset, peOffset + 4).equals(Buffer.from([0x50, 0x45, 0, 0]))
+  ) {
+    return null
+  }
+  const machine = bytes.readUInt16LE(peOffset + 4)
+  if (machine === 0x8664) return "x64"
+  if (machine === 0xaa64) return "arm64"
+  return null
+}
+
+function minimumArtifactBytes(extension: string) {
+  return extension === ".dmg" ? 5 * 1024 * 1024 : 1024 * 1024
 }
 
 function contentDispositionFilename(value: string | null) {
@@ -149,7 +170,7 @@ async function hashLocalFile(filePath: string, size: number) {
 
   const handle = await open(filePath, "r")
   try {
-    const firstBytes = Buffer.alloc(Math.min(512, size))
+    const firstBytes = Buffer.alloc(Math.min(HEADER_BYTES, size))
     const trailingBytes = Buffer.alloc(Math.min(512, size))
     await handle.read(firstBytes, 0, firstBytes.length, 0)
     await handle.read(trailingBytes, 0, trailingBytes.length, Math.max(0, size - trailingBytes.length))
@@ -231,8 +252,8 @@ async function readRemoteArtifact(href: string): Promise<ArtifactBytes> {
     const { done, value } = await reader.read()
     if (done) break
     const bytes = Buffer.from(value)
-    if (firstBytes.length < 512) {
-      firstBytes = Buffer.concat([firstBytes, bytes]).subarray(0, 512)
+    if (firstBytes.length < HEADER_BYTES) {
+      firstBytes = Buffer.concat([firstBytes, bytes]).subarray(0, HEADER_BYTES)
     }
     trailingBytes = Buffer.concat([trailingBytes, bytes]).subarray(-512)
     size += bytes.length
@@ -322,12 +343,25 @@ async function validateUncached(candidate: InstallerCandidate): Promise<Validate
       "Installer file signature is invalid or the file is corrupted."
     )
   }
+  if (bytes.size < minimumArtifactBytes(extension)) {
+    return unavailable(
+      { ...candidate, filename, size: bytes.size, sha256: bytes.sha256 },
+      `Installer is implausibly small: ${bytes.size} bytes.`
+    )
+  }
 
   const filenameArchitecture = inferredArchitecture(filename)
+  const binaryArchitecture = extension === ".exe" ? peArchitecture(bytes.firstBytes) : null
   if (candidate.architecture && filenameArchitecture && candidate.architecture !== filenameArchitecture) {
     return unavailable(
       { ...candidate, filename, size: bytes.size, sha256: bytes.sha256 },
       `Installer architecture ${filenameArchitecture} does not match metadata architecture ${candidate.architecture}.`
+    )
+  }
+  if (candidate.architecture && binaryArchitecture && candidate.architecture !== binaryArchitecture) {
+    return unavailable(
+      { ...candidate, filename, size: bytes.size, sha256: bytes.sha256 },
+      `Installer PE architecture ${binaryArchitecture} does not match metadata architecture ${candidate.architecture}.`
     )
   }
   const filenameVersion = inferredVersion(filename)
@@ -380,7 +414,7 @@ async function validateUncached(candidate: InstallerCandidate): Promise<Validate
   return {
     version: candidate.version || filenameVersion,
     platform: candidate.platform,
-    architecture: candidate.architecture || filenameArchitecture,
+    architecture: candidate.architecture || binaryArchitecture || filenameArchitecture,
     downloadUrl: href,
     filename,
     contentType: contentTypes[extension] || bytes.contentType,

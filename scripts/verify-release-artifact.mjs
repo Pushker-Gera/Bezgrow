@@ -35,7 +35,7 @@ if (platform === "windows" && ![".exe", ".msi", ".msix"].includes(extension)) {
 }
 
 const handle = openSync(filePath, "r")
-const firstBytes = Buffer.alloc(Math.min(512, details.size))
+const firstBytes = Buffer.alloc(Math.min(4096, details.size))
 const trailingBytes = Buffer.alloc(Math.min(512, details.size))
 readSync(handle, firstBytes, 0, firstBytes.length, 0)
 readSync(handle, trailingBytes, 0, trailingBytes.length, Math.max(0, details.size - trailingBytes.length))
@@ -51,17 +51,44 @@ if (
   fail("Installer bytes are HTML, JSON, or text.")
 }
 
+function peArchitecture(bytes) {
+  if (bytes.length < 64 || bytes.subarray(0, 2).toString("ascii") !== "MZ") return ""
+  const peOffset = bytes.readUInt32LE(0x3c)
+  if (
+    peOffset < 64 ||
+    peOffset + 6 > bytes.length ||
+    bytes.subarray(peOffset, peOffset + 4).toString("binary") !== "PE\u0000\u0000"
+  ) {
+    return ""
+  }
+  const machine = bytes.readUInt16LE(peOffset + 4)
+  if (machine === 0x8664) return "x64"
+  if (machine === 0xaa64) return "arm64"
+  return "unsupported"
+}
+
+const executableArchitecture = extension === ".exe" ? peArchitecture(firstBytes) : ""
 const magicValid =
   extension === ".dmg"
     ? trailingBytes.includes(Buffer.from("koly"))
     : extension === ".exe"
-      ? firstBytes.subarray(0, 2).toString("ascii") === "MZ"
+      ? executableArchitecture === "x64" || executableArchitecture === "arm64"
       : extension === ".msi"
         ? firstBytes
             .subarray(0, 8)
             .equals(Buffer.from([0xd0, 0xcf, 0x11, 0xe0, 0xa1, 0xb1, 0x1a, 0xe1]))
         : firstBytes.subarray(0, 2).toString("ascii") === "PK"
 if (!magicValid) fail("Installer file signature is invalid or the file is corrupted.")
+
+const minimumSize =
+  extension === ".dmg"
+    ? 5 * 1024 * 1024
+    : extension === ".exe" || extension === ".msi" || extension === ".msix"
+      ? 1024 * 1024
+      : 1
+if (details.size < minimumSize) {
+  fail(`Installer is implausibly small: expected at least ${minimumSize} bytes, found ${details.size}.`)
+}
 
 const sha256 = createHash("sha256").update(readFileSync(filePath)).digest("hex")
 if (expectedSize > 0 && expectedSize !== details.size) {
@@ -77,6 +104,16 @@ const filenameArchitecture = /(?:^|[-_.])(arm64|aarch64)(?:[-_.]|$)/.test(lowerN
     : ""
 if (architecture && filenameArchitecture && architecture !== filenameArchitecture) {
   fail(`Installer architecture ${filenameArchitecture} does not match ${architecture}.`)
+}
+if (
+  architecture &&
+  executableArchitecture &&
+  executableArchitecture !== "unsupported" &&
+  architecture !== executableArchitecture
+) {
+  fail(
+    `Windows PE machine architecture ${executableArchitecture} does not match ${architecture}.`
+  )
 }
 const filenameVersion =
   filename.match(/(?:^|[-_.])v?(\d+\.\d+\.\d+(?:[-+][A-Za-z0-9.-]+)?)(?:[-_.]|$)/i)?.[1] || ""
