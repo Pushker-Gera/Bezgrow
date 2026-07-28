@@ -1,0 +1,18 @@
+* text=auto
+
+# Contract tests inspect source text directly. Keep repository source files on
+# LF on every runner so their assertions behave identically on Windows/macOS.
+*.css text eol=lf
+*.html text eol=lf
+*.js text eol=lf
+*.json text eol=lf
+*.jsx text eol=lf
+*.md text eol=lf
+*.mjs text eol=lf
+*.rs text eol=lf
+*.sh text eol=lf
+*.toml text eol=lf
+*.ts text eol=lf
+*.tsx text eol=lf
+*.yml text eol=lf
+*.yaml text eol=lf
