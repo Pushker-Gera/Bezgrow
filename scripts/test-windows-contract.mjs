@@ -57,6 +57,11 @@ assert.match(updates, /desktopArchitecture\(\) === "arm64"[\s\S]*windowsArm64/, 
 assert.match(updates, /verifiedInstallerRouteForCurrentPlatform/, "Manual updates must use the integrity-validating download route.")
 assert.match(updatesPanel, /Code signing:[\s\S]*SHA-256:/, "The update card must show signing and checksum status.")
 assert.match(workflow, /npm run lint[\s\S]*npm run typecheck[\s\S]*npm test[\s\S]*npm run build/, "Windows CI must run the complete validation pipeline.")
+assert.match(
+  workflow,
+  /Build the secret-free production desktop bundle[\s\S]*BEZGROW_DESKTOP_BUILD: "1"[\s\S]*SUPABASE_SERVICE_ROLE_KEY: ""[\s\S]*BEZGROW_LICENSE_PRIVATE_KEY: ""/,
+  "Windows CI must build the desktop bundle without server-only Supabase or license signing secrets."
+)
 assert.match(workflow, /push:[\s\S]*tags:[\s\S]*v\*/, "Version tags must trigger the genuine Windows release workflow.")
 assert.match(workflow, /npm run desktop:validate-env/, "Windows CI must reject incomplete public desktop configuration.")
 assert.match(workflow, /makensis\.exe[\s\S]*GITHUB_PATH/, "Windows CI must add the installed NSIS directory to later build steps.")

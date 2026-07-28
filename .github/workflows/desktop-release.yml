@@ -257,7 +257,12 @@ jobs:
       - run: npm run lint
       - run: npm run typecheck
       - run: npm test
-      - run: npm run build
+      - name: Build the secret-free production desktop bundle
+        run: npm run build
+        env:
+          BEZGROW_DESKTOP_BUILD: "1"
+          SUPABASE_SERVICE_ROLE_KEY: ""
+          BEZGROW_LICENSE_PRIVATE_KEY: ""
 
       - name: Download the bundled x64 Node runtime
         shell: pwsh
