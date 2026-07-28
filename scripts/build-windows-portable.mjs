@@ -44,11 +44,17 @@ const zip = spawnSync(
     "-NoProfile",
     "-NonInteractive",
     "-Command",
-    "Compress-Archive -LiteralPath $args[0] -DestinationPath $args[1] -CompressionLevel Optimal -Force",
-    portableDirectory,
-    zipPath,
+    "Compress-Archive -LiteralPath $env:BEZGROW_PORTABLE_SOURCE -DestinationPath $env:BEZGROW_PORTABLE_ZIP -CompressionLevel Optimal -Force",
   ],
-  { cwd: root, encoding: "utf8" }
+  {
+    cwd: root,
+    encoding: "utf8",
+    env: {
+      ...process.env,
+      BEZGROW_PORTABLE_SOURCE: portableDirectory,
+      BEZGROW_PORTABLE_ZIP: zipPath,
+    },
+  }
 );
 if (zip.status !== 0 || !existsSync(zipPath)) {
   throw new Error(`Unable to create the Windows portable ZIP.\n${zip.stderr || zip.stdout}`);

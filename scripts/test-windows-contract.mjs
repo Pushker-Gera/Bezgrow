@@ -49,6 +49,11 @@ assert.match(printEngine, /dynamic-thermal-page-size/, "Long thermal invoices mu
 
 assert.match(portable, /portable\.zip/, "A Windows ZIP release must be generated.")
 assert.match(portable, /portable\.exe/, "A single-file portable Windows release must be generated.")
+assert.match(
+  portable,
+  /BEZGROW_PORTABLE_SOURCE[\s\S]*BEZGROW_PORTABLE_ZIP/,
+  "Portable ZIP assembly must pass Windows paths without fragile positional PowerShell arguments."
+)
 assert.match(portable, /signtool\.exe/, "Portable public executables must be Authenticode signed.")
 assert.match(portable, /Get-AuthenticodeSignature/, "Portable executable signatures must be verified.")
 assert.match(
