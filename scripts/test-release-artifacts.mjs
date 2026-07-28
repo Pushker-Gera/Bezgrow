@@ -166,10 +166,38 @@ const windowsFiles = [
   "public/downloads/Bezgrow-windows.msix",
 ]
 const genuineWindowsExists = windowsFiles.some(existsSync)
+const windowsManifestKeys = [
+  "windows",
+  "windowsMsi",
+  "windowsMsix",
+  "windowsArm64",
+  "windowsArm64Msi",
+  "windowsArm64Msix",
+  "windowsPortable",
+  "windowsPortableZip",
+  "windowsArm64Portable",
+  "windowsArm64PortableZip",
+]
+const publishedWindowsEntries = windowsManifestKeys
+  .map((key) => [key, manifest[key]])
+  .filter(([, installer]) => Boolean(installer))
+
 if (!genuineWindowsExists) {
-  for (const key of ["windows", "windowsMsi", "windowsMsix", "windowsArm64", "windowsArm64Msi", "windowsArm64Msix"]) {
-    assert.equal(manifest[key], undefined, `Manifest must not invent missing Windows artifact ${key}.`)
+  for (const [key, installer] of publishedWindowsEntries) {
+    assert.equal(installer.platform, "windows", `Published artifact ${key} must identify Windows.`)
+    assert.match(
+      installer.downloadUrl || "",
+      /^https:\/\/github\.com\/[^/]+\/[^/]+\/releases\/download\//,
+      `Published artifact ${key} must use a concrete GitHub Release URL.`
+    )
+    assert.ok(installer.size > 1024 * 1024, `Published artifact ${key} must include a realistic byte size.`)
+    assert.match(installer.sha256 || "", /^[a-f0-9]{64}$/i, `Published artifact ${key} must include SHA-256.`)
+    assert.equal(installer.available, true, `Published artifact ${key} must be available.`)
+    assert.equal(installer.checksumVerified, true, `Published artifact ${key} must be checksum-verified.`)
+    assert.equal(installer.metadataValid, true, `Published artifact ${key} must have valid metadata.`)
   }
 }
 
-console.log(`release-artifacts-ok mac=${Boolean(manifest.mac)} windows=${genuineWindowsExists}`)
+console.log(
+  `release-artifacts-ok mac=${Boolean(manifest.mac)} windows=${genuineWindowsExists || publishedWindowsEntries.length > 0}`
+)
