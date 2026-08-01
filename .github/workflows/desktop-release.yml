@@ -740,7 +740,7 @@ jobs:
             echo "Website release metadata is already up to date."
             exit 0
           fi
-          git commit -m "Publish Windows desktop release ${{ steps.release.outputs.version }} [skip ci]"
+          git commit -m "Publish Windows desktop release ${{ steps.release.outputs.version }}"
           git push origin "HEAD:${{ github.event.repository.default_branch }}"
 
       - name: Verify production Windows metadata and binary endpoint

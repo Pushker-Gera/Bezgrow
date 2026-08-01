@@ -43,7 +43,15 @@ for (const [key, installer] of Object.entries(manifest)) {
   if (!installer.signed || (installer.platform === "macos" && !installer.notarized)) {
     assert.equal(installer.releaseChannel, "internal", `${key} unsigned build must be internal/testing.`)
     assert.equal(installer.productionRecommended, false, `${key} unsigned build must not be production-recommended.`)
-    assert.match(installer.warning, /Internal\/testing build:/, `${key} trust warning is missing.`)
+    if (installer.platform === "windows") {
+      assert.match(
+        installer.warning,
+        /Microsoft Defender SmartScreen warning because this installer is not yet code-signed/,
+        `${key} Windows trust warning is missing.`
+      )
+    } else {
+      assert.match(installer.warning, /Internal\/testing build:/, `${key} trust warning is missing.`)
+    }
   }
 }
 

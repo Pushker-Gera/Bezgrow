@@ -84,6 +84,7 @@ assert.match(workflow, /makensis\.exe[\s\S]*GITHUB_PATH/, "Windows CI must add t
 assert.match(workflow, /cargo fmt[\s\S]*cargo check/, "Windows CI must compile-check the native application.")
 assert.match(workflow, /cargo test[\s\S]*x86_64-pc-windows-msvc/, "Windows CI must run native tests for the release target.")
 assert.match(workflow, /verify-production-windows-download\.mjs/, "Release CI must verify the deployed Windows binary endpoint.")
+assert.doesNotMatch(workflow, /Publish Windows desktop release.*\[skip ci\]/, "Release metadata commits must trigger production website deployment.")
 assert.match(workflow, /test-windows-installer\.ps1/, "Windows CI must validate the installer lifecycle.")
 assert.match(workflow, /Bezgrow-Setup-\$\{version\}-x64\.exe/, "The published NSIS filename must be stable and versioned.")
 assert.match(workflow, /Bezgrow-\$\{version\}-x64\.msi/, "The published MSI filename must be stable and versioned.")
