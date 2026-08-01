@@ -109,6 +109,7 @@ function licensePayload(row: StoredLicense, adminLabel: string): LicensePayload 
     business_name: row.business_name,
     device_id: row.device_id,
     platform: row.platform,
+    architecture: row.architecture === "x64" ? "x86_64" : row.architecture,
     app_version: row.app_version,
     plan_name: row.plan_name,
     issue_date: row.issue_date,

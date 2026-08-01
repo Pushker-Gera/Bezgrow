@@ -41,7 +41,7 @@ function installerWarning(platform, signed, notarized) {
     return "Internal/testing build: this macOS installer is not notarized and macOS may show a security warning.";
   }
   if (platform === "windows" && !signed) {
-    return "Internal/testing build: Windows SmartScreen may display a warning because this installer is not code-signed.";
+    return "Windows may show a Microsoft Defender SmartScreen warning because this installer is not yet code-signed. Verify that the publisher is Bezgrow and continue only if downloaded from bezgrow.com.";
   }
   return null;
 }
@@ -141,14 +141,14 @@ const version = readArg("--version") || existingManifest.version || packageJson.
 const installers = {
   mac: buildInstaller("mac", version, readArg("--mac-architecture")),
   macX64: buildInstaller("mac-x64", version, "x64"),
-  windows: buildInstaller("windows", version, "x64"),
-  windowsMsi: buildInstaller("windows-msi", version, "x64"),
-  windowsMsix: buildInstaller("windows-msix", version, "x64"),
+  windows: buildInstaller("windows", version, "x86_64"),
+  windowsMsi: buildInstaller("windows-msi", version, "x86_64"),
+  windowsMsix: buildInstaller("windows-msix", version, "x86_64"),
   windowsArm64: buildInstaller("windows-arm64", version, "arm64"),
   windowsArm64Msi: buildInstaller("windows-arm64-msi", version, "arm64"),
   windowsArm64Msix: buildInstaller("windows-arm64-msix", version, "arm64"),
-  windowsPortable: buildInstaller("windows-portable", version, "x64"),
-  windowsPortableZip: buildInstaller("windows-portable-zip", version, "x64"),
+  windowsPortable: buildInstaller("windows-portable", version, "x86_64"),
+  windowsPortableZip: buildInstaller("windows-portable-zip", version, "x86_64"),
   windowsArm64Portable: buildInstaller("windows-arm64-portable", version, "arm64"),
   windowsArm64PortableZip: buildInstaller("windows-arm64-portable-zip", version, "arm64"),
 };

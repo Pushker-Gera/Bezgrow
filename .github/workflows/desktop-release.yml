@@ -283,12 +283,14 @@ jobs:
       - name: Prepare bundled Next.js server
         run: npm run desktop:prepare
 
-      - name: Check Rust sources and Windows target
+      - name: Check and test Rust sources on the Windows x64 target
         shell: pwsh
         run: |
           cargo fmt --check --manifest-path src-tauri\Cargo.toml
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           cargo check --locked --manifest-path src-tauri\Cargo.toml --target x86_64-pc-windows-msvc
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo test --locked --manifest-path src-tauri\Cargo.toml --target x86_64-pc-windows-msvc
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Resolve Windows signing mode
@@ -394,11 +396,11 @@ jobs:
 
           New-Item -ItemType Directory -Force release-artifacts | Out-Null
           $staged = [ordered]@{
-            nsis = "release-artifacts\Bezgrow_${version}_x64-setup.exe"
-            msi = "release-artifacts\Bezgrow_${version}_x64_en-US.msi"
-            native = "release-artifacts\Bezgrow_${version}_x64.exe"
-            portable = "release-artifacts\Bezgrow_${version}_x64-portable.exe"
-            portableZip = "release-artifacts\Bezgrow_${version}_x64-portable.zip"
+            nsis = "release-artifacts\Bezgrow-Setup-${version}-x64.exe"
+            msi = "release-artifacts\Bezgrow-${version}-x64.msi"
+            native = "release-artifacts\Bezgrow-${version}-x64.exe"
+            portable = "release-artifacts\Bezgrow-${version}-x64-portable.exe"
+            portableZip = "release-artifacts\Bezgrow-${version}-x64-portable.zip"
           }
           Copy-Item -LiteralPath $nsis.FullName -Destination $staged.nsis
           Copy-Item -LiteralPath $msi.FullName -Destination $staged.msi
@@ -439,7 +441,7 @@ jobs:
           [ordered]@{
             version = $version
             platform = "windows"
-            architecture = "x64"
+            architecture = "x86_64"
             buildCommit = "${{ github.sha }}"
             workflowRunId = "${{ github.run_id }}"
             workflowRunNumber = "${{ github.run_number }}"
@@ -651,10 +653,10 @@ jobs:
               WINDOWS_SIGNED=true
               WINDOWS_CHANNEL="stable"
             fi
-            WINDOWS_EXE="$(find "$WINDOWS_DIR" -maxdepth 1 -name 'Bezgrow_*_x64-setup.exe' -print -quit)"
-            WINDOWS_MSI="$(find "$WINDOWS_DIR" -maxdepth 1 -name 'Bezgrow_*_x64_en-US.msi' -print -quit)"
-            WINDOWS_PORTABLE="$(find "$WINDOWS_DIR" -maxdepth 1 -name 'Bezgrow_*_x64-portable.exe' -print -quit)"
-            WINDOWS_PORTABLE_ZIP="$(find "$WINDOWS_DIR" -maxdepth 1 -name 'Bezgrow_*_x64-portable.zip' -print -quit)"
+            WINDOWS_EXE="$(find "$WINDOWS_DIR" -maxdepth 1 -name 'Bezgrow-Setup-*-x64.exe' -print -quit)"
+            WINDOWS_MSI="$(find "$WINDOWS_DIR" -maxdepth 1 -name 'Bezgrow-*-x64.msi' -print -quit)"
+            WINDOWS_PORTABLE="$(find "$WINDOWS_DIR" -maxdepth 1 -name 'Bezgrow-*-x64-portable.exe' -print -quit)"
+            WINDOWS_PORTABLE_ZIP="$(find "$WINDOWS_DIR" -maxdepth 1 -name 'Bezgrow-*-x64-portable.zip' -print -quit)"
             if [ -z "$WINDOWS_EXE" ] || [ -z "$WINDOWS_MSI" ]; then
               echo "The required Windows NSIS and MSI artifacts are missing."
               exit 1

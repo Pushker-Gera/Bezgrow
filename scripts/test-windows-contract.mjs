@@ -82,8 +82,11 @@ assert.match(workflow, /push:[\s\S]*tags:[\s\S]*v\*/, "Version tags must trigger
 assert.match(workflow, /npm run desktop:validate-env/, "Windows CI must reject incomplete public desktop configuration.")
 assert.match(workflow, /makensis\.exe[\s\S]*GITHUB_PATH/, "Windows CI must add the installed NSIS directory to later build steps.")
 assert.match(workflow, /cargo fmt[\s\S]*cargo check/, "Windows CI must compile-check the native application.")
+assert.match(workflow, /cargo test[\s\S]*x86_64-pc-windows-msvc/, "Windows CI must run native tests for the release target.")
 assert.match(workflow, /verify-production-windows-download\.mjs/, "Release CI must verify the deployed Windows binary endpoint.")
 assert.match(workflow, /test-windows-installer\.ps1/, "Windows CI must validate the installer lifecycle.")
+assert.match(workflow, /Bezgrow-Setup-\$\{version\}-x64\.exe/, "The published NSIS filename must be stable and versioned.")
+assert.match(workflow, /Bezgrow-\$\{version\}-x64\.msi/, "The published MSI filename must be stable and versioned.")
 assert.match(installerTest, /ProgramFiles[\s\S]*CommonDesktopDirectory[\s\S]*CommonPrograms/, "Installer QA must verify Program Files and shortcuts.")
 assert.match(installerTest, /update-preservation-test[\s\S]*\/UPDATE[\s\S]*Uninstall removed Bezgrow user data/, "Installer QA must verify update and uninstall data preservation.")
 assert.match(installerTest, /bundled server[\s\S]*\/login[\s\S]*authoritative SQLite database/i, "Installer QA must launch the installed app and verify its local server and database.")
@@ -91,6 +94,9 @@ assert.match(installerTest, /orphan bundled Node process/i, "Installer QA must r
 assert.match(installerTest, /Stop-Process[\s\S]*Bundled runtime supervisor restored the ERP window/, "Installer QA must prove recovery after the embedded server is terminated.")
 assert.match(installerTest, /ShowWindowAsync[\s\S]*IsIconic[\s\S]*IsZoomed/, "Installer QA must exercise minimize, maximize, and restore.")
 assert.match(installerTest, /Get-ExternalBrowserProcessIds[\s\S]*opened an external browser process/, "Installer QA must reject an externally opened browser.")
+assert.match(installerTest, /New-NetFirewallRule[\s\S]*RemoteAddress Internet/, "Installer QA must prove startup with external network access blocked.")
+assert.match(installerTest, /test-windows-installed-sqlite\.mjs[\s\S]*sqlite_crud=ok[\s\S]*license_persistence=ok/, "Installer QA must exercise installed SQLite CRUD and license persistence.")
+assert.match(installerTest, /All installer smoke checks completed successfully/, "Successful installer QA must export workflow diagnostics.")
 assert.match(
   iconGenerator,
   /windowsIconSizes = \[16, 20, 24, 32, 40, 48, 64, 128, 256\]/,

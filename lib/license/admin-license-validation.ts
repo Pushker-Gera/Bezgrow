@@ -37,6 +37,11 @@ const optionalIdempotencyKey = z.preprocess(
   z.string().trim().min(8, "Enter at least 8 characters.").max(160, "Enter no more than 160 characters.").optional()
 )
 
+const licenseArchitecture = z.preprocess(
+  (value) => (value === "x86_64" ? "x64" : value),
+  z.enum(["arm64", "x64"], { error: "Select ARM64 or x86_64 (x64)." })
+)
+
 export const createLicenseSchema = z
   .object({
     customer_name: z.string().trim().min(2, "Enter at least 2 characters.").max(160, "Enter no more than 160 characters."),
@@ -48,7 +53,7 @@ export const createLicenseSchema = z
     workspace_id: optionalWorkspaceId,
     device_id: z.string().trim().min(8, "Enter at least 8 characters.").max(180, "Enter no more than 180 characters."),
     platform: z.enum(["macos", "windows"], { error: "Select macOS or Windows." }),
-    architecture: z.enum(["arm64", "x64"], { error: "Select ARM64 or x64." }).optional(),
+    architecture: licenseArchitecture.optional(),
     app_version: z.string().trim().max(40, "Enter no more than 40 characters.").optional().default(""),
     plan_name: z.string().trim().min(2, "Enter at least 2 characters.").max(80, "Enter no more than 80 characters."),
     issue_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "Enter a valid issue date."),

@@ -12,6 +12,7 @@ export type LicensePayload = {
   business_name: string
   device_id: string
   platform?: "macos" | "windows" | string | null
+  architecture?: "arm64" | "x64" | "x86_64" | string | null
   app_version?: string | null
   plan_name: string
   issue_date?: string | null
@@ -170,6 +171,9 @@ function assertPayload(value: unknown): LicensePayload {
     business_name: String(payload.business_name),
     device_id: String(payload.device_id),
     ...(payload.platform !== undefined ? { platform: payload.platform ? String(payload.platform) : null } : {}),
+    ...(payload.architecture !== undefined
+      ? { architecture: payload.architecture ? String(payload.architecture) : null }
+      : {}),
     ...(payload.app_version !== undefined ? { app_version: payload.app_version ? String(payload.app_version) : null } : {}),
     plan_name: String(payload.plan_name),
     ...(payload.issue_date !== undefined

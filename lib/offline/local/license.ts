@@ -51,6 +51,18 @@ function dateEnd(value: string, graceDays = 0) {
   return date
 }
 
+function normalizedArchitecture(value: unknown) {
+  const architecture = String(value || "").toLowerCase()
+  return architecture === "x64" || architecture === "x86_64" || architecture === "amd64"
+    ? "x86_64"
+    : architecture
+}
+
+function currentDesktopPlatform() {
+  if (typeof navigator === "undefined") return null
+  return /windows/i.test(`${navigator.platform} ${navigator.userAgent}`) ? "windows" : "macos"
+}
+
 function workspaceOrganizationId() {
   const workspace = getCachedWorkspaceBootstrap()
   return workspace?.organization?.id || workspace?.membership?.organization_id || ""
@@ -407,7 +419,7 @@ export async function reportActivatedDevice(
   const platform = /windows/i.test(`${navigator.platform} ${navigator.userAgent}`)
     ? "windows"
     : "macos"
-  const architecture = desktopArchitecture() === "arm64" ? "arm64" : "x64"
+  const architecture = desktopArchitecture() === "arm64" ? "arm64" : "x86_64"
   const apiPath = `/api/desktop-proxy?path=${encodeURIComponent("/api/devices/checkin")}`
   const timeoutSignal = options.signal || AbortSignal.timeout(8_000)
   const response = await fetch(apiPath, {
@@ -459,6 +471,20 @@ export async function activateOfflineLicense(input: unknown) {
   if (parsed.payload.device_id !== deviceId) {
     await logLicenseEvent("global", "LICENSE_WRONG_DEVICE", "Rejected license issued for another device.", parsed.payload.license_id)
     throw new Error("This license was issued for another device.")
+  }
+
+  if (await isTauriRuntimeAsync().catch(() => false)) {
+    const platform = currentDesktopPlatform()
+    if (parsed.payload.platform && platform && parsed.payload.platform !== platform) {
+      await logLicenseEvent("global", "LICENSE_WRONG_PLATFORM", "Rejected license issued for another operating system.", parsed.payload.license_id)
+      throw new Error(`This license was issued for ${parsed.payload.platform === "windows" ? "Windows" : "macOS"}.`)
+    }
+    const currentArchitecture = normalizedArchitecture(desktopArchitecture())
+    const licensedArchitecture = normalizedArchitecture(parsed.payload.architecture)
+    if (licensedArchitecture && licensedArchitecture !== currentArchitecture) {
+      await logLicenseEvent("global", "LICENSE_WRONG_ARCHITECTURE", "Rejected license issued for another processor architecture.", parsed.payload.license_id)
+      throw new Error(`This license was issued for ${parsed.payload.architecture}.`)
+    }
   }
 
   const validSignature = await verifyLicenseForActivation(input, parsed)

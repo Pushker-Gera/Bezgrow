@@ -67,6 +67,8 @@ function basePayload(overrides = {}) {
     business_name: "Release Business",
     device_id: DEVICE_ID,
     plan_name: "Offline ERP",
+    platform: "windows",
+    architecture: "x86_64",
     expiry_date: "2099-12-31",
     grace_period_days: 7,
     allowed_features: ["backup", "billing", "customers", "inventory", "orders", "products", "reports"],
@@ -138,6 +140,8 @@ async function main() {
     const generated = signPayload(basePayload());
     assert.match(generated.licenseKey, /^BZG-LIC-v1\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/);
     assert.equal(generated.payload.device_id, DEVICE_ID);
+    assert.equal(generated.payload.platform, "windows");
+    assert.equal(generated.payload.architecture, "x86_64");
 
     const activated = await activateLikeDesktop(generated.licenseKey);
     assert.equal(activated.parsed.payload.device_id, DEVICE_ID);
@@ -208,7 +212,7 @@ async function main() {
 
     for (const [duration, expiryDate] of durations) {
       for (const platform of ["windows", "macos"]) {
-        for (const architecture of ["x64", "arm64"]) {
+        for (const architecture of platform === "windows" ? ["x86_64", "arm64"] : ["x64", "arm64"]) {
           for (const planName of ["Starter", "Professional", "Enterprise"]) {
             const parsedForm = adminValidation.createLicenseSchema.safeParse({
               ...licenseFormBase,
@@ -224,10 +228,14 @@ async function main() {
             );
             assert.equal(parsedForm.data.workspace_id, undefined, "An empty optional Workspace ID must be omitted.");
             assert.equal(parsedForm.data.internal_notes, "", "Empty optional Internal notes must remain valid.");
+            const signedArchitecture = platform === "windows" && parsedForm.data.architecture === "x64"
+              ? "x86_64"
+              : parsedForm.data.architecture;
 
             const signed = signPayload(basePayload({
               license_id: `lic_matrix_${matrixCount}`,
               platform,
+              architecture: signedArchitecture,
               plan_name: planName,
               issue_date: parsedForm.data.issue_date,
               expiry_date: parsedForm.data.expiry_date,
@@ -236,6 +244,7 @@ async function main() {
             const verified = await activateLikeDesktop(signed.licenseKey);
             assert.equal(verified.status.allowed, true);
             assert.equal(verified.parsed.payload.platform, platform);
+            assert.equal(verified.parsed.payload.architecture, signedArchitecture);
             assert.equal(verified.parsed.payload.plan_name, planName);
             matrixCount += 1;
           }

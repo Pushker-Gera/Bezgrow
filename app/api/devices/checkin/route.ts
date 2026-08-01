@@ -14,7 +14,7 @@ const checkinSchema = z.object({
   business_id: z.string().trim().min(1).max(180).optional(),
   platform: z.enum(["macos", "windows"]),
   operating_system: z.string().trim().max(160),
-  architecture: z.enum(["arm64", "x64"]),
+  architecture: z.enum(["arm64", "x64", "x86_64"]),
   app_version: z.string().trim().min(1).max(40),
   release_channel: z.string().trim().min(1).max(40).default("stable"),
   activation_status: z.enum(["active", "inactive", "pending"]).default("active"),
@@ -52,6 +52,7 @@ export async function POST(request: Request) {
   }
 
   const input = parsed.data
+  const storageArchitecture = input.architecture === "x86_64" ? "x64" : input.architecture
   const auth = await authenticateDeviceReport(request, {
     licenseKey: input.license_key,
     deviceId: input.device_id,
@@ -83,7 +84,7 @@ export async function POST(request: Request) {
         { status: 409, headers: { "Cache-Control": "no-store", "X-Request-Id": requestId } }
       )
     }
-    if (license.architecture && input.architecture !== license.architecture) {
+    if (license.architecture && storageArchitecture !== license.architecture) {
       return Response.json(
         { success: false, error: "Architecture does not match the registered license.", requestId },
         { status: 409, headers: { "Cache-Control": "no-store", "X-Request-Id": requestId } }
@@ -112,7 +113,7 @@ export async function POST(request: Request) {
       p_business_id: auth.context.payload.business_id,
       p_platform: input.platform,
       p_operating_system: input.operating_system,
-      p_architecture: input.architecture,
+      p_architecture: storageArchitecture,
       p_app_version: input.app_version,
       p_release_channel: input.release_channel,
       p_update_check_result: input.update_check_result || null,
@@ -150,7 +151,7 @@ export async function POST(request: Request) {
             license_id: license.id,
             platform: input.platform,
             operating_system: input.operating_system,
-            architecture: input.architecture,
+            architecture: storageArchitecture,
             app_version: input.app_version,
             activation_date: device?.activation_date || now,
             last_reported_at: now,
@@ -194,7 +195,7 @@ export async function POST(request: Request) {
             device_id: input.device_id,
             business_id: auth.context.payload.business_id,
             platform: input.platform,
-            architecture: input.architecture,
+            architecture: storageArchitecture,
             app_version: input.app_version,
             release_channel: input.release_channel,
           },
@@ -213,7 +214,7 @@ export async function POST(request: Request) {
             license_id: license.id,
             business_id: auth.context.payload.business_id,
             platform: input.platform,
-            architecture: input.architecture,
+            architecture: storageArchitecture,
             app_version: input.app_version,
           },
           request_id: requestId,
@@ -231,7 +232,7 @@ export async function POST(request: Request) {
       .from("desktop_releases")
       .select("id,version,build_number,mandatory,rollout_percentage,minimum_supported_version,release_notes,published_at,release_channel,release_artifacts(file_url,file_size,sha256,validation_status,signature_status,notarization_status,code_signing_status,validated_at)")
       .eq("platform", input.platform)
-      .eq("architecture", input.architecture)
+      .eq("architecture", storageArchitecture)
       .eq("release_channel", input.release_channel)
       .eq("release_status", "published")
       .eq("active", true)

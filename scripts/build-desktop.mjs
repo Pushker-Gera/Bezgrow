@@ -40,10 +40,11 @@ function envBoolean(name) {
   return value === "1" || value === "true" || value === "yes";
 }
 
-function buildArchitecture() {
+function buildArchitecture(platform) {
   if (/aarch64|arm64/i.test(targetTriple)) return "arm64";
-  if (/x86_64|x64|amd64/i.test(targetTriple)) return "x64";
-  return process.arch === "arm64" ? "arm64" : "x64";
+  if (/x86_64|x64|amd64/i.test(targetTriple)) return platform === "windows" ? "x86_64" : "x64";
+  if (process.arch === "arm64") return "arm64";
+  return platform === "windows" ? "x86_64" : "x64";
 }
 
 function releaseTrustMetadata({ platform, filename, signed, notarized = false, productionTrusted = false }) {
@@ -51,12 +52,12 @@ function releaseTrustMetadata({ platform, filename, signed, notarized = false, p
     platform === "macos" && (!signed || !notarized)
       ? "Internal/testing build: this macOS installer is not notarized and macOS may show a security warning."
       : platform === "windows" && !signed
-        ? "Internal/testing build: Windows SmartScreen may display a warning because this installer is not code-signed."
+        ? "Windows may show a Microsoft Defender SmartScreen warning because this installer is not yet code-signed. Verify that the publisher is Bezgrow and continue only if downloaded from bezgrow.com."
         : null;
   return {
     filename,
     platform,
-    architecture: buildArchitecture(),
+    architecture: buildArchitecture(platform),
     available: true,
     signed,
     notarized,

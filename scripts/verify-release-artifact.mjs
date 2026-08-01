@@ -23,7 +23,10 @@ const expectedSize = Number(arg("--size", "0"))
 
 if (!existsSync(filePath)) fail(`Installer does not exist: ${filePath}`)
 if (!["macos", "windows"].includes(platform)) fail("Platform must be macos or windows.")
-if (architecture && !["arm64", "x64"].includes(architecture)) fail("Architecture must be arm64 or x64.")
+if (architecture && !["arm64", "x64", "x86_64"].includes(architecture)) {
+  fail("Architecture must be arm64, x64, or x86_64.")
+}
+const comparableArchitecture = architecture === "x86_64" ? "x64" : architecture
 
 const details = statSync(filePath)
 if (!details.isFile() || details.size <= 0) fail("Installer is empty or is not a file.")
@@ -106,7 +109,7 @@ const filenameArchitecture = /(?:^|[-_.])(arm64|aarch64)(?:[-_.]|$)/.test(lowerN
   : /(?:^|[-_.])(x64|x86_64|amd64)(?:[-_.]|$)/.test(lowerName)
     ? "x64"
     : ""
-if (architecture && filenameArchitecture && architecture !== filenameArchitecture) {
+if (architecture && filenameArchitecture && comparableArchitecture !== filenameArchitecture) {
   fail(`Installer architecture ${filenameArchitecture} does not match ${architecture}.`)
 }
 if (
@@ -114,7 +117,7 @@ if (
   executableArchitecture &&
   executableArchitecture !== "unsupported" &&
   !is32BitInstallerBootstrap &&
-  architecture !== executableArchitecture
+  comparableArchitecture !== executableArchitecture
 ) {
   fail(
     `Windows PE machine architecture ${executableArchitecture} does not match ${architecture}.`

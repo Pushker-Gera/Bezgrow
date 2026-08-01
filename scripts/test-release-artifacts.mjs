@@ -23,6 +23,7 @@ const nextConfig = read("next.config.ts")
 const releaseWorkflow = read(".github/workflows/desktop-release.yml")
 const releaseManifestWriter = read("scripts/write-desktop-release-manifest.mjs")
 const publication = read("scripts/publish-release-metadata.mjs")
+const productionWindowsVerifier = read("scripts/verify-production-windows-download.mjs")
 
 for (const field of [
   "available",
@@ -65,7 +66,7 @@ assert.match(
 )
 assert.match(
   validator,
-  /Internal\/testing build: Windows SmartScreen may display a warning because this installer is not code-signed\./,
+  /Windows may show a Microsoft Defender SmartScreen warning because this installer is not yet code-signed\./,
   "Windows internal-build warning is missing."
 )
 assert.match(downloadPage, /right-click the Bezgrow app, choose Open/, "macOS right-click Open guidance is missing.")
@@ -79,6 +80,10 @@ assert.doesNotMatch(releaseWorkflow, /Stable publication and public downloads re
 assert.match(releaseManifestWriter, /productionRecommended/, "Manifest writer must separate availability from production trust.")
 assert.match(publication, /can only be published as an internal\/testing release/, "Unsigned CI metadata must be restricted to internal/testing.")
 assert.match(publication, /signature_status: installer\.signed === true \? "valid" : "invalid"/, "CI metadata must preserve signing truth.")
+assert.match(productionWindowsVerifier, /method: "GET"/, "Production verification must download the complete installer with GET.")
+assert.match(productionWindowsVerifier, /createHash\("sha256"\)/, "Production verification must hash downloaded installer bytes.")
+assert.match(productionWindowsVerifier, /peArchitecture\(firstBytes\)/, "Production verification must validate a real PE executable.")
+assert.match(productionWindowsVerifier, /releases\\\/download/, "Production verification must require durable GitHub Release storage.")
 
 const peFixtureDirectory = mkdtempSync(join(tmpdir(), "bezgrow-pe-validator-"))
 try {

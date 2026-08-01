@@ -118,7 +118,7 @@ try {
     workspace_id: "",
     device_id: `BZG-E2E-${randomUUID().replaceAll("-", "").toUpperCase()}`,
     platform: "windows",
-    architecture: "x64",
+    architecture: "x86_64",
     app_version: "0.1.6",
     plan_name: "Enterprise",
     issue_date: "2026-07-28",
@@ -169,6 +169,7 @@ try {
   const verification = await verificationResponse.json()
   assert.equal(verificationResponse.status, 200, verification.error || "Signed license verification failed.")
   assert.equal(verification.valid, true)
+  assert.equal(verification.payload.architecture, "x86_64")
 
   console.log(
     JSON.stringify({

@@ -231,7 +231,9 @@ function configuredCandidates(platform: InstallerPlatform) {
 
   const rawArchitecture = process.env[`BEZGROW_${prefix}_INSTALLER_ARCHITECTURE`]?.trim()
   const architecture =
-    rawArchitecture === "arm64" || rawArchitecture === "x64" ? rawArchitecture : null
+    rawArchitecture === "arm64" || rawArchitecture === "x64" || rawArchitecture === "x86_64"
+      ? rawArchitecture
+      : null
   const rawSize = Number(process.env[`BEZGROW_${prefix}_INSTALLER_SIZE`] || 0)
   const filename = process.env[`BEZGROW_${prefix}_INSTALLER_FILENAME`]?.trim() || basename(url.split("?")[0])
   return [

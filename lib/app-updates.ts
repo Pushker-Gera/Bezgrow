@@ -202,7 +202,7 @@ async function authenticatedDeviceRelease(currentVersion: string, signal?: Abort
   if (!snapshot?.allowed || typeof licenseKey !== "string" || !licenseKey) return null
 
   const platform = currentPlatform() === "windows" ? "windows" : "macos"
-  const architecture = desktopArchitecture() === "arm64" ? "arm64" : "x64"
+  const architecture = desktopArchitecture() === "arm64" ? "arm64" : "x86_64"
   const response = await fetch(`/api/desktop-proxy?path=${encodeURIComponent("/api/devices/checkin")}`, {
     method: "POST",
     cache: "no-store",

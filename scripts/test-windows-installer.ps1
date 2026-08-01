@@ -21,6 +21,11 @@ $diagnosticsRoot = if ([string]::IsNullOrWhiteSpace($env:RUNNER_TEMP)) {
 }
 $installedNode = Join-Path $installDirectory "node\node.exe"
 $installedServer = Join-Path $installDirectory "next-server\server.js"
+$installedSqliteTest = Join-Path $PSScriptRoot "test-windows-installed-sqlite.mjs"
+$offlineFirewallRules = @(
+  "BezgrowReleaseSmokeApplication",
+  "BezgrowReleaseSmokeRuntime"
+)
 
 Add-Type @"
 using System;
@@ -65,6 +70,49 @@ function Get-ExternalBrowserProcessIds {
     Get-Process -Name "chrome", "msedge", "firefox" -ErrorAction SilentlyContinue |
       ForEach-Object { $_.Id }
   )
+}
+
+function Remove-BezgrowOfflineRules {
+  foreach ($ruleName in $offlineFirewallRules) {
+    Remove-NetFirewallRule -Name $ruleName -ErrorAction SilentlyContinue
+  }
+}
+
+function Enable-BezgrowOfflineMode {
+  Remove-BezgrowOfflineRules
+  New-NetFirewallRule `
+    -Name $offlineFirewallRules[0] `
+    -DisplayName "Bezgrow release smoke - block app internet" `
+    -Direction Outbound `
+    -Action Block `
+    -Program $application `
+    -RemoteAddress Internet `
+    -Profile Any | Out-Null
+  New-NetFirewallRule `
+    -Name $offlineFirewallRules[1] `
+    -DisplayName "Bezgrow release smoke - block bundled runtime internet" `
+    -Direction Outbound `
+    -Action Block `
+    -Program $installedNode `
+    -RemoteAddress Internet `
+    -Profile Any | Out-Null
+
+  & $installedNode -e "fetch('https://www.bezgrow.com', { signal: AbortSignal.timeout(5000) }).then(() => process.exit(42)).catch(() => process.exit(0))"
+  if ($LASTEXITCODE -ne 0) {
+    throw "The bundled runtime could still reach the public internet during the offline test."
+  }
+}
+
+function Invoke-InstalledSqliteCrud([string]$Mode) {
+  Assert-Path $installedSqliteTest "Installed SQLite CRUD test script is missing."
+  & $installedNode `
+    --disable-warning=ExperimentalWarning `
+    $installedSqliteTest `
+    --database $database `
+    --mode $Mode
+  if ($LASTEXITCODE -ne 0) {
+    throw "Installed SQLite CRUD verification failed in $Mode mode."
+  }
 }
 
 function Test-BezgrowWindowControls([System.Diagnostics.Process]$ApplicationProcess, [int]$Cycle) {
@@ -310,12 +358,22 @@ if (-not $uninstallEntry) {
 New-Item -ItemType Directory -Force $dataRoot | Out-Null
 Set-Content -LiteralPath $sentinel -Value "preserve-across-update-and-uninstall" -Encoding UTF8
 Invoke-AppLaunchCycle 1 -TestRuntimeRecovery
+Invoke-InstalledSqliteCrud "seed"
 Invoke-AppLaunchCycle 2
-Invoke-AppLaunchCycle 3
+Invoke-InstalledSqliteCrud "verify"
+
+try {
+  Enable-BezgrowOfflineMode
+  Invoke-AppLaunchCycle 3
+  Invoke-InstalledSqliteCrud "verify"
+} finally {
+  Remove-BezgrowOfflineRules
+}
 
 Invoke-Installer @("/S", "/UPDATE")
 Assert-Path $sentinel "The update removed Bezgrow user data."
 Assert-Path $database "The update removed the Bezgrow SQLite database."
+Invoke-InstalledSqliteCrud "verify"
 
 $uninstallProcess = Start-Process -FilePath $uninstaller -ArgumentList @("/S") -Wait -PassThru
 if ($uninstallProcess.ExitCode -ne 0) {
@@ -323,11 +381,21 @@ if ($uninstallProcess.ExitCode -ne 0) {
 }
 Assert-Path $sentinel "Uninstall removed Bezgrow user data."
 Assert-Path $database "Uninstall removed the Bezgrow SQLite database."
+& node `
+  --disable-warning=ExperimentalWarning `
+  $installedSqliteTest `
+  --database $database `
+  --mode verify
+if ($LASTEXITCODE -ne 0) {
+  throw "SQLite CRUD data was not readable after uninstall."
+}
 
 Invoke-Installer @("/S")
 Assert-Path $application "Reinstall did not restore the application."
 Assert-Path $sentinel "Reinstall did not preserve Bezgrow user data."
 Assert-Path $database "Reinstall did not preserve the Bezgrow SQLite database."
 Invoke-AppLaunchCycle 4
+Invoke-InstalledSqliteCrud "verify"
 
-Write-Host "windows-installer-smoke-ok cycles=4 health=ok route=ok sqlite=ok runtime_recovery=ok window_controls=ok external_browser=none orphan_processes=0"
+Write-SmokeDiagnostics "All installer smoke checks completed successfully." $null
+Write-Host "windows-installer-smoke-ok cycles=4 health=ok route=ok sqlite_crud=ok license_persistence=ok offline=ok runtime_recovery=ok window_controls=ok external_browser=none orphan_processes=0 update_preservation=ok uninstall_preservation=ok reinstall=ok"

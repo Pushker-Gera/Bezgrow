@@ -27,7 +27,7 @@ for (const [key, installer] of Object.entries(manifest)) {
     assert.notEqual(installer[field], undefined, `${key}.${field} is missing.`)
   }
   assert.ok(["macos", "windows"].includes(installer.platform), `${key} platform is invalid.`)
-  assert.ok(["arm64", "x64"].includes(installer.architecture), `${key} architecture is invalid.`)
+  assert.ok(["arm64", "x64", "x86_64"].includes(installer.architecture), `${key} architecture is invalid.`)
   assert.match(installer.sha256, /^[a-f0-9]{64}$/i, `${key} SHA-256 is invalid.`)
   assert.ok(installer.size > 0, `${key} size must be non-zero.`)
   if (installer.file?.startsWith("/downloads/")) {

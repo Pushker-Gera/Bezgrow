@@ -347,7 +347,7 @@ export default function LicensesPage() {
             ))}
             <label className="text-sm font-bold text-neutral-300">
               Platform
-              <select value={form.platform} onChange={(event) => { setForm((current) => ({ ...current, platform: event.target.value })); setFieldErrors((current) => ({ ...current, platform: undefined })) }} className="mt-2 h-11 w-full rounded-xl border border-white/10 bg-black px-3">
+              <select value={form.platform} onChange={(event) => { const nextPlatform = event.target.value; setForm((current) => ({ ...current, platform: nextPlatform, architecture: nextPlatform === "windows" ? "x86_64" : "arm64" })); setFieldErrors((current) => ({ ...current, platform: undefined, architecture: undefined })) }} className="mt-2 h-11 w-full rounded-xl border border-white/10 bg-black px-3">
                 <option value="macos">macOS</option>
                 <option value="windows">Windows</option>
               </select>
@@ -356,7 +356,7 @@ export default function LicensesPage() {
               Architecture
               <select value={form.architecture} onChange={(event) => { setForm((current) => ({ ...current, architecture: event.target.value })); setFieldErrors((current) => ({ ...current, architecture: undefined })) }} className="mt-2 h-11 w-full rounded-xl border border-white/10 bg-black px-3">
                 <option value="arm64">ARM64</option>
-                <option value="x64">x64</option>
+                <option value="x86_64">x86_64 (Windows x64)</option>
               </select>
             </label>
           </div>

@@ -7,7 +7,7 @@ import { basename, extname, resolve, sep } from "node:path"
 import { isPublicHttpsUrl } from "@/lib/security/public-url"
 
 export type InstallerPlatform = "macos" | "windows"
-export type InstallerArchitecture = "arm64" | "x64"
+export type InstallerArchitecture = "arm64" | "x64" | "x86_64"
 
 export type InstallerCandidate = {
   platform: InstallerPlatform
@@ -99,6 +99,10 @@ function inferredArchitecture(filename: string) {
   if (/(?:^|[-_.])(arm64|aarch64)(?:[-_.]|$)/.test(lower)) return "arm64" as const
   if (/(?:^|[-_.])(x64|x86_64|amd64)(?:[-_.]|$)/.test(lower)) return "x64" as const
   return null
+}
+
+function comparableArchitecture(architecture: InstallerArchitecture | PeArchitecture | null) {
+  return architecture === "x86_64" ? "x64" : architecture
 }
 
 function inferredVersion(filename: string) {
@@ -361,7 +365,11 @@ async function validateUncached(candidate: InstallerCandidate): Promise<Validate
   const filenameArchitecture = inferredArchitecture(filename)
   const binaryArchitecture = extension === ".exe" ? peArchitecture(bytes.firstBytes) : null
   const installerBootstrap = is32BitInstallerBootstrap(filename, binaryArchitecture)
-  if (candidate.architecture && filenameArchitecture && candidate.architecture !== filenameArchitecture) {
+  if (
+    candidate.architecture &&
+    filenameArchitecture &&
+    comparableArchitecture(candidate.architecture) !== comparableArchitecture(filenameArchitecture)
+  ) {
     return unavailable(
       { ...candidate, filename, size: bytes.size, sha256: bytes.sha256 },
       `Installer architecture ${filenameArchitecture} does not match metadata architecture ${candidate.architecture}.`
@@ -371,7 +379,7 @@ async function validateUncached(candidate: InstallerCandidate): Promise<Validate
     candidate.architecture &&
     binaryArchitecture &&
     !installerBootstrap &&
-    candidate.architecture !== binaryArchitecture
+    comparableArchitecture(candidate.architecture) !== comparableArchitecture(binaryArchitecture)
   ) {
     return unavailable(
       { ...candidate, filename, size: bytes.size, sha256: bytes.sha256 },
@@ -420,7 +428,7 @@ async function validateUncached(candidate: InstallerCandidate): Promise<Validate
     candidate.platform === "macos" && (!signed || !notarized)
       ? "Internal/testing build: this macOS installer is not notarized and macOS may show a security warning."
       : candidate.platform === "windows" && !signed
-        ? "Internal/testing build: Windows SmartScreen may display a warning because this installer is not code-signed."
+        ? "Windows may show a Microsoft Defender SmartScreen warning because this installer is not yet code-signed. Verify that the publisher is Bezgrow and continue only if downloaded from bezgrow.com."
         : !metadataValid
           ? "Installer is available, but some release metadata is incomplete."
           : null

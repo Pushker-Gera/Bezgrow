@@ -53,7 +53,12 @@ function getInstallerInfo(
   const sizeLabel = release.size ? formatFileSize(release.size) : null
   const statusParts = [
     release.version ? `Version ${release.version}` : null,
-    release.architecture ? release.architecture.toUpperCase() : null,
+    release.platform === "windows" ? "Windows 10/11" : null,
+    release.architecture
+      ? release.architecture === "x86_64"
+        ? "x64"
+        : release.architecture.toUpperCase()
+      : null,
     sizeLabel,
     release.checksumVerified ? "SHA-256 verified" : null,
     release.signed ? "Code signed" : "Unsigned",
