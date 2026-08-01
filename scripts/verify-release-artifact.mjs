@@ -124,7 +124,7 @@ if (
   )
 }
 const filenameVersion =
-  filename.match(/(?:^|[-_.])v?(\d+\.\d+\.\d+(?:[-+][A-Za-z0-9.-]+)?)(?:[-_.]|$)/i)?.[1] || ""
+  filename.match(/(?:^|[-_.])v?(\d+\.\d+\.\d+)(?=[-_.]|$)/i)?.[1] || ""
 if (version && filenameVersion && version !== filenameVersion) {
   fail(`Installer version ${filenameVersion} does not match ${version}.`)
 }

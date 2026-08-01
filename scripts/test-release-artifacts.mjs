@@ -92,8 +92,8 @@ try {
   nsisStub.writeUInt32LE(0x80, 0x3c)
   nsisStub.write("PE\u0000\u0000", 0x80, "binary")
   nsisStub.writeUInt16LE(0x14c, 0x84)
-  const setupFixture = join(peFixtureDirectory, "Bezgrow_0.1.6_x64-setup.exe")
-  const nativeFixture = join(peFixtureDirectory, "Bezgrow_0.1.6_x64.exe")
+  const setupFixture = join(peFixtureDirectory, "Bezgrow-Setup-0.1.7-x64.exe")
+  const nativeFixture = join(peFixtureDirectory, "Bezgrow-0.1.7-x64.exe")
   writeFileSync(setupFixture, nsisStub)
   writeFileSync(nativeFixture, nsisStub)
 
@@ -108,7 +108,7 @@ try {
       "--architecture",
       "x64",
       "--version",
-      "0.1.6",
+      "0.1.7",
     ],
     { encoding: "utf8" }
   )
@@ -125,7 +125,7 @@ try {
       "--architecture",
       "x64",
       "--version",
-      "0.1.6",
+      "0.1.7",
     ],
     { encoding: "utf8" }
   )
