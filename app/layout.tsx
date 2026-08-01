@@ -6,6 +6,8 @@ import DesktopAuthBridge from "@/components/desktop/DesktopAuthBridge"
 import DesktopDatabaseBootstrap from "@/components/desktop/DesktopDatabaseBootstrap"
 import EntryCalculatorAnimation from "@/components/EntryCalculatorAnimation"
 import PwaRegistration from "@/components/PwaRegistration"
+import WindowsTaskbarHelp from "@/components/desktop/WindowsTaskbarHelp"
+import DesktopUpdateCoordinator from "@/components/desktop/DesktopUpdateCoordinator"
 
 const siteUrl = "https://www.bezgrow.com"
 const iconVersion = "20260701"
@@ -132,6 +134,8 @@ export default function RootLayout({
         <DesktopDatabaseBootstrap />
         <PwaRegistration />
         <EntryCalculatorAnimation />
+        <WindowsTaskbarHelp />
+        <DesktopUpdateCoordinator />
 
         {children}
 

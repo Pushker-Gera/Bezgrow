@@ -5,7 +5,7 @@ use std::{
     path::{Component, Path, PathBuf},
     process::{Child, Command},
     sync::{
-        atomic::{AtomicBool, Ordering},
+        atomic::{AtomicBool, AtomicUsize, Ordering},
         Mutex,
     },
     time::{SystemTime, UNIX_EPOCH},
@@ -13,6 +13,23 @@ use std::{
 
 #[cfg(any(target_os = "windows", not(debug_assertions)))]
 use std::process::Stdio;
+
+#[cfg(target_os = "windows")]
+use std::{os::windows::io::AsRawHandle, os::windows::process::CommandExt};
+
+#[cfg(target_os = "windows")]
+use windows_sys::Win32::{
+    Foundation::{CloseHandle, HANDLE},
+    System::{
+        JobObjects::{
+            AssignProcessToJobObject, CreateJobObjectW, JobObjectExtendedLimitInformation,
+            SetInformationJobObject, JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
+            JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
+        },
+        Threading::CREATE_NO_WINDOW,
+    },
+    UI::Shell::SetCurrentProcessExplicitAppUserModelID,
+};
 
 #[cfg(not(debug_assertions))]
 use std::{
@@ -38,11 +55,34 @@ use objc2_web_kit::WKWebView;
 const KEYCHAIN_SERVICE: &str = "com.bezgrow.erp";
 const LOCAL_DATABASE_NAME: &str = "bezgrow-offline.db";
 const WINDOWS_APP_DATA_DIR: &str = "Bezgrow";
+#[cfg(target_os = "windows")]
+const WINDOWS_APP_USER_MODEL_ID: &str = "com.bezgrow.erp";
+const STARTUP_LOG_MAX_BYTES: u64 = 2 * 1024 * 1024;
+const STARTUP_LOG_GENERATIONS: usize = 5;
 #[cfg(not(debug_assertions))]
 const DESKTOP_SERVER_PORT: u16 = 43124;
 
+#[cfg(target_os = "windows")]
+struct WindowsProcessJob(HANDLE);
+
+#[cfg(target_os = "windows")]
+unsafe impl Send for WindowsProcessJob {}
+
+#[cfg(target_os = "windows")]
+impl Drop for WindowsProcessJob {
+    fn drop(&mut self) {
+        if !self.0.is_null() {
+            unsafe {
+                CloseHandle(self.0);
+            }
+        }
+    }
+}
+
 struct NextServerProcess {
     child: Child,
+    #[cfg(target_os = "windows")]
+    _job: WindowsProcessJob,
     #[cfg(not(debug_assertions))]
     port: u16,
 }
@@ -53,6 +93,111 @@ struct NextServerState {
     shutting_down: AtomicBool,
     #[cfg(not(debug_assertions))]
     supervisor_started: AtomicBool,
+}
+
+struct DesktopOperationState {
+    active_critical_operations: AtomicUsize,
+    update_preparing: AtomicBool,
+    print_dialog_active: AtomicBool,
+}
+
+impl DesktopOperationState {
+    fn new() -> Self {
+        Self {
+            active_critical_operations: AtomicUsize::new(0),
+            update_preparing: AtomicBool::new(false),
+            print_dialog_active: AtomicBool::new(false),
+        }
+    }
+}
+
+struct CriticalOperationGuard<'a>(tauri::State<'a, DesktopOperationState>);
+
+impl Drop for CriticalOperationGuard<'_> {
+    fn drop(&mut self) {
+        self.0
+            .active_critical_operations
+            .fetch_sub(1, Ordering::SeqCst);
+    }
+}
+
+fn begin_critical_operation<'a, R: tauri::Runtime>(
+    app: &'a tauri::AppHandle<R>,
+) -> Result<CriticalOperationGuard<'a>, String> {
+    let state = app.state::<DesktopOperationState>();
+    if state.update_preparing.load(Ordering::SeqCst) {
+        return Err("Bezgrow is preparing a verified update. Finish or cancel the update before starting another write, print, backup, restore, migration, or export.".to_string());
+    }
+    state
+        .active_critical_operations
+        .fetch_add(1, Ordering::SeqCst);
+    if state.update_preparing.load(Ordering::SeqCst) {
+        state
+            .active_critical_operations
+            .fetch_sub(1, Ordering::SeqCst);
+        return Err("Bezgrow started update preparation before this operation could begin. Try again after the update.".to_string());
+    }
+    Ok(CriticalOperationGuard(state))
+}
+
+#[cfg(target_os = "windows")]
+fn windows_hidden_command(program: impl AsRef<std::ffi::OsStr>) -> Command {
+    let mut command = Command::new(program);
+    command.creation_flags(CREATE_NO_WINDOW);
+    command
+}
+
+#[cfg(target_os = "windows")]
+fn assign_child_to_kill_on_close_job(child: &Child) -> Result<WindowsProcessJob, String> {
+    unsafe {
+        let job = CreateJobObjectW(std::ptr::null(), std::ptr::null());
+        if job.is_null() {
+            return Err(format!(
+                "Unable to create the Windows process job: {}",
+                std::io::Error::last_os_error()
+            ));
+        }
+
+        let mut information: JOBOBJECT_EXTENDED_LIMIT_INFORMATION = std::mem::zeroed();
+        information.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+        if SetInformationJobObject(
+            job,
+            JobObjectExtendedLimitInformation,
+            &information as *const _ as *const std::ffi::c_void,
+            std::mem::size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32,
+        ) == 0
+        {
+            let error = std::io::Error::last_os_error();
+            CloseHandle(job);
+            return Err(format!(
+                "Unable to configure the Windows process job: {error}"
+            ));
+        }
+
+        if AssignProcessToJobObject(job, child.as_raw_handle() as HANDLE) == 0 {
+            let error = std::io::Error::last_os_error();
+            CloseHandle(job);
+            return Err(format!(
+                "Unable to attach the bundled server to the Windows process job: {error}"
+            ));
+        }
+
+        Ok(WindowsProcessJob(job))
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn configure_windows_app_identity() -> Result<(), String> {
+    let mut identifier = WINDOWS_APP_USER_MODEL_ID.encode_utf16().collect::<Vec<_>>();
+    identifier.push(0);
+    let result = unsafe { SetCurrentProcessExplicitAppUserModelID(identifier.as_ptr()) };
+    if result < 0 {
+        return Err(format!(
+            "Unable to set the Windows AppUserModelID: HRESULT 0x{:08x}",
+            result as u32
+        ));
+    }
+    Ok(())
 }
 
 impl NextServerState {
@@ -71,7 +216,7 @@ fn terminate_child_process(child: &mut Child) {
     #[cfg(target_os = "windows")]
     {
         let pid = child.id().to_string();
-        let _ = Command::new("taskkill.exe")
+        let _ = windows_hidden_command("taskkill.exe")
             .args(["/PID", &pid, "/T", "/F"])
             .stdin(Stdio::null())
             .stdout(Stdio::null())
@@ -138,6 +283,25 @@ fn startup_log_path<R: tauri::Runtime>(manager: &impl Manager<R>) -> PathBuf {
     managed_data_directory(manager, "Logs")
         .unwrap_or_else(|_| std::env::temp_dir().join(WINDOWS_APP_DATA_DIR))
         .join("bezgrow-startup.log")
+}
+
+fn rotate_startup_log<R: tauri::Runtime>(manager: &impl Manager<R>) {
+    let path = startup_log_path(manager);
+    let Ok(metadata) = fs::metadata(&path) else {
+        return;
+    };
+    if metadata.len() < STARTUP_LOG_MAX_BYTES {
+        return;
+    }
+
+    for generation in (1..STARTUP_LOG_GENERATIONS).rev() {
+        let source = path.with_extension(format!("log.{generation}"));
+        let destination = path.with_extension(format!("log.{}", generation + 1));
+        if source.exists() {
+            let _ = fs::rename(source, destination);
+        }
+    }
+    let _ = fs::rename(&path, path.with_extension("log.1"));
 }
 
 #[cfg(target_os = "windows")]
@@ -278,6 +442,14 @@ struct DesktopDatabaseBackup {
     checksum_sha256: String,
     bytes: u64,
     created_at: String,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct DesktopUpdatePreflight {
+    integrity: String,
+    foreign_key_violations: usize,
+    backup: Option<DesktopDatabaseBackup>,
 }
 
 #[derive(Deserialize)]
@@ -620,6 +792,7 @@ fn desktop_save_file<R: tauri::Runtime>(
     bytes: Vec<u8>,
     file_kind: String,
 ) -> Result<Option<DesktopSavedFile>, String> {
+    let _operation = begin_critical_operation(&app)?;
     if bytes.is_empty() {
         return Err("The file is empty and was not saved.".to_string());
     }
@@ -641,6 +814,7 @@ fn desktop_pick_business_logo<R: tauri::Runtime>(
     app: tauri::AppHandle<R>,
     organization_id: String,
 ) -> Result<Option<DesktopBusinessLogo>, String> {
+    let _operation = begin_critical_operation(&app)?;
     const MAX_INPUT_BYTES: u64 = 5 * 1024 * 1024;
     const MAX_DIMENSION: u32 = 1200;
 
@@ -726,6 +900,7 @@ fn desktop_remove_business_logo<R: tauri::Runtime>(
     app: tauri::AppHandle<R>,
     relative_path: String,
 ) -> Result<(), String> {
+    let _operation = begin_critical_operation(&app)?;
     let path = local_asset_path(&app, &relative_path)?;
     if path.exists() {
         fs::remove_file(&path)
@@ -758,9 +933,17 @@ fn desktop_read_local_asset<R: tauri::Runtime>(
 fn desktop_print_current_webview<R: tauri::Runtime>(
     webview: tauri::Webview<R>,
 ) -> Result<(), String> {
+    let app = webview.app_handle().clone();
+    let state = app.state::<DesktopOperationState>();
+    if state.update_preparing.load(Ordering::SeqCst) {
+        return Err(
+            "Bezgrow is preparing an update. Finish or cancel it before printing.".to_string(),
+        );
+    }
+    state.print_dialog_active.store(true, Ordering::SeqCst);
     #[cfg(target_os = "macos")]
     {
-        webview
+        let result = webview
             .with_webview(|platform_webview| unsafe {
                 let native_webview = &*platform_webview.inner().cast::<WKWebView>();
                 let print_info = NSPrintInfo::sharedPrintInfo();
@@ -769,15 +952,21 @@ fn desktop_print_current_webview<R: tauri::Runtime>(
                 operation.setShowsProgressPanel(true);
                 operation.runOperation();
             })
-            .map_err(|error| format!("Unable to open the macOS print panel: {error}"))?;
+            .map_err(|error| format!("Unable to open the macOS print panel: {error}"));
+        state.print_dialog_active.store(false, Ordering::SeqCst);
+        result?;
         return Ok(());
     }
 
     #[cfg(target_os = "windows")]
     {
-        webview
+        let result = webview
             .eval("window.print();")
-            .map_err(|error| format!("Unable to open the Windows print dialog: {error}"))?;
+            .map_err(|error| format!("Unable to open the Windows print dialog: {error}"));
+        if result.is_err() {
+            state.print_dialog_active.store(false, Ordering::SeqCst);
+        }
+        result?;
         return Ok(());
     }
 
@@ -786,6 +975,106 @@ fn desktop_print_current_webview<R: tauri::Runtime>(
         let _ = webview;
         Err("The native print panel is not available on this desktop platform.".to_string())
     }
+}
+
+#[tauri::command]
+fn desktop_finish_print<R: tauri::Runtime>(app: tauri::AppHandle<R>) {
+    app.state::<DesktopOperationState>()
+        .print_dialog_active
+        .store(false, Ordering::SeqCst);
+    append_startup_log_handle(&app, "Invoice print dialog closed");
+}
+
+#[tauri::command]
+fn desktop_open_invoice_print_window<R: tauri::Runtime>(
+    app: tauri::AppHandle<R>,
+    invoice_id: String,
+    format: String,
+    print_job_id: String,
+) -> Result<(), String> {
+    let safe_identifier = |value: &str| {
+        !value.is_empty()
+            && value.len() <= 128
+            && value.chars().all(|character| {
+                character.is_ascii_alphanumeric() || matches!(character, '-' | '_')
+            })
+    };
+    if !safe_identifier(&invoice_id) || !safe_identifier(&print_job_id) {
+        return Err("The invoice print request is invalid.".to_string());
+    }
+    if !matches!(
+        format.as_str(),
+        "a4" | "half-compact" | "half-top" | "thermal"
+    ) {
+        return Err("The selected invoice print format is not supported.".to_string());
+    }
+
+    #[cfg(debug_assertions)]
+    let port = 3000;
+    #[cfg(not(debug_assertions))]
+    let port = app
+        .state::<NextServerState>()
+        .process
+        .lock()
+        .map_err(|_| "The bundled print service is unavailable.".to_string())?
+        .as_ref()
+        .map(|process| process.port)
+        .ok_or_else(|| "The bundled print service is not running.".to_string())?;
+
+    let mut url = tauri::Url::parse(&format!(
+        "http://127.0.0.1:{port}/dashboard/invoices/{invoice_id}/print"
+    ))
+    .map_err(|error| format!("Unable to prepare the invoice print preview: {error}"))?;
+    url.query_pairs_mut()
+        .append_pair("printOnly", "1")
+        .append_pair("autoprint", "1")
+        .append_pair("format", &format)
+        .append_pair("printJob", &print_job_id);
+
+    if let Some(window) = app.get_webview_window("invoice-print") {
+        window
+            .navigate(url)
+            .map_err(|error| format!("Unable to refresh the invoice print preview: {error}"))?;
+        window
+            .show()
+            .map_err(|error| format!("Unable to show the invoice print preview: {error}"))?;
+        window
+            .unminimize()
+            .map_err(|error| format!("Unable to restore the invoice print preview: {error}"))?;
+        window
+            .set_focus()
+            .map_err(|error| format!("Unable to focus the invoice print preview: {error}"))?;
+        return Ok(());
+    }
+
+    let runtime_architecture = if cfg!(target_arch = "aarch64") {
+        "arm64"
+    } else {
+        "x64"
+    };
+    let runtime_script = format!(
+        "window.__BEZGROW_DESKTOP__ = true; window.__BEZGROW_RUNTIME__ = \"tauri-print\"; window.__BEZGROW_ARCH__ = \"{runtime_architecture}\"; window.isTauri = true;"
+    );
+    let builder =
+        tauri::WebviewWindowBuilder::new(&app, "invoice-print", WebviewUrl::External(url))
+            .title("Bezgrow — Invoice Print Preview")
+            .inner_size(1120.0, 860.0)
+            .min_inner_size(760.0, 620.0)
+            .resizable(true)
+            .fullscreen(false)
+            .initialization_script(runtime_script);
+
+    #[cfg(target_os = "windows")]
+    let builder = builder.data_directory(managed_data_directory(&app, "WebView")?);
+
+    builder
+        .build()
+        .map_err(|error| format!("Unable to open the invoice print preview: {error}"))?;
+    append_startup_log_handle(
+        &app,
+        format!("Isolated invoice print preview opened for format={format}"),
+    );
+    Ok(())
 }
 
 async fn create_consistent_database_snapshot(
@@ -1083,6 +1372,7 @@ async fn desktop_export_backup<R: tauri::Runtime>(
     organization_id: String,
     filename: String,
 ) -> Result<Option<DesktopSavedFile>, String> {
+    let _operation = begin_critical_operation(&app)?;
     let safe_filename = safe_extension(
         &sanitize_filename(&filename, "bezgrow-backup.bezgrow-backup"),
         "bezgrow-backup",
@@ -1221,6 +1511,7 @@ async fn desktop_restore_backup<R: tauri::Runtime>(
     app: tauri::AppHandle<R>,
     organization_id: String,
 ) -> Result<Option<DesktopRestoreResult>, String> {
+    let _operation = begin_critical_operation(&app)?;
     let backup_directory = managed_data_directory(&app, "Backups")?;
     fs::create_dir_all(&backup_directory)
         .map_err(|error| format!("Unable to create Bezgrow's backup folder: {error}"))?;
@@ -1406,6 +1697,7 @@ async fn desktop_database_backup<R: tauri::Runtime>(
     app: tauri::AppHandle<R>,
     reason: Option<String>,
 ) -> Result<Option<DesktopDatabaseBackup>, String> {
+    let _operation = begin_critical_operation(&app)?;
     let database_path = local_database_path(&app)?;
     if !database_path.exists() {
         return Ok(None);
@@ -1438,6 +1730,123 @@ async fn desktop_database_backup<R: tauri::Runtime>(
         bytes: metadata.len(),
         created_at,
     }))
+}
+
+#[tauri::command]
+async fn desktop_prepare_update<R: tauri::Runtime>(
+    app: tauri::AppHandle<R>,
+    unsaved_work: bool,
+) -> Result<DesktopUpdatePreflight, String> {
+    if unsaved_work {
+        return Err("The update is waiting because Bezgrow has unsaved work or a billing operation in progress.".to_string());
+    }
+    let state = app.state::<DesktopOperationState>();
+    if state
+        .update_preparing
+        .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+        .is_err()
+    {
+        return Err("An update is already being prepared.".to_string());
+    }
+    if state.active_critical_operations.load(Ordering::SeqCst) != 0 {
+        state.update_preparing.store(false, Ordering::SeqCst);
+        return Err("The update is waiting for the current invoice, print, database write, backup, restore, migration, or export to finish.".to_string());
+    }
+    if state.print_dialog_active.load(Ordering::SeqCst) {
+        state.update_preparing.store(false, Ordering::SeqCst);
+        return Err("The update is waiting for the active print dialog to close.".to_string());
+    }
+
+    let result = async {
+        let database_path = local_database_path(&app)?;
+        if !database_path.exists() {
+            return Ok(DesktopUpdatePreflight {
+                integrity: "database-not-created".to_string(),
+                foreign_key_violations: 0,
+                backup: None,
+            });
+        }
+        let options = SqliteConnectOptions::new()
+            .filename(&database_path)
+            .create_if_missing(false)
+            .foreign_keys(true)
+            .journal_mode(SqliteJournalMode::Wal)
+            .synchronous(SqliteSynchronous::Full)
+            .busy_timeout(std::time::Duration::from_secs(10));
+        let mut connection = SqliteConnection::connect_with(&options)
+            .await
+            .map_err(|error| format!("Unable to open SQLite for the pre-update integrity check: {error}"))?;
+        let integrity = sqlx::query_scalar::<_, String>("PRAGMA quick_check")
+            .fetch_one(&mut connection)
+            .await
+            .map_err(|error| format!("Unable to run the pre-update SQLite integrity check: {error}"))?;
+        if !integrity.eq_ignore_ascii_case("ok") {
+            return Err(format!("The update was cancelled because SQLite integrity is not OK: {integrity}"));
+        }
+        let foreign_key_violations = sqlx::query("PRAGMA foreign_key_check")
+            .fetch_all(&mut connection)
+            .await
+            .map_err(|error| format!("Unable to run the pre-update relationship check: {error}"))?
+            .len();
+        connection.close().await.map_err(|error| format!("Unable to close SQLite after the pre-update check: {error}"))?;
+        if foreign_key_violations != 0 {
+            return Err(format!("The update was cancelled because SQLite has {foreign_key_violations} foreign-key violations."));
+        }
+
+        let backup_dir = managed_data_directory(&app, "Backups")?;
+        fs::create_dir_all(&backup_dir)
+            .map_err(|error| format!("Unable to create the pre-update backup folder: {error}"))?;
+        let backup_path = backup_dir.join(format!("bezgrow-offline-pre-update-{}.db", unix_timestamp()));
+        create_consistent_database_snapshot(&database_path, &backup_path).await?;
+        let metadata = fs::metadata(&backup_path)
+            .map_err(|error| format!("Unable to inspect the pre-update backup: {error}"))?;
+        let backup = DesktopDatabaseBackup {
+            backup_path: backup_path.to_string_lossy().to_string(),
+            checksum_sha256: sha256_file(&backup_path)?,
+            bytes: metadata.len(),
+            created_at: unix_timestamp(),
+        };
+        append_startup_log_handle(
+            &app,
+            format!(
+                "Pre-update safety check passed: quick_check=ok, foreign_key_violations=0, backup={}, sha256={}",
+                backup.backup_path, backup.checksum_sha256
+            ),
+        );
+        Ok(DesktopUpdatePreflight {
+            integrity,
+            foreign_key_violations,
+            backup: Some(backup),
+        })
+    }
+    .await;
+
+    if result.is_err() {
+        state.update_preparing.store(false, Ordering::SeqCst);
+    }
+    result
+}
+
+#[tauri::command]
+fn desktop_cancel_update_preparation<R: tauri::Runtime>(app: tauri::AppHandle<R>) {
+    app.state::<DesktopOperationState>()
+        .update_preparing
+        .store(false, Ordering::SeqCst);
+    append_startup_log_handle(&app, "Update preparation lock released");
+}
+
+#[tauri::command]
+fn desktop_restart_after_update<R: tauri::Runtime>(app: tauri::AppHandle<R>) -> Result<(), String> {
+    if !app
+        .state::<DesktopOperationState>()
+        .update_preparing
+        .load(Ordering::SeqCst)
+    {
+        return Err("A verified update has not been prepared.".to_string());
+    }
+    append_startup_log_handle(&app, "Verified update installed; restarting Bezgrow");
+    stop_next_server(&app);
+    app.restart();
 }
 
 fn statement_preview(query: &str) -> String {
@@ -1590,6 +1999,7 @@ async fn desktop_execute<R: tauri::Runtime>(
     app: tauri::AppHandle<R>,
     statement: DesktopSqlStatement,
 ) -> Result<u64, String> {
+    let _operation = begin_critical_operation(&app)?;
     let database_path = local_database_path(&app)?;
     let options = SqliteConnectOptions::new()
         .filename(&database_path)
@@ -1650,6 +2060,7 @@ async fn desktop_execute_transaction<R: tauri::Runtime>(
     app: tauri::AppHandle<R>,
     statements: Vec<DesktopSqlStatement>,
 ) -> Result<DesktopTransactionResult, String> {
+    let _operation = begin_critical_operation(&app)?;
     let database_path = local_database_path(&app)?;
     match execute_transaction_at_path(&database_path, &statements).await {
         Ok(result) => Ok(result),
@@ -2040,6 +2451,7 @@ fn desktop_save_invoice_pdf<R: tauri::Runtime>(
     filename: String,
     bytes: Vec<u8>,
 ) -> Result<Option<DesktopSavedFile>, String> {
+    let _operation = begin_critical_operation(&app)?;
     if bytes.len() < 5 || !bytes.starts_with(b"%PDF-") {
         return Err("The generated invoice is not a valid PDF.".to_string());
     }
@@ -2061,9 +2473,12 @@ fn open_external_url(url: String) -> Result<(), String> {
 
     #[cfg(target_os = "windows")]
     {
-        Command::new("rundll32.exe")
+        windows_hidden_command("rundll32.exe")
             .arg("url.dll,FileProtocolHandler")
             .arg(&url)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
             .spawn()
             .map_err(|error| format!("Unable to open browser: {error}"))?;
         return Ok(());
@@ -2156,8 +2571,11 @@ fn desktop_reveal_file(path: String) -> Result<(), String> {
 
     #[cfg(target_os = "windows")]
     {
-        Command::new("explorer.exe")
+        windows_hidden_command("explorer.exe")
             .arg(format!("/select,{}", target.to_string_lossy()))
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
             .spawn()
             .map_err(|error| format!("Unable to show the saved file: {error}"))?;
         return Ok(());
@@ -2199,9 +2617,12 @@ fn desktop_open_file(path: String) -> Result<(), String> {
 
     #[cfg(target_os = "windows")]
     {
-        Command::new("rundll32.exe")
+        windows_hidden_command("rundll32.exe")
             .arg("url.dll,FileProtocolHandler")
             .arg(&target)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
             .spawn()
             .map_err(|error| format!("Unable to open the saved file: {error}"))?;
         return Ok(());
@@ -2273,30 +2694,17 @@ fn wait_for_local_server(child: &mut Child, port: u16) -> Result<(), String> {
 fn reserve_local_port<R: tauri::Runtime>(
     app: &tauri::AppHandle<R>,
 ) -> Result<u16, Box<dyn std::error::Error>> {
-    let listener = match TcpListener::bind(("127.0.0.1", DESKTOP_SERVER_PORT)) {
-        Ok(listener) => listener,
-        Err(fixed_port_error) => {
-            // A force-quit or operating-system crash can leave the bundled Node
-            // child orphaned. SQLite and desktop authentication are persisted
-            // outside WebKit's origin-scoped storage, and OAuth already returns
-            // to the current local origin, so keep the ERP usable on an isolated
-            // loopback port instead of blocking startup.
-            append_startup_log(
-                app,
-                format!(
-                    "Desktop port {DESKTOP_SERVER_PORT} is occupied ({fixed_port_error}); selecting an isolated loopback fallback port"
-                ),
-            );
-            TcpListener::bind(("127.0.0.1", 0)).map_err(|fallback_error| {
-                format!(
-                    "Bezgrow could not reserve a local desktop server port. Fixed port error: {fixed_port_error}; fallback error: {fallback_error}"
-                )
-            })?
-        }
-    };
-    let port = listener.local_addr()?.port();
+    let listener = TcpListener::bind(("127.0.0.1", DESKTOP_SERVER_PORT)).map_err(|error| {
+        append_startup_log(
+            app,
+            format!("Managed desktop port {DESKTOP_SERVER_PORT} is unavailable: {error}"),
+        );
+        format!(
+            "Bezgrow's managed local server port {DESKTOP_SERVER_PORT} is already in use. Close any remaining Bezgrow process and reopen the app. The desktop app will not switch to an untrusted fallback origin."
+        )
+    })?;
     drop(listener);
-    Ok(port)
+    Ok(DESKTOP_SERVER_PORT)
 }
 
 #[cfg(all(not(debug_assertions), target_os = "windows"))]
@@ -2385,7 +2793,11 @@ fn start_next_server<R: tauri::Runtime>(
         .append(true)
         .open(&log_path)?;
 
-    let mut child = Command::new(&node_path)
+    let mut command = Command::new(&node_path);
+    #[cfg(target_os = "windows")]
+    command.creation_flags(CREATE_NO_WINDOW);
+
+    let mut child = command
         .arg(&server_entry)
         .current_dir(&server_dir)
         .env("HOSTNAME", "127.0.0.1")
@@ -2407,14 +2819,27 @@ fn start_next_server<R: tauri::Runtime>(
             )
         })?;
 
+    #[cfg(target_os = "windows")]
+    let process_job = match assign_child_to_kill_on_close_job(&child) {
+        Ok(job) => job,
+        Err(error) => {
+            terminate_child_process(&mut child);
+            return Err(error.into());
+        }
+    };
+
     if let Err(error) = wait_for_local_server(&mut child, port) {
         terminate_child_process(&mut child);
         return Err(error.into());
     }
 
     let state = app.state::<NextServerState>();
-    *state.process.lock().expect("next server state poisoned") =
-        Some(NextServerProcess { child, port });
+    *state.process.lock().expect("next server state poisoned") = Some(NextServerProcess {
+        child,
+        #[cfg(target_os = "windows")]
+        _job: process_job,
+        port,
+    });
     append_startup_log(app, format!("Bundled Next server is ready on port {port}"));
 
     Ok(port)
@@ -2624,9 +3049,18 @@ fn start_runtime_supervisor<R: tauri::Runtime>(_app: tauri::AppHandle<R>) {}
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     #[cfg(target_os = "windows")]
-    append_early_startup_log("Bezgrow native process entered");
+    {
+        append_early_startup_log("Bezgrow native process entered");
+        if let Err(error) = configure_windows_app_identity() {
+            append_early_startup_log(error);
+        }
+    }
 
-    tauri::Builder::default()
+    let builder = tauri::Builder::default();
+    #[cfg(bezgrow_updater_enabled)]
+    let builder = builder.plugin(tauri_plugin_updater::Builder::new().build());
+
+    builder
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
             if let Some(window) = app.get_webview_window("main") {
                 let _ = window.show();
@@ -2635,8 +3069,10 @@ pub fn run() {
             }
         }))
         .setup(|app| {
+            rotate_startup_log(app);
             append_startup_log(app, "Tauri setup entered");
             app.manage(NextServerState::new());
+            app.manage(DesktopOperationState::new());
             if let Err(error) = prepare_managed_data(&app.handle()) {
                 append_startup_log(
                     app,
@@ -2673,7 +3109,17 @@ pub fn run() {
                 if window.label() == "platform-admin" {
                     append_startup_log_handle(
                         &app,
-                        "Platform Administration window closed; local ERP remains open",
+                        "Auxiliary window platform-admin closed; local ERP remains open",
+                    );
+                    return;
+                }
+                if window.label() == "invoice-print" {
+                    app.state::<DesktopOperationState>()
+                        .print_dialog_active
+                        .store(false, Ordering::SeqCst);
+                    append_startup_log_handle(
+                        &app,
+                        "Auxiliary window invoice-print closed; local ERP remains open",
                     );
                     return;
                 }
@@ -2698,6 +3144,9 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             desktop_database_diagnostics,
             desktop_database_backup,
+            desktop_prepare_update,
+            desktop_cancel_update_preparation,
+            desktop_restart_after_update,
             desktop_execute,
             desktop_select,
             desktop_execute_transaction,
@@ -2711,6 +3160,8 @@ pub fn run() {
             desktop_remove_business_logo,
             desktop_read_local_asset,
             desktop_print_current_webview,
+            desktop_finish_print,
+            desktop_open_invoice_print_window,
             desktop_reveal_file,
             desktop_open_file,
             desktop_export_backup,

@@ -1,22 +1,24 @@
 "use client"
 
-import { useMemo, useState } from "react"
+import { useEffect, useMemo, useState } from "react"
 import {
-  absoluteInstallerUrl,
   appUpdateStatusLabel,
   fetchDesktopReleaseManifest,
   formatUpdateSize,
-  installerHrefForCurrentPlatform,
   isDesktopUpdateAvailable,
   isOnline,
   latestVersionForCurrentPlatform,
   normalizeReleaseNotes,
   releaseForCurrentPlatform,
-  verifiedInstallerRouteForCurrentPlatform,
   type AppUpdateStatus,
   type DesktopReleaseManifest,
 } from "@/lib/app-updates"
-import { openExternalUrl } from "@/lib/desktop/tauri"
+import {
+  UPDATE_CHECK_EVENT,
+  UPDATE_INSTALL_EVENT,
+  readUpdateDecision,
+  remindLater,
+} from "@/lib/desktop/update-state"
 import packageJson from "@/package.json"
 
 function statusColor(status: AppUpdateStatus) {
@@ -38,11 +40,17 @@ export default function AppUpdatesPanel() {
   const platformRelease = releaseForCurrentPlatform(manifest)
   const releaseNotes = useMemo(() => normalizeReleaseNotes(manifest), [manifest])
   const updateAvailable = isDesktopUpdateAvailable(manifest, currentVersion)
-  const installerHref = installerHrefForCurrentPlatform(manifest)
   const updatePostponed = Boolean(updateAvailable && postponedVersion === latestVersion)
   const releaseSize = formatUpdateSize(platformRelease?.size)
 
+  useEffect(() => {
+    if (!latestVersion) return
+    const saved = readUpdateDecision(latestVersion)
+    if (saved.nextPromptAt > Date.now()) setPostponedVersion(latestVersion)
+  }, [latestVersion])
+
   async function checkUpdates() {
+    window.dispatchEvent(new CustomEvent(UPDATE_CHECK_EVENT))
     if (!isOnline()) {
       setStatus("offline")
       setMessage("Connect to the internet to check for updates.")
@@ -85,25 +93,15 @@ export default function AppUpdatesPanel() {
 
   async function updateNow() {
     setStatus("downloading")
-    setMessage("Opening the SHA-256 verified Bezgrow installer.")
-
-    try {
-      await openExternalUrl(
-        absoluteInstallerUrl(
-          installerHref ? verifiedInstallerRouteForCurrentPlatform() : installerHref
-        )
-      )
-      setStatus("ready")
-      setMessage("Ready to install. Finish the installer when it opens; your local database and license stay on this device.")
-    } catch {
-      setStatus("failed")
-      setMessage("Update failed, try again.")
-    }
+    setMessage("Preparing the signed in-app update. Bezgrow will first verify SQLite and create a backup.")
+    window.dispatchEvent(new CustomEvent(UPDATE_INSTALL_EVENT))
+    setStatus("ready")
   }
 
   function postponeUpdate() {
+    remindLater(latestVersion)
     setPostponedVersion(latestVersion)
-    setMessage("Update postponed. You can install it later from this page.")
+    setMessage("Update postponed for 6 hours. The first safe opportunity after 48 hours is still enforced.")
   }
 
   return (
@@ -116,7 +114,7 @@ export default function AppUpdatesPanel() {
           </p>
         </div>
         <span className="w-fit rounded-full border border-cyan-400/20 bg-cyan-500/10 px-4 py-2 text-xs font-black uppercase tracking-[0.16em] text-cyan-100">
-          Manual only
+          Signed in-app updater
         </span>
       </div>
 

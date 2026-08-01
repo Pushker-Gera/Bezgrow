@@ -15,6 +15,15 @@ type WindowsRelease = {
   releaseChannel?: string
   checksumVerified?: boolean
   installerType?: string
+  architecture?: "x86_64" | "arm64"
+  platform?: "windows" | "macos"
+  updaterUrl?: string
+  updaterSignature?: string
+  updaterSize?: number
+  updaterSha256?: string
+  publicationStatus?: string
+  releaseDate?: string
+  mandatoryAfter?: string | null
 }
 
 type MacRelease = WindowsRelease & {
@@ -232,11 +241,20 @@ async function authenticatedDeviceRelease(currentVersion: string, signal?: Abort
       mandatory?: boolean
       release_channel?: string
       published_at?: string | null
+      mandatory_after?: string | null
       release_artifacts?: Array<{
         file_url?: string
         file_size?: number
         sha256?: string
         validated_at?: string | null
+        signature_status?: string
+        notarization_status?: string
+        code_signing_status?: string
+        validation_status?: string
+        updater_url?: string | null
+        updater_size?: number | null
+        updater_sha256?: string | null
+        update_signature?: string | null
       }>
     } | null
   } | null
@@ -251,17 +269,31 @@ async function authenticatedDeviceRelease(currentVersion: string, signal?: Abort
 
   const release = payload.eligibleRelease
   const artifact = release.release_artifacts?.[0]
-  if (!release.version || !artifact?.file_url || !artifact.file_size || !artifact.sha256) return null
+  const trusted =
+    artifact?.validation_status === "valid" &&
+    artifact.signature_status === "valid" &&
+    artifact.code_signing_status === "valid" &&
+    (platform !== "macos" || artifact.notarization_status === "valid")
+  if (!release.version || !artifact?.file_url || !artifact.file_size || !artifact.sha256 || !trusted) return null
   const installer: WindowsRelease = {
     downloadUrl: artifact.file_url,
     version: release.version,
     size: Number(artifact.file_size),
     sha256: artifact.sha256,
-    signed: true,
+    signed: artifact.signature_status === "valid" && artifact.code_signing_status === "valid",
     generatedAt: artifact.validated_at || release.published_at || payload.serverTime,
     mandatory: Boolean(release.mandatory),
     minimumSupportedVersion: release.minimum_supported_version || null,
     releaseChannel: release.release_channel || "stable",
+    platform,
+    architecture,
+    updaterUrl: artifact.updater_url || undefined,
+    updaterSignature: artifact.update_signature || undefined,
+    updaterSize: artifact.updater_size || undefined,
+    updaterSha256: artifact.updater_sha256 || undefined,
+    publicationStatus: "published",
+    releaseDate: release.published_at || undefined,
+    mandatoryAfter: release.mandatory_after || null,
   }
   const manifest: DesktopReleaseManifest = {
     version: release.version,
@@ -269,7 +301,10 @@ async function authenticatedDeviceRelease(currentVersion: string, signal?: Abort
     releaseNotes: release.release_notes ? [release.release_notes] : [],
   }
   if (platform === "macos") {
-    const macInstaller: MacRelease = { ...installer, notarized: true }
+    const macInstaller: MacRelease = {
+      ...installer,
+      notarized: artifact.notarization_status === "valid",
+    }
     if (architecture === "arm64") manifest.mac = macInstaller
     else manifest.macX64 = macInstaller
   } else if (architecture === "arm64") {
@@ -293,4 +328,31 @@ export async function fetchDesktopReleaseManifest(signal?: AbortSignal, currentV
     ? `/api/desktop-proxy?path=${encodeURIComponent(manifestPath)}`
     : manifestPath
   return readManifest(url, signal)
+}
+
+export async function reportDesktopUpdateResult(
+  currentVersion: string,
+  result: "success" | "failed" | "no_update" | "update_available",
+) {
+  if (!isOnline() || !(await isTauriRuntimeAsync())) return false
+  const snapshot = await localLicenseSnapshot().catch(() => null)
+  const licenseKey = snapshot?.license?.license_key
+  if (!snapshot?.allowed || typeof licenseKey !== "string" || !licenseKey) return false
+  const response = await fetch(`/api/desktop-proxy?path=${encodeURIComponent("/api/devices/checkin")}`, {
+    method: "POST",
+    cache: "no-store",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      license_key: licenseKey,
+      device_id: snapshot.device_id,
+      platform: currentPlatform() === "windows" ? "windows" : "macos",
+      operating_system: navigator.userAgent.slice(0, 160),
+      architecture: desktopArchitecture() === "arm64" ? "arm64" : "x86_64",
+      app_version: currentVersion,
+      release_channel: "stable",
+      diagnostics_available: false,
+      update_check_result: result,
+    }),
+  }).catch(() => null)
+  return Boolean(response?.ok)
 }

@@ -183,6 +183,12 @@
           "markdownDescription": "Enables the delete_secret command without any pre-configured scope."
         },
         {
+          "description": "Enables the desktop_cancel_update_preparation command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-desktop-cancel-update-preparation",
+          "markdownDescription": "Enables the desktop_cancel_update_preparation command without any pre-configured scope."
+        },
+        {
           "description": "Enables the desktop_database_backup command without any pre-configured scope.",
           "type": "string",
           "const": "allow-desktop-database-backup",
@@ -219,16 +225,34 @@
           "markdownDescription": "Enables the desktop_export_backup command without any pre-configured scope."
         },
         {
+          "description": "Enables the desktop_finish_print command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-desktop-finish-print",
+          "markdownDescription": "Enables the desktop_finish_print command without any pre-configured scope."
+        },
+        {
           "description": "Enables the desktop_open_file command without any pre-configured scope.",
           "type": "string",
           "const": "allow-desktop-open-file",
           "markdownDescription": "Enables the desktop_open_file command without any pre-configured scope."
         },
         {
+          "description": "Enables the desktop_open_invoice_print_window command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-desktop-open-invoice-print-window",
+          "markdownDescription": "Enables the desktop_open_invoice_print_window command without any pre-configured scope."
+        },
+        {
           "description": "Enables the desktop_pick_business_logo command without any pre-configured scope.",
           "type": "string",
           "const": "allow-desktop-pick-business-logo",
           "markdownDescription": "Enables the desktop_pick_business_logo command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the desktop_prepare_update command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-desktop-prepare-update",
+          "markdownDescription": "Enables the desktop_prepare_update command without any pre-configured scope."
         },
         {
           "description": "Enables the desktop_print_current_webview command without any pre-configured scope.",
@@ -247,6 +271,12 @@
           "type": "string",
           "const": "allow-desktop-remove-business-logo",
           "markdownDescription": "Enables the desktop_remove_business_logo command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the desktop_restart_after_update command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-desktop-restart-after-update",
+          "markdownDescription": "Enables the desktop_restart_after_update command without any pre-configured scope."
         },
         {
           "description": "Enables the desktop_restore_backup command without any pre-configured scope.",
@@ -321,6 +351,12 @@
           "markdownDescription": "Denies the delete_secret command without any pre-configured scope."
         },
         {
+          "description": "Denies the desktop_cancel_update_preparation command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-desktop-cancel-update-preparation",
+          "markdownDescription": "Denies the desktop_cancel_update_preparation command without any pre-configured scope."
+        },
+        {
           "description": "Denies the desktop_database_backup command without any pre-configured scope.",
           "type": "string",
           "const": "deny-desktop-database-backup",
@@ -357,16 +393,34 @@
           "markdownDescription": "Denies the desktop_export_backup command without any pre-configured scope."
         },
         {
+          "description": "Denies the desktop_finish_print command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-desktop-finish-print",
+          "markdownDescription": "Denies the desktop_finish_print command without any pre-configured scope."
+        },
+        {
           "description": "Denies the desktop_open_file command without any pre-configured scope.",
           "type": "string",
           "const": "deny-desktop-open-file",
           "markdownDescription": "Denies the desktop_open_file command without any pre-configured scope."
         },
         {
+          "description": "Denies the desktop_open_invoice_print_window command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-desktop-open-invoice-print-window",
+          "markdownDescription": "Denies the desktop_open_invoice_print_window command without any pre-configured scope."
+        },
+        {
           "description": "Denies the desktop_pick_business_logo command without any pre-configured scope.",
           "type": "string",
           "const": "deny-desktop-pick-business-logo",
           "markdownDescription": "Denies the desktop_pick_business_logo command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the desktop_prepare_update command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-desktop-prepare-update",
+          "markdownDescription": "Denies the desktop_prepare_update command without any pre-configured scope."
         },
         {
           "description": "Denies the desktop_print_current_webview command without any pre-configured scope.",
@@ -385,6 +439,12 @@
           "type": "string",
           "const": "deny-desktop-remove-business-logo",
           "markdownDescription": "Denies the desktop_remove_business_logo command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the desktop_restart_after_update command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-desktop-restart-after-update",
+          "markdownDescription": "Denies the desktop_restart_after_update command without any pre-configured scope."
         },
         {
           "description": "Denies the desktop_restore_backup command without any pre-configured scope.",
@@ -2467,6 +2527,60 @@
           "type": "string",
           "const": "core:window:deny-unminimize",
           "markdownDescription": "Denies the unminimize command without any pre-configured scope."
+        },
+        {
+          "description": "This permission set configures which kind of\nupdater functions are exposed to the frontend.\n\n#### Granted Permissions\n\nThe full workflow from checking for updates to installing them\nis enabled.\n\n\n#### This default permission set includes:\n\n- `allow-check`\n- `allow-download`\n- `allow-install`\n- `allow-download-and-install`",
+          "type": "string",
+          "const": "updater:default",
+          "markdownDescription": "This permission set configures which kind of\nupdater functions are exposed to the frontend.\n\n#### Granted Permissions\n\nThe full workflow from checking for updates to installing them\nis enabled.\n\n\n#### This default permission set includes:\n\n- `allow-check`\n- `allow-download`\n- `allow-install`\n- `allow-download-and-install`"
+        },
+        {
+          "description": "Enables the check command without any pre-configured scope.",
+          "type": "string",
+          "const": "updater:allow-check",
+          "markdownDescription": "Enables the check command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the download command without any pre-configured scope.",
+          "type": "string",
+          "const": "updater:allow-download",
+          "markdownDescription": "Enables the download command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the download_and_install command without any pre-configured scope.",
+          "type": "string",
+          "const": "updater:allow-download-and-install",
+          "markdownDescription": "Enables the download_and_install command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the install command without any pre-configured scope.",
+          "type": "string",
+          "const": "updater:allow-install",
+          "markdownDescription": "Enables the install command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the check command without any pre-configured scope.",
+          "type": "string",
+          "const": "updater:deny-check",
+          "markdownDescription": "Denies the check command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the download command without any pre-configured scope.",
+          "type": "string",
+          "const": "updater:deny-download",
+          "markdownDescription": "Denies the download command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the download_and_install command without any pre-configured scope.",
+          "type": "string",
+          "const": "updater:deny-download-and-install",
+          "markdownDescription": "Denies the download_and_install command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the install command without any pre-configured scope.",
+          "type": "string",
+          "const": "updater:deny-install",
+          "markdownDescription": "Denies the install command without any pre-configured scope."
         }
       ]
     },

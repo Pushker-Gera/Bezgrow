@@ -111,6 +111,12 @@ export function PrintEngine({
       .catch((error) => setNotice(error instanceof Error ? error.message : "Print settings could not be saved."))
   }
 
+  function changeFormat(nextFormat: PrintFormat) {
+    setFormat(nextFormat)
+    if (publicMode) return
+    updateSettings({ defaultFormat: nextFormat })
+  }
+
   function escapeHtml(value: string) {
     return value
       .replaceAll("&", "&amp;")
@@ -121,17 +127,17 @@ export function PrintEngine({
 
   function printWindowOverrides() {
     const thermalPaperWidth = settings.thermalWidth === "58mm" ? "58mm" : "80mm"
-    const printSafeMargin = format === "thermal" ? "0" : "7mm"
+    const printSafeMargin = format === "thermal" || format === "half-top" ? "0" : "7mm"
     const pageSize =
       format === "thermal"
         ? `${thermalPaperWidth} 160mm`
         : format === "half-top"
-          ? "210mm 148.5mm"
+          ? "A4 portrait"
           : format === "half-compact"
             ? "A5 portrait"
             : "A4 portrait"
-    const bodyWidth = format === "thermal" ? thermalPaperWidth : format === "half-compact" ? "134mm" : "196mm"
-    const bodyHeight = format === "half-top" ? "134.5mm" : format === "half-compact" ? "196mm" : format === "thermal" ? "auto" : "283mm"
+    const bodyWidth = format === "thermal" ? thermalPaperWidth : format === "half-compact" ? "134mm" : format === "half-top" ? "210mm" : "196mm"
+    const bodyHeight = format === "half-top" ? "297mm" : format === "half-compact" ? "196mm" : format === "thermal" ? "auto" : "283mm"
 
     return `
       <style>
@@ -194,18 +200,20 @@ export function PrintEngine({
             padding: 6mm !important;
           }
           .print-half-top {
-            width: ${bodyWidth} !important;
-            max-width: ${bodyWidth} !important;
-            min-height: 134.5mm !important;
-            max-height: none !important;
+            width: 210mm !important;
+            max-width: 210mm !important;
+            height: 148.5mm !important;
+            min-height: 148.5mm !important;
+            max-height: 148.5mm !important;
             padding: 0 !important;
+            overflow: hidden !important;
           }
           .top-half-content {
-            height: auto !important;
-            min-height: 134.5mm !important;
-            max-height: none !important;
+            height: 148.5mm !important;
+            min-height: 148.5mm !important;
+            max-height: 148.5mm !important;
             padding: 4mm !important;
-            overflow: visible !important;
+            overflow: hidden !important;
           }
           .print-thermal {
             width: ${thermalPaperWidth} !important;
@@ -378,18 +386,79 @@ export function PrintEngine({
     document.head.appendChild(style)
   }
 
+  function validatePrintableLayout() {
+    const paper = document.querySelector<HTMLElement>(".print-preview-stage .invoice-paper")
+    if (!paper) return "The isolated invoice preview is not ready yet."
+    if (Array.from(paper.querySelectorAll("img")).some((image) => !image.complete || image.naturalWidth === 0)) {
+      return "The business logo has not finished loading. Wait a moment and try again."
+    }
+    if (paper.scrollWidth > paper.clientWidth + 2) {
+      return `${formatLabels[format]} has horizontal overflow. Printing was stopped to avoid clipping.`
+    }
+    const capacityMm = format === "a4" ? 297 : format === "half-compact" ? 210 : format === "half-top" ? 148.5 : 0
+    if (capacityMm > 0) {
+      const probe = document.createElement("div")
+      probe.style.cssText = "position:absolute;visibility:hidden;pointer-events:none;width:100mm;height:0"
+      document.body.appendChild(probe)
+      const pixelsPerMm = probe.getBoundingClientRect().width / 100 || 96 / 25.4
+      probe.remove()
+      if (paper.scrollHeight > capacityMm * pixelsPerMm + 3) {
+        return `${formatLabels[format]} cannot fit this invoice on one sheet. Choose a larger template or reduce optional print details.`
+      }
+    }
+    const paperRect = paper.getBoundingClientRect()
+    const codes = Array.from(paper.querySelectorAll<HTMLElement>('[data-code-kind="qr"], [data-code-kind="barcode"]'))
+    if (codes.some((code) => {
+      const rect = code.getBoundingClientRect()
+      return rect.left < paperRect.left - 1 || rect.right > paperRect.right + 1
+    })) {
+      return "The QR code or barcode exceeds the printable width. Printing was stopped to keep it scannable."
+    }
+    return ""
+  }
+
   async function printInvoice() {
     document.documentElement.dataset.printFormat = format
-    rememberReprint(effectiveInvoice, format)
-    setHistory(getReprintHistory().filter((entry) => entry.invoiceId === invoice.id))
-
+    await prepareCurrentDocumentForPrint()
+    const layoutError = validatePrintableLayout()
+    if (layoutError) {
+      setNotice(layoutError)
+      return
+    }
     if (await isTauriRuntimeAsync()) {
       setPendingAction("Printing")
       setNotice("")
       try {
-        await prepareCurrentDocumentForPrint()
-        await invokeTauri<void>("desktop_print_current_webview")
-        setNotice("System print dialog opened. Printing does not change the invoice.")
+        if (publicMode) {
+          const finishPrint = () => {
+            void invokeTauri<void>("desktop_finish_print").catch(() => undefined)
+          }
+          window.addEventListener("afterprint", finishPrint, { once: true })
+          try {
+            await invokeTauri<void>("desktop_print_current_webview")
+          } catch (error) {
+            window.removeEventListener("afterprint", finishPrint)
+            finishPrint()
+            throw error
+          }
+          rememberReprint(effectiveInvoice, format)
+          setNotice("System print dialog opened. Printing is complete only after you confirm it in the system dialog.")
+        } else {
+          const printJobId = crypto.randomUUID()
+          window.localStorage.setItem(`bezgrow.invoice-print-job.${printJobId}`, JSON.stringify({
+            invoiceId: invoice.id,
+            format,
+            settings: { ...settings, defaultFormat: format },
+            terms: effectiveInvoice.terms,
+            createdAt: Date.now(),
+          }))
+          await invokeTauri<void>("desktop_open_invoice_print_window", {
+            invoiceId: invoice.id,
+            format,
+            printJobId,
+          })
+          setNotice("Isolated print preview opened. Bezgrow will show the system print dialog after its physical-size check passes.")
+        }
       } catch (error) {
         setNotice(error instanceof Error ? error.message : "The system print dialog could not be opened.")
       } finally {
@@ -407,6 +476,8 @@ export function PrintEngine({
 
     const html = printableHtml(printDocument.innerHTML)
     if (printFromHiddenFrame(html)) {
+      rememberReprint(effectiveInvoice, format)
+      setHistory(getReprintHistory().filter((entry) => entry.invoiceId === invoice.id))
       setNotice("Print dialog opened using the invoice stored on this device.")
       return
     }
@@ -654,7 +725,7 @@ export function PrintEngine({
             <p className="control-label">Template</p>
             <div className="template-grid">
               {(Object.keys(formatLabels) as PrintFormat[]).map((key) => (
-                <button key={key} onClick={() => setFormat(key)} className={format === key ? "active" : ""}>
+                <button key={key} onClick={() => changeFormat(key)} className={format === key ? "active" : ""}>
                   {formatLabels[key]}
                 </button>
               ))}
@@ -730,9 +801,9 @@ export function PrintEngine({
           </section>
 
           <section>
-            <p className="control-label">Reprint History</p>
+            <p className="control-label">Print Dialog History</p>
             <div className="history-list">
-              {history.length === 0 ? <p>No reprints yet.</p> : history.slice(0, 5).map((entry) => (
+              {history.length === 0 ? <p>No print dialogs opened yet.</p> : history.slice(0, 5).map((entry) => (
                 <p key={`${entry.printedAt}-${entry.format}`}>{formatLabels[entry.format]} - {new Date(entry.printedAt).toLocaleString()}</p>
               ))}
             </div>
@@ -741,7 +812,7 @@ export function PrintEngine({
 
         <main className={`print-preview-stage print-format-${format} font-${settings.fontSize} margin-${settings.margins} ${settings.blackAndWhite ? "bw-mode" : ""}`}>
           {!publicMode && <div className="mobile-toolbar no-print">
-            <select className="mobile-format-select" value={format} onChange={(event) => setFormat(event.target.value as PrintFormat)}>
+            <select className="mobile-format-select" value={format} onChange={(event) => changeFormat(event.target.value as PrintFormat)}>
               {(Object.keys(formatLabels) as PrintFormat[]).map((key) => <option key={key} value={key}>{formatLabels[key]}</option>)}
             </select>
             <div className="mobile-action-grid">
@@ -758,6 +829,11 @@ export function PrintEngine({
           </div>
         </main>
       </div>
+      {publicMode && (notice || pendingAction) && (
+        <div className={`isolated-print-status no-print ${notice.toLowerCase().includes("cannot") || notice.toLowerCase().includes("could not") ? "error" : ""}`} role="status">
+          {notice || "Preparing the physical-size print preview…"}
+        </div>
+      )}
       {shareDialog && (
         <div className="share-modal-backdrop no-print" role="presentation">
           <section className="share-confirm-modal" role="dialog" aria-modal="true" aria-labelledby="share-dialog-title">
@@ -855,19 +931,19 @@ function PrintEngineStyles({ format, thermalWidth }: { format: PrintFormat; ther
     format === "thermal"
       ? `${thermalPaperWidth} 160mm`
       : format === "half-top"
-        ? "210mm 148.5mm"
+        ? "A4 portrait"
         : format === "half-compact"
           ? "A5 portrait"
           : "A4 portrait"
-  const printSafeMargin = format === "thermal" ? "0" : "7mm"
-  const printPaperWidth = format === "thermal" ? thermalPaperWidth : format === "half-compact" ? "134mm" : "196mm"
-  const printPaperHeight = format === "half-top" ? "134.5mm" : format === "half-compact" ? "196mm" : format === "thermal" ? "auto" : "283mm"
+  const printSafeMargin = format === "thermal" || format === "half-top" ? "0" : "7mm"
+  const printPaperWidth = format === "thermal" ? thermalPaperWidth : format === "half-compact" ? "134mm" : format === "half-top" ? "210mm" : "196mm"
+  const printPaperHeight = format === "half-top" ? "297mm" : format === "half-compact" ? "196mm" : format === "thermal" ? "auto" : "283mm"
 
   return (
     <style jsx global>{`
       @page { size: A4 portrait; margin: 7mm; }
       @page half-compact { size: A5 portrait; margin: 7mm; }
-      @page half-top { size: 210mm 148.5mm; margin: 7mm; }
+      @page half-top { size: A4 portrait; margin: 0; }
       @page thermal { size: ${thermalPaperWidth} 160mm; margin: 0; }
       html[data-print-format="thermal"] { print-color-adjust: exact; -webkit-print-color-adjust: exact; }
       .enterprise-print-shell { height: 100%; min-height: 0; min-width: 0; overflow: hidden; display: grid; grid-template-columns: 320px minmax(0, 1fr); background: #0a0d12; color: #f8fafc; }
@@ -979,7 +1055,7 @@ function PrintEngineStyles({ format, thermalWidth }: { format: PrintFormat; ther
       .print-a4 .payment-grid { margin-top: 12px; }
       .print-a4 .payment-grid span { font-size: 9.5px; }
       .print-a4 .payment-grid strong { font-size: 12px; }
-      .print-a4 .terms-card { min-height: 82mm; }
+      .print-a4 .terms-card { min-height: 0; }
       .print-half-compact .print-header-block,
       .print-half-compact .customer-grid,
       .print-half-compact .total-grid,
@@ -1006,6 +1082,43 @@ function PrintEngineStyles({ format, thermalWidth }: { format: PrintFormat; ther
       .print-half-compact .payment-grid strong { font-size: 11px; }
       .print-half-compact .footer-row { flex-direction: column; align-items: stretch; }
       .print-half-compact .signature-grid { grid-template-columns: 1fr; }
+      .compact-invoice-header { display: grid; grid-template-columns: minmax(0, 1fr) 38mm; gap: 3mm; border-bottom: 1.5px solid #0f172a; padding-bottom: 2.5mm; }
+      .compact-invoice-brand { display: flex; min-width: 0; gap: 2.5mm; }
+      .compact-brand-logo { width: 10mm; height: 10mm; border-radius: 2mm; }
+      .compact-invoice-brand h1 { margin: .6mm 0; color: #0f172a; font-size: 17px; line-height: 1.05; overflow-wrap: anywhere; }
+      .compact-invoice-brand p { margin: .35mm 0; color: #475569; font-size: 7.5px; line-height: 1.2; overflow-wrap: anywhere; }
+      .compact-invoice-meta { min-width: 0; border: 1px solid #dbe3ee; border-radius: 2mm; background: #f8fafc; padding: 2mm; display: grid; gap: .8mm; align-content: center; }
+      .compact-invoice-meta span { color: #64748b; font-size: 7px; font-weight: 900; text-transform: uppercase; }
+      .compact-invoice-meta strong { color: #1d4ed8; font-size: 12px; overflow-wrap: anywhere; }
+      .compact-invoice-meta small { color: #334155; font-size: 7px; }
+      .compact-customer-strip { display: grid; grid-template-columns: 1.2fr .75fr 1fr 1.8fr; margin-top: 2mm; border: 1px solid #dbe3ee; border-radius: 2mm; background: #f8fafc; overflow: hidden; }
+      .compact-customer-strip p { min-width: 0; margin: 0; padding: 1.5mm; border-right: 1px solid #dbe3ee; }
+      .compact-customer-strip p:last-child { border-right: 0; }
+      .compact-customer-strip span { display: block; color: #64748b; font-size: 6px; font-weight: 900; letter-spacing: .08em; text-transform: uppercase; }
+      .compact-customer-strip strong { display: block; margin-top: .5mm; color: #0f172a; font-size: 7.5px; line-height: 1.15; overflow-wrap: anywhere; }
+      .compact-item-table { width: 100%; margin-top: 2mm; border-collapse: collapse; table-layout: fixed; }
+      .compact-item-table th { padding: 1.2mm 1mm; background: #0f172a; color: #fff; font-size: 6.2px; line-height: 1.1; text-align: left; text-transform: uppercase; }
+      .compact-item-table td { height: 3.7mm; border: 1px solid #dbe3ee; padding: .7mm 1mm; color: #0f172a; font-size: 6.5px; line-height: 1.05; vertical-align: middle; overflow-wrap: anywhere; }
+      .compact-item-table th:first-child, .compact-item-table td:first-child { width: 5%; text-align: center; }
+      .compact-item-table th:nth-child(2), .compact-item-table td:nth-child(2) { width: 33%; }
+      .compact-item-table th:last-child, .compact-item-table td:last-child { width: 17%; text-align: right; }
+      .compact-item-table td small { display: block; margin-top: .3mm; color: #64748b; font-size: 5.5px; }
+      .compact-summary-grid { display: grid; grid-template-columns: minmax(0, 1fr) 43mm; gap: 2mm; margin-top: 2mm; break-inside: avoid; page-break-inside: avoid; }
+      .compact-terms, .compact-totals { min-width: 0; border: 1px solid #dbe3ee; border-radius: 2mm; background: #f8fafc; padding: 1.8mm; }
+      .compact-terms span { display: block; color: #64748b; font-size: 6px; font-weight: 900; text-transform: uppercase; }
+      .compact-terms strong, .compact-terms small { display: block; margin-top: .8mm; color: #0f172a; font-size: 6.5px; line-height: 1.15; overflow-wrap: anywhere; }
+      .compact-terms small { color: #475569; font-weight: 500; }
+      .compact-totals p { display: flex; justify-content: space-between; gap: 2mm; margin: 0; color: #334155; font-size: 6.3px; line-height: 1.35; }
+      .compact-totals strong { color: #0f172a; }
+      .compact-grand { margin-top: .8mm !important; border-top: 1px solid #cbd5e1; padding-top: .8mm; color: #1d4ed8 !important; font-size: 8px !important; font-weight: 900; }
+      .compact-reference-row { display: flex; align-items: flex-end; gap: 2mm; margin-top: 2mm; break-inside: avoid; page-break-inside: avoid; }
+      .compact-reference-row .codes-block { flex: none; gap: 2mm; }
+      .compact-reference-row .invoice-barcode { width: 30mm; }
+      .compact-reference-row .invoice-barcode svg { max-height: 10mm; }
+      .compact-reference-row .invoice-qr { width: 13mm; }
+      .compact-reference-row .invoice-qr svg { width: 12mm; height: 12mm; }
+      .compact-reference-row .signature-grid { flex: 1; grid-template-columns: 1fr 1fr; gap: 3mm; }
+      .compact-reference-row .signature-grid div { height: 9mm; font-size: 6.5px; }
       .half-top-header { display: grid; grid-template-columns: minmax(0, 1fr) 64mm; gap: 8mm; border-bottom: 2px solid #0f172a; padding-bottom: 4mm; }
       .half-top-brand { display: flex; align-items: flex-start; gap: 3mm; min-width: 0; }
       .half-top-brand-logo { width: 11mm; height: 11mm; border-radius: 2.5mm; font-size: 16px; }
@@ -1020,8 +1133,8 @@ function PrintEngineStyles({ format, thermalWidth }: { format: PrintFormat; ther
       .half-top-customer strong { display: block; margin-top: 1mm; color: #0f172a; font-size: 13px; }
       .half-top-customer p { margin: 1mm 0 0; color: #475569; font-size: 9.5px; line-height: 1.25; overflow-wrap: anywhere; }
       .half-top-items { width: 100%; margin-top: 3mm; border-collapse: collapse; table-layout: fixed; }
-      .half-top-items th { background: #0f172a; color: #fff; padding: 2mm 1.6mm; font-size: 8px; text-align: left; text-transform: uppercase; }
-      .half-top-items td { border: 1px solid #dbe3ee; padding: 2mm 1.6mm; color: #0f172a; font-size: 9.2px; line-height: 1.2; vertical-align: top; overflow-wrap: anywhere; }
+      .half-top-items th { background: #0f172a; color: #fff; padding: 1.35mm 1.4mm; font-size: 7px; text-align: left; text-transform: uppercase; }
+      .half-top-items td { height: 3.55mm; border: 1px solid #dbe3ee; padding: .65mm 1.4mm; color: #0f172a; font-size: 7.2px; line-height: 1.05; vertical-align: middle; overflow-wrap: anywhere; }
       .half-top-items th:first-child, .half-top-items td:first-child { width: 42%; }
       .half-top-items th:last-child, .half-top-items td:last-child { text-align: right; width: 20%; }
       .half-top-summary { display: grid; grid-template-columns: minmax(0, 1fr) 56mm; gap: 3mm; margin-top: 3mm; }
@@ -1068,6 +1181,8 @@ function PrintEngineStyles({ format, thermalWidth }: { format: PrintFormat; ther
       .thermal-generated-footer strong { color: #111827; font-size: 10px; font-weight: 900; }
       .thermal-generated-footer span { margin-top: 2px; color: #64748b; font-size: 8px; }
       .print-thermal svg { max-width: 100%; height: auto; }
+      .isolated-print-status { position: fixed; right: 18px; bottom: 18px; z-index: 120; max-width: min(520px, calc(100vw - 36px)); border: 1px solid rgba(34,211,238,.35); border-radius: 14px; background: #07131c; color: #cffafe; padding: 12px 16px; box-shadow: 0 18px 70px rgba(0,0,0,.42); font-size: 13px; font-weight: 800; line-height: 1.45; }
+      .isolated-print-status.error { border-color: rgba(248,113,113,.5); background: #1b090b; color: #fecaca; }
       .share-modal-backdrop { position: fixed; inset: 0; z-index: 100; display: grid; place-items: center; overflow-y: auto; padding: 20px; background: rgba(2,6,23,.78); backdrop-filter: blur(12px); }
       .share-confirm-modal { width: min(100%, 560px); border: 1px solid rgba(255,255,255,.14); border-radius: 24px; background: #080d16; color: #f8fafc; padding: 24px; box-shadow: 0 30px 100px rgba(0,0,0,.55); display: grid; gap: 18px; }
       .share-confirm-modal h2 { margin: 6px 0 0; font-size: 25px; font-weight: 900; }
@@ -1191,14 +1306,14 @@ function PrintEngineStyles({ format, thermalWidth }: { format: PrintFormat; ther
       @media print {
         @page { size: ${printPageSize}; margin: ${printSafeMargin}; }
         @page half-compact { size: A5 portrait; margin: 7mm; }
-        @page half-top { size: 210mm 148.5mm; margin: 7mm; }
+        @page half-top { size: A4 portrait; margin: 0; }
         @page thermal { size: ${printPageSize}; margin: 0; }
         html, body { width: ${printPaperWidth} !important; max-width: ${printPaperWidth} !important; min-height: 0 !important; margin: 0 !important; padding: 0 !important; overflow: visible !important; background: #fff !important; color: #000 !important; }
         body * { visibility: hidden !important; }
         .print-document, .print-document *, .invoice-paper, .invoice-paper * { visibility: visible !important; }
         .no-print { display: none !important; }
         .enterprise-print-shell, .print-preview-stage, .preview-scroll { position: static !important; display: block !important; width: ${printPaperWidth} !important; max-width: ${printPaperWidth} !important; min-width: 0 !important; height: auto !important; min-height: 0 !important; overflow: visible !important; padding: 0 !important; margin: 0 !important; background: #fff !important; color: #000 !important; transform: none !important; }
-        .print-document { position: absolute !important; top: 0 !important; left: 0 !important; display: block !important; width: ${printPaperWidth} !important; max-width: ${printPaperWidth} !important; min-width: 0 !important; height: ${printPaperHeight} !important; min-height: 0 !important; overflow: visible !important; padding: 0 !important; margin: 0 !important; background: #fff !important; color: #000 !important; transform: none !important; transition: none !important; }
+        .print-document { position: static !important; display: block !important; width: ${printPaperWidth} !important; max-width: ${printPaperWidth} !important; min-width: 0 !important; height: ${printPaperHeight} !important; min-height: 0 !important; overflow: visible !important; padding: 0 !important; margin: 0 !important; background: #fff !important; color: #000 !important; transform: none !important; transition: none !important; }
         .invoice-paper { box-shadow: none !important; margin: 0 !important; overflow: visible !important; background: #fff !important; color: #000 !important; break-inside: auto; page-break-inside: auto; }
         .print-a4 { page: auto !important; width: 196mm !important; max-width: 196mm !important; min-height: 283mm !important; padding: 6mm !important; }
         .print-a4 .total-grid { grid-template-columns: minmax(0, 1fr) 62mm !important; }
@@ -1212,8 +1327,8 @@ function PrintEngineStyles({ format, thermalWidth }: { format: PrintFormat; ther
         .print-half-compact .payment-grid { grid-template-columns: 1fr !important; }
         .print-half-compact .item-table th,
         .print-half-compact .item-table td { font-size: 7.8px !important; padding: 3px 2px !important; }
-        .print-half-top { page: half-top !important; width: 196mm !important; max-width: 196mm !important; min-height: 134.5mm !important; max-height: none !important; padding: 0 !important; margin: 0 !important; }
-        .top-half-content { height: auto !important; min-height: 134.5mm !important; max-height: none !important; overflow: visible !important; padding: 4mm !important; background: #fff !important; display: flex !important; flex-direction: column !important; }
+        .print-half-top { page: half-top !important; width: 210mm !important; max-width: 210mm !important; height: 148.5mm !important; min-height: 148.5mm !important; max-height: 148.5mm !important; padding: 0 !important; margin: 0 !important; overflow: hidden !important; }
+        .top-half-content { height: 148.5mm !important; min-height: 148.5mm !important; max-height: 148.5mm !important; overflow: hidden !important; padding: 4mm !important; background: #fff !important; display: flex !important; flex-direction: column !important; }
         .manual-notes-space { display: none !important; }
         .print-header-block, .customer-grid, .total-grid, .payment-grid, .footer-row, .generated-by-footer, .thermal-generated-footer, .codes-block, .signature-grid, .info-card, .invoice-meta-card, .terms-card, .total-card { break-inside: avoid !important; page-break-inside: avoid !important; }
         .item-table { width: 100% !important; max-width: 100% !important; table-layout: fixed !important; page-break-inside: auto !important; }
@@ -1226,7 +1341,7 @@ function PrintEngineStyles({ format, thermalWidth }: { format: PrintFormat; ther
         html[data-print-format="thermal"] .print-preview-stage,
         html[data-print-format="thermal"] .preview-scroll,
         html[data-print-format="thermal"] .print-document { width: ${thermalPaperWidth} !important; max-width: ${thermalPaperWidth} !important; height: auto !important; min-height: 0 !important; background: #fff !important; padding: 0 !important; margin: 0 !important; overflow: visible !important; justify-content: flex-start !important; }
-        html[data-print-format="thermal"] .print-document { position: absolute !important; top: 0 !important; left: 0 !important; display: block !important; }
+        html[data-print-format="thermal"] .print-document { position: static !important; display: block !important; }
       }
     `}</style>
   )

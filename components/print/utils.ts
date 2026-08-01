@@ -48,6 +48,7 @@ export function rememberReprint(invoice: PrintInvoice, format: PrintFormat) {
     invoiceNumber: invoice.invoiceNumber,
     format,
     printedAt: new Date().toISOString(),
+    outcome: "dialog-opened",
   }
   const stored = window.localStorage.getItem("bezgrow.reprint-history")
   const history = stored ? JSON.parse(stored) as typeof entry[] : []
@@ -62,6 +63,7 @@ export function getReprintHistory() {
       invoiceNumber: string
       format: PrintFormat
       printedAt: string
+      outcome?: "dialog-opened"
     }>
   } catch {
     return []

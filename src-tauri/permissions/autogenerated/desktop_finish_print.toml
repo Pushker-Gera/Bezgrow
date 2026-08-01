@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-desktop-finish-print"
+description = "Enables the desktop_finish_print command without any pre-configured scope."
+commands.allow = ["desktop_finish_print"]
+
+[[permission]]
+identifier = "deny-desktop-finish-print"
+description = "Denies the desktop_finish_print command without any pre-configured scope."
+commands.deny = ["desktop_finish_print"]

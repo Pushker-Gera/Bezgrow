@@ -9,7 +9,6 @@ function joinFilled(parts: string[]) {
 }
 
 export function HalfTopTemplate({ invoice, settings }: { invoice: PrintInvoice; settings: PrintSettings }) {
-  const gstTotal = invoice.totals.cgst + invoice.totals.sgst + invoice.totals.igst
   const businessDetails = joinFilled([
     `GST: ${invoice.enterprise.gstNumber}`,
     `Phone: ${invoice.enterprise.phone}`,
@@ -81,7 +80,7 @@ export function HalfTopTemplate({ invoice, settings }: { invoice: PrintInvoice; 
           <div className="half-top-totals">
             <p><span>Subtotal</span><strong>{formatMoney(invoice.totals.subtotal)}</strong></p>
             <p><span>Discount</span><strong>{formatMoney(invoice.totals.discount)}</strong></p>
-            <p><span>GST</span><strong>{formatMoney(gstTotal)}</strong></p>
+            {settings.showGstDetails && <p><span>CGST / SGST / IGST</span><strong>{formatMoney(invoice.totals.cgst)} / {formatMoney(invoice.totals.sgst)} / {formatMoney(invoice.totals.igst)}</strong></p>}
             <p className="half-top-grand"><span>Total</span><strong>{formatMoney(invoice.totals.grandTotal)}</strong></p>
           </div>
         </section>

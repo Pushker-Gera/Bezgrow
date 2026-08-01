@@ -24,6 +24,7 @@ const releaseWorkflow = read(".github/workflows/desktop-release.yml")
 const releaseManifestWriter = read("scripts/write-desktop-release-manifest.mjs")
 const publication = read("scripts/publish-release-metadata.mjs")
 const productionWindowsVerifier = read("scripts/verify-production-windows-download.mjs")
+const desktopBuild = read("scripts/build-desktop.mjs")
 
 for (const field of [
   "available",
@@ -81,6 +82,16 @@ assert.doesNotMatch(releaseWorkflow, /Stable publication and public downloads re
 assert.match(releaseManifestWriter, /productionRecommended/, "Manifest writer must separate availability from production trust.")
 assert.match(publication, /can only be published as an internal\/testing release/, "Unsigned CI metadata must be restricted to internal/testing.")
 assert.match(publication, /signature_status: installer\.signed === true \? "valid" : "invalid"/, "CI metadata must preserve signing truth.")
+assert.match(
+  desktopBuild,
+  /if \(publicMacBuild && existsSync\(dmgPath\)\)/,
+  "An internal macOS build must never replace public download artifacts."
+)
+assert.match(
+  desktopBuild,
+  /if \(publicWindowsBuild && existsSync\(windowsExePath\)\)/,
+  "An internal Windows build must never replace public download artifacts."
+)
 assert.match(productionWindowsVerifier, /method: "GET"/, "Production verification must download the complete installer with GET.")
 assert.match(productionWindowsVerifier, /createHash\("sha256"\)/, "Production verification must hash downloaded installer bytes.")
 assert.match(productionWindowsVerifier, /peArchitecture\(firstBytes\)/, "Production verification must validate a real PE executable.")

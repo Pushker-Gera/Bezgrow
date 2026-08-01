@@ -49,9 +49,13 @@ on:
         required: false
         type: string
       minimum_supported_version:
-        description: "Oldest installed Bezgrow version supported by the manual updater."
+        description: "Oldest installed Bezgrow version supported by the signed updater."
         required: false
         default: "0.1.0"
+        type: string
+      mandatory_after:
+        description: "Optional ISO-8601 timestamp after which the first safe update opportunity is mandatory."
+        required: false
         type: string
   push:
     tags:
@@ -69,8 +73,8 @@ jobs:
   mac:
     name: Build Mac DMG
     if: >-
-      github.event_name == 'workflow_dispatch' &&
-      (inputs.platform == 'all' || inputs.platform == 'mac')
+      github.event_name == 'push' ||
+      (github.event_name == 'workflow_dispatch' && (inputs.platform == 'all' || inputs.platform == 'mac'))
     runs-on: macos-14
     timeout-minutes: 120
     env:
@@ -90,6 +94,9 @@ jobs:
       APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
       APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
       APPLE_API_KEY_PATH: ${{ secrets.APPLE_API_KEY_PATH }}
+      TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+      TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+      BEZGROW_UPDATER_PUBLIC_KEY: ${{ vars.BEZGROW_UPDATER_PUBLIC_KEY || secrets.BEZGROW_UPDATER_PUBLIC_KEY }}
     steps:
       - uses: actions/checkout@v4
 
@@ -98,7 +105,9 @@ jobs:
           node-version-file: .nvmrc
           cache: npm
 
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.96.0
 
       - uses: Swatinem/rust-cache@v2
         with:
@@ -110,6 +119,18 @@ jobs:
       - run: npm run desktop:validate-env
       - run: npm run lint
       - run: npm run typecheck
+      - run: npm test
+      - name: Build the secret-free production web bundle
+        run: npm run build
+        env:
+          BEZGROW_DESKTOP_BUILD: "1"
+          SUPABASE_SERVICE_ROLE_KEY: ""
+          BEZGROW_LICENSE_PRIVATE_KEY: ""
+      - name: Check and test Rust sources on macOS
+        run: |
+          cargo fmt --check --manifest-path src-tauri/Cargo.toml
+          cargo check --locked --manifest-path src-tauri/Cargo.toml
+          cargo test --locked --manifest-path src-tauri/Cargo.toml
 
       - name: Resolve Mac signing and notarization mode
         id: trust
@@ -117,6 +138,7 @@ jobs:
         run: |
           HAS_SIGNING=false
           HAS_NOTARY=false
+          HAS_UPDATER=false
           if [ -n "$BEZGROW_MAC_SIGNING_IDENTITY" ] || { [ -n "$APPLE_CERTIFICATE" ] && [ -n "$APPLE_CERTIFICATE_PASSWORD" ]; }; then
             HAS_SIGNING=true
           fi
@@ -124,13 +146,18 @@ jobs:
              { [ -n "$APPLE_API_KEY" ] && [ -n "$APPLE_API_ISSUER" ] && [ -n "$APPLE_API_KEY_PATH" ]; }; then
             HAS_NOTARY=true
           fi
-          if [ "$HAS_SIGNING" = "true" ] && [ "$HAS_NOTARY" = "true" ]; then
+          if [ -n "$TAURI_SIGNING_PRIVATE_KEY" ] && [ -n "$BEZGROW_UPDATER_PUBLIC_KEY" ]; then
+            HAS_UPDATER=true
+          fi
+          if [ "$HAS_SIGNING" = "true" ] && [ "$HAS_NOTARY" = "true" ] && [ "$HAS_UPDATER" = "true" ]; then
             echo "signed=true" >> "$GITHUB_OUTPUT"
             echo "notarized=true" >> "$GITHUB_OUTPUT"
+            echo "updater=true" >> "$GITHUB_OUTPUT"
           else
             echo "signed=false" >> "$GITHUB_OUTPUT"
             echo "notarized=false" >> "$GITHUB_OUTPUT"
-            echo "Apple credentials are incomplete. The DMG will be labelled internal/testing." >> "$GITHUB_STEP_SUMMARY"
+            echo "updater=false" >> "$GITHUB_OUTPUT"
+            echo "Apple or updater signing credentials are incomplete. The DMG will be labelled internal/testing." >> "$GITHUB_STEP_SUMMARY"
           fi
 
       - name: Build Mac installer
@@ -145,9 +172,14 @@ jobs:
       - name: Verify and stage Mac installer
         shell: bash
         run: |
-          APP_BINARY="$(find src-tauri/target/release/bundle/macos -type f -path '*/Contents/MacOS/*' -perm -111 | head -n 1)"
-          if [ -z "$APP_BINARY" ]; then
+          APP_BINARY="src-tauri/target/release/Bezgrow"
+          if [ ! -f "$APP_BINARY" ]; then
             echo "The built macOS application binary was not found."
+            exit 1
+          fi
+          DMG="$(find src-tauri/target/release/bundle/dmg -type f -name 'Bezgrow_*.dmg' -print -quit)"
+          if [ -z "$DMG" ] || [ ! -f "$DMG" ]; then
+            echo "The newly built macOS DMG was not found."
             exit 1
           fi
           ARCHS="$(lipo -archs "$APP_BINARY")"
@@ -160,10 +192,26 @@ jobs:
               ;;
           esac
           mkdir -p release-artifacts
-          cp public/downloads/Bezgrow-mac.dmg release-artifacts/Bezgrow-mac.dmg
+          cp "$DMG" release-artifacts/Bezgrow-mac.dmg
+          VERSION="$(node -p "require('./package.json').version")"
+          if [ "${{ steps.trust.outputs.updater }}" = "true" ]; then
+            UPDATER="$(find src-tauri/target/release/bundle/macos -type f -name '*.app.tar.gz' -print -quit)"
+            if [ -z "$UPDATER" ] || [ ! -f "$UPDATER.sig" ]; then
+              echo "The signed macOS updater archive or signature is missing."
+              exit 1
+            fi
+            cp "$UPDATER" "release-artifacts/Bezgrow-${VERSION}-${RELEASE_ARCHITECTURE}.app.tar.gz"
+            cp "$UPDATER.sig" "release-artifacts/Bezgrow-${VERSION}-${RELEASE_ARCHITECTURE}.app.tar.gz.sig"
+            UPDATER_SHA="$(shasum -a 256 "release-artifacts/Bezgrow-${VERSION}-${RELEASE_ARCHITECTURE}.app.tar.gz" | awk '{print $1}')"
+            node --import tsx scripts/verify-updater-signature.ts \
+              --file "release-artifacts/Bezgrow-${VERSION}-${RELEASE_ARCHITECTURE}.app.tar.gz" \
+              --signature "release-artifacts/Bezgrow-${VERSION}-${RELEASE_ARCHITECTURE}.app.tar.gz.sig" \
+              --sha256 "$UPDATER_SHA"
+          fi
           echo "$RELEASE_ARCHITECTURE" > release-artifacts/mac-architecture.txt
           echo "${{ steps.trust.outputs.signed }}" > release-artifacts/mac-signing-status.txt
           echo "${{ steps.trust.outputs.notarized }}" > release-artifacts/mac-notarization-status.txt
+          echo "${{ steps.trust.outputs.updater }}" > release-artifacts/mac-updater-status.txt
           node scripts/verify-release-artifact.mjs \
             --file release-artifacts/Bezgrow-mac.dmg \
             --platform macos \
@@ -195,6 +243,9 @@ jobs:
       BEZGROW_WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD || secrets.BEZGROW_WINDOWS_CERTIFICATE_PASSWORD }}
       BEZGROW_WINDOWS_TIMESTAMP_URL: ${{ vars.WINDOWS_TIMESTAMP_URL || secrets.BEZGROW_WINDOWS_TIMESTAMP_URL || 'http://timestamp.digicert.com' }}
       BEZGROW_DESKTOP_TARGET: x86_64-pc-windows-msvc
+      TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+      TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+      BEZGROW_UPDATER_PUBLIC_KEY: ${{ vars.BEZGROW_UPDATER_PUBLIC_KEY || secrets.BEZGROW_UPDATER_PUBLIC_KEY }}
     steps:
       - uses: actions/checkout@v4
 
@@ -203,8 +254,9 @@ jobs:
           node-version-file: .nvmrc
           cache: npm
 
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@master
         with:
+          toolchain: 1.96.0
           targets: x86_64-pc-windows-msvc
 
       - uses: Swatinem/rust-cache@v2
@@ -304,6 +356,7 @@ jobs:
           $requestedChannel = if ([string]::IsNullOrWhiteSpace($env:REQUESTED_CHANNEL)) { "auto" } else { $env:REQUESTED_CHANNEL }
           $hasCertificate = -not [string]::IsNullOrWhiteSpace($env:BEZGROW_WINDOWS_CERTIFICATE_BASE64)
           $hasPassword = -not [string]::IsNullOrWhiteSpace($env:BEZGROW_WINDOWS_CERTIFICATE_PASSWORD)
+          $hasUpdater = -not [string]::IsNullOrWhiteSpace($env:TAURI_SIGNING_PRIVATE_KEY) -and -not [string]::IsNullOrWhiteSpace($env:BEZGROW_UPDATER_PUBLIC_KEY)
           if ($hasCertificate -ne $hasPassword) {
             throw "Windows signing configuration is incomplete: both certificate and password are required."
           }
@@ -321,6 +374,15 @@ jobs:
             }
             "status=unsigned" >> $env:GITHUB_OUTPUT
             "Windows Authenticode credentials are unavailable; producing a genuine unsigned internal/testing build." |
+              Out-File $env:GITHUB_STEP_SUMMARY -Append
+            exit 0
+          }
+          if (-not $hasUpdater) {
+            if ($requestedSigning -eq "required" -or $requestedChannel -eq "stable") {
+              throw "Stable Windows publication requires the Tauri updater private key and public key."
+            }
+            "status=unsigned" >> $env:GITHUB_OUTPUT
+            "Windows updater signing credentials are unavailable; producing an internal/testing build without updater metadata." |
               Out-File $env:GITHUB_STEP_SUMMARY -Append
             exit 0
           }
@@ -393,6 +455,10 @@ jobs:
           foreach ($artifact in @($nsis, $msi, $portableExe, $portableZip, $nativeExe)) {
             if (-not $artifact) { throw "A required Windows artifact is missing." }
           }
+          $peHeaders = (& dumpbin.exe /headers $nativeExe.FullName | Out-String)
+          if ($peHeaders -notmatch "subsystem \(Windows GUI\)") {
+            throw "Bezgrow.exe was not linked with the Windows GUI subsystem."
+          }
 
           New-Item -ItemType Directory -Force release-artifacts | Out-Null
           $staged = [ordered]@{
@@ -418,6 +484,7 @@ jobs:
           }
 
           $signed = "${{ steps.signing.outputs.status }}" -eq "valid"
+          $updaterVerified = $false
           if ($signed) {
             foreach ($path in @($staged.nsis, $staged.msi, $staged.native, $staged.portable)) {
               $signature = Get-AuthenticodeSignature -LiteralPath $path
@@ -425,8 +492,22 @@ jobs:
                 throw "Authenticode verification failed for $path with status $($signature.Status)."
               }
             }
+            $nsisSignature = "$($nsis.FullName).sig"
+            if (-not (Test-Path -LiteralPath $nsisSignature)) {
+              throw "The signed Windows updater signature is missing: $nsisSignature"
+            }
+            $stagedSignature = "$($staged.nsis).sig"
+            Copy-Item -LiteralPath $nsisSignature -Destination $stagedSignature
+            $updaterSha = (Get-FileHash -LiteralPath $staged.nsis -Algorithm SHA256).Hash.ToLowerInvariant()
+            node --import tsx scripts/verify-updater-signature.ts `
+              --file $staged.nsis `
+              --signature $stagedSignature `
+              --sha256 $updaterSha
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+            $updaterVerified = $true
           }
           "${{ steps.signing.outputs.status }}" | Set-Content "release-artifacts\windows-signing-status.txt"
+          $updaterVerified.ToString().ToLowerInvariant() | Set-Content "release-artifacts\windows-updater-status.txt"
 
           $records = foreach ($entry in $staged.GetEnumerator()) {
             $item = Get-Item -LiteralPath $entry.Value
@@ -445,6 +526,7 @@ jobs:
             buildCommit = "${{ github.sha }}"
             workflowRunId = "${{ github.run_id }}"
             workflowRunNumber = "${{ github.run_number }}"
+            updaterSignatureVerified = $updaterVerified
             generatedAt = (Get-Date).ToUniversalTime().ToString("o")
             artifacts = $records
           } | ConvertTo-Json -Depth 8 | Set-Content "release-artifacts\windows-build.json"
@@ -521,13 +603,15 @@ jobs:
           if [ -f "release-artifacts/mac/mac-signing-status.txt" ]; then
             MAC_SIGNED="$(tr -d '\r\n' < release-artifacts/mac/mac-signing-status.txt)"
             MAC_NOTARIZED="$(tr -d '\r\n' < release-artifacts/mac/mac-notarization-status.txt)"
-            if [ "$MAC_SIGNED" != "true" ] || [ "$MAC_NOTARIZED" != "true" ]; then
+            MAC_UPDATER="$(tr -d '\r\n' < release-artifacts/mac/mac-updater-status.txt)"
+            if [ "$MAC_SIGNED" != "true" ] || [ "$MAC_NOTARIZED" != "true" ] || [ "$MAC_UPDATER" != "true" ]; then
               TRUSTED=false
             fi
           fi
           if [ -f "release-artifacts/windows-x64/windows-signing-status.txt" ]; then
             WINDOWS_SIGNING="$(tr -d '\r\n' < release-artifacts/windows-x64/windows-signing-status.txt)"
-            if [ "$WINDOWS_SIGNING" != "valid" ]; then
+            WINDOWS_UPDATER="$(tr -d '\r\n' < release-artifacts/windows-x64/windows-updater-status.txt)"
+            if [ "$WINDOWS_SIGNING" != "valid" ] || [ "$WINDOWS_UPDATER" != "true" ]; then
               TRUSTED=false
             fi
           fi
@@ -600,7 +684,7 @@ jobs:
           fi
           mapfile -d '' ASSETS < <(
             find release-artifacts -type f \
-              \( -name '*.dmg' -o -name '*.exe' -o -name '*.msi' -o -name '*.msix' -o -name '*.zip' -o -name 'SHA256SUMS.txt' -o -name '*-build.json' \) \
+              \( -name '*.dmg' -o -name '*.exe' -o -name '*.msi' -o -name '*.msix' -o -name '*.zip' -o -name '*.tar.gz' -o -name '*.sig' -o -name 'SHA256SUMS.txt' -o -name '*-build.json' \) \
               -print0
           )
           if [ "${#ASSETS[@]}" -eq 0 ]; then
@@ -618,11 +702,14 @@ jobs:
           BASE_URL="https://github.com/$REPOSITORY/releases/download/$TAG"
           MANIFEST_ARGS=(
             --version "$VERSION"
+            --replace "true"
             --channel "${{ steps.release.outputs.channel }}"
             --release-notes "${{ steps.release.outputs.notes }}"
             --minimum-supported-version "${{ steps.release.outputs.minimum_version }}"
             --minimum-supported-windows-version "Windows 10 version 1809 (64-bit)"
-            --updater-compatibility "manual-installer"
+            --mandatory-after "${{ inputs.mandatory_after }}"
+            --publication-status "published"
+            --updater-compatibility "tauri-v2"
             --build-commit "${{ github.sha }}"
             --workflow-run-id "${{ github.run_id }}"
           )
@@ -642,6 +729,16 @@ jobs:
               --mac-channel "$MAC_CHANNEL"
               --mac-installer-type "dmg"
             )
+            MAC_UPDATER="$(find release-artifacts/mac -maxdepth 1 -name '*.app.tar.gz' -print -quit)"
+            if [ -n "$MAC_UPDATER" ]; then
+              MAC_UPDATER_NAME="$(basename "$MAC_UPDATER")"
+              MANIFEST_ARGS+=(
+                --mac-updater-url "$BASE_URL/$MAC_UPDATER_NAME"
+                --mac-updater-file "$MAC_UPDATER"
+                --mac-update-signature-file "$MAC_UPDATER.sig"
+                --mac-updater-signature-verified "true"
+              )
+            fi
           fi
 
           WINDOWS_DIR="release-artifacts/windows-x64"
@@ -677,6 +774,14 @@ jobs:
               --windows-msi-channel "$WINDOWS_CHANNEL"
               --windows-msi-installer-type "msi"
             )
+            if [ -f "$WINDOWS_EXE.sig" ]; then
+              MANIFEST_ARGS+=(
+                --windows-updater-url "$BASE_URL/$WINDOWS_EXE_NAME"
+                --windows-updater-file "$WINDOWS_EXE"
+                --windows-update-signature-file "$WINDOWS_EXE.sig"
+                --windows-updater-signature-verified "true"
+              )
+            fi
             if [ -n "$WINDOWS_PORTABLE" ]; then
               WINDOWS_PORTABLE_NAME="$(basename "$WINDOWS_PORTABLE")"
               MANIFEST_ARGS+=(

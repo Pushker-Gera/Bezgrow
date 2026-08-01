@@ -65,6 +65,53 @@ function Get-BezgrowNodeProcesses {
   )
 }
 
+function Get-BezgrowProcessTree([int]$RootProcessId) {
+  $all = @(Get-CimInstance Win32_Process -ErrorAction SilentlyContinue)
+  $ids = [System.Collections.Generic.HashSet[int]]::new()
+  [void]$ids.Add($RootProcessId)
+  $changed = $true
+  while ($changed) {
+    $changed = $false
+    foreach ($process in $all) {
+      if ($ids.Contains([int]$process.ParentProcessId) -and $ids.Add([int]$process.ProcessId)) {
+        $changed = $true
+      }
+    }
+  }
+  return @($all | Where-Object { $ids.Contains([int]$_.ProcessId) })
+}
+
+function Assert-NoVisibleConsoleProcess([System.Diagnostics.Process]$ApplicationProcess, [int]$Cycle) {
+  $tree = @(Get-BezgrowProcessTree $ApplicationProcess.Id)
+  $forbidden = @($tree | Where-Object { $_.Name -in @("cmd.exe", "powershell.exe", "pwsh.exe", "conhost.exe", "WindowsTerminal.exe") })
+  if ($forbidden.Count -gt 0) {
+    throw "Launch cycle $Cycle created a console/terminal process: $($forbidden.Name -join ', ')."
+  }
+  foreach ($node in @(Get-BezgrowNodeProcesses)) {
+    $process = Get-Process -Id $node.ProcessId -ErrorAction SilentlyContinue
+    if ($process -and $process.MainWindowHandle -ne [IntPtr]::Zero) {
+      throw "Launch cycle $Cycle exposed a visible bundled Node window."
+    }
+  }
+}
+
+function Start-Bezgrow([string]$LaunchPath) {
+  if (-not $LaunchPath.ToLowerInvariant().EndsWith(".lnk")) {
+    return Start-Process -FilePath $LaunchPath -PassThru
+  }
+  $before = @(Get-Process -Name "Bezgrow" -ErrorAction SilentlyContinue | ForEach-Object { $_.Id })
+  Start-Process -FilePath $LaunchPath | Out-Null
+  Wait-Until {
+    $candidate = Get-Process -Name "Bezgrow" -ErrorAction SilentlyContinue |
+      Where-Object { $before -notcontains $_.Id } |
+      Select-Object -First 1
+    $null -ne $candidate
+  } 20 "Shortcut launch did not start Bezgrow."
+  return Get-Process -Name "Bezgrow" -ErrorAction SilentlyContinue |
+    Where-Object { $before -notcontains $_.Id } |
+    Select-Object -First 1
+}
+
 function Get-ExternalBrowserProcessIds {
   return @(
     Get-Process -Name "chrome", "msedge", "firefox" -ErrorAction SilentlyContinue |
@@ -218,6 +265,7 @@ function Write-SmokeDiagnostics(
 
 function Invoke-AppLaunchCycle(
   [int]$Cycle,
+  [string]$LaunchPath = $application,
   [switch]$TestRuntimeRecovery,
   [switch]$TestWindowControls
 ) {
@@ -228,7 +276,7 @@ function Invoke-AppLaunchCycle(
   } else {
     0
   }
-  $appProcess = Start-Process -FilePath $application -PassThru
+  $appProcess = Start-Bezgrow $LaunchPath
   try {
     Wait-Until {
       if ($appProcess.HasExited -or -not (Test-Path -LiteralPath $startupLog)) {
@@ -263,6 +311,10 @@ function Invoke-AppLaunchCycle(
     throw "Launch cycle $Cycle did not record its loopback port."
   }
   $port = [int]$portMatches[$portMatches.Count - 1].Groups[1].Value
+  if ($port -ne 43124) {
+    throw "Launch cycle $Cycle used unexpected fallback port $port instead of the fixed packaged port 43124."
+  }
+  Assert-NoVisibleConsoleProcess $appProcess $Cycle
   $health = Invoke-WebRequest `
     -Uri "http://127.0.0.1:$port/api/desktop-health" `
     -UseBasicParsing `
@@ -365,7 +417,7 @@ New-Item -ItemType Directory -Force $dataRoot | Out-Null
 Set-Content -LiteralPath $sentinel -Value "preserve-across-update-and-uninstall" -Encoding UTF8
 Invoke-AppLaunchCycle 1 -TestRuntimeRecovery -TestWindowControls
 Invoke-InstalledSqliteCrud "seed"
-Invoke-AppLaunchCycle 2
+Invoke-AppLaunchCycle 2 -LaunchPath $startMenuShortcut
 Invoke-InstalledSqliteCrud "verify"
 
 try {
@@ -400,8 +452,8 @@ Invoke-Installer @("/S")
 Assert-Path $application "Reinstall did not restore the application."
 Assert-Path $sentinel "Reinstall did not preserve Bezgrow user data."
 Assert-Path $database "Reinstall did not preserve the Bezgrow SQLite database."
-Invoke-AppLaunchCycle 4
+Invoke-AppLaunchCycle 4 -LaunchPath $desktopShortcut
 Invoke-InstalledSqliteCrud "verify"
 
 Write-SmokeDiagnostics "All installer smoke checks completed successfully." $null
-Write-Host "windows-installer-smoke-ok cycles=4 health=ok route=ok sqlite_crud=ok license_persistence=ok offline=ok runtime_recovery=ok window_controls=ok external_browser=none orphan_processes=0 update_preservation=ok uninstall_preservation=ok reinstall=ok"
+Write-Host "windows-installer-smoke-ok cycles=4 start_menu=ok desktop_shortcut=ok console_windows=none fixed_port=43124 health=ok route=ok sqlite_crud=ok license_persistence=ok offline=ok runtime_recovery=ok window_controls=ok external_browser=none orphan_processes=0 update_preservation=ok uninstall_preservation=ok reinstall=ok"

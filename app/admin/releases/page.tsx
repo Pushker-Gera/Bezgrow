@@ -26,6 +26,11 @@ const initialRelease = {
   file_url: "",
   file_size: "",
   sha256: "",
+  updater_url: "",
+  updater_size: "",
+  updater_sha256: "",
+  update_signature: "",
+  mandatory_after: "",
   minimum_supported_version: "",
   release_notes: "",
   rollout_percentage: "100",
@@ -52,6 +57,11 @@ export default function ReleasesPage() {
         ...form,
         file_size: form.file_size ? Number(form.file_size) : undefined,
         sha256: form.sha256 || undefined,
+        updater_size: form.updater_size ? Number(form.updater_size) : undefined,
+        updater_sha256: form.updater_sha256 || undefined,
+        updater_url: form.updater_url || undefined,
+        update_signature: form.update_signature || undefined,
+        mandatory_after: form.mandatory_after ? new Date(form.mandatory_after).toISOString() : undefined,
         rollout_percentage: Number(form.rollout_percentage),
         mandatory: false,
       })
@@ -90,11 +100,11 @@ export default function ReleasesPage() {
       <AdminPageHeader
         eyebrow="Desktop distribution"
         title="Releases and updates"
-        description="Register and validate each platform independently. A real installer can be published as internal/testing without signing; stable production releases still require code signing and macOS notarization."
+        description="Register and validate each platform independently. Stable publication requires a real installer plus a SHA-256 checked, Minisign-verified Tauri updater artifact, code signing, and macOS notarization."
         action={<button type="button" onClick={() => setCreateOpen(true)} className="h-12 rounded-2xl bg-cyan-300 px-5 text-sm font-black text-black">Create draft release</button>}
       />
       <AdminNotice tone="warning">
-        Integrity validation is always required. Unsigned or unnotarized installers can only be published on the clearly labelled internal/testing channel.
+        Integrity validation is always required. Stable releases cannot publish until installer trust and updater signature checks pass; unsigned or unnotarized builds remain internal/testing only.
       </AdminNotice>
       {notice && <AdminNotice tone="success">{notice}</AdminNotice>}
       {actionError && <AdminNotice tone="danger">{actionError}</AdminNotice>}
@@ -140,13 +150,13 @@ export default function ReleasesPage() {
             label: "Validation",
             render: (row) => {
               const artifact = (Array.isArray(row.release_artifacts) ? row.release_artifacts[0] : null) as Record<string, unknown> | null
-              return artifact ? <div className="space-y-1.5"><StatusPill value={`artifact ${artifact.validation_status}`} /><br /><StatusPill value={`signature ${artifact.signature_status}`} /><br /><StatusPill value={`code signing ${artifact.code_signing_status}`} />{row.platform === "macos" && <><br /><StatusPill value={`notarization ${artifact.notarization_status}`} /></>}</div> : <StatusPill value="missing artifact" />
+              return artifact ? <div className="space-y-1.5"><StatusPill value={`artifact ${artifact.validation_status}`} /><br /><StatusPill value={`updater ${artifact.updater_signature_status || "pending"}`} /><br /><StatusPill value={`signature ${artifact.signature_status}`} /><br /><StatusPill value={`code signing ${artifact.code_signing_status}`} />{row.platform === "macos" && <><br /><StatusPill value={`notarization ${artifact.notarization_status}`} /></>}</div> : <StatusPill value="missing artifact" />
             },
           },
           {
             key: "rollout",
             label: "Rollout",
-            render: (row) => <div><p>{displayValue(row.rollout_percentage)}%</p><p className="mt-1 text-xs text-neutral-500">{row.mandatory ? "Mandatory update" : "Optional update"}</p><p className="mt-1 text-xs text-neutral-600">{row.published_at ? formatAdminDate(row.published_at) : "Not published"}</p></div>,
+            render: (row) => <div><p>{displayValue(row.rollout_percentage)}%</p><p className="mt-1 text-xs text-neutral-500">{row.mandatory ? "Mandatory update" : "Optional update"}</p><p className="mt-1 text-xs text-neutral-500">7d checks: {Number(row.update_checks_7d || 0).toLocaleString()} · available: {Number(row.update_available_7d || 0).toLocaleString()}</p><p className={`mt-1 text-xs ${Number(row.update_failures_7d || 0) > 0 ? "text-red-200" : "text-neutral-500"}`}>Update failures: {Number(row.update_failures_7d || 0).toLocaleString()}</p><p className="mt-1 text-xs text-neutral-600">{row.published_at ? formatAdminDate(row.published_at) : "Not published"}</p></div>,
           },
           { key: "release_status", label: "Status", render: (row) => <StatusPill value={row.release_status} /> },
           {
@@ -183,10 +193,14 @@ export default function ReleasesPage() {
               ["file_url", "HTTPS artifact URL", "url"],
               ["file_size", "File size in bytes (optional)", "number"],
               ["sha256", "SHA-256 (optional)", "text"],
+              ["updater_url", "HTTPS updater artifact URL", "url"],
+              ["updater_size", "Updater size in bytes", "number"],
+              ["updater_sha256", "Updater SHA-256", "text"],
               ["minimum_supported_version", "Minimum supported version", "text"],
+              ["mandatory_after", "Mandatory after (optional)", "datetime-local"],
               ["rollout_percentage", "Rollout percentage", "number"],
             ].map(([key, label, type]) => (
-              <label key={key} className={`${key === "file_url" || key === "sha256" ? "sm:col-span-2" : ""} text-sm font-bold text-neutral-300`}>
+              <label key={key} className={`${["file_url", "sha256", "updater_url", "updater_sha256"].includes(key) ? "sm:col-span-2" : ""} text-sm font-bold text-neutral-300`}>
                 {label}
                 <input type={type} required={["version", "build_number", "file_url"].includes(key)} value={form[key as keyof typeof form]} onChange={(event) => setForm((current) => ({ ...current, [key]: event.target.value }))} className="mt-2 h-11 w-full rounded-xl border border-white/10 bg-black/50 px-3 outline-none focus:border-cyan-400/40" />
               </label>
@@ -229,8 +243,12 @@ export default function ReleasesPage() {
             </label>
           </div>
           <p className="text-xs leading-5 text-neutral-500">
-            “Verify artifact” downloads the registered URL, rejects HTML and wrong-platform files, and calculates and stores its exact size and SHA-256.
+            “Verify artifact” downloads both registered artifacts, rejects broken installer responses, verifies exact SHA-256 values, and cryptographically verifies the updater signature using the server-side public key. Private signing keys are never accepted here.
           </p>
+          <label className="block text-sm font-bold text-neutral-300">
+            Tauri updater signature
+            <textarea value={form.update_signature} onChange={(event) => setForm((current) => ({ ...current, update_signature: event.target.value }))} className="mt-2 min-h-24 w-full rounded-xl border border-white/10 bg-black/50 p-3 font-mono text-xs outline-none focus:border-cyan-400/40" placeholder="Base64 content from the generated .sig artifact" />
+          </label>
           <label className="block text-sm font-bold text-neutral-300">
             Release notes
             <textarea value={form.release_notes} onChange={(event) => setForm((current) => ({ ...current, release_notes: event.target.value }))} className="mt-2 min-h-28 w-full rounded-xl border border-white/10 bg-black/50 p-3 outline-none focus:border-cyan-400/40" />

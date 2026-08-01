@@ -81,6 +81,18 @@ for (const entry of artifacts) {
       `${entry.key} is unsigned or unnotarized and can only be published as an internal/testing release.`
     )
   }
+  const primaryUpdaterArtifact = ["mac", "macX64", "windows", "windowsArm64"].includes(entry.key)
+  if (
+    entry.channel !== "internal" &&
+    primaryUpdaterArtifact &&
+    (!installer.updaterUrl ||
+      !installer.updaterSize ||
+      !/^[a-f0-9]{64}$/i.test(installer.updaterSha256 || "") ||
+      !installer.updateSignature ||
+      installer.updaterSignatureVerified !== true)
+  ) {
+    throw new Error(`${entry.key} is missing verified Tauri v2 updater metadata and cannot be published as stable.`)
+  }
 
   const response = await fetch(installer.downloadUrl, {
     method: "HEAD",
@@ -122,6 +134,7 @@ for (const entries of grouped.values()) {
           : manifest.releaseNotes || null,
         rollout_percentage: 100,
         mandatory: Boolean(manifest.mandatory),
+        mandatory_after: manifest.mandatoryAfter || null,
         active: true,
         published_at: new Date().toISOString(),
         updated_at: new Date().toISOString(),
@@ -145,6 +158,10 @@ for (const entries of grouped.values()) {
         file_size: installer.size,
         sha256: installer.sha256.toLowerCase(),
         update_signature: installer.updateSignature || null,
+        updater_url: installer.updaterUrl || null,
+        updater_size: installer.updaterSize || null,
+        updater_sha256: installer.updaterSha256?.toLowerCase() || null,
+        updater_signature_status: installer.updaterSignatureVerified === true ? "valid" : "missing",
         signature_status: installer.signed === true ? "valid" : "invalid",
         notarization_status:
           entry.platform === "macos"
@@ -174,6 +191,7 @@ for (const entries of grouped.values()) {
       ...identity,
       artifact_count: entries.length,
       checksums: entries.map((entry) => entry.installer.sha256),
+      updater_checksums: entries.map((entry) => entry.installer.updaterSha256).filter(Boolean),
     },
     request_id: requestId,
     result: "success",

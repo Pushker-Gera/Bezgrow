@@ -13,6 +13,7 @@ import {
   unexpectedAdminError,
 } from "@/lib/admin/control-plane"
 import { validateInstallerCandidate } from "@/lib/releases/artifact-validation"
+import { verifyUpdaterArtifact } from "@/lib/releases/updater-signature"
 import { adminSupabase } from "@/lib/supabase/admin"
 
 export const dynamic = "force-dynamic"
@@ -31,10 +32,14 @@ const createReleaseSchema = z.object({
   artifact_type: z.enum(["dmg", "nsis", "msi", "msix", "portable_exe", "portable_zip"]).optional(),
   file_name: z.string().trim().min(1).max(240).optional(),
   update_signature: z.string().trim().max(20000).optional(),
+  updater_url: httpsUrl.optional(),
+  updater_size: z.coerce.number().int().min(1).optional(),
+  updater_sha256: z.string().trim().regex(/^[a-fA-F0-9]{64}$/).optional(),
   minimum_supported_version: z.string().trim().max(40).optional(),
   release_notes: z.string().trim().max(10000).optional(),
   rollout_percentage: z.coerce.number().int().min(0).max(100).default(100),
   mandatory: z.boolean().default(false),
+  mandatory_after: z.string().datetime({ offset: true }).optional(),
 })
 
 const releaseActionSchema = z.object({
@@ -77,6 +82,10 @@ type ReleaseRow = {
     artifact_type?: string | null
     file_name?: string | null
     update_signature?: string | null
+    updater_url?: string | null
+    updater_size?: number | null
+    updater_sha256?: string | null
+    updater_signature_status?: string | null
   }>
 }
 
@@ -90,6 +99,16 @@ function publicationError(release: ReleaseRow) {
     (release.platform === "windows" || artifact.notarization_status === "valid")
   if (!productionTrusted && release.release_channel !== "internal") {
     return "Unsigned or unnotarized builds can only be published on the internal channel."
+  }
+  if (
+    release.release_channel !== "internal" &&
+    (!artifact.updater_url ||
+      !artifact.updater_size ||
+      !artifact.updater_sha256 ||
+      !artifact.update_signature ||
+      artifact.updater_signature_status !== "valid")
+  ) {
+    return "Stable releases require a present, SHA-256 validated, cryptographically verified updater artifact."
   }
   return null
 }
@@ -128,6 +147,22 @@ async function verifyArtifact(
   )
   const actualFileName = validation.filename || artifact.file_name || ""
   const artifactType = inferredArtifactType(release.platform, actualFileName)
+  let updaterVerification: Awaited<ReturnType<typeof verifyUpdaterArtifact>> | null = null
+  let updaterError: string | null = null
+  if (artifact.updater_url && artifact.updater_sha256 && artifact.update_signature) {
+    try {
+      updaterVerification = await verifyUpdaterArtifact({
+        url: artifact.updater_url,
+        sha256: artifact.updater_sha256,
+        signature: artifact.update_signature,
+        publicKey: process.env.BEZGROW_UPDATER_PUBLIC_KEY,
+      })
+    } catch (error) {
+      updaterError = error instanceof Error ? error.message : "Updater signature validation failed."
+    }
+  } else {
+    updaterError = "Updater URL, SHA-256, or signature is missing."
+  }
   return {
     artifact_type: artifact.artifact_type || artifactType,
     file_name: artifact.file_name || actualFileName,
@@ -138,7 +173,10 @@ async function verifyArtifact(
       : /HTTP 404|not found|missing/i.test(validation.blockedReason || "")
         ? "missing"
         : "invalid",
-    validation_error: validation.blockedReason,
+    validation_error: validation.blockedReason || updaterError,
+    updater_size: updaterVerification?.size || artifact.updater_size || null,
+    updater_sha256: updaterVerification?.sha256 || artifact.updater_sha256 || null,
+    updater_signature_status: updaterVerification?.signatureValid ? "valid" : updaterError ? "invalid" : "missing",
     validated_at: new Date().toISOString(),
   }
 }
@@ -170,8 +208,33 @@ export async function GET(request: Request) {
     if (result.error) {
       return adminFail(context, controlPlaneErrorMessage(result.error, "Releases failed to load."), 500)
     }
+    const since = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString()
+    const updateChecks = await adminSupabase
+      .from("device_checkins")
+      .select("update_check_result,reported_at,registered_devices(platform,architecture)")
+      .gte("reported_at", since)
+      .not("update_check_result", "is", null)
+      .limit(10000)
+    const updateStats = new Map<string, { checks: number; failures: number; available: number }>()
+    if (!updateChecks.error) {
+      for (const checkin of updateChecks.data || []) {
+        const relation = checkin.registered_devices
+        const device = (Array.isArray(relation) ? relation[0] : relation) as { platform?: string; architecture?: string } | null
+        if (!device?.platform || !device.architecture) continue
+        const key = `${device.platform}:${device.architecture}`
+        const stats = updateStats.get(key) || { checks: 0, failures: 0, available: 0 }
+        stats.checks += 1
+        if (checkin.update_check_result === "failed") stats.failures += 1
+        if (checkin.update_check_result === "update_available") stats.available += 1
+        updateStats.set(key, stats)
+      }
+    }
+    const rows = (result.data || []).map((release) => {
+      const stats = updateStats.get(`${release.platform}:${release.architecture}`) || { checks: 0, failures: 0, available: 0 }
+      return { ...release, update_checks_7d: stats.checks, update_failures_7d: stats.failures, update_available_7d: stats.available }
+    })
     if (exportMode) {
-      const data = (result.data || []).map((release) => {
+      const data = rows.map((release) => {
         const artifact = Array.isArray(release.release_artifacts) ? release.release_artifacts[0] : null
         return {
           ...release,
@@ -182,6 +245,10 @@ export async function GET(request: Request) {
           signature_status: artifact?.signature_status || null,
           notarization_status: artifact?.notarization_status || null,
           code_signing_status: artifact?.code_signing_status || null,
+          updater_url: artifact?.updater_url || null,
+          updater_size: artifact?.updater_size || null,
+          updater_sha256: artifact?.updater_sha256 || null,
+          updater_signature_status: artifact?.updater_signature_status || null,
         }
       })
       return csvResponse(
@@ -204,6 +271,10 @@ export async function GET(request: Request) {
           "artifact_type",
           "file_name",
           "update_signature",
+          "updater_url",
+          "updater_size",
+          "updater_sha256",
+          "updater_signature_status",
           "validation_status",
           "signature_status",
           "notarization_status",
@@ -211,12 +282,15 @@ export async function GET(request: Request) {
           "published_at",
           "created_at",
           "updated_at",
+          "update_checks_7d",
+          "update_failures_7d",
+          "update_available_7d",
         ],
         data
       )
     }
     return adminOk(context, {
-      data: result.data || [],
+      data: rows,
       pagination: { page: list.page, limit: list.limit, total: result.count || 0 },
       publicationPolicy:
         "Validated internal/testing artifacts may be downloaded with trust warnings. Stable production releases additionally require code signing and macOS notarization.",
@@ -248,6 +322,7 @@ export async function POST(request: Request) {
         release_notes: input.release_notes || null,
         rollout_percentage: input.rollout_percentage,
         mandatory: input.mandatory,
+        mandatory_after: input.mandatory_after || null,
         active: false,
         created_by_admin_id: context.adminUserId,
       })
@@ -267,6 +342,10 @@ export async function POST(request: Request) {
           inferredArtifactType(input.platform, input.file_name || new URL(input.file_url).pathname),
         file_name: input.file_name || decodeURIComponent(new URL(input.file_url).pathname.split("/").pop() || ""),
         update_signature: input.update_signature || null,
+        updater_url: input.updater_url || null,
+        updater_size: input.updater_size || null,
+        updater_sha256: input.updater_sha256?.toLowerCase() || null,
+        updater_signature_status: "pending",
         signature_status: "pending",
         notarization_status: input.platform === "windows" ? "not_applicable" : "pending",
         code_signing_status: "pending",

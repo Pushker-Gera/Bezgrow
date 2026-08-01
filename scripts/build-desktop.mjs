@@ -141,6 +141,34 @@ function configureWindowsSigning(config) {
   return config;
 }
 
+function configureUpdater(config) {
+  const publicKey = (process.env.BEZGROW_UPDATER_PUBLIC_KEY || "").trim();
+  const privateKey = (process.env.TAURI_SIGNING_PRIVATE_KEY || "").trim();
+  const publicBuild = publicMacBuild || publicWindowsBuild;
+  if (publicBuild && (!publicKey || !privateKey)) {
+    throw new Error(
+      "Public desktop builds require BEZGROW_UPDATER_PUBLIC_KEY and TAURI_SIGNING_PRIVATE_KEY so every updater artifact is signed."
+    );
+  }
+
+  config.bundle ??= {};
+  config.plugins ??= {};
+  if (!publicKey || !privateKey) {
+    config.bundle.createUpdaterArtifacts = false;
+    delete config.plugins.updater;
+    return config;
+  }
+
+  const updateOrigin = (process.env.NEXT_PUBLIC_SITE_URL || "https://www.bezgrow.com").replace(/\/$/, "");
+  config.bundle.createUpdaterArtifacts = true;
+  config.plugins.updater = {
+    pubkey: publicKey,
+    endpoints: [`${updateOrigin}/api/desktop-updater/{{target}}/{{arch}}/{{current_version}}`],
+    windows: { installMode: "passive" },
+  };
+  return config;
+}
+
 function tauriBuildEnv() {
   const env = { ...process.env };
 
@@ -411,7 +439,7 @@ function copyGeneratedInstallersForDownloads() {
 
   mkdirSync(publicDownloadsDir, { recursive: true });
 
-  if (existsSync(dmgPath)) {
+  if (publicMacBuild && existsSync(dmgPath)) {
     copyFileSync(dmgPath, publicMacDmg);
     const bytes = readFileSync(publicMacDmg);
     const sha256 = createHash("sha256").update(bytes).digest("hex");
@@ -456,7 +484,7 @@ function copyGeneratedInstallersForDownloads() {
     console.log(`Copied ${dmgPath} to ${publicMacDmg}`);
   }
 
-  if (existsSync(windowsExePath)) {
+  if (publicWindowsBuild && existsSync(windowsExePath)) {
     copyFileSync(windowsExePath, publicWindowsExe);
     const bytes = readFileSync(publicWindowsExe);
     const sha256 = createHash("sha256").update(bytes).digest("hex");
@@ -495,7 +523,7 @@ function copyGeneratedInstallersForDownloads() {
     console.log(`Copied ${windowsExePath} to ${publicWindowsExe}`);
   }
 
-  if (existsSync(windowsMsiPath)) {
+  if (publicWindowsBuild && existsSync(windowsMsiPath)) {
     copyFileSync(windowsMsiPath, publicWindowsMsi);
     const bytes = readFileSync(publicWindowsMsi);
     const sha256 = createHash("sha256").update(bytes).digest("hex");
@@ -536,8 +564,10 @@ function copyGeneratedInstallersForDownloads() {
 }
 
 mkdirSync(generatedConfigDir, { recursive: true });
-const config = configureWindowsSigning(
-  configureMacSigning(JSON.parse(readFileSync(tauriConfigPath, "utf8")))
+const config = configureUpdater(
+  configureWindowsSigning(
+    configureMacSigning(JSON.parse(readFileSync(tauriConfigPath, "utf8")))
+  )
 );
 config.version = packageVersion;
 if (process.env.BEZGROW_DESKTOP_PREPARED === "1") {

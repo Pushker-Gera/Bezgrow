@@ -84,9 +84,9 @@ assert.match(authCallback, /\/api\/desktop-auth\/callback/, "Web auth callback m
 assert.match(desktopAuthCallbackRoute, /isLocalDesktopRequest/, "Desktop OAuth callback receiver must be localhost-only.");
 assert.match(desktopAuthCallbackRoute, /storeDesktopOAuthExchange/, "Desktop OAuth callback receiver must store the session in the local app process.");
 assert.match(rust, /TcpListener::bind\(\("127\.0\.0\.1", DESKTOP_SERVER_PORT\)\)/, "Desktop startup must prefer the stable local origin.");
-assert.match(rust, /TcpListener::bind\(\("127\.0\.0\.1", 0\)\)/, "Desktop startup must recover from an orphaned fixed-port server.");
-assert.match(rust, /reserve_local_port\(app\)/, "Fallback-port selection must write to the packaged startup log.");
-assert.doesNotMatch(rust, /Close the other Bezgrow instance and reopen the app/, "A stale bundled server must not block desktop startup.");
+assert.doesNotMatch(rust, /TcpListener::bind\(\("127\.0\.0\.1", 0\)\)/, "Packaged startup must not silently move to a changing fallback port.");
+assert.match(rust, /reserve_local_port\(app\)/, "Fixed-port reservation failures must be written to the packaged startup log.");
+assert.match(rust, /Close any remaining Bezgrow process and reopen the app/, "A genuine fixed-port conflict must produce a useful startup error.");
 assert.match(rust, /fn start_server_with_retries[\s\S]*for attempt in 1\.\.=3/, "Packaged runtime startup must use bounded automatic retries.");
 assert.match(rust, /fn start_runtime_supervisor[\s\S]*local_server_responds\(port\)/, "The bundled runtime must remain health-checked after the window opens.");
 assert.match(rust, /GET \/api\/desktop-health[\s\S]*HTTP\/1\.1 200/, "The native health check must require the embedded server's dedicated HTTP 200 route.");

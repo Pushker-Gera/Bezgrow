@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-desktop-restart-after-update"
+description = "Enables the desktop_restart_after_update command without any pre-configured scope."
+commands.allow = ["desktop_restart_after_update"]
+
+[[permission]]
+identifier = "deny-desktop-restart-after-update"
+description = "Denies the desktop_restart_after_update command without any pre-configured scope."
+commands.deny = ["desktop_restart_after_update"]

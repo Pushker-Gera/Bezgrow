@@ -95,6 +95,17 @@ function buildInstaller(prefix, version, architecture) {
             ? "portable-exe"
             : "nsis");
   const generatedAt = new Date().toISOString();
+  const updaterUrl = readArg(`--${prefix}-updater-url`);
+  const updaterFile = readArg(`--${prefix}-updater-file`);
+  const updaterPath = updaterFile ? (isAbsolute(updaterFile) ? updaterFile : join(root, updaterFile)) : "";
+  const hasUpdaterFile = Boolean(updaterPath && existsSync(updaterPath));
+  const updaterSize = hasUpdaterFile ? statSync(updaterPath).size : readNumberArg(`--${prefix}-updater-size`);
+  const updaterSha256 = hasUpdaterFile ? sha256(updaterPath) : readArg(`--${prefix}-updater-sha256`);
+  const signatureFile = readArg(`--${prefix}-update-signature-file`);
+  const signaturePath = signatureFile ? (isAbsolute(signatureFile) ? signatureFile : join(root, signatureFile)) : "";
+  const updateSignature = signaturePath && existsSync(signaturePath)
+    ? readFileSync(signaturePath, "utf8").trim()
+    : readArg(`--${prefix}-update-signature`);
 
   return {
     downloadUrl,
@@ -130,7 +141,15 @@ function buildInstaller(prefix, version, architecture) {
       readArg(`--${prefix}-updater-compatibility`) ||
       readArg("--updater-compatibility") ||
       "manual-installer",
-    updateSignature: readArg(`--${prefix}-update-signature`) || undefined,
+    updaterUrl: updaterUrl || undefined,
+    updaterFilename: updaterUrl ? basename(updaterUrl.split("?")[0]) : updaterFile ? basename(updaterFile) : undefined,
+    updaterSize,
+    updaterSha256: updaterSha256 || undefined,
+    updateSignature: updateSignature || undefined,
+    updaterSignatureVerified: readBooleanArg(`--${prefix}-updater-signature-verified`),
+    publicationStatus: readArg("--publication-status") || "published",
+    releaseDate: generatedAt,
+    mandatoryAfter: readArg("--mandatory-after") || undefined,
     buildCommit: readArg("--build-commit") || undefined,
     workflowRunId: readArg("--workflow-run-id") || undefined,
   };
@@ -159,6 +178,9 @@ const nextManifest = {
   version,
   ...(releaseNotes ? { releaseNotes: [releaseNotes] } : {}),
   generatedAt: new Date().toISOString(),
+  publicationStatus: readArg("--publication-status") || "draft",
+  ...(readArg("--mandatory-after") ? { mandatoryAfter: readArg("--mandatory-after") } : {}),
+  minimumSupportedVersion: readArg("--minimum-supported-version") || undefined,
 };
 for (const [key, installer] of Object.entries(installers)) {
   if (installer) nextManifest[key] = installer;
