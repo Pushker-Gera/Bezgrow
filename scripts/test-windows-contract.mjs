@@ -93,6 +93,7 @@ assert.match(installerTest, /bundled server[\s\S]*\/login[\s\S]*authoritative SQ
 assert.match(installerTest, /orphan bundled Node process/i, "Installer QA must reject orphaned background server processes.")
 assert.match(installerTest, /Stop-Process[\s\S]*Bundled runtime supervisor restored the ERP window/, "Installer QA must prove recovery after the embedded server is terminated.")
 assert.match(installerTest, /ShowWindowAsync[\s\S]*IsIconic[\s\S]*IsZoomed/, "Installer QA must exercise minimize, maximize, and restore.")
+assert.match(installerTest, /Invoke-AppLaunchCycle 1 -TestRuntimeRecovery -TestWindowControls/, "Window controls must be exercised once on a ready installed app.")
 assert.match(installerTest, /Get-ExternalBrowserProcessIds[\s\S]*opened an external browser process/, "Installer QA must reject an externally opened browser.")
 assert.match(installerTest, /New-NetFirewallRule[\s\S]*RemoteAddress Internet/, "Installer QA must prove startup with external network access blocked.")
 assert.match(installerTest, /test-windows-installed-sqlite\.mjs[\s\S]*sqlite_crud=ok[\s\S]*license_persistence=ok/, "Installer QA must exercise installed SQLite CRUD and license persistence.")

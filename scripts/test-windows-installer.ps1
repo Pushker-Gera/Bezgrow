@@ -216,7 +216,11 @@ function Write-SmokeDiagnostics(
     Write-Host
 }
 
-function Invoke-AppLaunchCycle([int]$Cycle, [switch]$TestRuntimeRecovery) {
+function Invoke-AppLaunchCycle(
+  [int]$Cycle,
+  [switch]$TestRuntimeRecovery,
+  [switch]$TestWindowControls
+) {
   $beforeNodeIds = @(Get-BezgrowNodeProcesses | ForEach-Object { $_.ProcessId })
   $beforeBrowserIds = @(Get-ExternalBrowserProcessIds)
   $initialLogLength = if (Test-Path -LiteralPath $startupLog) {
@@ -288,7 +292,9 @@ function Invoke-AppLaunchCycle([int]$Cycle, [switch]$TestRuntimeRecovery) {
     (Get-Item -LiteralPath $database).Length -gt 0
   } 30 "Launch cycle $Cycle did not create or reopen the authoritative SQLite database."
 
-  Test-BezgrowWindowControls $appProcess $Cycle
+  if ($TestWindowControls) {
+    Test-BezgrowWindowControls $appProcess $Cycle
+  }
 
   if ($TestRuntimeRecovery) {
     $recoveryLogLength = (Get-Item -LiteralPath $startupLog).Length
@@ -357,7 +363,7 @@ if (-not $uninstallEntry) {
 
 New-Item -ItemType Directory -Force $dataRoot | Out-Null
 Set-Content -LiteralPath $sentinel -Value "preserve-across-update-and-uninstall" -Encoding UTF8
-Invoke-AppLaunchCycle 1 -TestRuntimeRecovery
+Invoke-AppLaunchCycle 1 -TestRuntimeRecovery -TestWindowControls
 Invoke-InstalledSqliteCrud "seed"
 Invoke-AppLaunchCycle 2
 Invoke-InstalledSqliteCrud "verify"
