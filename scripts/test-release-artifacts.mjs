@@ -48,6 +48,7 @@ assert.match(
   "32-bit NSIS bootstrap allowance must be limited to setup and portable installer wrappers."
 )
 assert.match(validator, /application\/json/, "HTML/JSON installer rejection is missing.")
+assert.match(validator, /function inferredVersion[\s\S]*\\d\+\\\.\\d\+\\\.\\d\+[\s\S]*\?=\[-_\.\]/, "Version parsing must stop before the x64 filename suffix.")
 assert.match(validator, /Installer SHA-256 does not match release metadata/, "Checksum mismatch must block downloads.")
 assert.match(validator, /Installer architecture .* does not match metadata architecture/, "Architecture mismatch must block downloads.")
 assert.match(publicReleaseSource, /checkedInCandidates/, "Local public/downloads artifacts must be discovered.")

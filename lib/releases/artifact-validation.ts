@@ -106,7 +106,7 @@ function comparableArchitecture(architecture: InstallerArchitecture | PeArchitec
 }
 
 function inferredVersion(filename: string) {
-  return filename.match(/(?:^|[-_.])v?(\d+\.\d+\.\d+(?:[-+][A-Za-z0-9.-]+)?)(?:[-_.]|$)/i)?.[1] || null
+  return filename.match(/(?:^|[-_.])v?(\d+\.\d+\.\d+)(?=[-_.]|$)/i)?.[1] || null
 }
 
 function installerExtension(platform: InstallerPlatform, filename: string) {
