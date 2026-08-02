@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useState } from "react"
 import Link from "next/link"
 import { BezgrowLogoMark } from "@/components/brand/BezgrowLogoMark"
-import { clearDesktopSession, clearServerAuthSession } from "@/lib/desktop/session"
+import { clearDesktopSession } from "@/lib/desktop/session"
 import { clearWorkspaceBootstrapCache, getWorkspaceBootstrap } from "@/lib/workspaceBootstrapClient"
 import { useRouter } from "next/navigation"
 
@@ -42,12 +42,8 @@ export default function ProfilePage() {
 
   async function logout() {
     clearWorkspaceBootstrapCache()
-    await Promise.all([clearDesktopSession(), clearServerAuthSession()])
+    await clearDesktopSession()
     router.replace("/login")
-    const { supabase } = await import("@/lib/supabase")
-    void supabase.auth.signOut().catch((error) => {
-      console.warn("Cloud sign-out warning:", error)
-    })
   }
 
   if (loading) {

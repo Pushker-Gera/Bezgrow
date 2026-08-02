@@ -27,7 +27,7 @@ export async function GET(request: Request) {
     const exportMode = list.format === "csv"
     const sort = adminSort(
       list,
-      ["created_at", "updated_at", "business_name", "status", "platform", "app_version", "telemetry_reported_at"],
+      ["created_at", "updated_at", "business_name", "status", "platform", "app_version"],
       "created_at"
     )
     let licensedBusinessIds: string[] | null = null
@@ -124,12 +124,10 @@ export async function GET(request: Request) {
         license: licenseMap.get(business.id) || null,
         device: deviceMap.get(business.id) || null,
         local_data_state:
-          business.cloud_mode === "local_only"
-            ? "Local-only data"
-            : business.telemetry_reported_at
-              ? "Synchronized metadata"
-              : "Not synchronized",
-        last_reported_label: business.telemetry_reported_at || "Never",
+          business.cloud_backup_enabled
+            ? "ERP local-only; backup customer-controlled"
+            : "Local-only",
+        last_reported_label: deviceMap.get(business.id)?.last_reported_at || "Never",
       }))
     if (exportMode) {
       return csvResponse(
@@ -145,9 +143,7 @@ export async function GET(request: Request) {
           "update_channel",
           "cloud_mode",
           "cloud_backup_enabled",
-          "last_sync_at",
           "last_backup_at",
-          "telemetry_reported_at",
           "local_data_state",
           "created_at",
           "updated_at",

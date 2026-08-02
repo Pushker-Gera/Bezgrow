@@ -1,9 +1,7 @@
-import { handleProfessionalErpApi } from "@/lib/api/professional-erp"
-
+import { localErpOnlyHandler } from "@/lib/api/local-erp-only"
 export const dynamic = "force-dynamic"
-
-export const GET = handleProfessionalErpApi
-export const POST = handleProfessionalErpApi
-export const PUT = handleProfessionalErpApi
-export const PATCH = handleProfessionalErpApi
-export const DELETE = handleProfessionalErpApi
+export const GET = localErpOnlyHandler
+export const POST = localErpOnlyHandler
+export const PUT = localErpOnlyHandler
+export const PATCH = localErpOnlyHandler
+export const DELETE = localErpOnlyHandler

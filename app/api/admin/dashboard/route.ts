@@ -496,8 +496,8 @@ export async function GET(request: Request) {
           platform: "Available from the Bezgrow control plane",
           license: "Authoritative cloud metadata with offline-verifiable signed files",
           device: "Last reported during authenticated online contact",
-          synchronizedTelemetry: "Available only when explicitly enabled and successfully uploaded",
-          localErp: "Unavailable to the platform unless the customer explicitly synchronizes it",
+          optionalBackupMetadata: "Available only when a customer explicitly enables the separate backup service",
+          localErp: "Customer ERP data is stored locally on the customer’s device and is not available to Bezgrow administrators.",
         },
       },
       {

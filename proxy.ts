@@ -9,7 +9,6 @@ const desktopServerBuild = process.env.BEZGROW_DESKTOP_BUILD === "1"
 
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL?.trim()
 const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY?.trim()
-const supabaseServiceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY?.trim()
 
 type ProfileGate = {
   role: string | null
@@ -20,45 +19,6 @@ type ProfileGate = {
 function isConfiguredAdmin(email: string | null | undefined, role?: string | null) {
   void email
   return role === "admin" || role === "platform_admin"
-}
-
-async function hasConnectedWorkspace(userId: string) {
-  if (!supabaseUrl || !supabaseServiceRoleKey) return false
-
-  try {
-    const membershipResponse = await fetch(
-      `${supabaseUrl}/rest/v1/organization_members?user_id=eq.${encodeURIComponent(userId)}&select=organization_id&limit=1`,
-      {
-        headers: {
-          apikey: supabaseServiceRoleKey,
-          authorization: `Bearer ${supabaseServiceRoleKey}`,
-        },
-        cache: "no-store",
-      }
-    )
-
-    if (membershipResponse.ok) {
-      const memberships = (await membershipResponse.json()) as Array<{ organization_id?: string | null }>
-      if (memberships[0]?.organization_id) return true
-    }
-
-    const ownerResponse = await fetch(
-      `${supabaseUrl}/rest/v1/organizations?owner_id=eq.${encodeURIComponent(userId)}&select=id&limit=1`,
-      {
-        headers: {
-          apikey: supabaseServiceRoleKey,
-          authorization: `Bearer ${supabaseServiceRoleKey}`,
-        },
-        cache: "no-store",
-      }
-    )
-
-    if (!ownerResponse.ok) return false
-    const organizations = (await ownerResponse.json()) as Array<{ id?: string | null }>
-    return Boolean(organizations[0]?.id)
-  } catch {
-    return false
-  }
 }
 
 function redirectWithCookies(request: NextRequest, response: NextResponse, pathname: string) {
@@ -121,6 +81,10 @@ export async function proxy(request: NextRequest) {
     )
   }
 
+  if (protectedRoute) {
+    return redirectWithCookies(request, NextResponse.next({ request }), "/download?erp=desktop_local_only")
+  }
+
   if (!supabaseUrl || !supabaseAnonKey) {
     return redirectToLogin(request, NextResponse.next({ request }))
   }
@@ -157,29 +121,7 @@ export async function proxy(request: NextRequest) {
     .eq("id", user.id)
     .maybeSingle()
 
-  let profile = userProfile as ProfileGate | null
-
-  if (!profile && supabaseServiceRoleKey) {
-    try {
-      const profileResponse = await fetch(
-        `${supabaseUrl}/rest/v1/profiles?id=eq.${encodeURIComponent(user.id)}&select=role,business_created,is_suspended`,
-        {
-          headers: {
-            apikey: supabaseServiceRoleKey,
-            authorization: `Bearer ${supabaseServiceRoleKey}`,
-          },
-          cache: "no-store",
-        }
-      )
-
-      if (profileResponse.ok) {
-        const rows = (await profileResponse.json()) as ProfileGate[]
-        profile = rows[0] ?? null
-      }
-    } catch {
-      profile = null
-    }
-  }
+  const profile = userProfile as ProfileGate | null
 
   if (!profile || profile.is_suspended) {
     return redirectWithCookies(request, response, profile?.is_suspended ? "/login?error=account_suspended" : "/login?error=profile_missing")
@@ -190,10 +132,6 @@ export async function proxy(request: NextRequest) {
       return redirectWithCookies(request, response, "/login?next=/admin&platform_admin=1&error=admin_required")
     }
     return response
-  }
-
-  if (!profile.business_created && !(await hasConnectedWorkspace(user.id))) {
-    return redirectWithCookies(request, response, "/create-business")
   }
 
   return response

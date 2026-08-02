@@ -1270,11 +1270,13 @@ export async function putNormalizedCollectionsInTransaction(
   updates: Array<{ collection: OfflineCollection; value: unknown }>,
   action?: OfflineAction
 ) {
+  // `action` is retained only for source compatibility with older callers.
+  // There is no cloud ERP queue: a committed SQLite transaction is final.
+  void action
   await service.transaction(async (db) => {
     for (const update of updates) {
       await putNormalizedCollectionWithDb(db, organizationId, update.collection, asRows(update.value))
     }
-    if (action) await queueNormalizedActionWithDb(db, action)
   })
 }
 
@@ -1552,36 +1554,6 @@ function flatten(value: unknown, path = "", output: FieldValue[] = []) {
   return output
 }
 
-function valueFromField(field: FieldValue) {
-  if (field.value_type === "null") return null
-  if (field.value_type === "number") return field.value_number
-  if (field.value_type === "boolean") return Boolean(field.value_boolean)
-  if (field.value_type === "array") return []
-  if (field.value_type === "object") return {}
-  return field.value_text
-}
-
-function setPath(target: DataRow, path: string, value: unknown) {
-  const parts = path.split(".")
-  let current: Record<string, unknown> | unknown[] = target
-  for (let index = 0; index < parts.length; index += 1) {
-    const part = parts[index]
-    const isLast = index === parts.length - 1
-    const nextIsArray = /^\d+$/.test(parts[index + 1] || "")
-    const key: string | number = /^\d+$/.test(part) ? Number(part) : part
-
-    if (isLast) {
-      ;(current as Record<string, unknown>)[key] = value
-      return
-    }
-
-    if ((current as Record<string, unknown>)[key] === undefined) {
-      ;(current as Record<string, unknown>)[key] = nextIsArray ? [] : {}
-    }
-    current = (current as Record<string, unknown>)[key] as Record<string, unknown> | unknown[]
-  }
-}
-
 async function replaceFields(db: SqlExecutor, ownerTable: string, ownerId: string, fields: FieldValue[]) {
   await db.execute(`DELETE FROM ${ownerTable} WHERE ${ownerTable.includes("action") ? "action_id" : ownerTable.includes("conflict") ? "conflict_id" : "log_id"} = ?`, [ownerId])
   const ownerColumn = ownerTable.includes("action") ? "action_id" : ownerTable.includes("conflict") ? "conflict_id" : "log_id"
@@ -1594,44 +1566,9 @@ async function replaceFields(db: SqlExecutor, ownerTable: string, ownerId: strin
   }
 }
 
-async function readFields(db: SqlExecutor, table: string, ownerColumn: string, ownerId: string) {
-  const rows = await db.select<FieldValue>(`SELECT field_path, value_text, value_number, value_boolean, value_type FROM ${table} WHERE ${ownerColumn} = ?`, [
-    ownerId,
-  ])
-  const value: DataRow = {}
-  rows.forEach((field) => setPath(value, field.field_path, valueFromField(field)))
-  return value
-}
-
 async function queueNormalizedActionWithDb(db: SqlExecutor, action: OfflineAction) {
-  await ensureOrganization(db, action.organizationId)
-  const entityType = action.type.replace(/^save_/, "").replace(/^create_/, "").replace(/^archive_/, "")
-  await db.execute(
-      `INSERT INTO offline_sync_queue (
-        id, organization_id, entity_type, operation_type, status, attempts, error,
-        idempotency_key, created_at, updated_at, last_synced_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-      ON CONFLICT(id) DO UPDATE SET
-        status = excluded.status,
-        attempts = excluded.attempts,
-        error = excluded.error,
-        updated_at = excluded.updated_at,
-        last_synced_at = excluded.last_synced_at`,
-      [
-        action.id,
-        action.organizationId,
-        entityType,
-        action.type,
-        action.status,
-        action.attempts,
-        action.error || null,
-        typeof action.payload.idempotency_key === "string" ? action.payload.idempotency_key : action.id,
-        action.createdAt,
-        action.updatedAt,
-        action.status === "synced" ? nowIso() : null,
-      ]
-  )
-  await replaceFields(db, "offline_sync_action_fields", action.id, flatten(action.payload))
+  void db
+  void action
 }
 
 export async function queueNormalizedAction(action: OfflineAction) {
@@ -1641,36 +1578,14 @@ export async function queueNormalizedAction(action: OfflineAction) {
 }
 
 export async function listNormalizedActions(statuses?: OfflineActionStatus[]) {
-  const db = await service.requireConnection("read")
-  const statusSql = statuses?.length ? `AND status IN (${statuses.map(() => "?").join(",")})` : ""
-  const rows = await db.select<DataRow>(
-    `SELECT * FROM offline_sync_queue WHERE 1 = 1 ${statusSql} ORDER BY datetime(created_at) ASC`,
-    statuses || []
-  )
-
-  const actions: OfflineAction[] = []
-  for (const row of rows) {
-    actions.push({
-      id: String(row.id),
-      type: row.operation_type as OfflineAction["type"],
-      organizationId: String(row.organization_id),
-      status: row.status as OfflineActionStatus,
-      createdAt: String(row.created_at),
-      updatedAt: String(row.updated_at),
-      attempts: Number(row.attempts || 0),
-      payload: await readFields(db, "offline_sync_action_fields", "action_id", String(row.id)),
-      error: text(row, ["error"]) || undefined,
-    })
-  }
-  return actions
+  void statuses
+  return [] as OfflineAction[]
 }
 
 export async function updateNormalizedAction(id: string, patch: Partial<OfflineAction>) {
-  const current = (await listNormalizedActions()).find((action) => action.id === id)
-  if (!current) return null
-  const next: OfflineAction = { ...current, ...patch, updatedAt: nowIso(), payload: patch.payload || current.payload }
-  await queueNormalizedAction(next)
-  return next
+  void id
+  void patch
+  return null
 }
 
 export async function writeNormalizedSyncLog(input: {
@@ -1867,27 +1782,6 @@ export async function importLegacyJsonCollectionsOnce() {
     }
     for (const [organizationId, values] of byOrg) {
       await putNormalizedCollection(organizationId, collection as OfflineCollection, values)
-    }
-  }
-
-  if (await tableExists(db, "sync_queue")) {
-    const actions = await db.select<DataRow>("SELECT * FROM sync_queue ORDER BY datetime(created_at) ASC").catch(() => [])
-    for (const row of actions) {
-      try {
-        await queueNormalizedAction({
-          id: String(row.id),
-          type: row.operation_type as OfflineAction["type"],
-          organizationId: String(row.organization_id),
-          status: (row.status as OfflineActionStatus) || "pending",
-          createdAt: String(row.created_at || nowIso()),
-          updatedAt: String(row.updated_at || nowIso()),
-          attempts: Number(row.attempts || 0),
-          payload: typeof row.payload_json === "string" ? JSON.parse(row.payload_json) : {},
-          error: text(row, ["error"]) || undefined,
-        })
-      } catch {
-        // Legacy queue rows remain in place if they cannot be normalized.
-      }
     }
   }
 

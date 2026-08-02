@@ -62,7 +62,6 @@ async function getProfileRedirect(
   email: string | null | undefined,
   requestedNext: string
 ) {
-  let lookupClient = client
   let { data: profile, error: profileError } = (await readProfile(client, userId)) as {
     data: ProfileGate | null
     error: PostgrestError | null
@@ -77,7 +76,6 @@ async function getProfileRedirect(
       }
       profile = adminProfile.data
       profileError = adminProfile.error
-      lookupClient = adminClient
     }
   }
 
@@ -103,26 +101,9 @@ async function getProfileRedirect(
   } else if (adminRequested) {
     destination = "/login?next=/admin&platform_admin=1&error=admin_required"
     reason = "admin_role_required"
-  } else if (!profile.business_created) {
-    const [{ data: membership }, { data: ownedOrganization }] = await Promise.all([
-      lookupClient
-        .from("organization_members")
-        .select("organization_id")
-        .eq("user_id", userId)
-        .limit(1)
-        .maybeSingle(),
-      lookupClient
-        .from("organizations")
-        .select("id")
-        .eq("owner_id", userId)
-        .limit(1)
-        .maybeSingle(),
-    ])
-    const hasBusiness = Boolean(membership?.organization_id || ownedOrganization?.id)
-    destination = hasBusiness ? requestedNext : "/create-business"
-    reason = hasBusiness ? "licensed_user_with_workspace" : "licensed_user_needs_workspace"
   } else {
-    destination = requestedNext
+    destination = "/download"
+    reason = "desktop_local_erp"
   }
 
   console.info("[auth/callback] profile redirect", {

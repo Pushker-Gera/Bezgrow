@@ -46,19 +46,15 @@ assert.match(rust, /BEGIN IMMEDIATE[\s\S]*PRAGMA defer_foreign_keys = ON[\s\S]*R
 assert.match(localApi, /recordOperationFailure\([\s\S]*local_api:[\s\S]*url\.pathname/, "Local adapter diagnostics must retain the exact route.")
 assert.match(localApi, /error instanceof LocalDatabaseUnavailableError/, "Only a typed startup failure may show the database-start message.")
 
-// Core domain data and its sync intent must commit in the same SQLite transaction.
-assert.match(repositories, /putNormalizedCollectionsInTransaction\([\s\S]*action\?: OfflineAction[\s\S]*service\.transaction[\s\S]*queueNormalizedActionWithDb/s, "Collection changes and pending sync actions must commit together.")
+// Core domain changes commit once to SQLite and never create an upload queue.
+assert.match(repositories, /putNormalizedCollectionsInTransaction\([\s\S]*void action[\s\S]*service\.transaction/s, "Collection changes must commit through one final SQLite transaction.")
+assert.doesNotMatch(repositories, /INSERT INTO offline_sync_queue/, "Local mutations must never create cloud upload queue rows.")
 assert.match(repositories, /organization_id: undefined,[\s\S]*id: text\(input, \["id"\], organizationId\)/, "Tenant-root organization writes must not target a nonexistent organization_id column.")
 assert.match(repositories, /previousImporterCompleted[\s\S]*normalized_legacy_import_complete/, "Completed legacy imports must not rerun after application upgrades.")
-assert.match(localApi, /pendingAction\(createOfflineId\("product-action"\), "save_product"/, "Product create/update must include its sync action in the transaction.")
-assert.match(localApi, /pendingAction\(createOfflineId\("customer-action"\), "save_customer"/, "Customer create/update must include its sync action in the transaction.")
-assert.match(localApi, /pendingAction\(offlineClientId, "create_invoice"/, "Invoice rows, stock, ledger, payment, and sync action must share one transaction.")
+assert.match(localApi, /action` is a legacy compatibility argument[\s\S]*void action[\s\S]*putNormalizedCollectionsInTransaction\(organizationId, updates\)/, "Legacy mutation intent must be ignored after the final SQLite commit.")
 assert.match(localApi, /largestExistingSequence \+ 1/, "Invoice numbering must advance past the largest stored invoice even when the organization counter is stale.")
 assert.match(localApi, /next_invoice_number: invoiceSequence \+ 1/, "A successful invoice must persist the sequence after the number actually assigned.")
-assert.match(localApi, /pendingAction\(createOfflineId\("invoice-delete-action"\), "delete_invoice"/, "Invoice correction and stock restoration must share one transaction.")
-assert.match(localApi, /pendingAction\(createOfflineId\("stock-action"\), "stock_movement"/, "Simple stock changes must include their sync action in the transaction.")
-assert.match(localErp, /createPaymentTransaction\([^)]*action\?: OfflineAction[\s\S]*writeCollections\([^;]*action\)/s, "Payments and ledger effects must include their sync action in the transaction.")
-assert.match(localErp, /createInventoryMovement\([^)]*action\?: OfflineAction[\s\S]*writeCollections\([^;]*action\)/s, "Professional stock changes must include their sync action in the transaction.")
+assert.match(localErp, /Legacy cloud-sync intent is ignored[\s\S]*void action[\s\S]*putNormalizedCollectionsInTransaction\(organizationId, updates\)/, "Professional ERP transactions must also stop at SQLite.")
 
 // Validation, rollback-sensitive invoice correction, and workspace isolation.
 assert.match(localApi, /A product with this SKU already exists/, "Unique SKU must have an accurate validation response.")
@@ -99,7 +95,8 @@ for (const [name, page] of [
 ]) {
   assert.match(page, /shouldUseWebOfflineFallback/, `${name} must explicitly reject the web fallback in packaged Tauri.`)
 }
-assert.match(dashboard, /router\.replace\("\/login"\)[\s\S]*void supabase\.auth\.signOut\(\)/, "Optional cloud logout must not block local navigation.")
+assert.match(dashboard, /clearWorkspaceBootstrapCache\(\)[\s\S]*clearDesktopSession\(\)[\s\S]*router\.replace\("\/login"\)/, "Logout must clear only local UI session state before navigation.")
+assert.doesNotMatch(dashboard, /supabase|\/api\/auth\/logout/, "Desktop logout must not depend on Supabase.")
 assert.doesNotMatch(dashboard, /clearOfflineData|clearNormalizedData/, "Logout must not delete business data or the license.")
 
 // Loaders and stale requests must terminate deterministically.
@@ -114,6 +111,6 @@ assert.match(invoices, /billingRequest\.current\?\.abort\(\)/, "Invoice filters 
 assert.match(settings, /const showExperimentalModules = process\.env\.NODE_ENV === "development"/, "Incomplete module cards must be development-only.")
 assert.match(settings, /\{showExperimentalModules && \([\s\S]*data-development-only="business-modules"/, "Production must not render the experimental module catalog.")
 assert.match(localApi, /settings\.feature_toggled/, "A persisted module change must create an audit entry.")
-assert.match(localApi, /pendingAction\(createOfflineId\("feature-action"\), "save_settings"/, "Settings value, audit entry, and sync intent must commit together.")
+assert.match(localApi, /SQLite is authoritative and there is no cloud upload queue/, "Settings and audit changes must remain local-only.")
 
 console.log("desktop-hardening-contract-ok")

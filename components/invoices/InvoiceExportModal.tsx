@@ -22,12 +22,6 @@ import {
 } from "@/lib/invoice-report-pdf"
 import { invokeTauri, isTauriRuntimeAsync, openExternalUrl } from "@/lib/desktop/tauri"
 import { normalizeWhatsAppPhone, validateCustomerEmail } from "@/lib/invoice-share"
-import {
-  createSecureReportShare,
-  InvoiceShareOfflineError,
-  revokeSecureReportShare,
-  type SecureInvoiceShareResult,
-} from "@/lib/secure-invoice-share-client"
 
 type Customer = {
   id: string
@@ -42,11 +36,8 @@ type ReportShareState = {
   channel: "whatsapp" | "email"
   phone: string
   email: string
-  expiresInDays: 7 | 30
   busy: boolean
-  offline: boolean
   error: string
-  result: SecureInvoiceShareResult | null
 }
 
 type Props = {
@@ -378,17 +369,14 @@ export function InvoiceExportModal(props: Props) {
       channel,
       phone: "",
       email: "",
-      expiresInDays: 7,
       busy: false,
-      offline: typeof navigator !== "undefined" && !navigator.onLine,
       error: "",
-      result: null,
     })
   }
 
   async function copyReportShareMessage() {
     if (!reportShare || !result) return
-    const message = reportShareMessage(reportShare.result?.url)
+    const message = reportShareMessage()
     const text = reportShare.channel === "email"
       ? `Subject: ${result.title} from ${dataset?.businessName || "Business"}\n\n${message}`
       : message
@@ -396,7 +384,7 @@ export function InvoiceExportModal(props: Props) {
     props.onNotice(reportShare.channel === "email" ? "Prepared report email copied." : "Prepared report WhatsApp message copied.")
   }
 
-  async function confirmReportShare() {
+  async function openPreparedReportMessage() {
     if (!reportShare || !result || !dataset || reportShare.busy) return
     const phone = normalizeWhatsAppPhone(reportShare.phone)
     const email = validateCustomerEmail(reportShare.email)
@@ -410,45 +398,22 @@ export function InvoiceExportModal(props: Props) {
     }
     setReportShare({ ...reportShare, phone: phone || reportShare.phone, email: email || reportShare.email, busy: true, error: "" })
     try {
-      const shared = await createSecureReportShare({
-        organizationId: props.organizationId,
-        title: result.title,
-        period: result.period,
-        filename: result.filename,
-        pdfBytes: result.bytes,
-        expiresInDays: reportShare.expiresInDays,
-      })
-      const next = { ...reportShare, phone: phone || reportShare.phone, email: email || reportShare.email, busy: false, offline: false, error: "", result: shared }
-      setReportShare(next)
-      const message = reportShareMessage(shared.url)
+      const message = reportShareMessage()
       if (reportShare.channel === "whatsapp") {
         await openExternalUrl(`https://wa.me/${phone}?text=${encodeURIComponent(message)}`)
-        props.onNotice("Secure report link created. WhatsApp opened with the prepared message.")
+        props.onNotice("WhatsApp opened with the prepared message. Attach the saved local PDF.")
       } else {
         const subject = `${result.title} from ${dataset.businessName}`
         await openExternalUrl(`mailto:${encodeURIComponent(email)}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(message)}`)
-        props.onNotice("Secure report link created. The email draft opened in your default email app.")
+        props.onNotice("The email draft opened. Attach the saved local PDF.")
       }
+      setReportShare({ ...reportShare, phone: phone || reportShare.phone, email: email || reportShare.email, busy: false, error: "" })
     } catch (shareError) {
-      const offline = shareError instanceof InvoiceShareOfflineError
       setReportShare((current) => current ? {
         ...current,
         busy: false,
-        offline,
-        error: offline ? "Internet is required to create a mobile report link." : shareError instanceof Error ? shareError.message : "The secure report link could not be created.",
+        error: shareError instanceof Error ? shareError.message : "The prepared report message could not be opened.",
       } : null)
-    }
-  }
-
-  async function revokeReportShare() {
-    if (!reportShare?.result || reportShare.busy) return
-    setReportShare({ ...reportShare, busy: true, error: "" })
-    try {
-      await revokeSecureReportShare(props.organizationId, reportShare.result.id)
-      setReportShare({ ...reportShare, busy: false, result: null })
-      props.onNotice("Secure report link revoked.")
-    } catch (shareError) {
-      setReportShare({ ...reportShare, busy: false, error: shareError instanceof Error ? shareError.message : "The secure report link could not be revoked." })
     }
   }
 
@@ -498,11 +463,11 @@ export function InvoiceExportModal(props: Props) {
           </div>
           {reportShare && (
             <div className="fixed inset-0 z-[110] grid place-items-center overflow-y-auto bg-black/80 p-4 backdrop-blur-xl" role="presentation">
-              <section className="grid w-full max-w-lg gap-4 rounded-3xl border border-white/10 bg-[#080d16] p-5 shadow-2xl" role="dialog" aria-modal="true" aria-label="Secure report sharing">
+              <section className="grid w-full max-w-lg gap-4 rounded-3xl border border-white/10 bg-[#080d16] p-5 shadow-2xl" role="dialog" aria-modal="true" aria-label="Local report sharing">
                 <div>
                   <p className="text-xs font-black uppercase tracking-[0.18em] text-cyan-200">{reportShare.channel === "whatsapp" ? "WhatsApp Report" : "Email Report"}</p>
-                  <h3 className="mt-2 text-2xl font-black">Create secure share link</h3>
-                  <p className="mt-2 text-sm text-neutral-400">Nothing is uploaded until you confirm.</p>
+                  <h3 className="mt-2 text-2xl font-black">Prepare local PDF share</h3>
+                  <p className="mt-2 text-sm text-neutral-400">The report remains on this device. Bezgrow does not upload it.</p>
                 </div>
                 <div className="grid grid-cols-2 gap-2 text-xs">
                   <div className="rounded-xl border border-white/10 bg-white/[0.035] p-3"><span className="text-neutral-500">Report</span><strong className="mt-1 block">{result.title}</strong></div>
@@ -513,15 +478,12 @@ export function InvoiceExportModal(props: Props) {
                 ) : (
                   <label><span>Recipient email</span><input className="export-field" inputMode="email" value={reportShare.email} onChange={(event) => setReportShare({ ...reportShare, email: event.target.value, error: "" })} placeholder="recipient@example.com" /></label>
                 )}
-                <label><span>Link expiry</span><select className="export-field" value={reportShare.expiresInDays} onChange={(event) => setReportShare({ ...reportShare, expiresInDays: Number(event.target.value) as 7 | 30 })}><option value={7}>7 days</option><option value={30}>30 days</option></select></label>
-                {reportShare.result && <div className="rounded-xl border border-emerald-400/20 bg-emerald-500/10 p-3 text-xs text-emerald-100"><strong>Secure report link created.</strong><span className="mt-1 block break-all">{reportShare.result.url}</span></div>}
-                {(reportShare.error || reportShare.offline) && <div className="rounded-xl border border-amber-400/25 bg-amber-500/10 p-3 text-xs text-amber-100">{reportShare.error || "Internet is required to create a mobile report link."}</div>}
+                {reportShare.error && <div className="rounded-xl border border-amber-400/25 bg-amber-500/10 p-3 text-xs text-amber-100">{reportShare.error}</div>}
                 <div className="grid gap-2 sm:grid-cols-2">
-                  {!reportShare.result && <button className="report-action primary" onClick={() => void confirmReportShare()} disabled={reportShare.busy}>{reportShare.busy ? "Creating..." : reportShare.offline ? "Try again" : "Create secure share link"}</button>}
-                  {reportShare.offline && <button className="report-action" onClick={() => void saveReport()}>Save PDF</button>}
-                  {(reportShare.offline || reportShare.result) && <button className="report-action" onClick={() => void copyReportShareMessage()}>{reportShare.channel === "email" ? "Copy Email Message" : "Copy prepared message"}</button>}
-                  {reportShare.result && <button className="report-action" onClick={() => void revokeReportShare()} disabled={reportShare.busy}>{reportShare.busy ? "Revoking..." : "Revoke link"}</button>}
-                  <button className="report-action" onClick={() => setReportShare(null)} disabled={reportShare.busy}>{reportShare.result ? "Close" : "Cancel"}</button>
+                  <button className="report-action" onClick={() => void saveReport()}>Save PDF</button>
+                  <button className="report-action" onClick={() => void copyReportShareMessage()}>{reportShare.channel === "email" ? "Copy Email Message" : "Copy prepared message"}</button>
+                  <button className="report-action primary" onClick={() => void openPreparedReportMessage()} disabled={reportShare.busy}>{reportShare.busy ? "Opening..." : reportShare.channel === "email" ? "Open Email Draft" : "Open WhatsApp"}</button>
+                  <button className="report-action" onClick={() => setReportShare(null)} disabled={reportShare.busy}>Close</button>
                 </div>
               </section>
             </div>

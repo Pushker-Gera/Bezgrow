@@ -19,6 +19,12 @@ const eslintConfig = defineConfig([
     "src-tauri/target/**",
     "pushker-dashboard/dist/**",
     "next-env.d.ts",
+    "**/* 2.ts",
+    "**/* 2.tsx",
+    "**/* 2.mjs",
+    "**/* 3.ts",
+    "**/* 3.tsx",
+    "**/* 3.mjs",
   ]),
 ]);
 

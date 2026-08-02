@@ -7,31 +7,14 @@ import { useRouter } from "next/navigation"
 import { BezgrowLogoMark } from "@/components/brand/BezgrowLogoMark"
 import { completeDesktopAuthCallback } from "@/lib/desktop/auth-callback"
 import {
-    hasCachedDesktopSession,
     isDesktopExplicitlyLoggedOut,
     markDesktopSessionActive,
     persistDesktopSession,
 } from "@/lib/desktop/session"
 import { isTauriRuntimeAsync, openExternalUrl } from "@/lib/desktop/tauri"
-import { getCachedWorkspaceBootstrap } from "@/lib/offline/db"
 import { localLicenseSnapshot, restoreLicensedWorkspaceContext } from "@/lib/offline/local/license"
 import { getLocalDatabaseService } from "@/lib/offline/local/service"
 import { supabase } from "@/lib/supabase"
-
-type BootstrapResponse = {
-    success?: boolean
-    error?: string
-    profile?: {
-        role?: string | null
-        is_suspended?: boolean
-        business_created?: boolean
-    }
-    organization?: { id?: string | null } | null
-    permissions?: {
-        admin?: boolean
-        canAccessDashboard?: boolean
-    }
-}
 
 type LoginResponse = {
     success?: boolean
@@ -72,6 +55,7 @@ export default function LoginPage() {
     const [resetLoading, setResetLoading] = useState(false)
     const [checkingSession, setCheckingSession] = useState(true)
     const [adminLoginView, setAdminLoginView] = useState(false)
+    const [verifiedLocalLicenseAvailable, setVerifiedLocalLicenseAvailable] = useState(false)
 
     const getSafeNextPath = useCallback((fallback: string) => {
         if (typeof window === "undefined") {
@@ -208,14 +192,17 @@ export default function LoginPage() {
 
             const desktopRuntime = (await withTimeout(isTauriRuntimeAsync(), 2500)) || false
             if (desktopRuntime) {
-                if (isDesktopExplicitlyLoggedOut()) {
-                    if (active) setCheckingSession(false)
-                    return
-                }
                 await withTimeout(getLocalDatabaseService().ensureReady(), 5000)
                 const workspace = await withTimeout(restoreLicensedWorkspaceContext().catch(() => null), 5000)
                 const organizationId = workspace?.organization?.id || workspace?.membership?.organization_id || undefined
                 const license = await withTimeout(localLicenseSnapshot(organizationId), 5000)
+                if (isDesktopExplicitlyLoggedOut()) {
+                    if (active) {
+                        setVerifiedLocalLicenseAvailable(Boolean(license?.allowed))
+                        setCheckingSession(false)
+                    }
+                    return
+                }
                 if (license?.allowed) {
                     navigate(getSafeNextPath("/dashboard"))
                     return
@@ -225,17 +212,8 @@ export default function LoginPage() {
             }
 
             if (!navigator.onLine) {
-                const [hasSession, cachedWorkspace] = await withTimeout(Promise.all([
-                    hasCachedDesktopSession(),
-                    Promise.resolve(getCachedWorkspaceBootstrap()),
-                ]), 3000) || [false, null]
-
-                if (hasSession && cachedWorkspace?.success && cachedWorkspace.permissions?.canAccessDashboard) {
-                    navigate("/dashboard")
-                    return
-                }
-
-                setErrorMessage("Please activate Bezgrow using your license key.")
+                setErrorMessage("Internet is required for platform account or administrator login. The desktop ERP opens with its local license.")
+                setCheckingSession(false)
                 return
             }
 
@@ -255,23 +233,6 @@ export default function LoginPage() {
                 }
             }
 
-            const bootstrapResponse = await withTimeout(fetch("/api/workspace/bootstrap", {
-                cache: "no-store",
-                credentials: "include",
-            }), SESSION_CHECK_TIMEOUT_MS)
-            if (bootstrapResponse?.ok) {
-                const payload = (await bootstrapResponse.json()) as BootstrapResponse
-                if (payload.success) {
-                    if (payload.permissions?.admin || ["admin", "platform_admin"].includes(payload.profile?.role || "")) {
-                        navigate("/admin")
-                        return
-                    }
-                    const hasBusiness = Boolean(payload.profile?.business_created || payload.organization?.id)
-                    navigate(hasBusiness ? "/dashboard" : "/create-business")
-                    return
-                }
-            }
-
             if (active && !navigating) setCheckingSession(false)
         }
 
@@ -287,6 +248,28 @@ export default function LoginPage() {
             active = false
         }
     }, [getSafeNextPath, platformAdminRequested, router])
+
+    async function continueWithVerifiedLocalLicense() {
+        try {
+            setLoading(true)
+            setErrorMessage("")
+            await getLocalDatabaseService().ensureReady()
+            const workspace = await restoreLicensedWorkspaceContext().catch(() => null)
+            const organizationId = workspace?.organization?.id || workspace?.membership?.organization_id || undefined
+            const license = await localLicenseSnapshot(organizationId)
+            if (!license?.allowed) {
+                setVerifiedLocalLicenseAvailable(false)
+                setErrorMessage("The saved local license could not be verified. Reconnect to renew or reactivate it.")
+                return
+            }
+            markDesktopSessionActive()
+            router.replace(getSafeNextPath("/dashboard"))
+        } catch (error) {
+            setErrorMessage(error instanceof Error ? error.message : "The saved local license could not be opened.")
+        } finally {
+            setLoading(false)
+        }
+    }
 
     async function login(event?: FormEvent<HTMLFormElement>) {
         event?.preventDefault()
@@ -490,6 +473,22 @@ export default function LoginPage() {
                         ? "Internet and an authorized admin or platform_admin account are required. Access is validated by the Bezgrow server."
                         : "Login to manage your inventory, billing, customers, and business operations."}
                 </p>
+
+                {!adminLoginView && verifiedLocalLicenseAvailable && (
+                    <div className="mb-5 rounded-lg border border-cyan-300/20 bg-cyan-300/[0.06] p-3">
+                        <button
+                            type="button"
+                            onClick={() => void continueWithVerifiedLocalLicense()}
+                            disabled={loading}
+                            className="min-h-12 w-full rounded-lg border border-cyan-300/30 bg-cyan-300/10 px-4 font-semibold text-cyan-100 disabled:opacity-50"
+                        >
+                            Continue with Verified Local License
+                        </button>
+                        <p className="mt-2 text-center text-xs leading-5 text-gray-400">
+                            Opens this device&apos;s local ERP without an internet or platform login request.
+                        </p>
+                    </div>
+                )}
 
                 {errorMessage && (
                     <div className="bg-red-900 border border-red-600 text-red-300 p-3 rounded mb-4 text-sm">

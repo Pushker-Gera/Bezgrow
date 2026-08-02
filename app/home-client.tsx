@@ -19,7 +19,7 @@ const signals = ["Realtime stock", "Smart invoices", "License access", "Mobile r
 const seoSections = [
   [
     "Inventory Management Software",
-    "Manage stock, batches, suppliers, warehouses, expiry tracking, purchase orders, and inventory movement from one cloud platform.",
+    "Manage stock, batches, suppliers, warehouses, expiry tracking, purchase orders, and inventory movement in the local desktop app.",
   ],
   [
     "GST Billing Software",
@@ -40,7 +40,7 @@ const seoSections = [
 ]
 
 const reasons = [
-  "Cloud-based",
+  "Local-first desktop",
   "Fast billing",
   "Multi-business support",
   "GST ready",
@@ -121,7 +121,7 @@ export default function HomeClient() {
             <BezgrowLogoMark className="h-10 w-10 sm:h-11 sm:w-11" size={44} priority />
             <span className="text-left">
               <span className="block text-base font-black sm:text-lg">Bezgrow</span>
-              <span className="hidden text-xs uppercase tracking-[0.18em] text-white/45 sm:block">Business Cloud</span>
+              <span className="hidden text-xs uppercase tracking-[0.18em] text-white/45 sm:block">Local-first ERP</span>
             </span>
           </button>
           <div className="hidden rounded-full border border-white/10 bg-white/[0.035] px-4 py-2 text-sm font-bold text-white/50 md:flex md:gap-5">
@@ -152,7 +152,7 @@ export default function HomeClient() {
               Inventory Management, GST Billing & ERP Software for Modern Businesses
             </h1>
             <p className="mx-auto mt-5 max-w-3xl text-center text-sm leading-7 text-white/62 sm:mt-6 sm:text-lg sm:leading-8">
-              Bezgrow helps retail, wholesale, and service businesses manage inventory, billing, customers, orders, analytics, and admin control from one professional cloud workspace.
+              Bezgrow keeps inventory, billing, customers, orders, and reports in a private SQLite database on your desktop while licensing and updates stay online.
             </p>
             <div className="mt-7 flex w-full flex-col gap-3 sm:mt-8 sm:w-auto sm:flex-row">
               <button onClick={() => router.push("/signup")} className="h-12 w-full rounded-2xl bg-cyan-300 px-6 font-black text-black shadow-[0_0_44px_rgba(34,211,238,0.25)] transition hover:-translate-y-0.5 hover:bg-cyan-200 sm:h-14 sm:w-auto sm:px-8">
@@ -200,7 +200,7 @@ export default function HomeClient() {
           <div className="max-w-3xl">
             <p className="text-xs font-black uppercase tracking-[0.22em] text-cyan-200">Business software platform</p>
             <h2 id="seo-overview" className="mt-3 text-3xl font-black sm:text-5xl">
-              Cloud ERP tools for inventory, GST billing, POS, wholesale, and retail operations.
+              Local-first desktop ERP for inventory, GST billing, POS, wholesale, and retail operations.
             </h2>
             <p className="mt-4 leading-8 text-white/58">
               Bezgrow is built for businesses that need professional invoice software, inventory tracking software, billing software, and ERP software without heavy setup.

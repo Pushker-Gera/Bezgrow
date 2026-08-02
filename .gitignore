@@ -45,6 +45,7 @@ service-account*.json
 auth.json
 session.json
 .bezgrow/
+/private/migration-backups/
 
 # debug
 npm-debug.log*

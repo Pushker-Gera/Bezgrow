@@ -15,7 +15,7 @@ const listQuerySchema = z.object({
   platform: z.enum(["", "macos", "windows"]).default(""),
   channel: z.string().trim().max(40).default(""),
   version: z.string().trim().max(40).default(""),
-  cloud: z.enum(["", "local_only", "cloud_backup", "metadata_sync"]).default(""),
+  cloud: z.enum(["", "local_only", "cloud_backup"]).default(""),
   sort: z.string().trim().regex(/^[a-z_]{1,80}$/).default("created_at"),
   direction: z.enum(["asc", "desc"]).default("desc"),
   format: z.enum(["", "csv"]).default(""),

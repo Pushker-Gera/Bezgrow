@@ -29,7 +29,6 @@ import packageJson from "@/package.json"
 
 type InstallState = "idle" | "checking" | "preparing" | "downloading" | "installing" | "restarting" | "failed"
 
-const CHECK_INTERVAL_MS = 6 * 60 * 60 * 1000
 const RECENT_EDIT_WINDOW_MS = 2 * 60 * 1000
 
 function updateIsUnsafe(lastEditAt: number) {
@@ -164,22 +163,15 @@ export default function DesktopUpdateCoordinator() {
       if (cancelled) return
       if (!desktop) return
       const recordEdit = () => { lastEditAt.current = Date.now() }
-      const handleOnline = () => { void checkForUpdate() }
       const handleCheck = () => { void checkForUpdate() }
       const handleInstall = () => { void installUpdate(false) }
       window.addEventListener("input", recordEdit, true)
       window.addEventListener("change", recordEdit, true)
-      window.addEventListener("online", handleOnline)
       window.addEventListener(UPDATE_CHECK_EVENT, handleCheck)
       window.addEventListener(UPDATE_INSTALL_EVENT, handleInstall)
-      const initial = globalThis.setTimeout(() => void checkForUpdate(), 8_000)
-      const interval = globalThis.setInterval(() => void checkForUpdate(), CHECK_INTERVAL_MS)
       cleanup = () => {
-        globalThis.clearTimeout(initial)
-        globalThis.clearInterval(interval)
         window.removeEventListener("input", recordEdit, true)
         window.removeEventListener("change", recordEdit, true)
-        window.removeEventListener("online", handleOnline)
         window.removeEventListener(UPDATE_CHECK_EVENT, handleCheck)
         window.removeEventListener(UPDATE_INSTALL_EVENT, handleInstall)
       }

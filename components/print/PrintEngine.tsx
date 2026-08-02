@@ -17,12 +17,6 @@ import {
 } from "@/lib/invoice-pdf-client"
 import { invokeTauri, isTauriRuntimeAsync, openExternalUrl } from "@/lib/desktop/tauri"
 import { saveDesktopBytes } from "@/lib/desktop-file-export"
-import {
-  createSecureInvoiceShare,
-  InvoiceShareOfflineError,
-  revokeSecureInvoiceShare,
-  type SecureInvoiceShareResult,
-} from "@/lib/secure-invoice-share-client"
 import { defaultPrintSettings, persistPrintSettings, saveStoredPrintSettings } from "@/components/print/settings/defaults"
 import type { PrintFormat, PrintInvoice, PrintSettings } from "@/components/print/types"
 import { getReprintHistory, rememberReprint } from "@/components/print/utils"
@@ -47,11 +41,8 @@ type ShareDialogState = {
   filename: string
   phone: string
   email: string
-  expiresInDays: 7 | 30
   busy: boolean
-  offline: boolean
   error: string
-  result: SecureInvoiceShareResult | null
 }
 
 export function PrintEngine({
@@ -545,11 +536,8 @@ export function PrintEngine({
         filename: invoicePdfFilename(effectiveInvoice),
         phone: normalizeWhatsAppPhone(invoice.customer.phone) || (invoice.customer.phone === "-" ? "" : invoice.customer.phone),
         email: validateCustomerEmail(invoice.customer.email) || (invoice.customer.email === "-" ? "" : invoice.customer.email),
-        expiresInDays: 7,
         busy: false,
-        offline: typeof navigator !== "undefined" && !navigator.onLine,
         error: "",
-        result: null,
       })
       setNotice("Invoice PDF generated.")
     })
@@ -563,7 +551,7 @@ export function PrintEngine({
     prepareInvoiceShare("whatsapp")
   }
 
-  function preparedShareInput(dialog: ShareDialogState, secureInvoiceUrl?: string) {
+  function preparedShareInput(dialog: ShareDialogState) {
     return {
       customerName: invoice.customer.name,
       customerPhone: dialog.phone,
@@ -574,18 +562,17 @@ export function PrintEngine({
       amount: invoice.totals.grandTotal,
       paidAmount: invoice.payment.paidAmount,
       dueAmount: invoice.payment.dueAmount,
-      secureInvoiceUrl,
     }
   }
 
   async function copyPreparedMessage(dialog: ShareDialogState) {
     if (dialog.channel === "email") {
-      const draft = createInvoiceEmailDraft(preparedShareInput(dialog, dialog.result?.url))
+      const draft = createInvoiceEmailDraft(preparedShareInput(dialog))
       await navigator.clipboard.writeText(`Subject: ${draft.subject}\n\n${draft.body}`)
       setNotice("Prepared email message copied.")
       return
     }
-    await navigator.clipboard.writeText(createInvoiceShareText(preparedShareInput(dialog, dialog.result?.url)))
+    await navigator.clipboard.writeText(createInvoiceShareText(preparedShareInput(dialog)))
     setNotice("Prepared WhatsApp message copied.")
   }
 
@@ -594,63 +581,37 @@ export function PrintEngine({
     if (result) setNotice(resultNotice("PDF saved", result))
   }
 
-  async function confirmSecureShare() {
-    const dialog = shareDialog
-    if (!dialog || dialog.busy) return
+  async function openPreparedMessage(dialog: ShareDialogState) {
+    if (dialog.busy) return
     const phone = normalizeWhatsAppPhone(dialog.phone)
     const email = validateCustomerEmail(dialog.email)
     if (dialog.channel === "whatsapp" && !phone) {
-      setShareDialog({ ...dialog, error: "Enter a valid mobile number with country code.", offline: false })
+      setShareDialog({ ...dialog, error: "Enter a valid mobile number with country code." })
       return
     }
     if (dialog.channel === "email" && !email) {
-      setShareDialog({ ...dialog, error: "Enter a valid customer email address.", offline: false })
+      setShareDialog({ ...dialog, error: "Enter a valid customer email address." })
       return
     }
     setShareDialog({ ...dialog, phone: phone || dialog.phone, email: email || dialog.email, busy: true, error: "" })
     try {
-      const result = await createSecureInvoiceShare({
-        organizationId: invoice.enterprise.organizationId,
-        invoiceId: invoice.id,
-        invoiceNumber: invoice.invoiceNumber,
-        customerName: invoice.customer.name,
-        filename: dialog.filename,
-        pdfBytes: dialog.bytes,
-        expiresInDays: dialog.expiresInDays,
-      })
-      const nextDialog = { ...dialog, phone: phone || dialog.phone, email: email || dialog.email, busy: false, offline: false, error: "", result }
-      setShareDialog(nextDialog)
       if (dialog.channel === "whatsapp") {
-        const url = createWhatsAppInvoiceUrl(preparedShareInput(nextDialog, result.url))
+        const url = createWhatsAppInvoiceUrl(preparedShareInput({ ...dialog, phone }))
         if (!url) throw new Error("The WhatsApp number is invalid.")
         await openExternalUrl(url)
-        setNotice("Secure invoice link created. WhatsApp opened with the prepared message.")
+        setNotice("WhatsApp opened with the prepared local invoice message. Attach the saved PDF from this device.")
       } else {
-        const draft = createInvoiceEmailDraft(preparedShareInput(nextDialog, result.url))
+        const draft = createInvoiceEmailDraft(preparedShareInput({ ...dialog, email }))
         await openExternalUrl(draft.mailtoUrl)
-        setNotice("Secure invoice link created. The email draft opened in your default email app.")
+        setNotice("The email draft opened. Attach the saved PDF from this device.")
       }
+      setShareDialog({ ...dialog, phone: phone || dialog.phone, email: email || dialog.email, busy: false, error: "" })
     } catch (error) {
-      const offline = error instanceof InvoiceShareOfflineError
       setShareDialog((current) => current ? {
         ...current,
         busy: false,
-        offline,
-        error: offline ? "Internet is required to create a mobile invoice link." : error instanceof Error ? error.message : "The secure invoice link could not be created.",
+        error: error instanceof Error ? error.message : "The prepared message could not be opened.",
       } : null)
-    }
-  }
-
-  async function revokeCurrentShare() {
-    const dialog = shareDialog
-    if (!dialog?.result || dialog.busy) return
-    setShareDialog({ ...dialog, busy: true, error: "" })
-    try {
-      await revokeSecureInvoiceShare(invoice.enterprise.organizationId, dialog.result.id)
-      setShareDialog({ ...dialog, busy: false, result: null, error: "" })
-      setNotice("Secure invoice link revoked.")
-    } catch (error) {
-      setShareDialog({ ...dialog, busy: false, error: error instanceof Error ? error.message : "The secure invoice link could not be revoked." })
     }
   }
 
@@ -839,14 +800,14 @@ export function PrintEngine({
           <section className="share-confirm-modal" role="dialog" aria-modal="true" aria-labelledby="share-dialog-title">
             <div>
               <p className="panel-eyebrow">{shareDialog.channel === "whatsapp" ? "WhatsApp Invoice" : "Email Invoice"}</p>
-              <h2 id="share-dialog-title">Create secure share link</h2>
-              <p className="share-modal-helper">Nothing is uploaded until you confirm.</p>
+              <h2 id="share-dialog-title">Prepare local PDF share</h2>
+              <p className="share-modal-helper">The invoice remains on this device. Bezgrow does not upload it.</p>
             </div>
             <dl className="share-summary-grid">
               <div><dt>Invoice</dt><dd>{invoice.invoiceNumber}</dd></div>
               <div><dt>Customer</dt><dd>{invoice.customer.name}</dd></div>
               <div><dt>File</dt><dd>{shareDialog.filename}</dd></div>
-              <div><dt>Expiry</dt><dd>{shareDialog.expiresInDays} days</dd></div>
+              <div><dt>Storage</dt><dd>Local-only</dd></div>
             </dl>
             {shareDialog.channel === "whatsapp" ? (
               <label className="share-field">
@@ -869,53 +830,22 @@ export function PrintEngine({
                 />
               </label>
             )}
-            <label className="share-field">
-              <span>Link expiry</span>
-              <select
-                value={shareDialog.expiresInDays}
-                onChange={(event) => setShareDialog({ ...shareDialog, expiresInDays: Number(event.target.value) as 7 | 30 })}
-              >
-                <option value={7}>7 days</option>
-                <option value={30}>30 days</option>
-              </select>
-            </label>
-            {shareDialog.result && (
-              <div className="share-link-result">
-                <strong>Secure invoice link created.</strong>
-                <span>{shareDialog.result.url}</span>
-                <small>Expires {new Date(shareDialog.result.expiresAt).toLocaleString("en-IN")}</small>
-              </div>
-            )}
-            {(shareDialog.error || shareDialog.offline) && (
+            {shareDialog.error && (
               <div className="share-offline-box">
-                <strong>{shareDialog.error || "Internet is required to create a mobile invoice link."}</strong>
-                {shareDialog.offline && <p>The PDF remains on this device unless you choose Save PDF.</p>}
+                <strong>{shareDialog.error}</strong>
+                <p>The PDF remains on this device.</p>
               </div>
             )}
             <div className="share-modal-actions">
-              {!shareDialog.result && (
-                <button type="button" className="primary" onClick={() => void confirmSecureShare()} disabled={shareDialog.busy}>
-                  {shareDialog.busy ? "Creating..." : shareDialog.offline ? "Try again" : "Create secure share link"}
-                </button>
-              )}
-              {shareDialog.offline && (
-                <>
-                  <button type="button" onClick={() => void savePreparedPdf(shareDialog)} disabled={shareDialog.busy}>Save PDF</button>
-                  <button type="button" onClick={() => void copyPreparedMessage(shareDialog)} disabled={shareDialog.busy}>
-                    {shareDialog.channel === "email" ? "Copy Email Message" : "Copy prepared message"}
-                  </button>
-                </>
-              )}
-              {shareDialog.result && (
-                <>
-                  <button type="button" onClick={() => void copyPreparedMessage(shareDialog)} disabled={shareDialog.busy}>Copy link message</button>
-                  <button type="button" className="danger" onClick={() => void revokeCurrentShare()} disabled={shareDialog.busy}>
-                    {shareDialog.busy ? "Revoking..." : "Revoke link"}
-                  </button>
-                </>
-              )}
+              <button type="button" onClick={() => void savePreparedPdf(shareDialog)} disabled={shareDialog.busy}>Save PDF</button>
+              <button type="button" onClick={() => void copyPreparedMessage(shareDialog)} disabled={shareDialog.busy}>
+                {shareDialog.channel === "email" ? "Copy Email Message" : "Copy prepared message"}
+              </button>
+              <button type="button" className="primary" onClick={() => void openPreparedMessage(shareDialog)} disabled={shareDialog.busy}>
+                {shareDialog.busy ? "Opening..." : shareDialog.channel === "email" ? "Open Email Draft" : "Open WhatsApp"}
+              </button>
               <button type="button" onClick={() => setShareDialog(null)} disabled={shareDialog.busy}>
-                {shareDialog.result ? "Close" : "Cancel"}
+                Close
               </button>
             </div>
           </section>

@@ -10,6 +10,7 @@ const service = read("lib/offline/local/service.ts")
 const products = read("app/dashboard/products/page.tsx")
 const customers = read("app/dashboard/customers/page.tsx")
 const invoices = read("app/dashboard/invoices/page.tsx")
+const network = read("lib/offline/network.ts")
 
 assert.match(api, /"X-Bezgrow-Data-Source": "sqlite"/, "Local list responses must identify SQLite as their source.")
 for (const route of ["products", "customers", "invoices"]) {
@@ -36,10 +37,17 @@ assert.ok(repositories.includes("WHERE organization_id = ? AND deleted_at IS NUL
 assert.ok(runtime.includes("__BEZGROW_RUNTIME__"), "Desktop selection must use an injected runtime marker.")
 assert.ok(api.includes('if (mode === "sqlite") return true'), "Online state must not override SQLite selection.")
 assert.ok(service.includes("transactionTail"), "SQLite writes must serialize on the shared connection.")
+assert.ok(network.includes("shouldUseWebOfflineFallback"), "Web-only offline fallback must have an explicit runtime gate.")
+assert.match(network, /isDesktopRuntime[\s\S]*return !\(await isDesktopRuntime/, "Packaged Tauri must never use the browser mutation fallback.")
 
 for (const [name, page] of [["products", products], ["customers", customers], ["invoices", invoices]]) {
   assert.ok(page.includes('headers.get("X-Bezgrow-Data-Source") !== "sqlite"'), `${name} must not write a local list back into SQLite.`)
+  assert.ok(page.includes("shouldUseWebOfflineFallback"), `${name} must keep packaged failures on the SQLite adapter.`)
 }
+assert.match(products, /productsRequest\.current\?\.abort\(\)/, "Product filters must cancel stale requests.")
+assert.match(customers, /customersRequest\.current\?\.abort\(\)/, "Customer filters must cancel stale requests.")
+assert.match(invoices, /billingRequest\.current\?\.abort\(\)/, "Invoice filters must cancel stale requests.")
+assert.match(customers, /skipNextCustomersRefresh/, "Customer startup must not issue a duplicate list fetch.")
 assert.match(customers, /finally \{\s*setLoading\(false\)/s, "Customer loader must complete after success and errors.")
 assert.match(invoices, /finally \{\s*setLoading\(false\)/s, "Invoice loader must complete after success and errors.")
 

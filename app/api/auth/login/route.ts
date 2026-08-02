@@ -138,25 +138,6 @@ async function readProfileWithFallback(client: SupabaseQueryClient, userId: stri
   return { ...result, lookupClient }
 }
 
-async function hasWorkspace(client: SupabaseQueryClient, userId: string) {
-  const [{ data: membership }, { data: ownedOrganization }] = await Promise.all([
-    client
-      .from("organization_members")
-      .select("organization_id")
-      .eq("user_id", userId)
-      .limit(1)
-      .maybeSingle(),
-    client
-      .from("organizations")
-      .select("id")
-      .eq("owner_id", userId)
-      .limit(1)
-      .maybeSingle(),
-  ])
-
-  return Boolean(membership?.organization_id || ownedOrganization?.id)
-}
-
 async function auditPlatformLogin(input: {
   request: Request
   requestId: string
@@ -230,16 +211,6 @@ async function resolveDestination(client: SupabaseQueryClient, user: User, reque
     }
   }
 
-  const workspaceExists = profile.business_created === true || (await hasWorkspace(lookupClient, user.id))
-  if (!workspaceExists) {
-    return {
-      ok: true as const,
-      redirectTo: "/create-business",
-      profileLookupSucceeded: true,
-      workspaceLookupSucceeded: true,
-    }
-  }
-
   const unsafeAdminNext = isAdminNext(requestedNext)
   if (unsafeAdminNext) {
     return {
@@ -251,11 +222,12 @@ async function resolveDestination(client: SupabaseQueryClient, user: User, reque
       workspaceLookupSucceeded: true,
     }
   }
+  void lookupClient
   return {
     ok: true as const,
-    redirectTo: requestedNext,
+    redirectTo: "/download",
     profileLookupSucceeded: true,
-    workspaceLookupSucceeded: true,
+    workspaceLookupSucceeded: false,
   }
 }
 

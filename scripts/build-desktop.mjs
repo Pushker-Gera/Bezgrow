@@ -35,6 +35,20 @@ const releaseRoot = targetTriple
   ? join(root, "src-tauri", "target", targetTriple, "release")
   : join(root, "src-tauri", "target", "release");
 
+function preserveMacAppBundle(args) {
+  if (process.platform !== "darwin") return args;
+  const bundleIndex = args.indexOf("--bundles");
+  if (bundleIndex === -1) return args;
+  const requestedBundles = (args[bundleIndex + 1] || "")
+    .split(",")
+    .map((bundle) => bundle.trim())
+    .filter(Boolean);
+  if (!requestedBundles.includes("dmg") || requestedBundles.includes("app")) return args;
+  const nextArgs = [...args];
+  nextArgs[bundleIndex + 1] = ["app", ...requestedBundles].join(",");
+  return nextArgs;
+}
+
 function envBoolean(name) {
   const value = (process.env[name] || "").toLowerCase();
   return value === "1" || value === "true" || value === "yes";
@@ -579,7 +593,13 @@ writeFileSync(generatedConfigPath, `${JSON.stringify(config, null, 2)}\n`);
 if (!existsSync(tauriCli)) {
   throw new Error(`The project-local Tauri CLI is missing: ${tauriCli}`);
 }
-run(process.execPath, [tauriCli, "build", "--config", generatedConfigPath, ...tauriArgs]);
+run(process.execPath, [
+  tauriCli,
+  "build",
+  "--config",
+  generatedConfigPath,
+  ...preserveMacAppBundle(tauriArgs),
+]);
 if (process.platform === "win32") {
   run(process.execPath, [
     join(root, "scripts", "build-windows-portable.mjs"),

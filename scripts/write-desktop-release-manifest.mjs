@@ -7,6 +7,7 @@ const root = dirname(dirname(fileURLToPath(import.meta.url)));
 const manifestPath = join(root, "public", "downloads", "desktop-release.json");
 const packageJson = JSON.parse(readFileSync(join(root, "package.json"), "utf8"));
 const args = process.argv.slice(2);
+const publicationStatus = readArg("--publication-status") || "draft";
 
 function readArg(name) {
   const index = args.indexOf(name);
@@ -56,6 +57,9 @@ function buildInstaller(prefix, version, architecture) {
   const size = hasLocalFile ? statSync(existingPath).size : readNumberArg(`--${prefix}-size`);
   const hash = hasLocalFile ? sha256(existingPath) : readArg(`--${prefix}-sha256`);
   if (!downloadUrl && !file) return null;
+  if (publicationStatus === "published" && !hasLocalFile) {
+    throw new Error(`Published release metadata requires a local verified installer file for ${prefix}.`);
+  }
 
   const filename =
     readArg(`--${prefix}-filename`) ||
@@ -106,6 +110,9 @@ function buildInstaller(prefix, version, architecture) {
   const updateSignature = signaturePath && existsSync(signaturePath)
     ? readFileSync(signaturePath, "utf8").trim()
     : readArg(`--${prefix}-update-signature`);
+  if (publicationStatus === "published" && updaterUrl && !hasUpdaterFile) {
+    throw new Error(`Published updater metadata requires a local verified updater file for ${prefix}.`);
+  }
 
   return {
     downloadUrl,
@@ -147,7 +154,7 @@ function buildInstaller(prefix, version, architecture) {
     updaterSha256: updaterSha256 || undefined,
     updateSignature: updateSignature || undefined,
     updaterSignatureVerified: readBooleanArg(`--${prefix}-updater-signature-verified`),
-    publicationStatus: readArg("--publication-status") || "published",
+    publicationStatus,
     releaseDate: generatedAt,
     mandatoryAfter: readArg("--mandatory-after") || undefined,
     buildCommit: readArg("--build-commit") || undefined,
@@ -178,7 +185,7 @@ const nextManifest = {
   version,
   ...(releaseNotes ? { releaseNotes: [releaseNotes] } : {}),
   generatedAt: new Date().toISOString(),
-  publicationStatus: readArg("--publication-status") || "draft",
+  publicationStatus,
   ...(readArg("--mandatory-after") ? { mandatoryAfter: readArg("--mandatory-after") } : {}),
   minimumSupportedVersion: readArg("--minimum-supported-version") || undefined,
 };

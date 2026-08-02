@@ -70,11 +70,27 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  release-gates:
+    name: Local-first release gates
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - run: npm ci
+      - name: Prove local data authority, control-plane availability, persistence, and publication safety
+        run: npm run test:release-gates
+
   mac:
     name: Build Mac DMG
+    needs: release-gates
     if: >-
-      github.event_name == 'push' ||
-      (github.event_name == 'workflow_dispatch' && (inputs.platform == 'all' || inputs.platform == 'mac'))
+      needs.release-gates.result == 'success' &&
+      (github.event_name == 'push' ||
+      (github.event_name == 'workflow_dispatch' && (inputs.platform == 'all' || inputs.platform == 'mac')))
     runs-on: macos-14
     timeout-minutes: 120
     env:
@@ -226,10 +242,12 @@ jobs:
 
   windows:
     name: Build Windows x64
+    needs: release-gates
     if: >-
-      github.event_name == 'push' ||
+      needs.release-gates.result == 'success' &&
+      (github.event_name == 'push' ||
       inputs.platform == 'all' ||
-      inputs.platform == 'windows'
+      inputs.platform == 'windows')
     runs-on: windows-latest
     timeout-minutes: 150
     env:
@@ -582,6 +600,21 @@ jobs:
         with:
           path: release-artifacts
 
+      - name: Compute release checksums
+        shell: bash
+        run: |
+          find release-artifacts -type f ! -name 'SHA256SUMS.txt' -print0 |
+            sort -z |
+            xargs -0 sha256sum > release-artifacts/SHA256SUMS.txt
+
+      - name: Verify genuine publication inputs
+        shell: bash
+        run: |
+          node scripts/verify-release-publication-inputs.mjs \
+            --root release-artifacts \
+            --checksums release-artifacts/SHA256SUMS.txt \
+            --version "$(node -p "require('./package.json').version")"
+
       - name: Resolve release identity and policy
         id: release
         shell: bash
@@ -659,13 +692,6 @@ jobs:
             echo "$NOTES"
             echo "BEZGROW_NOTES"
           } >> "$GITHUB_OUTPUT"
-
-      - name: Compute release checksums
-        shell: bash
-        run: |
-          find release-artifacts -type f ! -name 'SHA256SUMS.txt' -print0 |
-            sort -z |
-            xargs -0 sha256sum > release-artifacts/SHA256SUMS.txt
 
       - name: Create or update GitHub Release
         shell: bash

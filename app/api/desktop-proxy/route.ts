@@ -3,6 +3,21 @@ import { NextResponse } from "next/server"
 export const dynamic = "force-dynamic"
 
 const FORWARDED_HEADERS = ["accept", "authorization", "content-type"]
+const ALLOWED_CONTROL_PLANE_PATHS = [
+  "/api/auth/",
+  "/api/desktop-auth/",
+  "/api/license/verify",
+  "/api/devices/checkin",
+  "/api/desktop-release",
+  "/api/desktop-updater/",
+  "/api/diagnostics/upload",
+]
+
+function isAllowedControlPlanePath(apiPath: string) {
+  return ALLOWED_CONTROL_PLANE_PATHS.some((allowed) =>
+    allowed.endsWith("/") ? apiPath.startsWith(allowed) : apiPath === allowed
+  )
+}
 
 function cloudOrigin() {
   const configured =
@@ -29,9 +44,10 @@ async function proxyRequest(request: Request) {
   if (
     !apiPath.startsWith("/api/") ||
     apiPath.startsWith("/api/desktop-proxy") ||
-    apiPath.startsWith("/api/admin")
+    apiPath.startsWith("/api/admin") ||
+    !isAllowedControlPlanePath(apiPath)
   ) {
-    return NextResponse.json({ error: "Invalid desktop proxy target." }, { status: 400 })
+    return NextResponse.json({ error: "Only explicit platform-control actions may use the desktop network proxy." }, { status: 400 })
   }
 
   const target = new URL(apiPath, cloudOrigin())

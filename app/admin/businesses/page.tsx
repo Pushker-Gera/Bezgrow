@@ -37,9 +37,9 @@ export default function BusinessesPage() {
   return (
     <div className="space-y-6">
       <AdminPageHeader
-        eyebrow="Cloud-known metadata"
+        eyebrow="Platform-control metadata"
         title="Businesses"
-        description="Registered workspace metadata only. Local invoices, stock, products, retail customers, and billing activity are unavailable unless a customer explicitly enables authenticated synchronization."
+        description="Customer ERP data is stored locally on the customer’s device and is not available to Bezgrow administrators."
       />
 
       <section className="grid gap-3 sm:grid-cols-3">
@@ -56,7 +56,7 @@ export default function BusinessesPage() {
       </section>
 
       <AdminNotice tone="warning">
-        Missing local data is displayed as “Local-only data”, “Not synchronized”, or “Last reported: Never”—never as a fabricated zero.
+        Local records are shown as “Local-only” or “Not available to platform”—never as fabricated zeroes.
       </AdminNotice>
 
       <AdminListControls
@@ -75,7 +75,6 @@ export default function BusinessesPage() {
               <option value="">All cloud modes</option>
               <option value="local_only">Local-only</option>
               <option value="cloud_backup">Cloud backup enabled</option>
-              <option value="metadata_sync">Metadata sync</option>
             </select>
             <select value={platform} onChange={(event) => setPlatform(event.target.value)} className="h-11 rounded-2xl border border-white/10 bg-black px-3 text-sm">
               <option value="">Mac & Windows</option>
@@ -91,7 +90,7 @@ export default function BusinessesPage() {
       <AdminTable
         loading={list.loading}
         error={list.error}
-        empty="No cloud-known workspace metadata matches these filters."
+        empty="No registered platform-control metadata matches these filters."
         rows={list.data}
         columns={[
           {
@@ -119,12 +118,12 @@ export default function BusinessesPage() {
           {
             key: "cloud_mode",
             label: "Data availability",
-            render: (row) => <div><StatusPill value={row.cloud_mode} /><p className="mt-2 text-xs font-bold">{displayValue(row.local_data_state, "Local-only data")}</p><p className="mt-1 text-xs text-neutral-500">Last reported: {row.telemetry_reported_at ? formatAdminDate(row.telemetry_reported_at) : "Never"}</p></div>,
+            render: (row) => <div><StatusPill value={row.cloud_mode} /><p className="mt-2 text-xs font-bold">{displayValue(row.local_data_state, "Local-only")}</p><p className="mt-1 text-xs text-neutral-500">Not available to platform</p></div>,
           },
           {
             key: "backup",
             label: "Optional services",
-            render: (row) => <div><p>{row.cloud_backup_enabled ? "Cloud backup enabled" : "Cloud backup disabled"}</p><p className="mt-1 text-xs text-neutral-500">Last sync: {formatAdminDate(row.last_sync_at)}</p><p className="mt-1 text-xs text-neutral-500">Last backup: {formatAdminDate(row.last_backup_at)}</p></div>,
+            render: (row) => <div><p>{row.cloud_backup_enabled ? "Customer-enabled backup" : "Backup disabled"}</p><p className="mt-1 text-xs text-neutral-500">Last backup: {formatAdminDate(row.last_backup_at)}</p><p className="mt-1 text-xs text-neutral-500">Customer-controlled</p></div>,
           },
           {
             key: "created_at",

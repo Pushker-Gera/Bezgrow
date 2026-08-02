@@ -1,24 +1,14 @@
 "use client"
 
-import { cacheWorkspaceBootstrap, getCachedWorkspaceBootstrap } from "@/lib/offline/db"
-import { getCachedAccessToken } from "@/lib/api/client-fetch"
-import { syncCachedDesktopSessionWithServer } from "@/lib/desktop/auth-callback"
+import { getCachedWorkspaceBootstrap } from "@/lib/offline/db"
 import { isTauriRuntimeAsync } from "@/lib/desktop/tauri"
 import { localLicenseSnapshot, restoreLicensedWorkspaceContext } from "@/lib/offline/local/license"
 
 export type WorkspaceBootstrapPayload = {
   success: boolean
   error?: string
-  user?: {
-    id?: string
-    email?: string | null
-  }
-  profile?: {
-    id?: string
-    role?: string | null
-    is_suspended?: boolean
-    business_created?: boolean
-  }
+  user?: { id?: string; email?: string | null }
+  profile?: { id?: string; role?: string | null; is_suspended?: boolean; business_created?: boolean }
   organization?: {
     id?: string | null
     name?: string | null
@@ -28,131 +18,42 @@ export type WorkspaceBootstrapPayload = {
     business_type?: string | null
     business_category?: string | null
   } | null
-  membership?: {
-    organization_id?: string | null
-    role?: string | null
-  } | null
+  membership?: { organization_id?: string | null; role?: string | null } | null
   features?: string[]
   currency?: string
   timezone?: string
   locale?: string
-  permissions?: {
-    admin?: boolean
-    canAccessDashboard?: boolean
-    canManageBilling?: boolean
-  }
-}
-
-type CachedWorkspace = {
-  value: WorkspaceBootstrapPayload
-  expiresAt: number
-}
-
-const CACHE_KEY = "bezgrow:workspace-bootstrap"
-const CACHE_TTL_MS = 120000
-
-let inFlight: Promise<WorkspaceBootstrapPayload | null> | null = null
-
-function readCache() {
-  if (typeof window === "undefined") return null
-
-  try {
-    const cached = JSON.parse(sessionStorage.getItem(CACHE_KEY) || "null") as CachedWorkspace | null
-    if (cached?.expiresAt && cached.expiresAt > Date.now()) return cached.value
-  } catch {
-    sessionStorage.removeItem(CACHE_KEY)
-  }
-
-  return null
-}
-
-function writeCache(value: WorkspaceBootstrapPayload) {
-  if (typeof window === "undefined") return
-  sessionStorage.setItem(CACHE_KEY, JSON.stringify({ value, expiresAt: Date.now() + CACHE_TTL_MS }))
+  permissions?: { admin?: boolean; canAccessDashboard?: boolean; canManageBilling?: boolean }
 }
 
 export function clearWorkspaceBootstrapCache() {
-  inFlight = null
   if (typeof window !== "undefined") {
-    sessionStorage.removeItem(CACHE_KEY)
+    sessionStorage.removeItem("bezgrow:workspace-bootstrap")
     sessionStorage.removeItem("bezgrow:organization-id")
   }
 }
 
+/** Resolve the ERP workspace exclusively from the desktop's local license and SQLite cache. */
 export async function getWorkspaceBootstrap(options: { forceFresh?: boolean } = {}) {
-  const desktopRuntime = await isTauriRuntimeAsync()
-  const localWorkspace = getCachedWorkspaceBootstrap()
-  if (desktopRuntime) {
-    if (localWorkspace?.success) return localWorkspace
-    const restoredWorkspace = await restoreLicensedWorkspaceContext().catch(() => null)
-    if (restoredWorkspace?.success) return restoredWorkspace
-    const license = await localLicenseSnapshot().catch(() => null)
-    if (license?.allowed) {
-      return { success: false, error: "The licensed local workspace could not be restored." }
-    }
-  } else if (!options.forceFresh) {
-    const license = await localLicenseSnapshot().catch(() => null)
-    if (license?.allowed && localWorkspace?.success) return localWorkspace
-    if (license?.allowed) {
-      const restoredWorkspace = await restoreLicensedWorkspaceContext().catch(() => null)
-      if (restoredWorkspace?.success) return restoredWorkspace
-    }
+  void options.forceFresh
+  if (!(await isTauriRuntimeAsync().catch(() => false))) {
+    return {
+      success: false,
+      error: "Customer ERP records are available only in the Bezgrow desktop application.",
+    } satisfies WorkspaceBootstrapPayload
   }
 
-  if (typeof navigator !== "undefined" && !navigator.onLine) {
-    const offlineCached = localWorkspace
-    if (offlineCached) return offlineCached
-  }
+  const cached = getCachedWorkspaceBootstrap()
+  if (cached?.success) return cached
 
-  if (!options.forceFresh) {
-    const cached = readCache()
-    if (cached) return cached
-    if (inFlight) return inFlight
-  }
+  const restored = await restoreLicensedWorkspaceContext().catch(() => null)
+  if (restored?.success) return restored
 
-  const fetchBootstrap = async () => {
-    const accessToken = await getCachedAccessToken()
-    const apiPath = "/api/workspace/bootstrap"
-    const url = desktopRuntime ? `/api/desktop-proxy?path=${encodeURIComponent(apiPath)}` : apiPath
-
-    return fetch(url, {
-      credentials: "include",
-      cache: options.forceFresh ? "no-store" : "default",
-      headers: accessToken ? { Authorization: `Bearer ${accessToken}` } : undefined,
-    })
-  }
-
-  inFlight = fetchBootstrap()
-    .then(async (response) => {
-      if (response.status === 401) {
-        const nextPath =
-          typeof window !== "undefined"
-            ? `${window.location.pathname}${window.location.search}${window.location.hash}`
-            : "/dashboard"
-        const restoredPath = await syncCachedDesktopSessionWithServer(nextPath)
-        if (restoredPath) {
-          response = await fetchBootstrap()
-        }
-      }
-
-      const payload = (await response.json()) as WorkspaceBootstrapPayload
-      if (response.ok && payload.success) {
-        writeCache(payload)
-        await cacheWorkspaceBootstrap(payload)
-      }
-      if (!response.ok && typeof navigator !== "undefined" && !navigator.onLine) {
-        return getCachedWorkspaceBootstrap()
-      }
-      return payload
-    })
-    .catch(() => {
-      const cached = getCachedWorkspaceBootstrap()
-      if (cached && typeof navigator !== "undefined" && !navigator.onLine) return cached
-      return null
-    })
-    .finally(() => {
-      inFlight = null
-    })
-
-  return inFlight
+  const license = await localLicenseSnapshot().catch(() => null)
+  return {
+    success: false,
+    error: license?.allowed
+      ? "The licensed local workspace could not be restored."
+      : license?.reason || "A valid local license is required.",
+  } satisfies WorkspaceBootstrapPayload
 }

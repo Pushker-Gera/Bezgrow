@@ -9,7 +9,6 @@ export const dynamic = "force-dynamic"
 const registerSchema = z.object({
   fullName: z.string().trim().min(2).max(120),
   businessName: z.string().trim().min(2).max(160),
-  phone: z.string().trim().min(7).max(30),
   email: z.string().trim().email().max(254),
   password: z
     .string()
@@ -52,7 +51,6 @@ export async function POST(request: Request) {
       user_metadata: {
         full_name: payload.fullName,
         business_name: payload.businessName,
-        phone: payload.phone,
       },
     })
 

@@ -2,7 +2,7 @@ import { ImageResponse } from "next/og"
 import { readFile } from "node:fs/promises"
 import { join } from "node:path"
 
-export const alt = "Bezgrow cloud inventory management, GST billing, POS and ERP software"
+export const alt = "Bezgrow local-first inventory management, GST billing, POS and ERP software"
 export const size = {
   width: 1200,
   height: 630,
@@ -50,14 +50,14 @@ export default async function Image() {
           />
           <div style={{ display: "flex", flexDirection: "column" }}>
             <div style={{ fontSize: "54px", fontWeight: 900 }}>Bezgrow</div>
-            <div style={{ fontSize: "22px", color: "#a5f3fc", letterSpacing: "0.18em" }}>BUSINESS CLOUD</div>
+            <div style={{ fontSize: "22px", color: "#a5f3fc", letterSpacing: "0.18em" }}>LOCAL-FIRST ERP</div>
           </div>
         </div>
         <div style={{ maxWidth: "980px", fontSize: "76px", lineHeight: 1, fontWeight: 900 }}>
           Inventory Management, GST Billing & ERP Software
         </div>
         <div style={{ marginTop: "32px", maxWidth: "900px", fontSize: "30px", lineHeight: 1.35, color: "#cbd5e1" }}>
-          Cloud software for retail, wholesale, POS, billing, invoices, analytics, and business management.
+          Private desktop software for retail, wholesale, POS, billing, invoices, analytics, and business management.
         </div>
       </div>
     ),

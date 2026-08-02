@@ -5,7 +5,6 @@ import { useParams } from "next/navigation"
 
 import ShippingLabel from "@/components/ShippingLabel"
 
-import { isTauriRuntimeAsync } from "@/lib/desktop/tauri"
 import { getCachedWorkspaceBootstrap, getOfflineData } from "@/lib/offline/db"
 
 type OrderLabelRow = {
@@ -41,26 +40,7 @@ export default function LabelPage() {
             }
         }
 
-        if (await isTauriRuntimeAsync()) {
-            setOrder(null)
-            setLoading(false)
-            return
-        }
-
-        const { supabase } = await import("@/lib/supabase")
-        const { data, error } =
-            await supabase
-                .from("orders")
-                .select("*")
-                .eq("id", orderId)
-                .single()
-
-        if (error) {
-            console.warn(error)
-        }
-
-        setOrder(data as OrderLabelRow | null)
-
+        setOrder(null)
         setLoading(false)
     }, [orderId])
 

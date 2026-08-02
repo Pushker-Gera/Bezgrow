@@ -65,8 +65,10 @@ async function readRows(organizationId: string, collection: OfflineCollection) {
 }
 
 async function writeCollections(organizationId: string, updates: CollectionUpdate[], action?: OfflineAction) {
+  // Legacy cloud-sync intent is ignored. The SQLite transaction is final.
+  void action
   const desktopRuntime = await isDesktopRuntime().catch(() => false)
-  const wroteToSqlite = await putNormalizedCollectionsInTransaction(organizationId, updates, action)
+  const wroteToSqlite = await putNormalizedCollectionsInTransaction(organizationId, updates)
     .then(() => true)
     .catch((error) => {
       console.warn("[offline/local-erp] SQLite batch write unavailable.", error)

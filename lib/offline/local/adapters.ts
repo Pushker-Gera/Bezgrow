@@ -5,25 +5,15 @@ import { getLocalDatabaseService, type SqlExecutor } from "@/lib/offline/local/s
 import {
   exportNormalizedBackup,
   getNormalizedCollection,
-  listNormalizedActions,
   putNormalizedCollection,
-  queueNormalizedAction,
   repositories,
 } from "@/lib/offline/local/repositories"
 import type { OfflineAction, OfflineActionStatus, OfflineCollection } from "@/lib/offline/db"
 
-export type DataSourceMode = "sqlite" | "indexeddb" | "supabase" | "auto"
-
-export type CloudAdapter = {
-  mode: "supabase"
-  isAvailable(): Promise<boolean>
-}
+export type DataSourceMode = "sqlite" | "indexeddb" | "unavailable"
 
 export class LocalFirstRepositoryAdapter {
-  constructor(
-    private readonly localDb = getLocalDatabaseService(),
-    private readonly cloudAdapter: CloudAdapter | null = null
-  ) {}
+  constructor(private readonly localDb = getLocalDatabaseService()) {}
 
   async mode(): Promise<DataSourceMode> {
     const desktopRuntime = await isDesktopRuntime().catch(() => false)
@@ -34,7 +24,7 @@ export class LocalFirstRepositoryAdapter {
     if (db) return "sqlite"
     if (desktopRuntime) throw new Error("Bezgrow local database is required in desktop mode.")
     if (typeof window !== "undefined" && "indexedDB" in window) return "indexeddb"
-    return this.cloudAdapter && (await this.cloudAdapter.isAvailable()) ? "supabase" : "auto"
+    return "unavailable"
   }
 
   async read<T>(organizationId: string, collection: OfflineCollection, fallback: T): Promise<T> {
@@ -50,14 +40,14 @@ export class LocalFirstRepositoryAdapter {
   }
 
   async queue(action: OfflineAction) {
-    if (!(await this.localDb.isAvailable())) return false
-    await queueNormalizedAction(action)
+    // Compatibility no-op: local writes are final and are never queued for upload.
+    void action
     return true
   }
 
   async listActions(statuses?: OfflineActionStatus[]) {
-    if (!(await this.localDb.isAvailable())) return null
-    return listNormalizedActions(statuses)
+    void statuses
+    return []
   }
 
   async transaction<T>(work: (db: SqlExecutor) => Promise<T>) {

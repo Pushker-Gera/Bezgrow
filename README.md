@@ -1,6 +1,6 @@
-# Bezgrow SaaS ERP
+# Bezgrow Local-First Desktop ERP
 
-Production Next.js + Supabase workspace for admin controls, multi-tenant ERP dashboards, inventory, customers, invoices, orders, and offline desktop licensing.
+Bezgrow is a Tauri desktop ERP whose customer business records live only in the per-user SQLite database. Supabase is the online control plane for platform-admin authentication, licenses/devices, releases, support, sanitized diagnostics, security logs, and customer-enabled backup metadata. It is not an ERP datastore or synchronization target.
 
 ## Local Development
 
@@ -24,13 +24,9 @@ SUPABASE_SERVICE_ROLE_KEY=
 NEXT_PUBLIC_DESKTOP_API_ORIGIN=https://www.bezgrow.com
 ```
 
-`NEXT_PUBLIC_DESKTOP_API_ORIGIN` is used only for explicit online desktop actions such as
-creating or revoking secure invoice links. The hosted API must have
-`SUPABASE_SERVICE_ROLE_KEY` configured server-side and migration
-`20260726090000_secure_invoice_shares.sql` applied. The desktop bundle never contains the
-service-role key. Invoice PDFs remain local until the user confirms the upload.
+`NEXT_PUBLIC_DESKTOP_API_ORIGIN` is used only for explicit control-plane actions such as license/device check-ins and update checks. The desktop bundle never contains the service-role key or license private signing key. Invoice PDFs, exports, logos, backups, and ERP records remain local.
 
-Payments are not enabled for the current launch. Desktop access is license-based through admin-issued offline licenses, with suspension, business creation, and organization membership checks still available for cloud/admin workflows.
+Payments are not enabled for the current launch. Desktop access is license-based through admin-issued signed offline licenses. A valid locally stored license does not require Supabase authentication or a network connection during normal ERP use.
 
 Never expose `SUPABASE_SERVICE_ROLE_KEY` or `BEZGROW_LICENSE_PRIVATE_KEY` to client-side code.
 
@@ -62,7 +58,7 @@ If keys are missing, invalid format, or mismatched, `/admin/settings` shows a cl
 
 ## Supabase Setup
 
-Apply every migration in `supabase/migrations` before launch. The launch hardening migration repairs recursive `organization_members` RLS, backfills `order_items.organization_id`, creates tenant indexes, and keeps future subscription/payment tables available without enforcing payments in the app.
+Supabase migrations after the local-first cutover define only the platform control plane. Historical ERP migrations are legacy schema history and must not be used to restore cloud ERP routes. Before applying the guarded cloud-ERP cleanup migration, create and verify the protected export and confirm all required rows are present in SQLite.
 
 Required Supabase Auth URLs:
 
@@ -87,7 +83,7 @@ Both commands must pass before deployment.
 
 ## How to run Bezgrow Desktop
 
-Bezgrow Desktop uses Tauri v2 around the existing Next.js app. The web app, PWA, and Vercel deployment continue to use the same Next/Supabase codebase.
+Bezgrow Desktop uses Tauri v2 around the existing Next.js UI and the native SQLite bridge. The hosted website provides downloads, documentation, account/license actions, support, and the platform-admin application; it does not expose desktop-local ERP records.
 
 ### Prerequisites
 
@@ -172,33 +168,24 @@ Windows installers must be built on Windows. From a Windows machine, run `npm ru
 
 ### Offline-first desktop behavior
 
-- First login requires internet and Supabase authentication.
-- The Supabase refresh/session data is stored through the Tauri Rust keychain bridge when running as desktop. Passwords are never stored.
-- Workspace, profile, organization, membership, features, products, customers, invoices, invoice items, orders, settings, inventory items, and stock movements are cached locally.
-- Desktop uses SQLite through `@tauri-apps/plugin-sql`; web/PWA falls back to IndexedDB.
-- Offline records are written locally first and queued in `sync_queue`.
-- When internet returns, the sync engine retries queued work through existing authenticated APIs using the logged-in user's access token.
-- Admin approval, signup, password reset, cloud sync, email/WhatsApp sending, and server-side admin actions require internet.
+- Initial license issuance or activation may require internet, but signature verification and reopening use the signed license stored locally.
+- SQLite is the sole authoritative datastore for organizations, users, products, inventory, customers, suppliers, invoices, purchases, payments, expenses, ledgers, reports, settings, templates, audit history, and backup/import/export history.
+- Normal ERP reads, writes, reports, printing, PDF/CSV export, backup, and restore do not call Supabase or a hosted ERP API.
+- If the native SQLite bridge cannot start, the packaged desktop fails closed and presents database diagnostics/recovery. It never falls back to Supabase or IndexedDB for ERP writes.
+- Device check-ins and update checks are explicit, best-effort control-plane operations and send only license/device/platform/version metadata. Normal startup, navigation, network restoration, and ERP actions do not trigger them.
+- After an explicit logout, a desktop user can reopen offline through the verified local-license action; the app re-verifies the signed license before restoring access.
+- Cloud backup is disabled by default and is not implemented or enabled by normal ERP workflows.
 
-The local SQLite database creates these tables:
+The local SQLite database contains normalized domain tables, including:
 
 ```text
-local_workspace
-local_profiles
-local_organizations
-local_organization_members
-local_products
-local_inventory_items
-local_customers
-local_invoices
-local_invoice_items
-local_orders
-local_order_items
-local_settings
-local_stock_movements
-sync_queue
-sync_conflicts
-sync_logs
+organizations, local_users, organization_members
+products, categories, units, warehouses, inventory_items, stock_batches, stock_movements
+customers, suppliers, sales_invoices, sales_invoice_items, orders, order_items
+quotations, purchase_invoices, payments, payment_receipts, expenses, ledger_entries
+business_settings, print_templates, feature_flags, local_audit_logs, backup_manifest
 ```
 
-Do not put `SUPABASE_SERVICE_ROLE_KEY` in any desktop or public environment variable. Only `NEXT_PUBLIC_SUPABASE_URL` and `NEXT_PUBLIC_SUPABASE_ANON_KEY` are available to the desktop client.
+The Tauri Rust layer stores the database in the stable per-user application-data directory, enables WAL, foreign keys, a busy timeout, atomic transactions, schema versioning, integrity checks, and pre-migration backups. Logout, restart, reinstall, and app updates do not delete this database or the stored license.
+
+Do not put `SUPABASE_SERVICE_ROLE_KEY` or `BEZGROW_LICENSE_PRIVATE_KEY` in any desktop or public environment variable. Public Supabase values are present only for hosted/control-plane authentication; local ERP modules must not import a Supabase client.

@@ -3,7 +3,6 @@
 import Link from "next/link"
 import { useCallback, useEffect, useState } from "react"
 import { useParams } from "next/navigation"
-import { isTauriRuntimeAsync } from "@/lib/desktop/tauri"
 import { getCachedWorkspaceBootstrap, getOfflineData } from "@/lib/offline/db"
 
 type DataRow = Record<string, unknown> & {
@@ -68,21 +67,6 @@ export default function InvoiceViewPage() {
     if (await loadOfflineInvoice()) {
       setLoading(false)
       return
-    }
-
-    if (await isTauriRuntimeAsync()) {
-      setLoading(false)
-      return
-    }
-
-    const { supabase } = await import("@/lib/supabase")
-    const { data: invoiceData } = await supabase.from("invoices").select("*").eq("id", invoiceId).single()
-    const typedInvoice = (invoiceData as DataRow | null) || null
-    setInvoice(typedInvoice)
-
-    if (typedInvoice?.customer_id) {
-      const { data } = await supabase.from("customers").select("*").eq("id", typedInvoice.customer_id).single()
-      setCustomer((data as DataRow | null) || null)
     }
 
     setLoading(false)

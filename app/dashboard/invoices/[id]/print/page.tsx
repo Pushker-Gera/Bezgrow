@@ -6,7 +6,6 @@ import { PrintEngine } from "@/components/print/PrintEngine"
 import { loadStoredPrintSettings, readStoredPrintSettings } from "@/components/print/settings/defaults"
 import type { PrintInvoice, PrintSettings } from "@/components/print/types"
 import { resolveBusinessLogoUrl } from "@/lib/business-logo"
-import { isTauriRuntimeAsync } from "@/lib/desktop/tauri"
 import { getCachedWorkspaceBootstrap, getOfflineData } from "@/lib/offline/db"
 import { buildPrintInvoice, resolvePrintOrganization, stringFrom, type PrintRow } from "@/lib/print-invoice-builder"
 
@@ -95,49 +94,8 @@ export default function PrintInvoicePage() {
       return true
     }
 
-    if (await isTauriRuntimeAsync()) {
-      setLoading(false)
-      return false
-    }
-
-    const { supabase } = await import("@/lib/supabase")
-    let typedInvoice: PrintRow | null = null
-    try {
-      const { data: invoiceData } = await supabase.from("invoices").select("*").eq("id", invoiceId).single()
-      typedInvoice = invoiceData as PrintRow | null
-    } catch {
-      typedInvoice = null
-    }
-
-    if (!typedInvoice) {
-      const loadedOffline = await loadOfflineInvoice()
-      setLoading(false)
-      return loadedOffline
-    }
-    setInvoice(typedInvoice)
-
-    const [{ data: itemRows }, { data: organizationData }, { data: customerData }] = await Promise.all([
-      supabase.from("invoice_items").select("*").eq("invoice_id", invoiceId),
-      typedInvoice?.organization_id
-        ? supabase.from("organizations").select("*").eq("id", typedInvoice.organization_id).single()
-        : Promise.resolve({ data: null }),
-      typedInvoice?.customer_id
-        ? supabase.from("customers").select("*").eq("id", typedInvoice.customer_id).single()
-        : Promise.resolve({ data: null }),
-    ])
-    const typedItems = (itemRows || []) as PrintRow[]
-    setItems(typedItems)
-    setOrganization(organizationData as PrintRow | null)
-    setCustomer(customerData as PrintRow | null)
-
-    const productIds = Array.from(new Set(typedItems.map((item) => stringFrom(item, ["product_id"])).filter(Boolean)))
-    if (productIds.length) {
-      const { data } = await supabase.from("products").select("*").in("id", productIds)
-      setProducts((data || []) as PrintRow[])
-    }
-
     setLoading(false)
-    return true
+    return false
   }, [invoiceId, loadOfflineInvoice])
 
   useEffect(() => {

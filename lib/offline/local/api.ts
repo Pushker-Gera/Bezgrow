@@ -1,7 +1,7 @@
 "use client"
 
 import { isDesktopRuntime, isTauriRuntimeAsync } from "@/lib/desktop/tauri"
-import { createOfflineId, getCachedWorkspaceBootstrap, getOfflineData, putOfflineData, queueOfflineAction, type OfflineAction, type OfflineCollection } from "@/lib/offline/db"
+import { createOfflineId, getCachedWorkspaceBootstrap, getOfflineData, putOfflineData, type OfflineAction, type OfflineCollection } from "@/lib/offline/db"
 import { isLicenseRestrictedEndpoint } from "@/lib/license/policy"
 import { localFirstRepositoryAdapter } from "@/lib/offline/local/adapters"
 import {
@@ -300,8 +300,11 @@ async function writeCollections(
   updates: Array<{ collection: OfflineCollection; value: unknown }>,
   action?: OfflineAction
 ) {
+  // `action` is a legacy compatibility argument. It is intentionally not
+  // persisted: SQLite is authoritative and there is no cloud upload queue.
+  void action
   const desktopRuntime = await isDesktopRuntime().catch(() => false)
-  const wroteToSqlite = await putNormalizedCollectionsInTransaction(organizationId, updates, action)
+  const wroteToSqlite = await putNormalizedCollectionsInTransaction(organizationId, updates)
     .then(() => true)
     .catch((error) => {
       console.warn("[offline/local-api] SQLite batch write unavailable.", error)
@@ -328,8 +331,9 @@ function pendingAction(
   return { id, type, organizationId, payload, status: "pending", attempts: 0, createdAt: now, updatedAt: now }
 }
 
-async function queue(action: Parameters<typeof queueOfflineAction>[0]) {
-  await queueOfflineAction(action)
+async function queue(action: Omit<OfflineAction, "status" | "createdAt" | "updatedAt" | "attempts">) {
+  // Retained so legacy call sites remain source-compatible. Never enqueue or upload.
+  void action
 }
 
 function rowMatches(row: DataRow, fields: string[], term: string) {

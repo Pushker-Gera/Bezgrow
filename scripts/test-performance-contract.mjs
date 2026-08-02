@@ -20,8 +20,6 @@ const requiredIndexes = [
   "idx_inventory_product_warehouse",
   "idx_stock_movements_org_type_date",
   "idx_ledger_org_account_date",
-  "idx_sync_queue_status",
-  "idx_sync_queue_org",
   "idx_backup_verification",
 ];
 
@@ -42,8 +40,8 @@ for (const pragma of [
 }
 
 assert.match(service, /desktop_execute_transaction/, "Local writes must use the native single-connection transaction command.");
-assert.match(bootstrap, /const pageSize = 100/, "Offline preparation must page network downloads.");
-assert.match(bootstrap, /page <= 1000/, "Offline preparation must cap page loops.");
+assert.doesNotMatch(bootstrap, /fetch\s*\(/, "Local startup must not wait for network downloads.");
+assert.match(bootstrap, /local-sqlite-only/, "Offline preparation must terminate at the local SQLite workspace.");
 assert.match(repositories, /ORDER BY datetime\(updated_at\) DESC/, "Backup exports should stream organizations in deterministic recent order.");
 assert.match(repositories, /SELECT name FROM sqlite_master WHERE type = 'table' AND name = \? LIMIT 1/, "Legacy import table checks must be indexed metadata probes.");
 for (const query of ["queryNormalizedProducts", "queryNormalizedCustomers", "queryNormalizedInvoices"]) {

@@ -89,6 +89,11 @@ assert.match(
 )
 assert.match(
   desktopBuild,
+  /function preserveMacAppBundle[\s\S]*requestedBundles\.includes\("dmg"\)[\s\S]*"app"/,
+  "DMG builds must explicitly retain the independently launchable macOS app bundle."
+)
+assert.match(
+  desktopBuild,
   /if \(publicWindowsBuild && existsSync\(windowsExePath\)\)/,
   "An internal Windows build must never replace public download artifacts."
 )

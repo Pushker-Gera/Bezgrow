@@ -11,7 +11,6 @@ export default function SignupPage() {
 
     const [fullName, setFullName] = useState("")
     const [businessName, setBusinessName] = useState("")
-    const [phone, setPhone] = useState("")
     const [email, setEmail] = useState("")
     const [password, setPassword] = useState("")
     const [termsAccepted, setTermsAccepted] = useState(false)
@@ -62,10 +61,9 @@ export default function SignupPage() {
 
             const cleanFullName = fullName.trim()
             const cleanBusinessName = businessName.trim()
-            const cleanPhone = phone.trim()
             const cleanEmail = email.trim()
 
-            if (!cleanFullName || !cleanBusinessName || !cleanPhone || !cleanEmail || !password) {
+            if (!cleanFullName || !cleanBusinessName || !cleanEmail || !password) {
                 setErrorMessage("Please fill all fields")
                 setLoading(false)
                 return
@@ -89,7 +87,6 @@ export default function SignupPage() {
                 body: JSON.stringify({
                     fullName: cleanFullName,
                     businessName: cleanBusinessName,
-                    phone: cleanPhone,
                     email: cleanEmail,
                     password,
                     termsAccepted,
@@ -179,14 +176,6 @@ export default function SignupPage() {
                     value={businessName}
                     className="mb-4 min-h-12 w-full rounded-lg border border-gray-700 bg-black p-3 outline-none focus:border-cyan-300"
                     onChange={(e) => setBusinessName(e.target.value)}
-                />
-
-                <input
-                    type="tel"
-                    placeholder="Phone Number"
-                    value={phone}
-                    className="mb-4 min-h-12 w-full rounded-lg border border-gray-700 bg-black p-3 outline-none focus:border-cyan-300"
-                    onChange={(e) => setPhone(e.target.value)}
                 />
 
                 <input

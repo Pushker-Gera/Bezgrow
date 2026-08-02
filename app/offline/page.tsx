@@ -26,11 +26,11 @@ export default function OfflinePage() {
   const [licenseKey, setLicenseKey] = useState("")
   const [status, setStatus] = useState<LicenseSnapshot | null>(null)
   const [notice, setNotice] = useState("")
-  const [browserStorageNotice, setBrowserStorageNotice] = useState("")
   const [activating, setActivating] = useState(false)
   const [nextPath, setNextPath] = useState("/dashboard")
   const [checkingLocalDatabase, setCheckingLocalDatabase] = useState(true)
   const [localDatabaseError, setLocalDatabaseError] = useState("")
+  const [desktopRuntime, setDesktopRuntime] = useState<boolean | null>(null)
 
   async function refreshStatus() {
     const snapshot = await localLicenseSnapshot()
@@ -46,6 +46,7 @@ export default function OfflinePage() {
     queueMicrotask(async () => {
       try {
         const desktopRuntime = await isTauriRuntimeAsync().catch(() => false)
+        setDesktopRuntime(desktopRuntime)
         if (desktopRuntime) {
           try {
             await getLocalDatabaseService().integrityReport()
@@ -64,9 +65,6 @@ export default function OfflinePage() {
             router.replace(requestedNextPath)
             return
           }
-        } else {
-          setBrowserStorageNotice("Browser and Safari use separate license storage. A desktop license is stored inside the desktop app only; activate this browser separately if you want to use it here.")
-          await refreshStatus().catch(() => setNotice("Device activation status could not be loaded."))
         }
       } finally {
         setCheckingLocalDatabase(false)
@@ -129,6 +127,22 @@ export default function OfflinePage() {
 
   if (checkingLocalDatabase) return <LocalDatabaseRecovery checking />
   if (localDatabaseError) return <LocalDatabaseRecovery errorMessage={localDatabaseError} />
+  if (desktopRuntime === false) {
+    return (
+      <main className="flex min-h-dvh items-center justify-center bg-black px-5 text-white">
+        <section className="max-w-xl rounded-[32px] border border-cyan-400/20 bg-cyan-500/10 p-8 text-center">
+          <p className="text-xs font-black uppercase tracking-[0.2em] text-cyan-200">Desktop activation</p>
+          <h1 className="mt-4 text-3xl font-black">Activate Bezgrow in the desktop app.</h1>
+          <p className="mt-4 leading-7 text-neutral-300">
+            A browser cannot read or create the desktop SQLite workspace. License activation and ERP records remain on the customer&apos;s device.
+          </p>
+          <Link href="/download" className="mt-6 inline-flex min-h-12 items-center rounded-2xl bg-white px-6 font-black text-black">
+            Download Bezgrow Desktop
+          </Link>
+        </section>
+      </main>
+    )
+  }
 
   return (
     <main className="flex min-h-dvh items-center justify-center bg-black px-5 py-8 text-white">
@@ -138,8 +152,6 @@ export default function OfflinePage() {
         <p className="mt-4 text-neutral-300">
           Send this Device ID to the admin, then paste the license key or import the license file received from admin.
         </p>
-        {browserStorageNotice && <p className="mt-3 text-sm text-amber-100">{browserStorageNotice}</p>}
-
         <div className="mt-7 rounded-3xl border border-white/10 bg-black/35 p-5 text-left">
           <p className="text-xs font-black uppercase tracking-[0.18em] text-neutral-500">Device ID</p>
           <div className="mt-3 flex flex-col gap-3 sm:flex-row">

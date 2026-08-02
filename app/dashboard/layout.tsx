@@ -8,11 +8,11 @@ import { BezgrowLogoMark } from "@/components/brand/BezgrowLogoMark"
 import DesktopBackButton from "@/components/desktop/DesktopBackButton"
 import PlatformAdminLauncher from "@/components/desktop/PlatformAdminLauncher"
 import LocalDatabaseRecovery from "@/components/offline/LocalDatabaseRecovery"
-import { clearDesktopSession, clearServerAuthSession } from "@/lib/desktop/session"
+import { clearDesktopSession } from "@/lib/desktop/session"
 import { isTauriRuntimeAsync } from "@/lib/desktop/tauri"
 import { getLocalDatabaseService } from "@/lib/offline/local/service"
 import { localLicenseSnapshot, restoreLicensedWorkspaceContext } from "@/lib/offline/local/license"
-import { clearWorkspaceBootstrapCache, getWorkspaceBootstrap } from "@/lib/workspaceBootstrapClient"
+import { clearWorkspaceBootstrapCache } from "@/lib/workspaceBootstrapClient"
 
 const navItems = [
     ["Dashboard", "/dashboard"],
@@ -48,20 +48,8 @@ const priorityPrefetchRoutes = [
 ]
 
 type DesktopDatabaseState = {
-    status: "initializing" | "database-ready" | "license-valid" | "business-ready" | "ready" | "failed"
+    status: "initializing" | "database-ready" | "license-valid" | "business-ready" | "browser-local-only" | "failed"
     message?: string
-}
-
-function scheduleIdleTask(callback: () => void, timeout = 3000) {
-    if (typeof window === "undefined") return () => undefined
-
-    if ("requestIdleCallback" in window) {
-        const idleId = window.requestIdleCallback(callback, { timeout })
-        return () => window.cancelIdleCallback(idleId)
-    }
-
-    const timeoutId = globalThis.setTimeout(callback, Math.min(timeout, 1200))
-    return () => globalThis.clearTimeout(timeoutId)
 }
 
 export default function DashboardLayout({ children }: { children: ReactNode }) {
@@ -73,7 +61,6 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
     const [tabletNavOpen, setTabletNavOpen] = useState(false)
     const [online, setOnline] = useState(true)
     const [canShowAdmin, setCanShowAdmin] = useState(false)
-    const [offlinePrepMessage, setOfflinePrepMessage] = useState("")
     const [desktopDatabase, setDesktopDatabase] = useState<DesktopDatabaseState>({ status: "initializing" })
     const startupStartedRef = useRef(false)
     const initialPathRef = useRef(pathname || "/dashboard")
@@ -82,7 +69,6 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
         if (startupStartedRef.current) return
         startupStartedRef.current = true
         let cancelled = false
-        let cancelOfflinePrep: () => void = () => undefined
 
         queueMicrotask(async () => {
             try {
@@ -126,63 +112,17 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
                     router.replace(`/offline?next=${encodeURIComponent(initialPathRef.current)}`)
                     return
                 } else if (!cancelled) {
-                    setDesktopDatabase({ status: "ready" })
-                }
-
-                const payload = await getWorkspaceBootstrap()
-                if (cancelled) return
-
-                if (!payload?.success) {
-                    const license = await localLicenseSnapshot().catch(() => null)
-                    if (license?.allowed) return
-                    router.replace("/offline?next=/dashboard")
+                    setDesktopDatabase({ status: "browser-local-only" })
                     return
                 }
-
-                if (payload.organization?.name) setBusinessName(payload.organization.name)
-
-                setOwnerEmail(payload.user?.email || "owner@bezgrow.com")
-
-                const isAdmin = Boolean(payload.permissions?.admin || ["admin", "platform_admin"].includes(payload.profile?.role || ""))
-                setCanShowAdmin(isAdmin)
-                if (isAdmin) {
-                    router.replace("/admin")
-                    return
-                }
-
-                cancelOfflinePrep = scheduleIdleTask(() => {
-                    if (cancelled) return
-                    let lastProgressAt = 0
-
-                    void import("@/lib/offline/bootstrap").then(({ prepareOfflineWorkspace }) => prepareOfflineWorkspace(payload, {
-                        onProgress: (progress) => {
-                            const now = Date.now()
-                            const isDone = progress.completed >= progress.total
-                            if (!isDone && now - lastProgressAt < 900) return
-                            lastProgressAt = now
-
-                            setOfflinePrepMessage(progress.message)
-                            if (isDone) {
-                                globalThis.setTimeout(() => setOfflinePrepMessage(""), 4000)
-                            }
-                        },
-                    })).catch((error) => {
-                        if (typeof navigator !== "undefined" && navigator.onLine) {
-                            setOfflinePrepMessage(error instanceof Error ? error.message : "Offline data could not be prepared.")
-                            globalThis.setTimeout(() => setOfflinePrepMessage(""), 6000)
-                        }
-                    })
-                })
-                if (!cancelled && desktopRuntime) setDesktopDatabase({ status: "business-ready" })
             } catch (error) {
                 console.warn("Dashboard access warning:", error)
-                if (!cancelled) setDesktopDatabase({ status: "ready" })
+                if (!cancelled) setDesktopDatabase({ status: "failed", message: "Bezgrow local startup could not be completed." })
             }
         })
 
         return () => {
             cancelled = true
-            cancelOfflinePrep()
         }
     }, [router])
 
@@ -227,12 +167,8 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
 
     async function handleLogout() {
         clearWorkspaceBootstrapCache()
-        await Promise.all([clearDesktopSession(), clearServerAuthSession()])
+        await clearDesktopSession()
         router.replace("/login")
-        const { supabase } = await import("@/lib/supabase")
-        void supabase.auth.signOut().catch((error) => {
-            console.warn("Cloud sign-out warning:", error)
-        })
     }
 
     if (desktopDatabase.status === "initializing" || desktopDatabase.status === "database-ready" || desktopDatabase.status === "license-valid") {
@@ -241,6 +177,23 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
 
     if (desktopDatabase.status === "failed") {
         return <LocalDatabaseRecovery errorMessage={desktopDatabase.message} />
+    }
+
+    if (desktopDatabase.status === "browser-local-only") {
+        return (
+            <main className="flex min-h-dvh items-center justify-center bg-black px-5 text-white">
+                <section className="max-w-xl rounded-[32px] border border-cyan-400/20 bg-cyan-500/10 p-8 text-center">
+                    <p className="text-xs font-black uppercase tracking-[0.2em] text-cyan-200">Local-only desktop ERP</p>
+                    <h1 className="mt-4 text-3xl font-black">Open Bezgrow on this device.</h1>
+                    <p className="mt-4 leading-7 text-neutral-300">
+                        Customer ERP data is stored in the desktop app&apos;s local SQLite database and is not available to this browser or to Bezgrow administrators.
+                    </p>
+                    <Link href="/download" className="mt-6 inline-flex min-h-12 items-center rounded-2xl bg-white px-6 font-black text-black">
+                        Download Bezgrow Desktop
+                    </Link>
+                </section>
+            </main>
+        )
     }
 
     return (
@@ -381,11 +334,6 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
                 </header>
 
                 <main className={`min-h-0 flex-1 overflow-x-hidden bg-black ${isInvoicePrintWorkspace ? "overflow-hidden p-0" : "overflow-y-auto pb-28 md:pb-4"}`}>
-                    {offlinePrepMessage && (
-                        <div className="border-b border-emerald-400/20 bg-emerald-500/10 px-3 py-2 text-sm font-semibold text-emerald-100">
-                            <div className="mx-auto max-w-[1800px]">{offlinePrepMessage}</div>
-                        </div>
-                    )}
                     {children}
                 </main>
 

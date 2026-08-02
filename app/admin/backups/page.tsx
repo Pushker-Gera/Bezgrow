@@ -23,8 +23,8 @@ export default function BackupsPage() {
     <div className="space-y-6">
       <AdminPageHeader
         eyebrow="Opt-in cloud services"
-        title="Backups and sync"
-        description="Backup and synchronization metadata appears only for workspaces that explicitly enabled the service. The desktop ERP remains fully functional when cloud services are disabled."
+        title="Backups"
+        description="Backup metadata appears only for a separate service explicitly enabled by the customer. The desktop ERP remains fully functional when it is disabled."
       />
       <AdminNotice>{String(list.metadata.privacyNotice || "No hidden uploads: local invoices, products, customers, and credentials stay on the customer device by default.")}</AdminNotice>
       <AdminListControls
@@ -70,8 +70,8 @@ export default function BackupsPage() {
           },
           {
             key: "sync_conflict_count",
-            label: "Sync / restore",
-            render: (row) => <div><p>{row.sync_conflict_count === null || row.sync_conflict_count === undefined ? "Conflict count not reported" : `${row.sync_conflict_count} conflicts`}</p><p className="mt-1 text-xs text-neutral-500">Restore: {displayValue(row.restore_request_status, "No request")}</p></div>,
+            label: "Restore",
+            render: (row) => <div><p>{displayValue(row.restore_request_status, "No request")}</p><p className="mt-1 text-xs text-neutral-500">Customer-controlled</p></div>,
           },
         ]}
       />

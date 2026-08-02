@@ -2,6 +2,7 @@
 
 import { normalizeLicenseEnvKey, parseLicenseInput, verifyLicenseSignature, type LicensePayload } from "@/lib/license/codec"
 import { evaluateStoredLicense, type LicensePolicyResult, type StoredLicenseRow } from "@/lib/license/policy"
+import { verifyStoredLicenseRows } from "@/lib/license/verification"
 import { setDesktopAuthMarker } from "@/lib/desktop/session"
 import { desktopArchitecture, invokeTauri, isTauriRuntimeAsync } from "@/lib/desktop/tauri"
 import packageJson from "@/package.json"
@@ -24,12 +25,6 @@ const DEVICE_STORAGE_KEY = "bezgrow:device-id"
 const DEVICE_SECRET_KEY = "bezgrow-device-id"
 const LICENSE_SECRET_KEY = "bezgrow-offline-license-key"
 const PUBLIC_KEY = normalizeLicenseEnvKey(process.env.NEXT_PUBLIC_BEZGROW_LICENSE_PUBLIC_KEY || "")
-
-type LicenseVerificationResponse = {
-  success: boolean
-  error?: string
-  valid?: boolean
-}
 
 type DeviceCheckinResponse = {
   success?: boolean
@@ -243,6 +238,7 @@ async function restoreLicenseRowsFromDesktopSecret(deviceId: string) {
     const parsed = parseLicenseInput(licenseKey)
     if (parsed.payload.device_id !== deviceId) return []
     if (Date.now() > dateEnd(parsed.payload.expiry_date, parsed.payload.grace_period_days).getTime()) return []
+    if (!(await verifyLicenseSignature(parsed, PUBLIC_KEY))) return []
 
     await writeActivatedLicense(parsed.payload, parsed.licenseKey, parsed.signatureText)
     return [licenseRowFromPayload(parsed.payload, parsed.licenseKey, parsed.signatureText) as StoredLicenseRow]
@@ -362,16 +358,7 @@ export async function restoreLicensedWorkspaceContext() {
     console.error("[offline/license] legacy business-data migration failed", error)
     return null
   })
-  const deviceId = await getOrCreateDeviceId()
-  let rows = await readLicenseRows("global")
-  let status = evaluateStoredLicense(rows, { deviceId })
-  if (!status.allowed) {
-    const restoredRows = await restoreLicenseRowsFromDesktopSecret(deviceId)
-    if (restoredRows.length) {
-      rows = [...restoredRows, ...rows]
-      status = evaluateStoredLicense(rows, { deviceId })
-    }
-  }
+  const status = await getLocalLicenseStatus("global")
   if (!status.allowed || !status.license) return null
 
   const cachedWorkspace = migrated?.workspace || getCachedWorkspaceBootstrap()
@@ -384,22 +371,8 @@ export async function restoreLicensedWorkspaceContext() {
   return workspace
 }
 
-async function verifyLicenseForActivation(input: unknown, parsed: ReturnType<typeof parseLicenseInput>) {
-  try {
-    return await verifyLicenseSignature(parsed, PUBLIC_KEY)
-  } catch (error) {
-    if (typeof fetch === "undefined") throw error
-    const response = await fetch("/api/license/verify", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ license: input }),
-    })
-    const result = (await response.json().catch(() => null)) as LicenseVerificationResponse | null
-    if (!response.ok || !result?.success || !result.valid) {
-      throw new Error(result?.error || (error instanceof Error ? error.message : "License signature is invalid."))
-    }
-    return true
-  }
+async function verifyLicenseForActivation(parsed: ReturnType<typeof parseLicenseInput>) {
+  return verifyLicenseSignature(parsed, PUBLIC_KEY)
 }
 
 export async function reportActivatedDevice(
@@ -434,7 +407,6 @@ export async function reportActivatedDevice(
       device_id: parsed.payload.device_id,
       business_id: parsed.payload.business_id,
       platform,
-      operating_system: navigator.userAgent.slice(0, 160),
       architecture,
       app_version: packageJson.version,
       release_channel: "stable",
@@ -487,7 +459,7 @@ export async function activateOfflineLicense(input: unknown) {
     }
   }
 
-  const validSignature = await verifyLicenseForActivation(input, parsed)
+  const validSignature = await verifyLicenseForActivation(parsed)
   if (!validSignature) {
     await logLicenseEvent("global", "LICENSE_TAMPERED", "Rejected tampered or unsigned license.", parsed.payload.license_id)
     throw new Error("License signature is invalid.")
@@ -531,12 +503,12 @@ async function touchLicense(organizationId: string, result: LicensePolicyResult)
 
 export async function getLocalLicenseStatus(organizationId = workspaceOrganizationId() || "global") {
   const deviceId = await getOrCreateDeviceId()
-  let rows = await readLicenseRows(organizationId)
+  let rows = await verifyStoredLicenseRows(await readLicenseRows(organizationId), { publicKey: PUBLIC_KEY, deviceId })
   let status = evaluateStoredLicense(rows, { deviceId })
   if (!status.allowed) {
     const restoredRows = await restoreLicenseRowsFromDesktopSecret(deviceId)
     if (restoredRows.length) {
-      rows = [...restoredRows, ...rows]
+      rows = await verifyStoredLicenseRows([...restoredRows, ...rows], { publicKey: PUBLIC_KEY, deviceId })
       status = evaluateStoredLicense(rows, { deviceId })
     }
   }

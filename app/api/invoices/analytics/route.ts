@@ -1,3 +1,4 @@
-export const dynamic = "force-dynamic"
+import { localErpOnlyHandler } from "@/lib/api/local-erp-only"
 
-export { GET } from "@/app/api/dashboard/billing/summary/route"
+export const dynamic = "force-dynamic"
+export const GET = localErpOnlyHandler

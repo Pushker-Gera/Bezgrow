@@ -67,6 +67,7 @@ async function createTemporaryUser(role) {
   return {
     id: created.data.user.id,
     token: signedIn.data.session.access_token,
+    client,
   }
 }
 
@@ -81,6 +82,30 @@ async function requestDashboard(token) {
     status: response.status,
     elapsedMs: Math.round(performance.now() - startedAt),
     payload,
+  }
+}
+
+async function controlPlaneVisibility(client) {
+  const [customers, businesses, licenses, devices, releases, audits] = await Promise.all([
+    client.from("platform_customers").select("id", { count: "exact", head: true }),
+    client.from("platform_businesses").select("id", { count: "exact", head: true }),
+    client.from("licenses").select("id", { count: "exact", head: true }),
+    client.from("registered_devices").select("id", { count: "exact", head: true }),
+    client.from("desktop_releases").select("id", { count: "exact", head: true }),
+    client.from("admin_audit_logs").select("id", { count: "exact", head: true }),
+  ])
+  const summarize = (result) => ({
+    count: result.error ? 0 : result.count || 0,
+    access: result.error ? "denied" : "granted",
+    code: result.error?.code || null,
+  })
+  return {
+    customers: summarize(customers),
+    businesses: summarize(businesses),
+    licenses: summarize(licenses),
+    devices: summarize(devices),
+    releases: summarize(releases),
+    audits: summarize(audits),
   }
 }
 
@@ -104,9 +129,37 @@ try {
     requestDashboard(normalUser.token),
     requestDashboard(platformAdmin.token),
   ])
+  const anonymousClient = createClient(supabaseUrl, anonKey, {
+    auth: { autoRefreshToken: false, persistSession: false },
+  })
+  const [anonymousVisibility, normalVisibility, adminVisibility] = await Promise.all([
+    controlPlaneVisibility(anonymousClient),
+    controlPlaneVisibility(normalUser.client),
+    controlPlaneVisibility(platformAdmin.client),
+  ])
+  const schemaStatusResult = await service.rpc("admin_control_plane_schema_status")
+  if (schemaStatusResult.error) throw schemaStatusResult.error
 
   assert.equal(anonymous.status, 401, "Anonymous admin access must be rejected.")
   assert.equal(normal.status, 403, "Normal-user admin access must be rejected.")
+  for (const visibility of [anonymousVisibility, normalVisibility]) {
+    assert.ok(
+      Object.values(visibility).every((entry) => entry.count === 0),
+      "Non-admin users must not see control-plane rows."
+    )
+  }
+  assert.equal(
+    adminVisibility.customers.access,
+    "granted",
+    "Platform admin must have platform-customer read access."
+  )
+  assert.equal(
+    adminVisibility.businesses.access,
+    "granted",
+    "Platform admin must have platform-business read access."
+  )
+  assert.ok(adminVisibility.customers.count >= 1, "Platform admin must be able to read platform customers.")
+  assert.ok(adminVisibility.businesses.count >= 1, "Platform admin must be able to read platform businesses.")
   assert.ok(
     [200, 500, 503].includes(admin.status),
     `Platform-admin dashboard returned unexpected HTTP ${admin.status}.`
@@ -118,6 +171,12 @@ try {
         baseUrl,
         anonymous: { status: anonymous.status },
         normalUser: { status: normal.status },
+        rls: {
+          anonymous: anonymousVisibility,
+          normalUser: normalVisibility,
+          platformAdmin: adminVisibility,
+        },
+        schemaStatus: schemaStatusResult.data,
         platformAdmin: {
           status: admin.status,
           elapsedMs: admin.elapsedMs,

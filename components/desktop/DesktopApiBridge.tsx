@@ -7,7 +7,6 @@ const REMOTE_SETUP_PATHS = [
   "/api/auth/",
   "/api/desktop-auth/",
   "/api/license/verify",
-  "/api/workspace/create-business",
 ]
 
 function isExplicitSetupPath(apiPath: string) {

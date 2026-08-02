@@ -63,7 +63,7 @@ assert.match(portable, /signtool\.exe/, "Portable public executables must be Aut
 assert.match(portable, /Get-AuthenticodeSignature/, "Portable executable signatures must be verified.")
 assert.match(
   desktopBuild,
-  /node_modules", "@tauri-apps", "cli", "tauri\.js"[\s\S]*run\(process\.execPath, \[tauriCli/,
+  /node_modules", "@tauri-apps", "cli", "tauri\.js"[\s\S]*run\(process\.execPath, \[[\s\S]*tauriCli/,
   "Windows packaging must invoke the project-local Tauri CLI without relying on a global PATH entry."
 )
 assert.match(workflow, /x86_64-pc-windows-msvc/, "Windows x64 release target is missing.")

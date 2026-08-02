@@ -2,18 +2,17 @@
 
 import type { WorkspaceBootstrapPayload } from "@/lib/workspaceBootstrapClient"
 import { invokeTauri, isDesktopRuntime } from "@/lib/desktop/tauri"
-import { evaluateStoredLicense, isLicenseRestrictedAction, isLicenseRestrictedCollection, type StoredLicenseRow } from "@/lib/license/policy"
+import { evaluateStoredLicense, isLicenseRestrictedCollection, type StoredLicenseRow } from "@/lib/license/policy"
+import { verifyStoredLicenseRows } from "@/lib/license/verification"
+import { normalizeLicenseEnvKey } from "@/lib/license/codec"
 import {
   clearSqliteOfflineData,
   exportSqliteBackup,
   getSqliteCollection,
   getSqliteMeta,
-  listSqliteActions,
   mergeSqliteOrganizations,
   putSqliteCollection,
-  queueSqliteAction,
   setSqliteMeta,
-  updateSqliteAction,
 } from "@/lib/offline/sqlite"
 
 export type OfflineCollection =
@@ -95,6 +94,8 @@ export type OfflineAction = {
   payload: Record<string, unknown>
   error?: string
 }
+
+const LOCAL_LICENSE_PUBLIC_KEY = normalizeLicenseEnvKey(process.env.NEXT_PUBLIC_BEZGROW_LICENSE_PUBLIC_KEY || "")
 
 type OfflineBackupRecord = {
   organizationId?: string
@@ -479,13 +480,12 @@ async function readLicenseRowsForGuard(organizationId: string) {
 
 async function assertOfflineMutationAllowed(organizationId: string, collection: OfflineCollection, value: unknown) {
   if (!organizationId || !isLicenseRestrictedCollection(collection) || !valueLooksLikeMutation(value)) return
-  const status = evaluateStoredLicense(await readLicenseRowsForGuard(organizationId), { deviceId: deviceIdForGuard() })
-  if (!status.allowed) throw new Error(status.reason)
-}
-
-async function assertOfflineActionAllowed(action: Omit<OfflineAction, "status" | "createdAt" | "updatedAt" | "attempts">) {
-  if (!isLicenseRestrictedAction(action.type)) return
-  const status = evaluateStoredLicense(await readLicenseRowsForGuard(action.organizationId), { deviceId: deviceIdForGuard() })
+  const deviceId = deviceIdForGuard()
+  const verifiedRows = await verifyStoredLicenseRows(await readLicenseRowsForGuard(organizationId), {
+    publicKey: LOCAL_LICENSE_PUBLIC_KEY,
+    deviceId,
+  })
+  const status = evaluateStoredLicense(verifiedRows, { deviceId })
   if (!status.allowed) throw new Error(status.reason)
 }
 
@@ -601,57 +601,28 @@ export function getCachedWorkspaceBootstrap(): WorkspaceBootstrapPayload | null 
 }
 
 export async function queueOfflineAction(action: Omit<OfflineAction, "status" | "createdAt" | "updatedAt" | "attempts">) {
-  await assertOfflineActionAllowed(action)
+  // Compatibility no-op. SQLite commits are authoritative and are never
+  // queued for automatic upload.
+  void action
   const now = new Date().toISOString()
-  const record: OfflineAction = {
+  return {
     ...action,
-    status: "pending",
+    status: "synced",
     createdAt: now,
     updatedAt: now,
     attempts: 0,
-  }
-  const sqliteHandled = await queueSqliteAction(record)
-  if (sqliteHandled) {
-    window.dispatchEvent(new Event("bezgrow:offline-actions-changed"))
-    return record
-  }
-  if (await strictDesktopStorage()) throw desktopSqliteRequiredError(`queuing ${action.type}`)
-
-  const { store, transaction } = await storeTransaction("actions", "readwrite")
-  store.put(record)
-  await waitForTransaction(transaction)
-  window.dispatchEvent(new Event("bezgrow:offline-actions-changed"))
-  return record
+  } as OfflineAction
 }
 
 export async function listOfflineActions(statuses?: OfflineActionStatus[]) {
-  if (!isBrowser()) return []
-  const sqliteActions = await listSqliteActions(statuses)
-  if (sqliteActions) return sqliteActions
-  if (await strictDesktopStorage()) throw desktopSqliteRequiredError("listing pending actions")
-
-  const { store } = await storeTransaction("actions", "readonly")
-  const actions = await requestToPromise<OfflineAction[]>(store.getAll())
-  return statuses?.length ? actions.filter((action) => statuses.includes(action.status)) : actions
+  void statuses
+  return []
 }
 
 export async function updateOfflineAction(id: string, patch: Partial<OfflineAction>) {
-  const sqliteAction = await updateSqliteAction(id, patch)
-  if (sqliteAction) {
-    window.dispatchEvent(new Event("bezgrow:offline-actions-changed"))
-    return sqliteAction
-  }
-  if (await strictDesktopStorage()) return null
-
-  const { store: readStore } = await storeTransaction("actions", "readonly")
-  const current = await requestToPromise<OfflineAction | undefined>(readStore.get(id))
-  if (!current) return null
-  const next: OfflineAction = { ...current, ...patch, updatedAt: new Date().toISOString() }
-  const { store, transaction } = await storeTransaction("actions", "readwrite")
-  store.put(next)
-  await waitForTransaction(transaction)
-  window.dispatchEvent(new Event("bezgrow:offline-actions-changed"))
-  return next
+  void id
+  void patch
+  return null
 }
 
 export async function pendingOfflineCount() {
@@ -768,7 +739,7 @@ export async function restoreOfflineBackup(input: unknown) {
   }
 
   let restoredRecords = 0
-  let restoredActions = 0
+  const restoredActions = 0
 
   if (Array.isArray(backup.data)) {
     for (const record of backup.data) {
@@ -798,20 +769,8 @@ export async function restoreOfflineBackup(input: unknown) {
     }
   }
 
-  if (Array.isArray(backup.actions)) {
-    for (const action of backup.actions) {
-      if (!action.id || !action.type || !action.organizationId || !action.payload) continue
-      if (action.status === "synced") continue
-
-      await queueOfflineAction({
-        id: action.id,
-        type: action.type,
-        organizationId: action.organizationId,
-        payload: action.payload,
-      })
-      restoredActions += 1
-    }
-  }
+  // Legacy cloud-sync actions are intentionally not restored. Business rows
+  // above are restored directly into the authoritative local SQLite tables.
 
   window.dispatchEvent(new Event("bezgrow:offline-data-changed"))
   window.dispatchEvent(new Event("bezgrow:offline-actions-changed"))
