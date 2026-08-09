@@ -25,10 +25,6 @@ tauri-plugin-single-instance = "2"
 tauri-plugin-updater = "2"
 zip = { version = "2.4", default-features = false, features = ["deflate"] }
 
-[target.'cfg(target_os = "macos")'.dependencies]
-objc2-app-kit = { version = "0.3.2", default-features = false, features = ["NSPrintInfo", "NSPrintOperation"] }
-objc2-web-kit = { version = "0.3.2", default-features = false, features = ["WKWebView"] }
-
 [target.'cfg(target_os = "windows")'.dependencies]
 windows-sys = { version = "0.61", features = [
   "Win32_Foundation",

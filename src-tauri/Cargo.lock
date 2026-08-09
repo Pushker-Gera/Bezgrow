@@ -305,8 +305,6 @@ version = "0.1.7"
 dependencies = [
  "image",
  "keyring",
- "objc2-app-kit",
- "objc2-web-kit",
  "rfd",
  "serde",
  "serde_json",

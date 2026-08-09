@@ -30,6 +30,7 @@ export type InvoiceReportResult = {
   title: string
   period: string
   invoiceCount: number
+  pageCount: number
 }
 
 export function datasetForInvoiceReport(dataset: InvoiceExportDataset, reportType: InvoiceReportType) {
@@ -525,6 +526,7 @@ export async function createInvoiceReportPdf(
     title,
     period: dataset.periodLabel,
     invoiceCount: dataset.summary.invoiceCount,
+    pageCount: pages.length,
   }
 }
 

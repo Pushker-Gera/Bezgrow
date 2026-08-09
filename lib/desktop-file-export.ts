@@ -8,6 +8,11 @@ export type DesktopSavedFile = {
   bytes: number
 }
 
+export type DesktopOpenedPdf = DesktopSavedFile & {
+  pageCount: number
+  status: "opened"
+}
+
 export type CsvColumn<Row> = {
   header: string
   value: keyof Row | ((row: Row) => unknown)
@@ -134,6 +139,32 @@ export async function prepareDesktopInvoiceShare(
     filename,
     bytes: Array.from(bytes),
   })
+}
+
+export async function openPdfForNativePrinting(
+  filename: string,
+  bytes: Uint8Array,
+  expectedPageCount: number,
+): Promise<DesktopOpenedPdf> {
+  if (await isTauriRuntimeAsync()) {
+    return invokeTauri<DesktopOpenedPdf>("desktop_open_pdf_for_print", {
+      filename,
+      bytes: Array.from(bytes),
+      expectedPageCount,
+    })
+  }
+
+  const objectUrl = URL.createObjectURL(new Blob([bytes.slice().buffer as ArrayBuffer], { type: "application/pdf" }))
+  const link = document.createElement("a")
+  link.href = objectUrl
+  link.target = "_blank"
+  link.rel = "noopener noreferrer"
+  link.style.display = "none"
+  document.body.appendChild(link)
+  link.click()
+  link.remove()
+  globalThis.setTimeout(() => URL.revokeObjectURL(objectUrl), 5 * 60_000)
+  return { path: filename, filename, bytes: bytes.byteLength, pageCount: expectedPageCount, status: "opened" }
 }
 
 export async function exportCsv<Row>(

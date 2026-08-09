@@ -3,7 +3,10 @@
 import type { PrintFormat, PrintInvoice, PrintSettings } from "@/components/print/types"
 import { defaultPrintSettings } from "@/components/print/settings/defaults"
 import { saveDesktopBytes, type DesktopSavedFile } from "@/lib/desktop-file-export"
-import { createInvoicePdf } from "@/lib/pdf-invoice"
+import {
+  getCanonicalInvoiceDocument,
+  type CanonicalInvoiceDocument,
+} from "@/lib/invoice-document"
 
 export type InvoicePdfResult = DesktopSavedFile
 
@@ -14,60 +17,39 @@ export function invoicePdfFilename(invoice: PrintInvoice) {
   return `Invoice-${safeNumber || "invoice"}.pdf`
 }
 
+/** Compatibility entry point. New UI code keeps the returned canonical
+ * document artifact and passes that exact artifact to every action. */
 export async function createInvoicePdfBytes(
   invoice: PrintInvoice,
   settings: PrintSettings = defaultPrintSettings,
-  format: PrintFormat = settings.defaultFormat
+  format: PrintFormat = settings.defaultFormat,
 ) {
-  return createInvoicePdf(invoice, settings, format)
+  return (await getCanonicalInvoiceDocument(invoice, settings, format)).bytes
 }
 
-export async function createInvoicePdfBlob(
-  invoice: PrintInvoice,
-  settings: PrintSettings = defaultPrintSettings,
-  format: PrintFormat = settings.defaultFormat
-) {
-  const bytes = await createInvoicePdfBytes(invoice, settings, format)
-  const body = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer
-  return new Blob([body], { type: "application/pdf" })
+export function createInvoicePdfBlob(artifact: CanonicalInvoiceDocument) {
+  return new Blob([artifact.bytes.slice().buffer as ArrayBuffer], { type: "application/pdf" })
 }
 
-export async function saveInvoicePdf(
-  invoice: PrintInvoice,
-  settings: PrintSettings = defaultPrintSettings,
-  format: PrintFormat = settings.defaultFormat
-) {
-  const filename = invoicePdfFilename(invoice)
-  const bytes = await createInvoicePdfBytes(invoice, settings, format)
-  return saveDesktopBytes(filename, bytes, "pdf")
+export async function saveInvoicePdf(artifact: CanonicalInvoiceDocument) {
+  return saveDesktopBytes(artifact.filename, artifact.bytes, "pdf")
 }
 
-export async function downloadInvoicePdf(
-  invoice: PrintInvoice,
-  settings: PrintSettings = defaultPrintSettings,
-  format: PrintFormat = settings.defaultFormat
-) {
-  return saveInvoicePdf(invoice, settings, format)
+export async function downloadInvoicePdf(artifact: CanonicalInvoiceDocument) {
+  return saveInvoicePdf(artifact)
 }
 
 export async function shareInvoicePdf(
-  invoice: PrintInvoice,
-  settings: PrintSettings = defaultPrintSettings,
-  format: PrintFormat = settings.defaultFormat
+  artifact: CanonicalInvoiceDocument,
+  options: { title: string; text: string },
 ): Promise<(InvoicePdfResult & { shared?: boolean }) | null> {
-  const filename = invoicePdfFilename(invoice)
-  const file = new File([await createInvoicePdfBlob(invoice, settings, format)], filename, { type: "application/pdf" })
+  const file = new File([createInvoicePdfBlob(artifact)], artifact.filename, { type: "application/pdf" })
   const canShareFiles = Boolean(navigator.share) && (!navigator.canShare || navigator.canShare({ files: [file] }))
 
   if (canShareFiles) {
-    await navigator.share({
-      title: `Invoice ${invoice.invoiceNumber}`,
-      text: `Invoice from ${invoice.enterprise.name}`,
-      files: [file],
-    })
-    return { filename, path: filename, bytes: file.size, shared: true }
+    await navigator.share({ ...options, files: [file] })
+    return { filename: artifact.filename, path: artifact.filename, bytes: file.size, shared: true }
   }
 
-  return saveInvoicePdf(invoice, settings, format)
+  return saveInvoicePdf(artifact)
 }
-

@@ -384,7 +384,7 @@ export default function AnalyticsPage() {
                                                         <Cell key={entry.name} fill={colorForCategory(entry.name, index)} />
                                                     ))}
                                                 </Pie>
-                                                <Tooltip {...darkTooltipProps} />
+                                                <PieValueTooltip data={analytics.stockPie} />
                                             </PieChart>
                                         </ResponsiveContainer>
                                         <PieLegendSummary data={analytics.stockPie} />
@@ -440,7 +440,7 @@ export default function AnalyticsPage() {
                                                         <Cell key={entry.name} fill={colorForCategory(entry.name, index)} />
                                                     ))}
                                                 </Pie>
-                                                <Tooltip {...darkTooltipProps} />
+                                                <PieValueTooltip data={analytics.expiryPie} />
                                             </PieChart>
                                         </ResponsiveContainer>
                                         <PieLegendSummary data={analytics.expiryPie} />
@@ -511,6 +511,20 @@ function PieLegendSummary({ data }: { data: Array<{ name: string; value: number 
                 )
             })}
         </div>
+    )
+}
+
+function PieValueTooltip({ data }: { data: Array<{ name: string; value: number }> }) {
+    const total = data.reduce((sum, item) => sum + item.value, 0)
+    return (
+        <Tooltip
+            {...darkTooltipProps}
+            formatter={(value, name) => {
+                const count = Number(value || 0)
+                const percentage = total > 0 ? Math.round((count / total) * 100) : 0
+                return [`${count} (${percentage}%)`, String(name)]
+            }}
+        />
     )
 }
 

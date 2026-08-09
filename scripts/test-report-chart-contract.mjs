@@ -4,6 +4,10 @@ import { readFileSync } from "node:fs"
 const source = readFileSync(new URL("../app/dashboard/charts/page.tsx", import.meta.url), "utf8")
 
 assert.match(source, /function PieLegendSummary/, "Pie and doughnut charts need visible legends")
+assert.match(source, /function PieValueTooltip/, "Pie and doughnut tooltips need a dedicated count and percentage renderer")
+assert.match(source, /`\$\{count\} \(\$\{percentage\}%\)`/, "Pie tooltips must show a readable count and percentage")
+assert.match(source, /<PieValueTooltip data=\{analytics\.stockPie\}/, "Stock health must use the high-contrast pie tooltip")
+assert.match(source, /<PieValueTooltip data=\{analytics\.expiryPie\}/, "Expiry risk must use the high-contrast pie tooltip")
 assert.match(source, /\{item\.value\} · \{percentage\}%/, "Pie legends must show count and percentage")
 assert.match(source, /label=\{pieLabel\}/, "Pie segments need visible category and percentage labels")
 assert.match(source, /labelStyle: \{ color: "#ffffff"/, "Dark tooltips need a high-contrast title")

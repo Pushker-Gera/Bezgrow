@@ -225,12 +225,6 @@
           "markdownDescription": "Enables the desktop_export_backup command without any pre-configured scope."
         },
         {
-          "description": "Enables the desktop_finish_print command without any pre-configured scope.",
-          "type": "string",
-          "const": "allow-desktop-finish-print",
-          "markdownDescription": "Enables the desktop_finish_print command without any pre-configured scope."
-        },
-        {
           "description": "Enables the desktop_get_or_create_device_id command without any pre-configured scope.",
           "type": "string",
           "const": "allow-desktop-get-or-create-device-id",
@@ -243,10 +237,10 @@
           "markdownDescription": "Enables the desktop_open_file command without any pre-configured scope."
         },
         {
-          "description": "Enables the desktop_open_invoice_print_window command without any pre-configured scope.",
+          "description": "Enables the desktop_open_pdf_for_print command without any pre-configured scope.",
           "type": "string",
-          "const": "allow-desktop-open-invoice-print-window",
-          "markdownDescription": "Enables the desktop_open_invoice_print_window command without any pre-configured scope."
+          "const": "allow-desktop-open-pdf-for-print",
+          "markdownDescription": "Enables the desktop_open_pdf_for_print command without any pre-configured scope."
         },
         {
           "description": "Enables the desktop_pick_business_logo command without any pre-configured scope.",
@@ -265,12 +259,6 @@
           "type": "string",
           "const": "allow-desktop-prepare-update",
           "markdownDescription": "Enables the desktop_prepare_update command without any pre-configured scope."
-        },
-        {
-          "description": "Enables the desktop_print_current_webview command without any pre-configured scope.",
-          "type": "string",
-          "const": "allow-desktop-print-current-webview",
-          "markdownDescription": "Enables the desktop_print_current_webview command without any pre-configured scope."
         },
         {
           "description": "Enables the desktop_read_local_asset command without any pre-configured scope.",
@@ -313,12 +301,6 @@
           "type": "string",
           "const": "allow-desktop-save-file",
           "markdownDescription": "Enables the desktop_save_file command without any pre-configured scope."
-        },
-        {
-          "description": "Enables the desktop_save_invoice_pdf command without any pre-configured scope.",
-          "type": "string",
-          "const": "allow-desktop-save-invoice-pdf",
-          "markdownDescription": "Enables the desktop_save_invoice_pdf command without any pre-configured scope."
         },
         {
           "description": "Enables the desktop_select command without any pre-configured scope.",
@@ -405,12 +387,6 @@
           "markdownDescription": "Denies the desktop_export_backup command without any pre-configured scope."
         },
         {
-          "description": "Denies the desktop_finish_print command without any pre-configured scope.",
-          "type": "string",
-          "const": "deny-desktop-finish-print",
-          "markdownDescription": "Denies the desktop_finish_print command without any pre-configured scope."
-        },
-        {
           "description": "Denies the desktop_get_or_create_device_id command without any pre-configured scope.",
           "type": "string",
           "const": "deny-desktop-get-or-create-device-id",
@@ -423,10 +399,10 @@
           "markdownDescription": "Denies the desktop_open_file command without any pre-configured scope."
         },
         {
-          "description": "Denies the desktop_open_invoice_print_window command without any pre-configured scope.",
+          "description": "Denies the desktop_open_pdf_for_print command without any pre-configured scope.",
           "type": "string",
-          "const": "deny-desktop-open-invoice-print-window",
-          "markdownDescription": "Denies the desktop_open_invoice_print_window command without any pre-configured scope."
+          "const": "deny-desktop-open-pdf-for-print",
+          "markdownDescription": "Denies the desktop_open_pdf_for_print command without any pre-configured scope."
         },
         {
           "description": "Denies the desktop_pick_business_logo command without any pre-configured scope.",
@@ -445,12 +421,6 @@
           "type": "string",
           "const": "deny-desktop-prepare-update",
           "markdownDescription": "Denies the desktop_prepare_update command without any pre-configured scope."
-        },
-        {
-          "description": "Denies the desktop_print_current_webview command without any pre-configured scope.",
-          "type": "string",
-          "const": "deny-desktop-print-current-webview",
-          "markdownDescription": "Denies the desktop_print_current_webview command without any pre-configured scope."
         },
         {
           "description": "Denies the desktop_read_local_asset command without any pre-configured scope.",
@@ -493,12 +463,6 @@
           "type": "string",
           "const": "deny-desktop-save-file",
           "markdownDescription": "Denies the desktop_save_file command without any pre-configured scope."
-        },
-        {
-          "description": "Denies the desktop_save_invoice_pdf command without any pre-configured scope.",
-          "type": "string",
-          "const": "deny-desktop-save-invoice-pdf",
-          "markdownDescription": "Denies the desktop_save_invoice_pdf command without any pre-configured scope."
         },
         {
           "description": "Denies the desktop_select command without any pre-configured scope.",

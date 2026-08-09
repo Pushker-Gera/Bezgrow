@@ -5,7 +5,7 @@
   "remote": {
     "urls": ["http://127.0.0.1:*", "http://localhost:*"]
   },
-  "windows": ["main", "startup-error", "invoice-print"],
+  "windows": ["main", "startup-error"],
   "permissions": [
     "core:default",
     "updater:default",
@@ -24,13 +24,10 @@
     "allow-desktop-get-or-create-device-id",
     "allow-desktop-prepare-invoice-share",
     "allow-desktop-save-file",
-    "allow-desktop-save-invoice-pdf",
     "allow-desktop-pick-business-logo",
     "allow-desktop-remove-business-logo",
     "allow-desktop-read-local-asset",
-    "allow-desktop-print-current-webview",
-    "allow-desktop-finish-print",
-    "allow-desktop-open-invoice-print-window",
+    "allow-desktop-open-pdf-for-print",
     "allow-desktop-reveal-file",
     "allow-desktop-open-file",
     "allow-desktop-export-backup",

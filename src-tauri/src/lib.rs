@@ -11,9 +11,6 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
-#[cfg(target_os = "macos")]
-use std::sync::Arc;
-
 #[cfg(any(target_os = "windows", not(debug_assertions)))]
 use std::process::Stdio;
 
@@ -49,11 +46,6 @@ use sqlx::{
     Column, Connection, Row, SqliteConnection, TypeInfo, ValueRef,
 };
 use tauri::{Manager, WebviewUrl};
-
-#[cfg(target_os = "macos")]
-use objc2_app_kit::NSPrintInfo;
-#[cfg(target_os = "macos")]
-use objc2_web_kit::WKWebView;
 
 const KEYCHAIN_SERVICE: &str = "com.bezgrow.erp";
 const LOCAL_DATABASE_NAME: &str = "bezgrow-offline.db";
@@ -104,7 +96,6 @@ struct NextServerState {
 struct DesktopOperationState {
     active_critical_operations: AtomicUsize,
     update_preparing: AtomicBool,
-    print_dialog_active: AtomicBool,
 }
 
 impl DesktopOperationState {
@@ -112,7 +103,6 @@ impl DesktopOperationState {
         Self {
             active_critical_operations: AtomicUsize::new(0),
             update_preparing: AtomicBool::new(false),
-            print_dialog_active: AtomicBool::new(false),
         }
     }
 }
@@ -484,7 +474,12 @@ struct DesktopSavedFile {
 }
 
 #[derive(Serialize)]
-struct DesktopPrintResult {
+#[serde(rename_all = "camelCase")]
+struct DesktopOpenedPdf {
+    path: String,
+    filename: String,
+    bytes: u64,
+    page_count: usize,
     status: &'static str,
 }
 
@@ -847,6 +842,16 @@ fn save_bytes_with_dialog<R: tauri::Runtime>(
         }
     }
 
+    let written = fs::read(&path)
+        .map_err(|error| format!("Unable to reopen the saved file for verification: {error}"))?;
+    if written != bytes {
+        return Err("The saved file bytes do not match the generated document.".to_string());
+    }
+    if kind == "pdf" {
+        let expected_page_count = pdf_page_count(bytes);
+        validate_pdf_for_native_open(&written, expected_page_count)?;
+    }
+
     let metadata =
         fs::metadata(&path).map_err(|error| format!("Unable to verify the saved file: {error}"))?;
     Ok(Some(DesktopSavedFile {
@@ -928,12 +933,9 @@ fn prepare_invoice_share_at(
     filename: &str,
     bytes: &[u8],
 ) -> Result<DesktopSavedFile, String> {
-    if bytes.len() < 5 || !bytes.starts_with(b"%PDF-") {
-        return Err(
-            "The generated invoice is not a valid PDF and was not prepared for sharing."
-                .to_string(),
-        );
-    }
+    let expected_page_count = pdf_page_count(bytes);
+    validate_pdf_for_native_open(bytes, expected_page_count)
+        .map_err(|error| format!("The invoice PDF was not prepared for sharing: {error}"))?;
 
     let safe_name = safe_extension(&sanitize_filename(filename, "Invoice.pdf"), "pdf");
     fs::create_dir_all(directory)
@@ -963,12 +965,19 @@ fn prepare_invoice_share_at(
         let _ = fs::remove_file(&temporary);
     }
     write_result?;
-    let metadata = fs::metadata(&destination)
+    let written = fs::read(&destination)
+        .map_err(|error| format!("Unable to reopen the prepared invoice PDF: {error}"))?;
+    validate_pdf_for_native_open(&written, expected_page_count)
         .map_err(|error| format!("Unable to verify the prepared invoice PDF: {error}"))?;
+    if written != bytes {
+        return Err(
+            "The prepared invoice PDF bytes do not match the validated document.".to_string(),
+        );
+    }
     Ok(DesktopSavedFile {
         path: destination.to_string_lossy().to_string(),
         filename: safe_name,
-        bytes: metadata.len(),
+        bytes: written.len() as u64,
     })
 }
 
@@ -1103,182 +1112,150 @@ fn desktop_read_local_asset<R: tauri::Runtime>(
     })
 }
 
-#[tauri::command]
-fn desktop_print_current_webview<R: tauri::Runtime>(
-    webview: tauri::Webview<R>,
-) -> Result<DesktopPrintResult, String> {
-    let app = webview.app_handle().clone();
-    let state = app.state::<DesktopOperationState>();
-    if state.update_preparing.load(Ordering::SeqCst) {
-        return Err(
-            "Bezgrow is preparing an update. Finish or cancel it before printing.".to_string(),
-        );
+fn pdf_page_count(bytes: &[u8]) -> usize {
+    const PAGE_MARKER: &[u8] = b"/Type /Page";
+    bytes
+        .windows(PAGE_MARKER.len() + 1)
+        .filter(|window| {
+            window.starts_with(PAGE_MARKER)
+                && !window
+                    .get(PAGE_MARKER.len())
+                    .is_some_and(|next| *next == b's')
+        })
+        .count()
+}
+
+fn validate_pdf_for_native_open(bytes: &[u8], expected_page_count: usize) -> Result<usize, String> {
+    if bytes.len() < 1_500 || !bytes.starts_with(b"%PDF-") {
+        return Err("The invoice PDF is empty or does not have a valid PDF header.".to_string());
     }
-    state.print_dialog_active.store(true, Ordering::SeqCst);
+    let tail_start = bytes.len().saturating_sub(2_048);
+    if !bytes[tail_start..]
+        .windows(5)
+        .any(|window| window == b"%%EOF")
+    {
+        return Err("The invoice PDF is incomplete and was not opened for printing.".to_string());
+    }
+    if !bytes.windows(9).any(|window| window == b"/Contents")
+        || !bytes.windows(6).any(|window| window == b"stream")
+    {
+        return Err("The invoice PDF has no printable page content.".to_string());
+    }
+    let page_count = pdf_page_count(bytes);
+    if page_count == 0 || page_count != expected_page_count {
+        return Err(format!(
+            "The invoice PDF page count changed during native validation (expected {expected_page_count}, found {page_count})."
+        ));
+    }
+    Ok(page_count)
+}
+
+fn unique_pdf_print_path(directory: &Path, filename: &str) -> PathBuf {
+    let safe_name = safe_extension(&sanitize_filename(filename, "Invoice.pdf"), "pdf");
+    let stem = safe_name.strip_suffix(".pdf").unwrap_or("Invoice");
+    let unique = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_nanos().to_string())
+        .unwrap_or_else(|_| format!("{}-{}", unix_timestamp(), std::process::id()));
+    directory.join(format!("{stem}-{unique}.pdf"))
+}
+
+fn open_pdf_with_default_application(path: &Path) -> Result<(), String> {
     #[cfg(target_os = "macos")]
     {
-        let completed = Arc::new(AtomicBool::new(false));
-        let completed_in_webview = Arc::clone(&completed);
-        let result = webview
-            .with_webview(move |platform_webview| unsafe {
-                let native_webview = &*platform_webview.inner().cast::<WKWebView>();
-                let print_info = NSPrintInfo::sharedPrintInfo();
-                let operation = native_webview.printOperationWithPrintInfo(&print_info);
-                operation.setShowsPrintPanel(true);
-                operation.setShowsProgressPanel(true);
-                completed_in_webview.store(operation.runOperation(), Ordering::SeqCst);
-            })
-            .map_err(|error| format!("Unable to open the macOS print panel: {error}"));
-        state.print_dialog_active.store(false, Ordering::SeqCst);
-        result?;
-        return Ok(DesktopPrintResult {
-            status: if completed.load(Ordering::SeqCst) {
-                "completed"
-            } else {
-                "cancelled"
-            },
-        });
+        Command::new("open").arg(path).spawn().map_err(|error| {
+            format!("Unable to open the invoice in the macOS PDF application: {error}")
+        })?;
+        return Ok(());
     }
 
     #[cfg(target_os = "windows")]
     {
-        let result = webview
-            .eval("window.print();")
-            .map_err(|error| format!("Unable to open the Windows print dialog: {error}"));
-        if result.is_err() {
-            state.print_dialog_active.store(false, Ordering::SeqCst);
-        }
-        result?;
-        return Ok(DesktopPrintResult {
-            status: "dialog_opened",
-        });
+        windows_hidden_command("rundll32.exe")
+            .arg("url.dll,FileProtocolHandler")
+            .arg(path)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .map_err(|error| {
+                format!("Unable to open the invoice in the Windows PDF application: {error}")
+            })?;
+        return Ok(());
     }
 
-    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    #[cfg(target_os = "linux")]
     {
-        let _ = webview;
-        Err("The native print panel is not available on this desktop platform.".to_string())
+        Command::new("xdg-open")
+            .arg(path)
+            .spawn()
+            .map_err(|error| {
+                format!("Unable to open the invoice in the system PDF application: {error}")
+            })?;
+        return Ok(());
+    }
+
+    #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
+    {
+        let _ = path;
+        Err("Opening a PDF for printing is not supported on this platform.".to_string())
     }
 }
 
 #[tauri::command]
-fn desktop_finish_print<R: tauri::Runtime>(app: tauri::AppHandle<R>) {
-    app.state::<DesktopOperationState>()
-        .print_dialog_active
-        .store(false, Ordering::SeqCst);
-    append_startup_log_handle(&app, "Invoice print dialog closed");
-}
-
-#[tauri::command]
-fn desktop_open_invoice_print_window<R: tauri::Runtime>(
+fn desktop_open_pdf_for_print<R: tauri::Runtime>(
     app: tauri::AppHandle<R>,
-    invoice_id: String,
-    format: String,
-    print_job_id: String,
-) -> Result<(), String> {
-    let safe_identifier = |value: &str| {
-        !value.is_empty()
-            && value.len() <= 128
-            && value.chars().all(|character| {
-                character.is_ascii_alphanumeric() || matches!(character, '-' | '_')
-            })
-    };
-    if !safe_identifier(&invoice_id) || !safe_identifier(&print_job_id) {
-        return Err("The invoice print request is invalid.".to_string());
-    }
-    if !matches!(
-        format.as_str(),
-        "a4" | "half-compact" | "half-top" | "thermal"
-    ) {
-        return Err("The selected invoice print format is not supported.".to_string());
-    }
+    filename: String,
+    bytes: Vec<u8>,
+    expected_page_count: usize,
+) -> Result<DesktopOpenedPdf, String> {
+    let _operation = begin_critical_operation(&app)?;
+    validate_pdf_for_native_open(&bytes, expected_page_count)?;
+    let directory = managed_data_directory(&app, "Temp")?.join("PDF Print");
+    fs::create_dir_all(&directory).map_err(|error| {
+        format!("Unable to create Bezgrow's temporary PDF print folder: {error}")
+    })?;
+    let destination = unique_pdf_print_path(&directory, &filename);
+    let temporary = destination.with_extension("pdf.tmp");
 
-    let print_state = app.state::<DesktopOperationState>();
-    if print_state
-        .print_dialog_active
-        .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
-        .is_err()
-    {
-        return Err(
-            "Another invoice print dialog is already active. Close it before printing again."
-                .to_string(),
-        );
-    }
-
-    let open_result = (|| {
-        #[cfg(debug_assertions)]
-        let port = 3000;
-        #[cfg(not(debug_assertions))]
-        let port = app
-            .state::<NextServerState>()
-            .process
-            .lock()
-            .map_err(|_| "The bundled print service is unavailable.".to_string())?
-            .as_ref()
-            .map(|process| process.port)
-            .ok_or_else(|| "The bundled print service is not running.".to_string())?;
-
-        let mut url = tauri::Url::parse(&format!(
-            "http://127.0.0.1:{port}/dashboard/invoices/{invoice_id}/print"
-        ))
-        .map_err(|error| format!("Unable to prepare the invoice print preview: {error}"))?;
-        url.query_pairs_mut()
-            .append_pair("printOnly", "1")
-            .append_pair("autoprint", "1")
-            .append_pair("format", &format)
-            .append_pair("printJob", &print_job_id);
-
-        if let Some(window) = app.get_webview_window("invoice-print") {
-            window
-                .navigate(url)
-                .map_err(|error| format!("Unable to refresh the invoice print preview: {error}"))?;
-            window
-                .show()
-                .map_err(|error| format!("Unable to show the invoice print preview: {error}"))?;
-            window
-                .unminimize()
-                .map_err(|error| format!("Unable to restore the invoice print preview: {error}"))?;
-            window
-                .set_focus()
-                .map_err(|error| format!("Unable to focus the invoice print preview: {error}"))?;
-            return Ok(());
-        }
-
-        let runtime_architecture = if cfg!(target_arch = "aarch64") {
-            "arm64"
-        } else {
-            "x64"
-        };
-        let runtime_script = format!(
-        "window.__BEZGROW_DESKTOP__ = true; window.__BEZGROW_RUNTIME__ = \"tauri-print\"; window.__BEZGROW_ARCH__ = \"{runtime_architecture}\"; window.isTauri = true;"
-    );
-        let builder =
-            tauri::WebviewWindowBuilder::new(&app, "invoice-print", WebviewUrl::External(url))
-                .title("Bezgrow — Invoice Print Preview")
-                .inner_size(1120.0, 860.0)
-                .min_inner_size(760.0, 620.0)
-                .resizable(true)
-                .fullscreen(false)
-                .initialization_script(runtime_script);
-
-        #[cfg(target_os = "windows")]
-        let builder = builder.data_directory(managed_data_directory(&app, "WebView")?);
-
-        builder
-            .build()
-            .map_err(|error| format!("Unable to open the invoice print preview: {error}"))?;
-        append_startup_log_handle(
-            &app,
-            format!("Isolated invoice print preview opened for format={format}"),
-        );
-        Ok(())
+    let write_result = (|| {
+        let mut file = fs::File::create(&temporary)
+            .map_err(|error| format!("Unable to prepare the invoice PDF for printing: {error}"))?;
+        file.write_all(&bytes)
+            .and_then(|()| file.sync_all())
+            .map_err(|error| format!("Unable to finish the invoice PDF for printing: {error}"))?;
+        fs::rename(&temporary, &destination)
+            .map_err(|error| format!("Unable to publish the temporary invoice PDF: {error}"))?;
+        Ok::<(), String>(())
     })();
-    if open_result.is_err() {
-        print_state
-            .print_dialog_active
-            .store(false, Ordering::SeqCst);
+    if write_result.is_err() {
+        let _ = fs::remove_file(&temporary);
     }
-    open_result
+    write_result?;
+
+    let written = fs::read(&destination)
+        .map_err(|error| format!("Unable to reopen the temporary invoice PDF: {error}"))?;
+    let written_page_count = validate_pdf_for_native_open(&written, expected_page_count)?;
+    if written != bytes {
+        return Err("The temporary invoice PDF bytes changed after writing.".to_string());
+    }
+    open_pdf_with_default_application(&destination)?;
+    append_startup_log_handle(
+        &app,
+        "Validated PDF opened in the operating-system PDF application",
+    );
+
+    Ok(DesktopOpenedPdf {
+        path: destination.to_string_lossy().to_string(),
+        filename: destination
+            .file_name()
+            .and_then(|value| value.to_str())
+            .unwrap_or("Invoice.pdf")
+            .to_string(),
+        bytes: written.len() as u64,
+        page_count: written_page_count,
+        status: "opened",
+    })
 }
 
 async fn create_consistent_database_snapshot(
@@ -1956,11 +1933,6 @@ async fn desktop_prepare_update<R: tauri::Runtime>(
         state.update_preparing.store(false, Ordering::SeqCst);
         return Err("The update is waiting for the current invoice, print, database write, backup, restore, migration, or export to finish.".to_string());
     }
-    if state.print_dialog_active.load(Ordering::SeqCst) {
-        state.update_preparing.store(false, Ordering::SeqCst);
-        return Err("The update is waiting for the active print dialog to close.".to_string());
-    }
-
     let result = async {
         let database_path = local_database_path(&app)?;
         if !database_path.exists() {
@@ -2359,6 +2331,16 @@ async fn execute_transaction_at_path(
 mod database_transaction_tests {
     use super::*;
 
+    fn minimal_pdf_bytes(label: &str) -> Vec<u8> {
+        let mut bytes = format!(
+            "%PDF-1.7\n1 0 obj\n<< /Type /Page /Contents 2 0 R >>\nendobj\n2 0 obj\n<< /Length 16 >>\nstream\nBT ({label}) Tj ET\nendstream\nendobj\n"
+        )
+        .into_bytes();
+        bytes.resize(1_600, b' ');
+        bytes.extend_from_slice(b"\n%%EOF\n");
+        bytes
+    }
+
     fn statement(query: &str, bind_values: Vec<serde_json::Value>) -> DesktopSqlStatement {
         DesktopSqlStatement {
             query: query.to_string(),
@@ -2549,22 +2531,17 @@ mod database_transaction_tests {
             std::process::id(),
             unix_timestamp()
         ));
-        let first = prepare_invoice_share_at(
-            &fixture_root,
-            "E2E-Invoice-00005.pdf",
-            b"%PDF-1.7 E2E first",
-        )
-        .expect("prepare the first local invoice PDF");
-        let second = prepare_invoice_share_at(
-            &fixture_root,
-            "E2E-Invoice-00005.pdf",
-            b"%PDF-1.7 E2E replacement",
-        )
-        .expect("reuse the predictable invoice PDF path");
+        let first_bytes = minimal_pdf_bytes("E2E first");
+        let second_bytes = minimal_pdf_bytes("E2E replacement");
+        let first = prepare_invoice_share_at(&fixture_root, "E2E-Invoice-00005.pdf", &first_bytes)
+            .expect("prepare the first local invoice PDF");
+        let second =
+            prepare_invoice_share_at(&fixture_root, "E2E-Invoice-00005.pdf", &second_bytes)
+                .expect("reuse the predictable invoice PDF path");
         assert_eq!(first.path, second.path);
         assert_eq!(
             fs::read(&second.path).expect("read the reusable invoice PDF"),
-            b"%PDF-1.7 E2E replacement"
+            second_bytes
         );
         assert_eq!(
             fs::read_dir(&fixture_root)
@@ -2694,44 +2671,6 @@ fn validate_external_url(url: &str) -> Result<(), String> {
     }
 
     Err("Only trusted web URLs can be opened externally.".to_string())
-}
-
-fn safe_invoice_filename(filename: &str) -> String {
-    let sanitized: String = filename
-        .chars()
-        .map(|character| {
-            if character.is_ascii_alphanumeric() || matches!(character, '.' | '-' | '_') {
-                character
-            } else {
-                '-'
-            }
-        })
-        .collect();
-    let trimmed = sanitized.trim_matches(['.', '-']);
-    let base = if trimmed.is_empty() {
-        "invoice.pdf"
-    } else {
-        trimmed
-    };
-
-    if base.to_ascii_lowercase().ends_with(".pdf") {
-        base.to_string()
-    } else {
-        format!("{base}.pdf")
-    }
-}
-
-#[tauri::command]
-fn desktop_save_invoice_pdf<R: tauri::Runtime>(
-    app: tauri::AppHandle<R>,
-    filename: String,
-    bytes: Vec<u8>,
-) -> Result<Option<DesktopSavedFile>, String> {
-    let _operation = begin_critical_operation(&app)?;
-    if bytes.len() < 5 || !bytes.starts_with(b"%PDF-") {
-        return Err("The generated invoice is not a valid PDF.".to_string());
-    }
-    save_bytes_with_dialog(&app, &safe_invoice_filename(&filename), &bytes, "pdf")
 }
 
 #[tauri::command]
@@ -3389,16 +3328,6 @@ pub fn run() {
                     );
                     return;
                 }
-                if window.label() == "invoice-print" {
-                    app.state::<DesktopOperationState>()
-                        .print_dialog_active
-                        .store(false, Ordering::SeqCst);
-                    append_startup_log_handle(
-                        &app,
-                        "Auxiliary window invoice-print closed; local ERP remains open",
-                    );
-                    return;
-                }
                 api.prevent_close();
                 if window.label() == "startup-error" {
                     stop_next_server(&app);
@@ -3433,13 +3362,10 @@ pub fn run() {
             desktop_get_or_create_device_id,
             desktop_save_file,
             desktop_prepare_invoice_share,
-            desktop_save_invoice_pdf,
             desktop_pick_business_logo,
             desktop_remove_business_logo,
             desktop_read_local_asset,
-            desktop_print_current_webview,
-            desktop_finish_print,
-            desktop_open_invoice_print_window,
+            desktop_open_pdf_for_print,
             desktop_reveal_file,
             desktop_open_file,
             desktop_export_backup,

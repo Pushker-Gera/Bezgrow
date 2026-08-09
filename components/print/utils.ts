@@ -41,14 +41,14 @@ export function formatDate(value: string) {
   return new Date(value).toLocaleDateString("en-IN")
 }
 
-export function rememberReprint(invoice: PrintInvoice, format: PrintFormat) {
+export function rememberPdfOpenedForPrint(invoice: PrintInvoice, format: PrintFormat) {
   if (typeof window === "undefined") return
   const entry = {
     invoiceId: invoice.id,
     invoiceNumber: invoice.invoiceNumber,
     format,
     printedAt: new Date().toISOString(),
-    outcome: "dialog-opened",
+    outcome: "pdf-opened",
   }
   const stored = window.localStorage.getItem("bezgrow.reprint-history")
   const history = stored ? JSON.parse(stored) as typeof entry[] : []
@@ -63,7 +63,7 @@ export function getReprintHistory() {
       invoiceNumber: string
       format: PrintFormat
       printedAt: string
-      outcome?: "dialog-opened"
+      outcome?: "dialog-opened" | "pdf-opened"
     }>
   } catch {
     return []

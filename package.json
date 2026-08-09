@@ -44,7 +44,7 @@
     "test:offline": "node scripts/test-offline-contract.mjs",
     "test:diagnostics": "node scripts/test-desktop-diagnostics-contract.mjs",
     "test:local-lists": "node scripts/test-local-list-contract.mjs",
-    "test:invoice-print": "node scripts/test-invoice-print-contract.mjs && npm run test:invoice-print-layout && npm run test:invoice-print-options",
+    "test:invoice-print": "node scripts/test-invoice-print-contract.mjs && node --import tsx scripts/test-canonical-invoice-document.ts && npm run test:invoice-print-layout && npm run test:invoice-print-options",
     "test:invoice-print-layout": "node --import tsx scripts/test-invoice-pdf-layout.ts",
     "test:invoice-print-options": "node --import tsx scripts/test-invoice-pdf-options.ts",
     "test:reports": "node scripts/test-report-chart-contract.mjs",
@@ -74,6 +74,7 @@
     "preflight:final": "node scripts/preflight-final-hardening.mjs"
   },
   "dependencies": {
+    "@pdf-lib/upng": "^1.0.1",
     "@supabase/ssr": "^0.10.3",
     "@supabase/supabase-js": "^2.96.0",
     "@tauri-apps/api": "^2.11.1",
@@ -81,6 +82,7 @@
     "@types/three": "^0.184.1",
     "next": "^16.2.12",
     "pdf-lib": "^1.17.1",
+    "pdfjs-dist": "^6.2.108",
     "qrcode": "^1.5.4",
     "qrcode.react": "^4.2.0",
     "react": "19.2.3",

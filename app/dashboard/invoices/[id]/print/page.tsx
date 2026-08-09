@@ -9,30 +9,6 @@ import { resolveBusinessLogoUrl } from "@/lib/business-logo"
 import { getCachedWorkspaceBootstrap, getOfflineData } from "@/lib/offline/db"
 import { buildPrintInvoice, resolvePrintOrganization, stringFrom, type PrintRow } from "@/lib/print-invoice-builder"
 
-type StoredPrintJob = {
-  invoiceId: string
-  format: PrintSettings["defaultFormat"]
-  settings: PrintSettings
-  terms: string[]
-  createdAt: number
-}
-
-function readPrintRequest() {
-  if (typeof window === "undefined") return { printOnly: false, jobId: "", job: null as StoredPrintJob | null }
-  const query = new URLSearchParams(window.location.search)
-  const printOnly = query.get("printOnly") === "1"
-  const jobId = query.get("printJob") || ""
-  if (!printOnly || !jobId) return { printOnly, jobId, job: null as StoredPrintJob | null }
-  try {
-    const raw = window.localStorage.getItem(`bezgrow.invoice-print-job.${jobId}`)
-    const job = raw ? JSON.parse(raw) as StoredPrintJob : null
-    if (!job || Date.now() - Number(job.createdAt || 0) > 10 * 60 * 1000) return { printOnly, jobId, job: null }
-    return { printOnly, jobId, job }
-  } catch {
-    return { printOnly, jobId, job: null as StoredPrintJob | null }
-  }
-}
-
 export default function PrintInvoicePage() {
   const params = useParams()
   const invoiceId = Array.isArray(params.id) ? params.id[0] : params.id
@@ -44,7 +20,6 @@ export default function PrintInvoicePage() {
   const [loading, setLoading] = useState(true)
   const [loadError, setLoadError] = useState("")
   const [printSettings, setPrintSettings] = useState<PrintSettings>(() => readStoredPrintSettings())
-  const [printRequest] = useState(readPrintRequest)
 
   const loadOfflineInvoice = useCallback(async () => {
     if (!invoiceId) return false
@@ -80,9 +55,9 @@ export default function PrintInvoicePage() {
       cachedCustomers.find((row) => stringFrom(row, ["id"]) === customerId || stringFrom(row, ["offline_local_id"]) === customerId) || null
     )
     setProducts(cachedProducts)
-    setPrintSettings(printRequest.job?.invoiceId === invoiceId ? printRequest.job.settings : storedPrintSettings)
+    setPrintSettings(storedPrintSettings)
     return true
-  }, [invoiceId, printRequest.job])
+  }, [invoiceId])
 
   const fetchInvoice = useCallback(async () => {
     if (!invoiceId) {
@@ -126,20 +101,8 @@ export default function PrintInvoicePage() {
 
     const origin = typeof window === "undefined" ? "https://www.bezgrow.com" : window.location.origin
 
-    const built = buildPrintInvoice({ invoice, items, organization, customer, products, origin })
-    if (printRequest.job?.invoiceId === built.id) {
-      return { ...built, terms: printRequest.job.terms }
-    }
-    return built
-  }, [customer, invoice, items, organization, printRequest.job, products])
-
-  useEffect(() => {
-    if (!printRequest.jobId) return
-    const timeout = globalThis.setTimeout(() => {
-      window.localStorage.removeItem(`bezgrow.invoice-print-job.${printRequest.jobId}`)
-    }, 5 * 60 * 1000)
-    return () => globalThis.clearTimeout(timeout)
-  }, [printRequest.jobId])
+    return buildPrintInvoice({ invoice, items, organization, customer, products, origin })
+  }, [customer, invoice, items, organization, products])
 
   if (loading) {
     return (
@@ -165,5 +128,5 @@ export default function PrintInvoicePage() {
     return <div className="flex min-h-dvh items-center justify-center bg-black text-white">Invoice not found.</div>
   }
 
-  return <PrintEngine invoice={printInvoice} initialSettings={printSettings} publicMode={printRequest.printOnly} />
+  return <PrintEngine invoice={printInvoice} initialSettings={printSettings} />
 }
