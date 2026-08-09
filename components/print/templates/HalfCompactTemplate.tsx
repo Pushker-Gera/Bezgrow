@@ -7,7 +7,7 @@ import { BusinessLogo, CodesBlock, GeneratedByFooter, SignatureBlock } from "./P
 export function HalfCompactTemplate({ invoice, settings }: { invoice: PrintInvoice; settings: PrintSettings }) {
   return (
     <article className="invoice-paper print-half-compact">
-      {settings.showWatermark && <div className="watermark">{invoice.watermark}</div>}
+      {settings.showWatermark && <div className="watermark" aria-hidden="true"><span>{invoice.watermark}</span></div>}
       <header className="compact-invoice-header">
         <div className="compact-invoice-brand">
           {settings.showLogo && <BusinessLogo invoice={invoice} className="compact-brand-logo" />}

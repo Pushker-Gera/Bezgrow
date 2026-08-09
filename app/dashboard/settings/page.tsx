@@ -1,6 +1,7 @@
 "use client"
 
 import { useEffect, useMemo, useRef, useState } from "react"
+import { useRouter } from "next/navigation"
 import { useDebounce } from "use-debounce"
 import AppUpdatesPanel from "@/components/AppUpdatesPanel"
 import DesktopDiagnosticsPanel from "@/components/settings/DesktopDiagnosticsPanel"
@@ -10,10 +11,12 @@ import { LocalDataExportsPanel } from "@/components/settings/LocalDataExportsPan
 import { apiFetch } from "@/lib/api/client-fetch"
 import { invalidateBusinessLogoUrl, pickBusinessLogo, removeBusinessLogo, resolveBusinessLogoUrl } from "@/lib/business-logo"
 import { invokeTauri, isTauriRuntimeAsync } from "@/lib/desktop/tauri"
+import { clearDesktopSession } from "@/lib/desktop/session"
 import { getOrganizationId } from "@/lib/getOrganization"
 import { createOfflineId, exportOfflineBackup, getOfflineData, putOfflineData, queueOfflineAction, restoreOfflineBackup } from "@/lib/offline/db"
 import { shouldUseWebOfflineFallback } from "@/lib/offline/network"
-import { getWorkspaceBootstrap } from "@/lib/workspaceBootstrapClient"
+import { REMOVE_LICENSE_CONFIRMATION, removeLocalLicenseFromDevice } from "@/lib/offline/local/license"
+import { clearWorkspaceBootstrapCache, getWorkspaceBootstrap } from "@/lib/workspaceBootstrapClient"
 
 type Organization = Record<string, unknown> & {
   id: string
@@ -138,6 +141,7 @@ function normalizeFeatures(features: WorkspaceResponse["features"], organization
 }
 
 export default function SettingsPage() {
+  const router = useRouter()
   const [organizationId, setOrganizationId] = useState("")
   const [organization, setOrganization] = useState<Organization | null>(null)
   const [features, setFeatures] = useState<FeatureRow[]>([])
@@ -150,6 +154,9 @@ export default function SettingsPage() {
   const [saving, setSaving] = useState(false)
   const [notice, setNotice] = useState("")
   const [logoBusy, setLogoBusy] = useState(false)
+  const [licenseRemovalOpen, setLicenseRemovalOpen] = useState(false)
+  const [licenseRemovalText, setLicenseRemovalText] = useState("")
+  const [removingLicense, setRemovingLicense] = useState(false)
   const backupInputRef = useRef<HTMLInputElement | null>(null)
   const [form, setForm] = useState({
     name: "",
@@ -687,6 +694,29 @@ export default function SettingsPage() {
     setSaving(false)
   }
 
+  async function removeLicense() {
+    if (licenseRemovalText.trim().toUpperCase() !== REMOVE_LICENSE_CONFIRMATION) {
+      setNotice(`Type ${REMOVE_LICENSE_CONFIRMATION} to confirm licence removal.`)
+      return
+    }
+    setRemovingLicense(true)
+    setNotice("")
+    try {
+      const result = await removeLocalLicenseFromDevice(licenseRemovalText)
+      clearWorkspaceBootstrapCache()
+      await clearDesktopSession()
+      sessionStorage.setItem(
+        "bezgrow:license-message",
+        `Licence removed from this device. Device ID ${result.device_id} and all local business data were preserved.`
+      )
+      router.replace("/offline?reason=license_removed&next=%2Fdashboard")
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : "The licence could not be removed.")
+    } finally {
+      setRemovingLicense(false)
+    }
+  }
+
   return (
     <div className="relative min-h-dvh overflow-y-auto overflow-x-hidden bg-black text-white">
       <div className="pointer-events-none absolute inset-0 overflow-hidden">
@@ -860,6 +890,38 @@ export default function SettingsPage() {
             <AppUpdatesPanel />
 
             <DesktopDiagnosticsPanel />
+
+            <div className="rounded-[36px] border border-red-400/20 bg-red-500/[0.04] p-7 backdrop-blur-2xl">
+              <h2 className="text-3xl font-black">Device Licence</h2>
+              <p className="mt-3 max-w-3xl text-sm leading-6 text-neutral-400">
+                Ordinary Logout never removes the signed licence, Device ID, SQLite database, business profile, settings, logo, invoices, products, customers, reports, backups, or print preferences.
+              </p>
+              {!licenseRemovalOpen ? (
+                <button type="button" onClick={() => setLicenseRemovalOpen(true)} className="mt-5 h-12 rounded-2xl border border-red-400/30 bg-red-500/10 px-5 text-sm font-black text-red-100">
+                  Remove licence from this device
+                </button>
+              ) : (
+                <div className="mt-5 rounded-2xl border border-red-400/25 bg-black/35 p-5">
+                  <p className="text-sm leading-6 text-red-100">
+                    This removes only the signed local licence and ends the current session. It does not erase the Device ID or any ERP records. Type <strong>{REMOVE_LICENSE_CONFIRMATION}</strong> to continue.
+                  </p>
+                  <input
+                    value={licenseRemovalText}
+                    onChange={(event) => setLicenseRemovalText(event.target.value)}
+                    placeholder={REMOVE_LICENSE_CONFIRMATION}
+                    className="mt-4 h-12 w-full rounded-2xl border border-red-400/25 bg-black/50 px-4 text-sm font-bold text-white outline-none focus:border-red-300"
+                  />
+                  <div className="mt-4 flex flex-wrap gap-3">
+                    <button type="button" onClick={() => void removeLicense()} disabled={removingLicense || licenseRemovalText.trim().toUpperCase() !== REMOVE_LICENSE_CONFIRMATION} className="h-12 rounded-2xl bg-red-500 px-5 text-sm font-black text-white disabled:cursor-not-allowed disabled:opacity-40">
+                      {removingLicense ? "Removing..." : "Confirm licence removal"}
+                    </button>
+                    <button type="button" onClick={() => { setLicenseRemovalOpen(false); setLicenseRemovalText("") }} disabled={removingLicense} className="h-12 rounded-2xl border border-white/10 bg-white/[0.04] px-5 text-sm font-black text-white">
+                      Cancel
+                    </button>
+                  </div>
+                </div>
+              )}
+            </div>
 
             <LocalDataExportsPanel organizationId={organizationId} />
 

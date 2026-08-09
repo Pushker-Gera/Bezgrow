@@ -1,5 +1,6 @@
 import assert from "node:assert/strict"
 import { mkdirSync, writeFileSync } from "node:fs"
+import { pathToFileURL } from "node:url"
 import { PDFDocument } from "pdf-lib"
 import { createInvoicePdf } from "../lib/pdf-invoice"
 import { defaultPrintSettings } from "../components/print/settings/defaults"
@@ -8,7 +9,7 @@ import type { PrintFormat, PrintInvoice } from "../components/print/types"
 const PT_PER_MM = 72 / 25.4
 const logo = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAYAAABytg0kAAAAFElEQVR42mP8z8Dwn4GBgYGJAQoAHgQCAelx2VQAAAAASUVORK5CYII="
 
-function invoice(itemCount: number, gst: boolean): PrintInvoice {
+export function invoice(itemCount: number, gst: boolean): PrintInvoice {
   const items = Array.from({ length: itemCount }, (_, index) => {
     const taxableValue = 99.95 * (index % 3 + 1)
     const discountAmount = index === 0 ? 9.5 : 0
@@ -115,7 +116,7 @@ const formats: Array<{
 
 async function run() {
   const results: string[] = []
-  const fixtureDirectory = "tmp/pdfs/bezgrow-invoice-layout-qa"
+  const fixtureDirectory = process.env.BEZGROW_PRINT_EVIDENCE_DIR || "tmp/pdfs/bezgrow-invoice-layout-qa"
   const keepFixtures = process.env.BEZGROW_KEEP_PDF_FIXTURES === "1"
   if (keepFixtures) mkdirSync(fixtureDirectory, { recursive: true })
   for (const itemCount of [1, 5, 20]) {
@@ -130,6 +131,7 @@ async function run() {
         const document = await PDFDocument.load(bytes)
         assert.equal(document.getPageCount(), 1, `${expected.label}/${itemCount}/${gst ? "gst" : "non-gst"} split unexpectedly`)
         const page = document.getPage(0)
+        assert.ok(page.node.Contents(), `${expected.label} produced a blank first page`)
         closeTo(page.getWidth(), expected.widthMm * PT_PER_MM)
         if (expected.heightMm) closeTo(page.getHeight(), expected.heightMm * PT_PER_MM)
         else assert.ok(page.getHeight() > 100 * PT_PER_MM, "Thermal receipt did not expand to a usable continuous height")
@@ -139,14 +141,27 @@ async function run() {
         closeTo(box.width, page.getWidth())
         closeTo(box.height, page.getHeight())
         if (keepFixtures && itemCount === 20 && gst) {
-          writeFileSync(`${fixtureDirectory}/${expected.label}-20-items-gst.pdf`, bytes)
+          writeFileSync(`${fixtureDirectory}/${expected.label}-20-items-gst-bw-watermark.pdf`, await createInvoicePdf(
+            invoice(itemCount, gst),
+            { ...defaultPrintSettings, thermalWidth: expected.thermalWidth, showLogo: true, showQr: true, showBarcode: true, showWatermark: true, blackAndWhite: true },
+            expected.format,
+          ))
         }
         results.push(`${expected.label}:${itemCount}:${gst ? "gst" : "non-gst"}=1page ${page.getWidth().toFixed(2)}x${page.getHeight().toFixed(2)}pt`)
       }
     }
   }
+  const longA4 = await PDFDocument.load(await createInvoicePdf(invoice(90, true), {
+    ...defaultPrintSettings,
+    showLogo: true,
+    showQr: true,
+    showBarcode: true,
+    showWatermark: true,
+  }, "a4"))
+  assert.ok(longA4.getPageCount() >= 3, "A very long A4 invoice must use controlled continuation pages")
+  for (const page of longA4.getPages()) assert.ok(page.node.Contents(), "A4 continuation output contained a blank page")
   console.log(`Invoice PDF layout matrix passed (${results.length} PDFs).`)
   for (const result of results) console.log(result)
 }
 
-void run()
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) void run()

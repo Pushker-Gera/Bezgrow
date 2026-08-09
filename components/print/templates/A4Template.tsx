@@ -6,7 +6,7 @@ import { CodesBlock, CustomerBlock, GeneratedByFooter, HeaderBlock, ItemTable, P
 export function A4Template({ invoice, settings }: { invoice: PrintInvoice; settings: PrintSettings }) {
   return (
     <article className="invoice-paper print-a4">
-      {settings.showWatermark && <div className="watermark">{invoice.watermark}</div>}
+      {settings.showWatermark && <div className="watermark" aria-hidden="true"><span>{invoice.watermark}</span></div>}
       <HeaderBlock invoice={invoice} settings={settings} />
       <CustomerBlock invoice={invoice} />
       <ItemTable invoice={invoice} settings={settings} />

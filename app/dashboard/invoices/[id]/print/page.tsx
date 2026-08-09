@@ -42,6 +42,7 @@ export default function PrintInvoicePage() {
   const [customer, setCustomer] = useState<PrintRow | null>(null)
   const [products, setProducts] = useState<PrintRow[]>([])
   const [loading, setLoading] = useState(true)
+  const [loadError, setLoadError] = useState("")
   const [printSettings, setPrintSettings] = useState<PrintSettings>(() => readStoredPrintSettings())
   const [printRequest] = useState(readPrintRequest)
 
@@ -99,9 +100,25 @@ export default function PrintInvoicePage() {
   }, [invoiceId, loadOfflineInvoice])
 
   useEffect(() => {
+    let active = true
+    let timeoutId: ReturnType<typeof globalThis.setTimeout> | undefined
     queueMicrotask(() => {
-      void fetchInvoice()
+      const timeout = new Promise<never>((_, reject) => {
+        timeoutId = globalThis.setTimeout(() => reject(new Error("The local invoice did not finish loading within 15 seconds.")), 15_000)
+      })
+      void Promise.race([fetchInvoice(), timeout])
+        .catch((error) => {
+          if (active) setLoadError(error instanceof Error ? error.message : "The local invoice could not be loaded.")
+        })
+        .finally(() => {
+          if (timeoutId !== undefined) globalThis.clearTimeout(timeoutId)
+          if (active) setLoading(false)
+        })
     })
+    return () => {
+      active = false
+      if (timeoutId !== undefined) globalThis.clearTimeout(timeoutId)
+    }
   }, [fetchInvoice])
 
   const printInvoice = useMemo<PrintInvoice | null>(() => {
@@ -128,6 +145,18 @@ export default function PrintInvoicePage() {
     return (
       <div className="flex min-h-dvh items-center justify-center bg-black text-white">
         <div className="h-10 w-10 animate-spin rounded-full border-4 border-neutral-800 border-t-cyan-300" />
+      </div>
+    )
+  }
+
+  if (loadError) {
+    return (
+      <div className="flex min-h-dvh items-center justify-center bg-black px-5 text-white">
+        <div className="max-w-lg rounded-3xl border border-red-400/25 bg-red-500/10 p-7 text-center">
+          <h1 className="text-2xl font-black">Invoice print preview could not load.</h1>
+          <p className="mt-3 text-sm leading-6 text-red-100">{loadError}</p>
+          <button type="button" onClick={() => window.location.reload()} className="mt-5 min-h-12 rounded-2xl bg-white px-5 text-sm font-black text-black">Retry preview</button>
+        </div>
       </div>
     )
   }

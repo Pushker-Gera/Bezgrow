@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-desktop-prepare-invoice-share"
+description = "Enables the desktop_prepare_invoice_share command without any pre-configured scope."
+commands.allow = ["desktop_prepare_invoice_share"]
+
+[[permission]]
+identifier = "deny-desktop-prepare-invoice-share"
+description = "Denies the desktop_prepare_invoice_share command without any pre-configured scope."
+commands.deny = ["desktop_prepare_invoice_share"]

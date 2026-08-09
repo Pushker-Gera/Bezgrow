@@ -21,6 +21,8 @@
     "allow-store-secret",
     "allow-read-secret",
     "allow-delete-secret",
+    "allow-desktop-get-or-create-device-id",
+    "allow-desktop-prepare-invoice-share",
     "allow-desktop-save-file",
     "allow-desktop-save-invoice-pdf",
     "allow-desktop-pick-business-logo",

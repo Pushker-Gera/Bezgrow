@@ -18,7 +18,7 @@ export function HalfTopTemplate({ invoice, settings }: { invoice: PrintInvoice; 
   return (
     <article className="invoice-paper print-half-top">
       <div className="top-half-content">
-        {settings.showWatermark && <div className="watermark">{invoice.watermark}</div>}
+        {settings.showWatermark && <div className="watermark" aria-hidden="true"><span>{invoice.watermark}</span></div>}
         <header className="half-top-header">
           <div className="half-top-brand">
             {settings.showLogo && <BusinessLogo invoice={invoice} className="half-top-brand-logo" />}
@@ -55,7 +55,7 @@ export function HalfTopTemplate({ invoice, settings }: { invoice: PrintInvoice; 
               <th>Item</th>
               <th>Qty</th>
               <th>Rate</th>
-              <th>GST</th>
+              {settings.showGstDetails && <th>GST</th>}
               <th>Amount</th>
             </tr>
           </thead>
@@ -65,7 +65,7 @@ export function HalfTopTemplate({ invoice, settings }: { invoice: PrintInvoice; 
                 <td><strong>{item.name}</strong></td>
                 <td>{item.quantity} {item.unit}</td>
                 <td>{formatMoney(item.rate)}</td>
-                <td>{item.cgstPercent + item.sgstPercent + item.igstPercent}%</td>
+                {settings.showGstDetails && <td>{item.cgstPercent + item.sgstPercent + item.igstPercent}%</td>}
                 <td><strong>{formatMoney(item.finalAmount)}</strong></td>
               </tr>
             ))}

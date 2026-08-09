@@ -3,7 +3,7 @@
 import { normalizeLicenseEnvKey, parseLicenseInput, verifyLicenseSignature, type LicensePayload } from "@/lib/license/codec"
 import { evaluateStoredLicense, type LicensePolicyResult, type StoredLicenseRow } from "@/lib/license/policy"
 import { verifyStoredLicenseRows } from "@/lib/license/verification"
-import { setDesktopAuthMarker } from "@/lib/desktop/session"
+import { clearDesktopAuthMarker, markDesktopSessionActive, setDesktopAuthMarker } from "@/lib/desktop/session"
 import { desktopArchitecture, invokeTauri, isTauriRuntimeAsync } from "@/lib/desktop/tauri"
 import packageJson from "@/package.json"
 import {
@@ -25,6 +25,9 @@ const DEVICE_STORAGE_KEY = "bezgrow:device-id"
 const DEVICE_SECRET_KEY = "bezgrow-device-id"
 const LICENSE_SECRET_KEY = "bezgrow-offline-license-key"
 const PUBLIC_KEY = normalizeLicenseEnvKey(process.env.NEXT_PUBLIC_BEZGROW_LICENSE_PUBLIC_KEY || "")
+export const REMOVE_LICENSE_CONFIRMATION = "REMOVE LICENCE"
+
+let deviceIdPromise: Promise<string> | null = null
 
 type DeviceCheckinResponse = {
   success?: boolean
@@ -68,6 +71,10 @@ function randomDeviceId() {
   return `BZG-${random.replace(/-/g, "").slice(0, 24).toUpperCase()}`
 }
 
+function validDeviceId(value: unknown): value is string {
+  return typeof value === "string" && /^BZG-[A-Z0-9-]{8,92}$/i.test(value.trim())
+}
+
 async function readDesktopSecret(key: string) {
   if (!(await isTauriRuntimeAsync().catch(() => false))) return null
 
@@ -89,6 +96,11 @@ async function writeDesktopSecret(key: string, value: string) {
   }
 }
 
+async function deleteDesktopSecret(key: string) {
+  if (!(await isTauriRuntimeAsync().catch(() => false))) return
+  await invokeTauri<void>("delete_secret", { key })
+}
+
 async function readDeviceIdFromStoredLicense() {
   const licenseKey = await readDesktopSecret(LICENSE_SECRET_KEY)
   if (!licenseKey) return ""
@@ -106,36 +118,32 @@ async function persistDeviceId(deviceId: string) {
   await setOfflineMeta(DEVICE_META_KEY, deviceId, "global").catch(() => undefined)
 }
 
-export async function getOrCreateDeviceId() {
+async function resolveDeviceId() {
   const secureDeviceId = await readDesktopSecret(DEVICE_SECRET_KEY)
-  if (secureDeviceId) {
-    await persistDeviceId(secureDeviceId)
-    return secureDeviceId
-  }
-
   const licensedDeviceId = await readDeviceIdFromStoredLicense()
-  if (licensedDeviceId) {
-    await persistDeviceId(licensedDeviceId)
-    return licensedDeviceId
-  }
-
   const cached = await getOfflineMeta<string>(DEVICE_META_KEY, "", "global").catch(() => "")
-  if (cached) {
-    await persistDeviceId(cached)
-    return cached
-  }
-
-  if (typeof window !== "undefined") {
-    const stored = localStorage.getItem(DEVICE_STORAGE_KEY)
-    if (stored) {
-      await persistDeviceId(stored)
-      return stored
-    }
-  }
-
-  const next = randomDeviceId()
+  const stored = typeof window !== "undefined" ? localStorage.getItem(DEVICE_STORAGE_KEY) : ""
+  // A signed licence is the strongest migration evidence for the Device ID
+  // that was actually registered before the native installation file existed.
+  const legacyDeviceId = [licensedDeviceId, secureDeviceId, cached, stored]
+    .find((value) => validDeviceId(value))
+    ?.trim()
+  const desktopRuntime = await isTauriRuntimeAsync().catch(() => false)
+  const next = desktopRuntime
+    ? await invokeTauri<string>("desktop_get_or_create_device_id", { legacyDeviceId: legacyDeviceId || null })
+    : legacyDeviceId || randomDeviceId()
   await persistDeviceId(next)
   return next
+}
+
+export async function getOrCreateDeviceId() {
+  if (!deviceIdPromise) {
+    deviceIdPromise = resolveDeviceId().catch((error) => {
+      deviceIdPromise = null
+      throw error
+    })
+  }
+  return deviceIdPromise
 }
 
 async function readLicenseRows(organizationId: string) {
@@ -350,6 +358,7 @@ async function createLocalWorkspaceFromLicense(payload: LicensePayload) {
   if (typeof window !== "undefined") {
     sessionStorage.setItem("bezgrow:organization-id", JSON.stringify({ value: payload.business_id, cachedAt: Date.now() }))
   }
+  markDesktopSessionActive()
   setDesktopAuthMarker()
 }
 
@@ -528,4 +537,51 @@ export async function assertLocalWriteAllowed(organizationId: string, actionName
 export async function localLicenseSnapshot(organizationId = workspaceOrganizationId() || "global") {
   const [deviceId, status] = await Promise.all([getOrCreateDeviceId(), getLocalLicenseStatus(organizationId)])
   return { device_id: deviceId, ...status }
+}
+
+export async function removeLocalLicenseFromDevice(confirmation: string) {
+  if (confirmation.trim().toUpperCase() !== REMOVE_LICENSE_CONFIRMATION) {
+    throw new Error(`Type ${REMOVE_LICENSE_CONFIRMATION} to confirm licence removal.`)
+  }
+
+  const deviceId = await getOrCreateDeviceId()
+  const storedKey = await readDesktopSecret(LICENSE_SECRET_KEY)
+  let storedBusinessId = ""
+  let storedLicenseId = ""
+  if (storedKey) {
+    try {
+      const parsed = parseLicenseInput(storedKey)
+      storedBusinessId = parsed.payload.business_id
+      storedLicenseId = parsed.payload.license_id
+    } catch {
+      // An invalid stored key is still removed only by this explicit action.
+    }
+  }
+
+  const targets = [...new Set(["global", workspaceOrganizationId(), storedBusinessId].filter(Boolean))]
+  for (const organizationId of targets) {
+    const [licenses, activations] = await Promise.all([
+      getOfflineData<DataRow[]>(organizationId, "license", []).catch(() => []),
+      getOfflineData<DataRow[]>(organizationId, "device_activations", []).catch(() => []),
+    ])
+    const remainingLicenses = licenses.filter((row) => {
+      if (storedLicenseId && String(row.id || "") === storedLicenseId) return false
+      return String(row.device_id || "") !== deviceId
+    })
+    const remainingActivations = activations.filter((row) => String(row.device_id || "") !== deviceId)
+    await Promise.all([
+      putOfflineData(organizationId, "license", remainingLicenses),
+      putOfflineData(organizationId, "device_activations", remainingActivations),
+    ])
+    await logLicenseEvent(
+      organizationId,
+      "LICENSE_REMOVED_FROM_DEVICE",
+      "The signed local licence was removed after explicit Settings confirmation. ERP records and the installation Device ID were preserved.",
+      storedLicenseId || null
+    )
+  }
+
+  await deleteDesktopSecret(LICENSE_SECRET_KEY)
+  clearDesktopAuthMarker()
+  return { device_id: deviceId, removed: true }
 }

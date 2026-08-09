@@ -19,6 +19,7 @@ const invoicePage = read("app/dashboard/invoices/page.tsx")
 const repositories = read("lib/offline/local/repositories.ts")
 const offlineDb = read("lib/offline/db.ts")
 const loginPage = read("app/login/page.tsx")
+const licensePage = read("app/offline/page.tsx")
 
 assert.doesNotMatch(dashboard, /AppUpdateBanner/, "The dashboard must not mount an application update banner.")
 assert.doesNotMatch(layout, /OfflineStatusBar/, "The desktop layout must not mount sync/update queue status.")
@@ -43,7 +44,8 @@ assert.doesNotMatch(invoicePage, /Pending Update/, "Invoice queue state must not
 assert.match(repositories, /INSERT OR IGNORE INTO organizations/, "Repository readiness checks must not overwrite an existing business.")
 assert.match(repositories, /Object\.hasOwn\(input, "logo_path"\)/, "Partial workspace records must preserve managed logo metadata.")
 assert.match(offlineDb, /currentOrganization && !isPlaceholder/, "Desktop workspace caching must preserve authoritative local business settings.")
-assert.match(loginPage, /Continue with Verified Local License/, "An explicitly logged-out desktop must be able to reopen through its verified local license without internet.")
-assert.match(loginPage, /localLicenseSnapshot\(organizationId\)/, "Offline continuation must re-verify the stored license before clearing the logout marker.")
+assert.match(loginPage, /\/offline\?reason=logged_out/, "An explicitly logged-out desktop must open the local licence lifecycle, not cloud login.")
+assert.match(licensePage, /Continue \/ Open Dashboard/, "The licence screen must reopen through its verified stored licence without internet.")
+assert.match(licensePage, /localLicenseSnapshot/, "Offline continuation must re-verify the stored licence before clearing the logout marker.")
 
 console.log("final-offline-network-contract-ok")

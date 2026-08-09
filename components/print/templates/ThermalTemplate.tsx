@@ -18,6 +18,7 @@ export function ThermalTemplate({ invoice, settings }: { invoice: PrintInvoice; 
 
   return (
     <article className={`invoice-paper print-thermal thermal-${settings.thermalWidth.replace("mm", "")}`}>
+      {settings.showWatermark && <div className="watermark thermal-watermark" aria-hidden="true"><span>{invoice.watermark}</span></div>}
       <header className="thermal-center">
         {settings.showLogo && <BusinessLogo invoice={invoice} className="thermal-brand-logo" />}
         <h1>{invoice.enterprise.name}</h1>
@@ -45,7 +46,12 @@ export function ThermalTemplate({ invoice, settings }: { invoice: PrintInvoice; 
         <tbody>
           {invoice.items.map((item) => (
             <tr key={item.id}>
-              <td>{item.name}<br /><span>{item.hsnCode} {item.batchNumber !== "-" ? `B:${item.batchNumber}` : ""}</span></td>
+              <td>
+                {item.name}
+                {(settings.showHsn || settings.pharmaMode) && (
+                  <><br /><span>{settings.showHsn ? item.hsnCode : ""} {settings.pharmaMode && item.batchNumber !== "-" ? `B:${item.batchNumber}` : ""}</span></>
+                )}
+              </td>
               <td>{item.quantity}</td>
               {settings.showGstDetails && <td>{item.cgstPercent + item.sgstPercent + item.igstPercent}%</td>}
               <td>{formatMoney(item.finalAmount)}</td>
@@ -57,7 +63,7 @@ export function ThermalTemplate({ invoice, settings }: { invoice: PrintInvoice; 
       <div className="thermal-rule" />
       <div className="thermal-row"><span>Subtotal</span><strong>{formatMoney(invoice.totals.subtotal)}</strong></div>
       <div className="thermal-row"><span>Discount</span><strong>{formatMoney(invoice.totals.discount)}</strong></div>
-      <div className="thermal-row"><span>GST</span><strong>{formatMoney(invoice.totals.cgst + invoice.totals.sgst + invoice.totals.igst)}</strong></div>
+      {settings.showGstDetails && <div className="thermal-row"><span>GST</span><strong>{formatMoney(invoice.totals.cgst + invoice.totals.sgst + invoice.totals.igst)}</strong></div>}
       <div className="thermal-total"><span>Total</span><strong>{formatMoney(invoice.totals.grandTotal)}</strong></div>
       <div className="thermal-row"><span>Cash Received</span><strong>{formatMoney(invoice.payment.cashReceived)}</strong></div>
       <div className="thermal-row"><span>Balance</span><strong>{formatMoney(invoice.payment.balanceAmount)}</strong></div>

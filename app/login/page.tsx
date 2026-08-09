@@ -55,7 +55,6 @@ export default function LoginPage() {
     const [resetLoading, setResetLoading] = useState(false)
     const [checkingSession, setCheckingSession] = useState(true)
     const [adminLoginView, setAdminLoginView] = useState(false)
-    const [verifiedLocalLicenseAvailable, setVerifiedLocalLicenseAvailable] = useState(false)
 
     const getSafeNextPath = useCallback((fallback: string) => {
         if (typeof window === "undefined") {
@@ -193,16 +192,13 @@ export default function LoginPage() {
             const desktopRuntime = (await withTimeout(isTauriRuntimeAsync(), 2500)) || false
             if (desktopRuntime) {
                 await withTimeout(getLocalDatabaseService().ensureReady(), 5000)
+                if (isDesktopExplicitlyLoggedOut() && !platformAdminRequested()) {
+                    navigate(`/offline?reason=logged_out&next=${encodeURIComponent(getSafeNextPath("/dashboard"))}`)
+                    return
+                }
                 const workspace = await withTimeout(restoreLicensedWorkspaceContext().catch(() => null), 5000)
                 const organizationId = workspace?.organization?.id || workspace?.membership?.organization_id || undefined
                 const license = await withTimeout(localLicenseSnapshot(organizationId), 5000)
-                if (isDesktopExplicitlyLoggedOut()) {
-                    if (active) {
-                        setVerifiedLocalLicenseAvailable(Boolean(license?.allowed))
-                        setCheckingSession(false)
-                    }
-                    return
-                }
                 if (license?.allowed) {
                     navigate(getSafeNextPath("/dashboard"))
                     return
@@ -248,28 +244,6 @@ export default function LoginPage() {
             active = false
         }
     }, [getSafeNextPath, platformAdminRequested, router])
-
-    async function continueWithVerifiedLocalLicense() {
-        try {
-            setLoading(true)
-            setErrorMessage("")
-            await getLocalDatabaseService().ensureReady()
-            const workspace = await restoreLicensedWorkspaceContext().catch(() => null)
-            const organizationId = workspace?.organization?.id || workspace?.membership?.organization_id || undefined
-            const license = await localLicenseSnapshot(organizationId)
-            if (!license?.allowed) {
-                setVerifiedLocalLicenseAvailable(false)
-                setErrorMessage("The saved local license could not be verified. Reconnect to renew or reactivate it.")
-                return
-            }
-            markDesktopSessionActive()
-            router.replace(getSafeNextPath("/dashboard"))
-        } catch (error) {
-            setErrorMessage(error instanceof Error ? error.message : "The saved local license could not be opened.")
-        } finally {
-            setLoading(false)
-        }
-    }
 
     async function login(event?: FormEvent<HTMLFormElement>) {
         event?.preventDefault()
@@ -473,22 +447,6 @@ export default function LoginPage() {
                         ? "Internet and an authorized admin or platform_admin account are required. Access is validated by the Bezgrow server."
                         : "Login to manage your inventory, billing, customers, and business operations."}
                 </p>
-
-                {!adminLoginView && verifiedLocalLicenseAvailable && (
-                    <div className="mb-5 rounded-lg border border-cyan-300/20 bg-cyan-300/[0.06] p-3">
-                        <button
-                            type="button"
-                            onClick={() => void continueWithVerifiedLocalLicense()}
-                            disabled={loading}
-                            className="min-h-12 w-full rounded-lg border border-cyan-300/30 bg-cyan-300/10 px-4 font-semibold text-cyan-100 disabled:opacity-50"
-                        >
-                            Continue with Verified Local License
-                        </button>
-                        <p className="mt-2 text-center text-xs leading-5 text-gray-400">
-                            Opens this device&apos;s local ERP without an internet or platform login request.
-                        </p>
-                    </div>
-                )}
 
                 {errorMessage && (
                     <div className="bg-red-900 border border-red-600 text-red-300 p-3 rounded mb-4 text-sm">

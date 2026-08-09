@@ -11,6 +11,9 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
+#[cfg(target_os = "macos")]
+use std::sync::Arc;
+
 #[cfg(any(target_os = "windows", not(debug_assertions)))]
 use std::process::Stdio;
 
@@ -55,6 +58,9 @@ use objc2_web_kit::WKWebView;
 const KEYCHAIN_SERVICE: &str = "com.bezgrow.erp";
 const LOCAL_DATABASE_NAME: &str = "bezgrow-offline.db";
 const WINDOWS_APP_DATA_DIR: &str = "Bezgrow";
+const INSTALLATION_DIRECTORY: &str = "Installation";
+const DEVICE_ID_FILENAME: &str = "device-id";
+const INSTALLATION_SEED_FILENAME: &str = "installation-seed";
 #[cfg(target_os = "windows")]
 const WINDOWS_APP_USER_MODEL_ID: &str = "com.bezgrow.erp";
 const STARTUP_LOG_MAX_BYTES: u64 = 2 * 1024 * 1024;
@@ -478,6 +484,11 @@ struct DesktopSavedFile {
 }
 
 #[derive(Serialize)]
+struct DesktopPrintResult {
+    status: &'static str,
+}
+
+#[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct DesktopBusinessLogo {
     relative_path: String,
@@ -552,6 +563,7 @@ fn prepare_managed_data<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> Result<
     let root = managed_app_data_root(app)?;
     for directory in [
         "Database",
+        INSTALLATION_DIRECTORY,
         "business-assets/logos",
         "Settings",
         "PDFs",
@@ -640,6 +652,108 @@ fn sha256_bytes(bytes: &[u8]) -> String {
     let mut hasher = Sha256::new();
     hasher.update(bytes);
     format!("{:x}", hasher.finalize())
+}
+
+fn valid_device_id(value: &str) -> bool {
+    let trimmed = value.trim();
+    trimmed.starts_with("BZG-")
+        && (12..=96).contains(&trimmed.len())
+        && trimmed
+            .chars()
+            .all(|character| character.is_ascii_alphanumeric() || character == '-')
+}
+
+fn read_persisted_device_id(path: &Path) -> Result<Option<String>, String> {
+    if !path.exists() {
+        return Ok(None);
+    }
+    let value = fs::read_to_string(path)
+        .map_err(|error| format!("Unable to read Bezgrow's installation identity: {error}"))?;
+    let trimmed = value.trim();
+    if !valid_device_id(trimmed) {
+        return Err("Bezgrow's persisted installation identity is invalid. Restore the application-data folder from backup or contact support; a replacement Device ID was not generated.".to_string());
+    }
+    Ok(Some(trimmed.to_string()))
+}
+
+fn write_new_identity_file(path: &Path, value: &str) -> Result<(), String> {
+    let mut file = match OpenOptions::new().write(true).create_new(true).open(path) {
+        Ok(file) => file,
+        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => return Ok(()),
+        Err(error) => {
+            return Err(format!(
+                "Unable to persist Bezgrow's installation identity: {error}"
+            ))
+        }
+    };
+    file.write_all(value.as_bytes())
+        .and_then(|()| file.sync_all())
+        .map_err(|error| {
+            format!("Unable to finish persisting Bezgrow's installation identity: {error}")
+        })
+}
+
+fn get_or_create_device_id_at(
+    installation_directory: &Path,
+    legacy_device_id: Option<&str>,
+) -> Result<String, String> {
+    fs::create_dir_all(installation_directory)
+        .map_err(|error| format!("Unable to create Bezgrow's installation-data folder: {error}"))?;
+    let device_path = installation_directory.join(DEVICE_ID_FILENAME);
+    if let Some(existing) = read_persisted_device_id(&device_path)? {
+        return Ok(existing);
+    }
+
+    if let Some(legacy) = legacy_device_id
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        if !valid_device_id(legacy) {
+            return Err(
+                "The previous Device ID is invalid, so Bezgrow did not replace it automatically."
+                    .to_string(),
+            );
+        }
+        write_new_identity_file(&device_path, legacy)?;
+        return read_persisted_device_id(&device_path)?.ok_or_else(|| {
+            "Bezgrow could not verify the migrated installation Device ID.".to_string()
+        });
+    }
+
+    let seed_path = installation_directory.join(INSTALLATION_SEED_FILENAME);
+    let seed = if seed_path.exists() {
+        fs::read_to_string(&seed_path)
+            .map_err(|error| format!("Unable to read Bezgrow's installation seed: {error}"))?
+    } else {
+        let timestamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos().to_string())
+            .unwrap_or_else(|_| unix_timestamp());
+        let material = format!(
+            "bezgrow-installation-v1|{}|{}|{}",
+            installation_directory.display(),
+            std::process::id(),
+            timestamp
+        );
+        let generated = sha256_bytes(material.as_bytes());
+        write_new_identity_file(&seed_path, &generated)?;
+        fs::read_to_string(&seed_path)
+            .map_err(|error| format!("Unable to verify Bezgrow's installation seed: {error}"))?
+    };
+    let digest = sha256_bytes(format!("bezgrow-device-v1|{}", seed.trim()).as_bytes());
+    let generated = format!("BZG-{}", digest[..24].to_ascii_uppercase());
+    write_new_identity_file(&device_path, &generated)?;
+    read_persisted_device_id(&device_path)?
+        .ok_or_else(|| "Bezgrow could not verify the new installation Device ID.".to_string())
+}
+
+#[tauri::command]
+fn desktop_get_or_create_device_id<R: tauri::Runtime>(
+    app: tauri::AppHandle<R>,
+    legacy_device_id: Option<String>,
+) -> Result<String, String> {
+    let directory = managed_data_directory(&app, INSTALLATION_DIRECTORY)?;
+    get_or_create_device_id_at(&directory, legacy_device_id.as_deref())
 }
 
 fn sanitize_filename(filename: &str, fallback: &str) -> String {
@@ -809,6 +923,66 @@ fn desktop_save_file<R: tauri::Runtime>(
     save_bytes_with_dialog(&app, &filename, &bytes, &file_kind)
 }
 
+fn prepare_invoice_share_at(
+    directory: &Path,
+    filename: &str,
+    bytes: &[u8],
+) -> Result<DesktopSavedFile, String> {
+    if bytes.len() < 5 || !bytes.starts_with(b"%PDF-") {
+        return Err(
+            "The generated invoice is not a valid PDF and was not prepared for sharing."
+                .to_string(),
+        );
+    }
+
+    let safe_name = safe_extension(&sanitize_filename(filename, "Invoice.pdf"), "pdf");
+    fs::create_dir_all(directory)
+        .map_err(|error| format!("Unable to create the local invoice-share folder: {error}"))?;
+    let destination = directory.join(&safe_name);
+    let temporary = directory.join(format!(".{safe_name}.tmp"));
+    let write_result = (|| {
+        let mut file = fs::File::create(&temporary)
+            .map_err(|error| format!("Unable to prepare the local invoice PDF: {error}"))?;
+        file.write_all(&bytes)
+            .and_then(|()| file.sync_all())
+            .map_err(|error| {
+                format!("Unable to finish preparing the local invoice PDF: {error}")
+            })?;
+        if let Err(initial_error) = fs::rename(&temporary, &destination) {
+            let replacement = if destination.is_file() {
+                fs::remove_file(&destination).and_then(|()| fs::rename(&temporary, &destination))
+            } else {
+                Err(initial_error)
+            };
+            replacement
+                .map_err(|error| format!("Unable to replace the prepared invoice PDF: {error}"))?;
+        }
+        Ok::<(), String>(())
+    })();
+    if write_result.is_err() {
+        let _ = fs::remove_file(&temporary);
+    }
+    write_result?;
+    let metadata = fs::metadata(&destination)
+        .map_err(|error| format!("Unable to verify the prepared invoice PDF: {error}"))?;
+    Ok(DesktopSavedFile {
+        path: destination.to_string_lossy().to_string(),
+        filename: safe_name,
+        bytes: metadata.len(),
+    })
+}
+
+#[tauri::command]
+fn desktop_prepare_invoice_share<R: tauri::Runtime>(
+    app: tauri::AppHandle<R>,
+    filename: String,
+    bytes: Vec<u8>,
+) -> Result<DesktopSavedFile, String> {
+    let _operation = begin_critical_operation(&app)?;
+    let directory = managed_data_directory(&app, "Exports")?.join("Invoice Shares");
+    prepare_invoice_share_at(&directory, &filename, &bytes)
+}
+
 #[tauri::command]
 fn desktop_pick_business_logo<R: tauri::Runtime>(
     app: tauri::AppHandle<R>,
@@ -932,7 +1106,7 @@ fn desktop_read_local_asset<R: tauri::Runtime>(
 #[tauri::command]
 fn desktop_print_current_webview<R: tauri::Runtime>(
     webview: tauri::Webview<R>,
-) -> Result<(), String> {
+) -> Result<DesktopPrintResult, String> {
     let app = webview.app_handle().clone();
     let state = app.state::<DesktopOperationState>();
     if state.update_preparing.load(Ordering::SeqCst) {
@@ -943,19 +1117,27 @@ fn desktop_print_current_webview<R: tauri::Runtime>(
     state.print_dialog_active.store(true, Ordering::SeqCst);
     #[cfg(target_os = "macos")]
     {
+        let completed = Arc::new(AtomicBool::new(false));
+        let completed_in_webview = Arc::clone(&completed);
         let result = webview
-            .with_webview(|platform_webview| unsafe {
+            .with_webview(move |platform_webview| unsafe {
                 let native_webview = &*platform_webview.inner().cast::<WKWebView>();
                 let print_info = NSPrintInfo::sharedPrintInfo();
                 let operation = native_webview.printOperationWithPrintInfo(&print_info);
                 operation.setShowsPrintPanel(true);
                 operation.setShowsProgressPanel(true);
-                operation.runOperation();
+                completed_in_webview.store(operation.runOperation(), Ordering::SeqCst);
             })
             .map_err(|error| format!("Unable to open the macOS print panel: {error}"));
         state.print_dialog_active.store(false, Ordering::SeqCst);
         result?;
-        return Ok(());
+        return Ok(DesktopPrintResult {
+            status: if completed.load(Ordering::SeqCst) {
+                "completed"
+            } else {
+                "cancelled"
+            },
+        });
     }
 
     #[cfg(target_os = "windows")]
@@ -967,7 +1149,9 @@ fn desktop_print_current_webview<R: tauri::Runtime>(
             state.print_dialog_active.store(false, Ordering::SeqCst);
         }
         result?;
-        return Ok(());
+        return Ok(DesktopPrintResult {
+            status: "dialog_opened",
+        });
     }
 
     #[cfg(not(any(target_os = "macos", target_os = "windows")))]
@@ -1009,72 +1193,92 @@ fn desktop_open_invoice_print_window<R: tauri::Runtime>(
         return Err("The selected invoice print format is not supported.".to_string());
     }
 
-    #[cfg(debug_assertions)]
-    let port = 3000;
-    #[cfg(not(debug_assertions))]
-    let port = app
-        .state::<NextServerState>()
-        .process
-        .lock()
-        .map_err(|_| "The bundled print service is unavailable.".to_string())?
-        .as_ref()
-        .map(|process| process.port)
-        .ok_or_else(|| "The bundled print service is not running.".to_string())?;
-
-    let mut url = tauri::Url::parse(&format!(
-        "http://127.0.0.1:{port}/dashboard/invoices/{invoice_id}/print"
-    ))
-    .map_err(|error| format!("Unable to prepare the invoice print preview: {error}"))?;
-    url.query_pairs_mut()
-        .append_pair("printOnly", "1")
-        .append_pair("autoprint", "1")
-        .append_pair("format", &format)
-        .append_pair("printJob", &print_job_id);
-
-    if let Some(window) = app.get_webview_window("invoice-print") {
-        window
-            .navigate(url)
-            .map_err(|error| format!("Unable to refresh the invoice print preview: {error}"))?;
-        window
-            .show()
-            .map_err(|error| format!("Unable to show the invoice print preview: {error}"))?;
-        window
-            .unminimize()
-            .map_err(|error| format!("Unable to restore the invoice print preview: {error}"))?;
-        window
-            .set_focus()
-            .map_err(|error| format!("Unable to focus the invoice print preview: {error}"))?;
-        return Ok(());
+    let print_state = app.state::<DesktopOperationState>();
+    if print_state
+        .print_dialog_active
+        .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+        .is_err()
+    {
+        return Err(
+            "Another invoice print dialog is already active. Close it before printing again."
+                .to_string(),
+        );
     }
 
-    let runtime_architecture = if cfg!(target_arch = "aarch64") {
-        "arm64"
-    } else {
-        "x64"
-    };
-    let runtime_script = format!(
+    let open_result = (|| {
+        #[cfg(debug_assertions)]
+        let port = 3000;
+        #[cfg(not(debug_assertions))]
+        let port = app
+            .state::<NextServerState>()
+            .process
+            .lock()
+            .map_err(|_| "The bundled print service is unavailable.".to_string())?
+            .as_ref()
+            .map(|process| process.port)
+            .ok_or_else(|| "The bundled print service is not running.".to_string())?;
+
+        let mut url = tauri::Url::parse(&format!(
+            "http://127.0.0.1:{port}/dashboard/invoices/{invoice_id}/print"
+        ))
+        .map_err(|error| format!("Unable to prepare the invoice print preview: {error}"))?;
+        url.query_pairs_mut()
+            .append_pair("printOnly", "1")
+            .append_pair("autoprint", "1")
+            .append_pair("format", &format)
+            .append_pair("printJob", &print_job_id);
+
+        if let Some(window) = app.get_webview_window("invoice-print") {
+            window
+                .navigate(url)
+                .map_err(|error| format!("Unable to refresh the invoice print preview: {error}"))?;
+            window
+                .show()
+                .map_err(|error| format!("Unable to show the invoice print preview: {error}"))?;
+            window
+                .unminimize()
+                .map_err(|error| format!("Unable to restore the invoice print preview: {error}"))?;
+            window
+                .set_focus()
+                .map_err(|error| format!("Unable to focus the invoice print preview: {error}"))?;
+            return Ok(());
+        }
+
+        let runtime_architecture = if cfg!(target_arch = "aarch64") {
+            "arm64"
+        } else {
+            "x64"
+        };
+        let runtime_script = format!(
         "window.__BEZGROW_DESKTOP__ = true; window.__BEZGROW_RUNTIME__ = \"tauri-print\"; window.__BEZGROW_ARCH__ = \"{runtime_architecture}\"; window.isTauri = true;"
     );
-    let builder =
-        tauri::WebviewWindowBuilder::new(&app, "invoice-print", WebviewUrl::External(url))
-            .title("Bezgrow — Invoice Print Preview")
-            .inner_size(1120.0, 860.0)
-            .min_inner_size(760.0, 620.0)
-            .resizable(true)
-            .fullscreen(false)
-            .initialization_script(runtime_script);
+        let builder =
+            tauri::WebviewWindowBuilder::new(&app, "invoice-print", WebviewUrl::External(url))
+                .title("Bezgrow — Invoice Print Preview")
+                .inner_size(1120.0, 860.0)
+                .min_inner_size(760.0, 620.0)
+                .resizable(true)
+                .fullscreen(false)
+                .initialization_script(runtime_script);
 
-    #[cfg(target_os = "windows")]
-    let builder = builder.data_directory(managed_data_directory(&app, "WebView")?);
+        #[cfg(target_os = "windows")]
+        let builder = builder.data_directory(managed_data_directory(&app, "WebView")?);
 
-    builder
-        .build()
-        .map_err(|error| format!("Unable to open the invoice print preview: {error}"))?;
-    append_startup_log_handle(
-        &app,
-        format!("Isolated invoice print preview opened for format={format}"),
-    );
-    Ok(())
+        builder
+            .build()
+            .map_err(|error| format!("Unable to open the invoice print preview: {error}"))?;
+        append_startup_log_handle(
+            &app,
+            format!("Isolated invoice print preview opened for format={format}"),
+        );
+        Ok(())
+    })();
+    if open_result.is_err() {
+        print_state
+            .print_dialog_active
+            .store(false, Ordering::SeqCst);
+    }
+    open_result
 }
 
 async fn create_consistent_database_snapshot(
@@ -2308,6 +2512,78 @@ mod database_transaction_tests {
     }
 
     #[test]
+    fn installation_device_id_is_migrated_and_stays_stable() {
+        let fixture_root = std::env::temp_dir().join(format!(
+            "bezgrow-device-identity-{}-{}",
+            std::process::id(),
+            unix_timestamp()
+        ));
+        let migrated = "BZG-54842A525D2A47A5BEB2CBD7";
+        let first = get_or_create_device_id_at(&fixture_root, Some(migrated))
+            .expect("migrate the previous device identity");
+        assert_eq!(first, migrated);
+        let second =
+            get_or_create_device_id_at(&fixture_root, Some("BZG-AAAAAAAAAAAAAAAAAAAAAAAA"))
+                .expect("reuse the persisted device identity");
+        assert_eq!(
+            second, migrated,
+            "a later candidate must never replace the installation identity"
+        );
+
+        let generated_root = fixture_root.join("fresh-installation");
+        let generated = get_or_create_device_id_at(&generated_root, None)
+            .expect("create a deterministic identity from the installation seed");
+        fs::remove_file(generated_root.join(DEVICE_ID_FILENAME))
+            .expect("remove only the derived fixture identity");
+        let regenerated = get_or_create_device_id_at(&generated_root, None)
+            .expect("derive the same identity from the persisted installation seed");
+        assert_eq!(generated, regenerated);
+
+        let _ = fs::remove_dir_all(fixture_root);
+    }
+
+    #[test]
+    fn invoice_share_file_is_reused_without_duplicates() {
+        let fixture_root = std::env::temp_dir().join(format!(
+            "bezgrow-invoice-share-{}-{}",
+            std::process::id(),
+            unix_timestamp()
+        ));
+        let first = prepare_invoice_share_at(
+            &fixture_root,
+            "E2E-Invoice-00005.pdf",
+            b"%PDF-1.7 E2E first",
+        )
+        .expect("prepare the first local invoice PDF");
+        let second = prepare_invoice_share_at(
+            &fixture_root,
+            "E2E-Invoice-00005.pdf",
+            b"%PDF-1.7 E2E replacement",
+        )
+        .expect("reuse the predictable invoice PDF path");
+        assert_eq!(first.path, second.path);
+        assert_eq!(
+            fs::read(&second.path).expect("read the reusable invoice PDF"),
+            b"%PDF-1.7 E2E replacement"
+        );
+        assert_eq!(
+            fs::read_dir(&fixture_root)
+                .expect("read invoice share fixture")
+                .filter_map(Result::ok)
+                .filter(
+                    |entry| entry.path().extension().and_then(|value| value.to_str())
+                        == Some("pdf")
+                )
+                .count(),
+            1,
+            "a repeated share attempt must not create another PDF"
+        );
+        assert!(prepare_invoice_share_at(&fixture_root, "invalid.pdf", b"not-a-pdf").is_err());
+        assert!(!fixture_root.join(".E2E-Invoice-00005.pdf.tmp").exists());
+        let _ = fs::remove_dir_all(fixture_root);
+    }
+
+    #[test]
     fn native_backup_snapshot_and_restore_preserve_authoritative_data() {
         let fixture_root = std::env::temp_dir().join(format!(
             "bezgrow-backup-restore-{}-{}",
@@ -3154,7 +3430,9 @@ pub fn run() {
             store_secret,
             read_secret,
             delete_secret,
+            desktop_get_or_create_device_id,
             desktop_save_file,
+            desktop_prepare_invoice_share,
             desktop_save_invoice_pdf,
             desktop_pick_business_logo,
             desktop_remove_business_logo,

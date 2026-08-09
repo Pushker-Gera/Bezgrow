@@ -168,7 +168,7 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
     async function handleLogout() {
         clearWorkspaceBootstrapCache()
         await clearDesktopSession()
-        router.replace("/login")
+        router.replace("/offline?reason=logged_out&next=%2Fdashboard")
     }
 
     if (desktopDatabase.status === "initializing" || desktopDatabase.status === "database-ready" || desktopDatabase.status === "license-valid") {

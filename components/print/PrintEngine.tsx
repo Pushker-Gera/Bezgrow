@@ -16,7 +16,7 @@ import {
   shareInvoicePdf,
 } from "@/lib/invoice-pdf-client"
 import { invokeTauri, isTauriRuntimeAsync, openExternalUrl } from "@/lib/desktop/tauri"
-import { saveDesktopBytes } from "@/lib/desktop-file-export"
+import { prepareDesktopInvoiceShare, saveDesktopBytes, type DesktopSavedFile } from "@/lib/desktop-file-export"
 import { defaultPrintSettings, persistPrintSettings, saveStoredPrintSettings } from "@/components/print/settings/defaults"
 import type { PrintFormat, PrintInvoice, PrintSettings } from "@/components/print/types"
 import { getReprintHistory, rememberReprint } from "@/components/print/utils"
@@ -43,7 +43,16 @@ type ShareDialogState = {
   email: string
   busy: boolean
   error: string
+  preparedFile?: DesktopSavedFile
 }
+
+type DesktopPrintResult = {
+  status: "completed" | "cancelled" | "dialog_opened"
+}
+
+const PRINT_ROOT_ID = "bezgrow-invoice-print-root"
+const PRINT_COMPLETION_TIMEOUT_MS = 60_000
+const ASSET_READY_TIMEOUT_MS = 12_000
 
 export function PrintEngine({
   invoice,
@@ -70,6 +79,7 @@ export function PrintEngine({
   const [shareDialog, setShareDialog] = useState<ShareDialogState | null>(null)
   const requestedShareHandled = useRef(false)
   const requestedPrintHandled = useRef(false)
+  const printInFlight = useRef(false)
 
   const effectiveInvoice = useMemo<PrintInvoice>(() => {
     const terms = termsText
@@ -93,6 +103,11 @@ export function PrintEngine({
     }
   }, [format])
 
+  useEffect(() => () => {
+    document.getElementById(PRINT_ROOT_ID)?.remove()
+    document.body.classList.remove("dedicated-print-active")
+  }, [])
+
   function updateSettings(next: Partial<PrintSettings>) {
     const updated = { ...settings, ...next }
     setSettings(updated)
@@ -114,6 +129,75 @@ export function PrintEngine({
       .replaceAll("<", "&lt;")
       .replaceAll(">", "&gt;")
       .replaceAll("\"", "&quot;")
+  }
+
+  function withBoundedTimeout<T>(promise: Promise<T>, timeoutMs: number, message: string) {
+    let timeoutId: ReturnType<typeof globalThis.setTimeout> | undefined
+    const timeout = new Promise<never>((_, reject) => {
+      timeoutId = globalThis.setTimeout(() => reject(new Error(message)), timeoutMs)
+    })
+    return Promise.race([promise, timeout]).finally(() => {
+      if (timeoutId !== undefined) globalThis.clearTimeout(timeoutId)
+    })
+  }
+
+  function nextPaint() {
+    return new Promise<void>((resolve) => {
+      requestAnimationFrame(() => requestAnimationFrame(() => resolve()))
+    })
+  }
+
+  async function waitForPrintAssets(root: HTMLElement) {
+    const images = Array.from(root.querySelectorAll("img"))
+    await withBoundedTimeout(
+      Promise.all(images.map(async (image) => {
+        if (!image.complete) {
+          await new Promise<void>((resolve, reject) => {
+            image.addEventListener("load", () => resolve(), { once: true })
+            image.addEventListener("error", () => reject(new Error("The business logo could not be loaded for printing.")), { once: true })
+          })
+        }
+        if (!image.naturalWidth || !image.naturalHeight) {
+          throw new Error("The business logo is empty or invalid, so printing was stopped.")
+        }
+        await image.decode?.().catch(() => undefined)
+      })),
+      ASSET_READY_TIMEOUT_MS,
+      "Invoice images did not finish loading. Printing was stopped before opening the system dialog."
+    )
+    if (document.fonts?.ready) {
+      await withBoundedTimeout(
+        document.fonts.ready.then(() => undefined),
+        ASSET_READY_TIMEOUT_MS,
+        "Invoice fonts did not finish loading. Printing was stopped before opening the system dialog."
+      )
+    }
+    await nextPaint()
+  }
+
+  async function prepareDedicatedPrintRoot() {
+    const sourcePaper = document.querySelector<HTMLElement>(".print-preview-stage .invoice-paper")
+    if (!sourcePaper) throw new Error("The invoice print document is not ready yet.")
+
+    document.getElementById(PRINT_ROOT_ID)?.remove()
+    const root = document.createElement("section")
+    root.id = PRINT_ROOT_ID
+    root.className = `invoice-native-print-root print-format-${format} font-${settings.fontSize} margin-${settings.margins} ${settings.blackAndWhite ? "bw-mode" : ""}`
+    root.dataset.printFormat = format
+    root.dataset.thermalWidth = settings.thermalWidth === "58mm" ? "58mm" : "80mm"
+    root.setAttribute("aria-hidden", "true")
+    root.appendChild(sourcePaper.cloneNode(true))
+    document.body.classList.add("dedicated-print-active")
+    document.body.appendChild(root)
+
+    const paper = root.querySelector<HTMLElement>(".invoice-paper")
+    if (!paper || !paper.textContent?.trim() || !paper.querySelector("table, .thermal-table")) {
+      root.remove()
+      document.body.classList.remove("dedicated-print-active")
+      throw new Error("The invoice print document is empty. Printing was stopped before opening the system dialog.")
+    }
+    await waitForPrintAssets(root)
+    return root
   }
 
   function printWindowOverrides() {
@@ -315,10 +399,10 @@ export function PrintEngine({
     const frame = document.createElement("iframe")
     frame.setAttribute("title", "Invoice print")
     frame.style.position = "fixed"
-    frame.style.right = "0"
-    frame.style.bottom = "0"
-    frame.style.width = "0"
-    frame.style.height = "0"
+    frame.style.left = "-10000px"
+    frame.style.top = "0"
+    frame.style.width = "1px"
+    frame.style.height = "1px"
     frame.style.border = "0"
     frame.style.opacity = "0"
     frame.style.pointerEvents = "none"
@@ -328,34 +412,62 @@ export function PrintEngine({
 
     if (!frameDocument) {
       frame.remove()
-      return false
+      return Promise.reject(new Error("The isolated browser print document could not be created."))
     }
 
-    frame.contentWindow?.addEventListener("afterprint", () => frame.remove(), { once: true })
-    window.setTimeout(() => {
-      if (frame.parentNode) frame.remove()
-    }, 60000)
+    return new Promise<"completed" | "timeout">((resolve) => {
+      let settled = false
+      const finish = (outcome: "completed" | "timeout") => {
+        if (settled) return
+        settled = true
+        resolve(outcome)
+        const cleanupDelay = outcome === "completed" ? 1_000 : 5 * 60_000
+        globalThis.setTimeout(() => frame.remove(), cleanupDelay)
+      }
+      frame.contentWindow?.addEventListener("afterprint", () => finish("completed"), { once: true })
+      globalThis.setTimeout(() => finish("timeout"), PRINT_COMPLETION_TIMEOUT_MS)
+      frameDocument.open()
+      frameDocument.write(html)
+      frameDocument.close()
+    })
+  }
 
-    frameDocument.open()
-    frameDocument.write(html)
-    frameDocument.close()
-    return true
+  function createAfterPrintWaiter() {
+    let timeoutId: ReturnType<typeof globalThis.setTimeout> | undefined
+    let settled = false
+    let resolvePromise: (value: "closed" | "timeout") => void = () => undefined
+    const onAfterPrint = () => {
+      if (settled) return
+      settled = true
+      if (timeoutId !== undefined) globalThis.clearTimeout(timeoutId)
+      resolvePromise("closed")
+    }
+    const promise = new Promise<"closed" | "timeout">((resolve) => {
+      resolvePromise = resolve
+      window.addEventListener("afterprint", onAfterPrint, { once: true })
+      timeoutId = globalThis.setTimeout(() => {
+        if (settled) return
+        settled = true
+        window.removeEventListener("afterprint", onAfterPrint)
+        resolve("timeout")
+      }, PRINT_COMPLETION_TIMEOUT_MS)
+    })
+    return {
+      promise,
+      cancel() {
+        if (settled) return
+        settled = true
+        if (timeoutId !== undefined) globalThis.clearTimeout(timeoutId)
+        window.removeEventListener("afterprint", onAfterPrint)
+      },
+    }
   }
 
   async function prepareCurrentDocumentForPrint() {
-    const images = Array.from(document.images)
-    await Promise.all(images.map((image) => {
-      if (image.complete) return Promise.resolve()
-      return new Promise<void>((resolve) => {
-        image.addEventListener("load", () => resolve(), { once: true })
-        image.addEventListener("error", () => resolve(), { once: true })
-      })
-    }))
-    await document.fonts?.ready?.catch(() => undefined)
-
-    if (format !== "thermal") return
-    const paper = document.querySelector<HTMLElement>(".print-preview-stage .invoice-paper")
-    if (!paper) return
+    const root = await prepareDedicatedPrintRoot()
+    if (format !== "thermal") return root
+    const paper = root.querySelector<HTMLElement>(".invoice-paper")
+    if (!paper) throw new Error("The thermal print document is not ready yet.")
 
     const probe = document.createElement("div")
     probe.style.cssText = "position:absolute;visibility:hidden;pointer-events:none;width:100mm;height:0"
@@ -375,18 +487,26 @@ export function PrintEngine({
       ".print-thermal { min-height: 0 !important; }"
     document.getElementById(style.id)?.remove()
     document.head.appendChild(style)
+    await nextPaint()
+    return root
   }
 
-  function validatePrintableLayout() {
-    const paper = document.querySelector<HTMLElement>(".print-preview-stage .invoice-paper")
+  function validatePrintableLayout(root: HTMLElement) {
+    const paper = root.querySelector<HTMLElement>(".invoice-paper")
     if (!paper) return "The isolated invoice preview is not ready yet."
+    const rootRect = root.getBoundingClientRect()
+    const paperRect = paper.getBoundingClientRect()
+    if (rootRect.width <= 1 || rootRect.height <= 1 || paperRect.width <= 1 || paperRect.height <= 1) {
+      return "The isolated invoice print root has no printable dimensions."
+    }
+    if (!paper.textContent?.trim()) return "The invoice print root is empty."
     if (Array.from(paper.querySelectorAll("img")).some((image) => !image.complete || image.naturalWidth === 0)) {
       return "The business logo has not finished loading. Wait a moment and try again."
     }
     if (paper.scrollWidth > paper.clientWidth + 2) {
       return `${formatLabels[format]} has horizontal overflow. Printing was stopped to avoid clipping.`
     }
-    const capacityMm = format === "a4" ? 297 : format === "half-compact" ? 210 : format === "half-top" ? 148.5 : 0
+    const capacityMm = format === "half-compact" ? 210 : format === "half-top" ? 148.5 : 0
     if (capacityMm > 0) {
       const probe = document.createElement("div")
       probe.style.cssText = "position:absolute;visibility:hidden;pointer-events:none;width:100mm;height:0"
@@ -397,7 +517,6 @@ export function PrintEngine({
         return `${formatLabels[format]} cannot fit this invoice on one sheet. Choose a larger template or reduce optional print details.`
       }
     }
-    const paperRect = paper.getBoundingClientRect()
     const codes = Array.from(paper.querySelectorAll<HTMLElement>('[data-code-kind="qr"], [data-code-kind="barcode"]'))
     if (codes.some((code) => {
       const rect = code.getBoundingClientRect()
@@ -409,32 +528,17 @@ export function PrintEngine({
   }
 
   async function printInvoice() {
-    document.documentElement.dataset.printFormat = format
-    await prepareCurrentDocumentForPrint()
-    const layoutError = validatePrintableLayout()
-    if (layoutError) {
-      setNotice(layoutError)
+    if (printInFlight.current) {
+      setNotice("A print request is already active. Close the current system dialog before printing again.")
       return
     }
-    if (await isTauriRuntimeAsync()) {
-      setPendingAction("Printing")
-      setNotice("")
-      try {
-        if (publicMode) {
-          const finishPrint = () => {
-            void invokeTauri<void>("desktop_finish_print").catch(() => undefined)
-          }
-          window.addEventListener("afterprint", finishPrint, { once: true })
-          try {
-            await invokeTauri<void>("desktop_print_current_webview")
-          } catch (error) {
-            window.removeEventListener("afterprint", finishPrint)
-            finishPrint()
-            throw error
-          }
-          rememberReprint(effectiveInvoice, format)
-          setNotice("System print dialog opened. Printing is complete only after you confirm it in the system dialog.")
-        } else {
+    printInFlight.current = true
+    setPendingAction("Printing")
+    setNotice("")
+    try {
+      document.documentElement.dataset.printFormat = format
+      const desktopRuntime = await isTauriRuntimeAsync()
+      if (desktopRuntime && !publicMode) {
           const printJobId = crypto.randomUUID()
           window.localStorage.setItem(`bezgrow.invoice-print-job.${printJobId}`, JSON.stringify({
             invoiceId: invoice.id,
@@ -443,37 +547,59 @@ export function PrintEngine({
             terms: effectiveInvoice.terms,
             createdAt: Date.now(),
           }))
-          await invokeTauri<void>("desktop_open_invoice_print_window", {
-            invoiceId: invoice.id,
-            format,
-            printJobId,
-          })
+          await withBoundedTimeout(
+            invokeTauri<void>("desktop_open_invoice_print_window", { invoiceId: invoice.id, format, printJobId }),
+            15_000,
+            "The isolated invoice print window did not open in time."
+          )
           setNotice("Isolated print preview opened. Bezgrow will show the system print dialog after its physical-size check passes.")
-        }
-      } catch (error) {
-        setNotice(error instanceof Error ? error.message : "The system print dialog could not be opened.")
-      } finally {
-        setPendingAction("")
+          return
       }
-      return
-    }
 
-    const printDocument = document.querySelector(".print-preview-stage .print-document")
+      const printRoot = await prepareCurrentDocumentForPrint()
+      const layoutError = validatePrintableLayout(printRoot)
+      if (layoutError) throw new Error(layoutError)
 
-    if (!printDocument) {
-      requestAnimationFrame(() => window.print())
-      return
-    }
+      if (desktopRuntime) {
+        const waiter = createAfterPrintWaiter()
+        try {
+          const nativeResult = await withBoundedTimeout(
+            invokeTauri<DesktopPrintResult>("desktop_print_current_webview"),
+            PRINT_COMPLETION_TIMEOUT_MS,
+            "The system print dialog did not complete within 60 seconds. Bezgrow cleared the loading state; close any remaining print window before retrying."
+          )
+          if (nativeResult.status === "cancelled") {
+            waiter.cancel()
+            setNotice("Printing was cancelled. No completed print-dialog entry was recorded.")
+            return
+          }
+          const completion = nativeResult.status === "completed" ? "closed" : await waiter.promise
+          if (completion === "timeout") {
+            throw new Error("The system print dialog did not report completion within 60 seconds. Bezgrow cleared the loading state; check the printer and close any remaining dialog before retrying.")
+          }
+          rememberReprint(effectiveInvoice, format)
+          setHistory(getReprintHistory().filter((entry) => entry.invoiceId === invoice.id))
+          setNotice("The system print dialog closed. Check the physical printer output before reprinting.")
+        } finally {
+          waiter.cancel()
+          await invokeTauri<void>("desktop_finish_print").catch(() => undefined)
+        }
+        return
+      }
 
-    const html = printableHtml(printDocument.innerHTML)
-    if (printFromHiddenFrame(html)) {
+      const completion = await printFromHiddenFrame(printableHtml(printRoot.innerHTML))
+      if (completion === "timeout") {
+        throw new Error("The browser print dialog did not report completion within 60 seconds. The loading state was cleared; close any remaining dialog before retrying.")
+      }
       rememberReprint(effectiveInvoice, format)
       setHistory(getReprintHistory().filter((entry) => entry.invoiceId === invoice.id))
-      setNotice("Print dialog opened using the invoice stored on this device.")
-      return
+      setNotice("The browser print dialog closed. Check the physical printer output before reprinting.")
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : "The system print dialog could not be completed.")
+    } finally {
+      printInFlight.current = false
+      setPendingAction("")
     }
-
-    requestAnimationFrame(() => window.print())
   }
 
   function resultNotice(action: string, result: { filename: string; path?: string }) {
@@ -581,6 +707,53 @@ export function PrintEngine({
     if (result) setNotice(resultNotice("PDF saved", result))
   }
 
+  async function ensurePreparedShareFile(dialog: ShareDialogState) {
+    if (dialog.preparedFile) return dialog.preparedFile
+    const prepared = await prepareDesktopInvoiceShare(dialog.filename, dialog.bytes)
+    if (prepared) {
+      setShareDialog((current) => current ? { ...current, preparedFile: prepared } : null)
+    }
+    return prepared
+  }
+
+  async function sharePreparedAttachment(dialog: ShareDialogState) {
+    if (dialog.busy) return
+    setShareDialog({ ...dialog, busy: true, error: "" })
+    try {
+      const body = dialog.bytes.buffer.slice(dialog.bytes.byteOffset, dialog.bytes.byteOffset + dialog.bytes.byteLength) as ArrayBuffer
+      const file = new File([body], dialog.filename, { type: "application/pdf" })
+      const canShareFiles = Boolean(navigator.share) && (!navigator.canShare || navigator.canShare({ files: [file] }))
+      if (canShareFiles) {
+        await navigator.share({
+          title: `Invoice ${invoice.invoiceNumber}`,
+          text: createInvoiceShareText(preparedShareInput(dialog)),
+          files: [file],
+        })
+        setNotice("The invoice PDF was handed to the OS share sheet. The final recipient and Send action remain under your control.")
+      } else {
+        const prepared = await ensurePreparedShareFile(dialog)
+        if (prepared) {
+          await invokeTauri<void>("desktop_reveal_file", { path: prepared.path })
+          setNotice(`Direct attachment sharing is unavailable. The reusable PDF is ready at ${prepared.path}. Attach it in WhatsApp, then press Send yourself.`)
+        } else {
+          const saved = await saveDesktopBytes(dialog.filename, dialog.bytes, "pdf")
+          if (saved) setNotice("Direct attachment sharing is unavailable. The PDF was downloaded; attach it in WhatsApp, then press Send yourself.")
+        }
+      }
+      setShareDialog((current) => current ? { ...current, busy: false, error: "" } : null)
+    } catch (error) {
+      if (error instanceof DOMException && error.name === "AbortError") {
+        setShareDialog((current) => current ? { ...current, busy: false } : null)
+        return
+      }
+      setShareDialog((current) => current ? {
+        ...current,
+        busy: false,
+        error: error instanceof Error ? error.message : "The local PDF could not be shared.",
+      } : null)
+    }
+  }
+
   async function openPreparedMessage(dialog: ShareDialogState) {
     if (dialog.busy) return
     const phone = normalizeWhatsAppPhone(dialog.phone)
@@ -596,16 +769,33 @@ export function PrintEngine({
     setShareDialog({ ...dialog, phone: phone || dialog.phone, email: email || dialog.email, busy: true, error: "" })
     try {
       if (dialog.channel === "whatsapp") {
+        let prepared = await ensurePreparedShareFile(dialog)
+        if (!prepared && !(await isTauriRuntimeAsync())) {
+          prepared = await saveDesktopBytes(dialog.filename, dialog.bytes, "pdf")
+          if (!prepared) {
+            setShareDialog((current) => current ? { ...current, busy: false } : null)
+            return
+          }
+        }
+        if (prepared && await isTauriRuntimeAsync()) {
+          await invokeTauri<void>("desktop_reveal_file", { path: prepared.path })
+        }
         const url = createWhatsAppInvoiceUrl(preparedShareInput({ ...dialog, phone }))
         if (!url) throw new Error("The WhatsApp number is invalid.")
         await openExternalUrl(url)
-        setNotice("WhatsApp opened with the prepared local invoice message. Attach the saved PDF from this device.")
+        setNotice("WhatsApp opened with the professional message. Attach the already-prepared local PDF shown in the file browser, then press Send yourself. Bezgrow did not claim or attempt an automatic send.")
       } else {
         const draft = createInvoiceEmailDraft(preparedShareInput({ ...dialog, email }))
         await openExternalUrl(draft.mailtoUrl)
         setNotice("The email draft opened. Attach the saved PDF from this device.")
       }
-      setShareDialog({ ...dialog, phone: phone || dialog.phone, email: email || dialog.email, busy: false, error: "" })
+      setShareDialog((current) => current ? {
+        ...current,
+        phone: phone || current.phone,
+        email: email || current.email,
+        busy: false,
+        error: "",
+      } : null)
     } catch (error) {
       setShareDialog((current) => current ? {
         ...current,
@@ -802,6 +992,7 @@ export function PrintEngine({
               <p className="panel-eyebrow">{shareDialog.channel === "whatsapp" ? "WhatsApp Invoice" : "Email Invoice"}</p>
               <h2 id="share-dialog-title">Prepare local PDF share</h2>
               <p className="share-modal-helper">The invoice remains on this device. Bezgrow does not upload it.</p>
+              <p className="share-modal-helper">Secure online links are not enabled because the retired share control plane cannot provide a valid expiring HTTPS link. This local mode uploads nothing.</p>
             </div>
             <dl className="share-summary-grid">
               <div><dt>Invoice</dt><dd>{invoice.invoiceNumber}</dd></div>
@@ -838,6 +1029,7 @@ export function PrintEngine({
             )}
             <div className="share-modal-actions">
               <button type="button" onClick={() => void savePreparedPdf(shareDialog)} disabled={shareDialog.busy}>Save PDF</button>
+              <button type="button" onClick={() => void sharePreparedAttachment(shareDialog)} disabled={shareDialog.busy}>Share PDF with OS</button>
               <button type="button" onClick={() => void copyPreparedMessage(shareDialog)} disabled={shareDialog.busy}>
                 {shareDialog.channel === "email" ? "Copy Email Message" : "Copy prepared message"}
               </button>
@@ -897,7 +1089,13 @@ function PrintEngineStyles({ format, thermalWidth }: { format: PrintFormat; ther
       .print-format-thermal .preview-scroll { background: #111827; justify-content: center; }
       .print-document { transform-origin: top center; transition: transform .18s ease; }
       .invoice-paper, .invoice-paper * { box-sizing: border-box; }
-      .invoice-paper { position: relative; overflow: visible; background: #fff; color: #111827; font-family: Arial, Helvetica, sans-serif; box-shadow: 0 24px 90px rgba(0,0,0,.35); print-color-adjust: exact; -webkit-print-color-adjust: exact; }
+      .invoice-paper { position: relative; overflow: hidden; background: #fff; color: #111827; font-family: Arial, Helvetica, sans-serif; box-shadow: 0 24px 90px rgba(0,0,0,.35); print-color-adjust: exact; -webkit-print-color-adjust: exact; }
+      .invoice-paper > :not(.watermark), .top-half-content > :not(.watermark) { position: relative; z-index: 1; }
+      .invoice-native-print-root { position: absolute; left: -10000px; top: 0; display: block; width: 196mm; min-height: 283mm; margin: 0; padding: 0; overflow: visible; pointer-events: none; background: #fff; color: #000; }
+      .invoice-native-print-root.print-format-half-compact { width: 134mm; min-height: 196mm; }
+      .invoice-native-print-root.print-format-half-top { width: 210mm; height: 297mm; min-height: 297mm; }
+      .invoice-native-print-root.print-format-thermal { width: ${thermalPaperWidth}; min-height: 1mm; height: auto; }
+      .invoice-native-print-root > .invoice-paper { width: 100%; max-width: 100%; margin: 0; box-shadow: none; transform: none; transition: none; }
       .public-invoice-shell { display: block; height: auto; min-height: 100dvh; overflow: visible; background: #f8fafc; color: #111827; }
       .public-invoice-shell .print-preview-stage { min-height: 100dvh; background: #f8fafc; }
       .public-invoice-shell .preview-scroll { height: auto; min-height: 100dvh; overflow: visible; padding: clamp(10px, 3vw, 28px); background: #f8fafc; align-items: flex-start; }
@@ -961,7 +1159,7 @@ function PrintEngineStyles({ format, thermalWidth }: { format: PrintFormat; ther
       .generated-by-footer strong { color: #111827; font-size: 10px; font-weight: 900; letter-spacing: .03em; }
       .generated-by-footer span { margin-top: 2px; font-weight: 500; }
       .generated-by-footer.compact { padding-top: 6px; font-size: 8px; }
-      .codes-block { display: flex; gap: 16px; align-items: flex-end; max-width: 100%; overflow: visible; }
+      .codes-block { display: flex; flex-wrap: wrap; gap: 16px; align-items: flex-end; max-width: 100%; min-width: 0; overflow: hidden; }
       .invoice-code { min-width: 0; margin: 0; display: grid; justify-items: center; gap: 4px; break-inside: avoid; page-break-inside: avoid; }
       .invoice-code svg { display: block; max-width: 100%; height: auto; color: #000; background: #fff; }
       .invoice-code figcaption { color: #475569; font-size: 7.5px; font-weight: 800; letter-spacing: .04em; text-align: center; }
@@ -970,7 +1168,12 @@ function PrintEngineStyles({ format, thermalWidth }: { format: PrintFormat; ther
       .signature-grid { flex: 1; display: grid; grid-template-columns: 1fr 1fr; gap: 18px; }
       .signature-grid div { height: 34px; border-bottom: 1px solid #64748b; display: flex; align-items: flex-end; justify-content: center; color: #64748b; font-size: 9px; }
       .page-number { position: absolute; bottom: 6mm; right: 12mm; color: #64748b; font-size: 9px; }
-      .watermark { position: absolute; inset: 0; display: grid; place-items: center; font-size: 64px; font-weight: 900; color: rgba(15,23,42,.05); transform: rotate(-28deg); pointer-events: none; }
+      .watermark { position: absolute !important; inset: 0; z-index: 0 !important; display: grid; place-items: center; overflow: hidden; pointer-events: none; contain: paint; }
+      .watermark span { display: block; max-width: 72%; background: transparent !important; color: rgba(15,23,42,.055); font-size: 34px; font-weight: 900; line-height: 1.05; text-align: center; overflow-wrap: anywhere; transform: rotate(-20deg); transform-origin: center; }
+      .print-a4 .watermark span { max-width: 68%; font-size: 42px; }
+      .print-half-compact .watermark span { max-width: 70%; font-size: 25px; }
+      .print-half-top .watermark span { max-width: 68%; font-size: 30px; }
+      .print-thermal .watermark span { max-width: 76%; font-size: 15px; transform: rotate(-14deg); }
       .print-a4 .print-header-block { gap: 16px; padding-bottom: 12px; }
       .print-a4 .brand-block h1 { font-size: 31px; }
       .print-a4 .brand-block p, .print-a4 .invoice-meta-card p, .print-a4 .info-card p, .print-a4 .terms-card p { font-size: 11.5px; }
@@ -1084,7 +1287,15 @@ function PrintEngineStyles({ format, thermalWidth }: { format: PrintFormat; ther
       .font-large .invoice-paper { font-size: 108%; }
       .margin-compact .print-a4 { padding: 5mm; }
       .margin-wide .print-a4 { padding: 9mm; }
-      .bw-mode .invoice-paper, .bw-mode .invoice-paper * { color: #000 !important; background-color: #fff !important; border-color: #000 !important; }
+      .bw-mode .invoice-paper { color: #000 !important; background: #fff !important; border-color: #000 !important; }
+      .bw-mode .invoice-paper :is(.invoice-meta-card, .info-card, .terms-card, .total-card, .payment-grid div, .compact-invoice-meta, .compact-customer-strip, .compact-terms, .compact-totals, .half-top-meta, .half-top-customer div, .half-top-words, .half-top-totals) { color: #000 !important; background: #fff !important; border-color: #000 !important; }
+      .bw-mode .invoice-paper :is(.item-table, .compact-item-table, .half-top-items, .thermal-table) th { color: #fff !important; background: #000 !important; border-color: #000 !important; }
+      .bw-mode .invoice-paper :is(td, tr, p, span, strong, small, h1, h2, h3, figcaption, .print-eyebrow) { border-color: #000 !important; }
+      .bw-mode .invoice-paper :is(p, small, figcaption, .print-eyebrow, .generated-by-footer, .thermal-generated-footer) { color: #202020 !important; }
+      .bw-mode .invoice-paper :is(.grand-total, .compact-grand, .half-top-grand, .invoice-meta-card h2, .compact-invoice-meta strong, .half-top-meta strong) { color: #000 !important; }
+      .bw-mode .invoice-paper .watermark, .bw-mode .invoice-paper .watermark span { background: transparent !important; border-color: transparent !important; color: rgba(0,0,0,.055) !important; }
+      .bw-mode .invoice-paper svg { filter: none !important; transform: none; }
+      .bw-mode .invoice-paper :is(.brand-logo, .compact-brand-logo, .half-top-brand-logo, .thermal-brand-logo) img { filter: grayscale(1) contrast(1.08) !important; transform: none !important; }
       .thermal-center { text-align: center; }
       .thermal-brand-logo { width: 36px; height: 36px; margin: 0 auto 5px; border: 1px solid #bae6fd; border-radius: 8px; font-family: Arial, Helvetica, sans-serif; font-size: 17px; }
       .print-thermal h1 { margin: 0 0 4px; font-size: 17px; line-height: 1.15; }
@@ -1134,7 +1345,7 @@ function PrintEngineStyles({ format, thermalWidth }: { format: PrintFormat; ther
       .share-modal-actions button.primary { border-color: transparent; background: #fff; color: #020617; }
       .share-modal-actions button.danger { border-color: rgba(248,113,113,.3); background: rgba(239,68,68,.12); color: #fecaca; }
       .share-modal-actions button:disabled { cursor: wait; opacity: .55; }
-      @media (max-width: 900px) {
+      @media screen and (max-width: 900px) {
         .enterprise-print-shell { grid-template-columns: 1fr; }
         .print-control-panel { display: none; }
         .mobile-toolbar { display: grid; grid-template-columns: 1fr; }
@@ -1239,11 +1450,10 @@ function PrintEngineStyles({ format, thermalWidth }: { format: PrintFormat; ther
         @page half-top { size: A4 portrait; margin: 0; }
         @page thermal { size: ${printPageSize}; margin: 0; }
         html, body { width: ${printPaperWidth} !important; max-width: ${printPaperWidth} !important; min-height: 0 !important; margin: 0 !important; padding: 0 !important; overflow: visible !important; background: #fff !important; color: #000 !important; }
-        body * { visibility: hidden !important; }
-        .print-document, .print-document *, .invoice-paper, .invoice-paper * { visibility: visible !important; }
+        body.dedicated-print-active > *:not(#bezgrow-invoice-print-root) { display: none !important; }
         .no-print { display: none !important; }
-        .enterprise-print-shell, .print-preview-stage, .preview-scroll { position: static !important; display: block !important; width: ${printPaperWidth} !important; max-width: ${printPaperWidth} !important; min-width: 0 !important; height: auto !important; min-height: 0 !important; overflow: visible !important; padding: 0 !important; margin: 0 !important; background: #fff !important; color: #000 !important; transform: none !important; }
-        .print-document { position: static !important; display: block !important; width: ${printPaperWidth} !important; max-width: ${printPaperWidth} !important; min-width: 0 !important; height: ${printPaperHeight} !important; min-height: 0 !important; overflow: visible !important; padding: 0 !important; margin: 0 !important; background: #fff !important; color: #000 !important; transform: none !important; transition: none !important; }
+        #bezgrow-invoice-print-root { position: static !important; left: auto !important; top: auto !important; display: block !important; width: ${printPaperWidth} !important; max-width: ${printPaperWidth} !important; min-width: 0 !important; height: ${printPaperHeight} !important; min-height: 0 !important; overflow: visible !important; padding: 0 !important; margin: 0 !important; background: #fff !important; color: #000 !important; pointer-events: none !important; transform: none !important; }
+        #bezgrow-invoice-print-root, #bezgrow-invoice-print-root * { visibility: visible !important; }
         .invoice-paper { box-shadow: none !important; margin: 0 !important; overflow: visible !important; background: #fff !important; color: #000 !important; break-inside: auto; page-break-inside: auto; }
         .print-a4 { page: auto !important; width: 196mm !important; max-width: 196mm !important; min-height: 283mm !important; padding: 6mm !important; }
         .print-a4 .total-grid { grid-template-columns: minmax(0, 1fr) 62mm !important; }
@@ -1267,11 +1477,7 @@ function PrintEngineStyles({ format, thermalWidth }: { format: PrintFormat; ther
         .item-table th { position: static !important; }
         html[data-print-format="thermal"], html[data-print-format="thermal"] body { width: ${thermalPaperWidth} !important; max-width: ${thermalPaperWidth} !important; height: auto !important; min-height: 0 !important; background: #fff !important; }
         html[data-print-format="thermal"] .invoice-paper { page: thermal !important; width: ${thermalPaperWidth} !important; max-width: ${thermalPaperWidth} !important; min-height: 0 !important; margin: 0 !important; padding: ${thermalWidth === "58mm" ? "2mm" : "3mm 4mm"} !important; box-shadow: none !important; background: #fff !important; color: #000 !important; }
-        html[data-print-format="thermal"] .enterprise-print-shell,
-        html[data-print-format="thermal"] .print-preview-stage,
-        html[data-print-format="thermal"] .preview-scroll,
-        html[data-print-format="thermal"] .print-document { width: ${thermalPaperWidth} !important; max-width: ${thermalPaperWidth} !important; height: auto !important; min-height: 0 !important; background: #fff !important; padding: 0 !important; margin: 0 !important; overflow: visible !important; justify-content: flex-start !important; }
-        html[data-print-format="thermal"] .print-document { position: static !important; display: block !important; }
+        html[data-print-format="thermal"] #bezgrow-invoice-print-root { width: ${thermalPaperWidth} !important; max-width: ${thermalPaperWidth} !important; height: auto !important; min-height: 0 !important; background: #fff !important; padding: 0 !important; margin: 0 !important; overflow: visible !important; }
       }
     `}</style>
   )

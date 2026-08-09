@@ -231,6 +231,12 @@
           "markdownDescription": "Enables the desktop_finish_print command without any pre-configured scope."
         },
         {
+          "description": "Enables the desktop_get_or_create_device_id command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-desktop-get-or-create-device-id",
+          "markdownDescription": "Enables the desktop_get_or_create_device_id command without any pre-configured scope."
+        },
+        {
           "description": "Enables the desktop_open_file command without any pre-configured scope.",
           "type": "string",
           "const": "allow-desktop-open-file",
@@ -247,6 +253,12 @@
           "type": "string",
           "const": "allow-desktop-pick-business-logo",
           "markdownDescription": "Enables the desktop_pick_business_logo command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the desktop_prepare_invoice_share command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-desktop-prepare-invoice-share",
+          "markdownDescription": "Enables the desktop_prepare_invoice_share command without any pre-configured scope."
         },
         {
           "description": "Enables the desktop_prepare_update command without any pre-configured scope.",
@@ -399,6 +411,12 @@
           "markdownDescription": "Denies the desktop_finish_print command without any pre-configured scope."
         },
         {
+          "description": "Denies the desktop_get_or_create_device_id command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-desktop-get-or-create-device-id",
+          "markdownDescription": "Denies the desktop_get_or_create_device_id command without any pre-configured scope."
+        },
+        {
           "description": "Denies the desktop_open_file command without any pre-configured scope.",
           "type": "string",
           "const": "deny-desktop-open-file",
@@ -415,6 +433,12 @@
           "type": "string",
           "const": "deny-desktop-pick-business-logo",
           "markdownDescription": "Denies the desktop_pick_business_logo command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the desktop_prepare_invoice_share command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-desktop-prepare-invoice-share",
+          "markdownDescription": "Denies the desktop_prepare_invoice_share command without any pre-configured scope."
         },
         {
           "description": "Denies the desktop_prepare_update command without any pre-configured scope.",

@@ -125,6 +125,17 @@ export async function saveDesktopBytes(
   }
 }
 
+export async function prepareDesktopInvoiceShare(
+  filename: string,
+  bytes: Uint8Array
+): Promise<DesktopSavedFile | null> {
+  if (!(await isTauriRuntimeAsync())) return null
+  return invokeTauri<DesktopSavedFile>("desktop_prepare_invoice_share", {
+    filename,
+    bytes: Array.from(bytes),
+  })
+}
+
 export async function exportCsv<Row>(
   filename: string,
   columns: CsvColumn<Row>[],

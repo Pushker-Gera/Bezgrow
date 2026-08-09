@@ -115,6 +115,7 @@ const license = read("lib/offline/local/license.ts")
 const shareClient = read("lib/secure-invoice-share-client.ts")
 const updateCoordinator = read("components/desktop/DesktopUpdateCoordinator.tsx")
 const loginPage = read("app/login/page.tsx")
+const licensePage = read("app/offline/page.tsx")
 
 assert.doesNotMatch(bootstrap, /fetch\s*\(/, "Offline bootstrap must not hydrate ERP data from the network.")
 assert.doesNotMatch(sync, /fetch\s*\(/, "Retired cloud synchronization must not make network calls.")
@@ -129,8 +130,8 @@ assert.doesNotMatch(license, /operating_system:/, "Device check-ins must not sen
 assert.match(license, /verifyStoredLicenseRows/, "Stored license rows must be signature-verified before policy evaluation.")
 assert.doesNotMatch(updateCoordinator, /CHECK_INTERVAL_MS|setInterval\([^\n]*checkForUpdate|setTimeout\([^\n]*checkForUpdate|addEventListener\("online"/, "Normal desktop startup must not make an implicit control-plane request.")
 assert.match(updateCoordinator, /addEventListener\(UPDATE_CHECK_EVENT, handleCheck\)/, "Desktop release checks must remain explicitly user-triggered.")
-assert.match(loginPage, /Continue with Verified Local License/, "Offline logout/reopen must retain a locally verified entry path.")
-assert.match(loginPage, /localLicenseSnapshot\(organizationId\)[\s\S]*markDesktopSessionActive\(\)/, "The offline entry path must verify the signed local license before restoring access.")
+assert.match(loginPage, /\/offline\?reason=logged_out/, "Offline logout/reopen must enter the local licence lifecycle instead of cloud login.")
+assert.match(licensePage, /localLicenseSnapshot[\s\S]*restoreLicensedWorkspaceContext\(\)[\s\S]*markDesktopSessionActive\(\)/, "The licence screen must verify the signed local licence before restoring access.")
 
 const clientSecretViolations = runtimeFiles.filter((filename) => {
   const source = read(filename)

@@ -15,6 +15,7 @@ import {
     Tooltip,
     XAxis,
     YAxis,
+    type PieLabelRenderProps,
 } from "recharts"
 import { apiFetch } from "@/lib/api/client-fetch"
 import { getOrganizationId } from "@/lib/getOrganization"
@@ -53,7 +54,37 @@ const emptyState: AnalyticsState = {
 }
 
 const chartColors = ["#38bdf8", "#34d399", "#fbbf24", "#fb7185", "#a78bfa"]
+const statusColors: Record<string, string> = {
+    Healthy: "#34d399",
+    "Low Stock": "#fbbf24",
+    Valid: "#34d399",
+    "Expiring Soon": "#fbbf24",
+    Expired: "#fb7185",
+}
 const weekLabels = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
+const darkTooltipProps = {
+    contentStyle: {
+        background: "#050606",
+        border: "1px solid #64748b",
+        borderRadius: 8,
+        color: "#f8fafc",
+        boxShadow: "0 12px 36px rgba(0,0,0,.55)",
+    },
+    labelStyle: { color: "#ffffff", fontWeight: 800 },
+    itemStyle: { color: "#f8fafc" },
+    wrapperStyle: { zIndex: 60, maxWidth: "calc(100% - 12px)", pointerEvents: "none" as const },
+    cursor: { fill: "rgba(148,163,184,.12)", stroke: "rgba(226,232,240,.3)" },
+    allowEscapeViewBox: { x: false, y: false },
+}
+
+function colorForCategory(name: string, index: number) {
+    return statusColors[name] || chartColors[index % chartColors.length]
+}
+
+function pieLabel({ name, percent }: PieLabelRenderProps) {
+    const percentage = Math.round(Number(percent || 0) * 100)
+    return percentage >= 5 ? `${String(name || "")}: ${percentage}%` : ""
+}
 
 function numberFrom(row: AnyRow, fields: string[]) {
     for (const field of fields) {
@@ -97,6 +128,8 @@ export default function AnalyticsPage() {
     const [notice, setNotice] = useState("")
 
     async function loadAnalytics() {
+        const controller = new AbortController()
+        const timeoutId = globalThis.setTimeout(() => controller.abort(), 15_000)
         try {
             setLoading(true)
             const orgId = await getOrganizationId()
@@ -107,10 +140,10 @@ export default function AnalyticsPage() {
             }
 
             const [productsResponse, invoicesResponse, customersResponse, ordersResponse] = await Promise.all([
-                apiFetch(`/api/products/list?${new URLSearchParams({ organization_id: orgId, limit: "500", sort: "created_at", direction: "desc" }).toString()}`, { cache: "no-store" }),
-                apiFetch(`/api/invoices/list?${new URLSearchParams({ organization_id: orgId, limit: "500", sort: "created_at", direction: "desc" }).toString()}`, { cache: "no-store" }),
-                apiFetch(`/api/customers/list?${new URLSearchParams({ organization_id: orgId, limit: "500", sort: "created_at", direction: "desc" }).toString()}`, { cache: "no-store" }),
-                apiFetch(`/api/orders/list?${new URLSearchParams({ organization_id: orgId, limit: "500" }).toString()}`, { cache: "no-store" }),
+                apiFetch(`/api/products/list?${new URLSearchParams({ organization_id: orgId, limit: "500", sort: "created_at", direction: "desc" }).toString()}`, { cache: "no-store", signal: controller.signal }),
+                apiFetch(`/api/invoices/list?${new URLSearchParams({ organization_id: orgId, limit: "500", sort: "created_at", direction: "desc" }).toString()}`, { cache: "no-store", signal: controller.signal }),
+                apiFetch(`/api/customers/list?${new URLSearchParams({ organization_id: orgId, limit: "500", sort: "created_at", direction: "desc" }).toString()}`, { cache: "no-store", signal: controller.signal }),
+                apiFetch(`/api/orders/list?${new URLSearchParams({ organization_id: orgId, limit: "500" }).toString()}`, { cache: "no-store", signal: controller.signal }),
             ])
 
             const [productsResult, invoicesResult, customersResult, ordersResult] = await Promise.all([
@@ -135,8 +168,11 @@ export default function AnalyticsPage() {
                 orders: ordersResult.data || [],
             })
         } catch (error) {
-            setNotice(error instanceof Error ? error.message : "Analytics failed to load.")
+            setNotice(error instanceof DOMException && error.name === "AbortError"
+                ? "Reports did not finish loading within 15 seconds. Retry after checking the local database in Settings → Desktop Diagnostics."
+                : error instanceof Error ? error.message : "Analytics failed to load.")
         } finally {
+            globalThis.clearTimeout(timeoutId)
             setLoading(false)
         }
     }
@@ -289,8 +325,9 @@ export default function AnalyticsPage() {
                         </div>
                     </div>
                     {notice && (
-                        <div className="relative z-10 mt-5 rounded-lg border border-amber-400/20 bg-amber-400/10 px-4 py-3 text-sm text-amber-100">
-                            {notice}
+                        <div className="relative z-10 mt-5 flex flex-wrap items-center justify-between gap-3 rounded-lg border border-amber-400/20 bg-amber-400/10 px-4 py-3 text-sm text-amber-100">
+                            <span>{notice}</span>
+                            <button type="button" onClick={() => void loadAnalytics()} disabled={loading} className="min-h-10 rounded-lg border border-amber-200/25 bg-black/25 px-4 font-black text-amber-50 disabled:opacity-50">Retry reports</button>
                         </div>
                     )}
                 </section>
@@ -319,30 +356,39 @@ export default function AnalyticsPage() {
                         <section className="grid grid-cols-1 gap-6 2xl:grid-cols-[1.35fr_0.9fr]">
                             <ChartCard title="Weekly Revenue Flow" subtitle="Billing totals from live invoices">
                                 {hasWeeklyRevenue ? (
-                                    <ResponsiveContainer width="100%" height={320}>
-                                        <BarChart data={analytics.weeklyRevenue}>
-                                            <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.08)" />
-                                            <XAxis dataKey="label" stroke="#737373" />
-                                            <YAxis stroke="#737373" />
-                                            <Tooltip contentStyle={{ background: "#050606", border: "1px solid rgba(255,255,255,0.12)", borderRadius: 8 }} />
-                                            <Bar dataKey="revenue" fill="#38bdf8" radius={[8, 8, 0, 0]} />
-                                        </BarChart>
-                                    </ResponsiveContainer>
+                                    <div data-report-chart="weekly-revenue">
+                                        <ResponsiveContainer width="100%" height={320}>
+                                            <BarChart data={analytics.weeklyRevenue}>
+                                                <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.08)" />
+                                                <XAxis dataKey="label" stroke="#cbd5e1" tick={{ fill: "#e2e8f0" }} />
+                                                <YAxis stroke="#cbd5e1" tick={{ fill: "#e2e8f0" }} />
+                                                <Tooltip {...darkTooltipProps} />
+                                                <Bar dataKey="revenue" name="Revenue" fill="#38bdf8" radius={[8, 8, 0, 0]} />
+                                            </BarChart>
+                                        </ResponsiveContainer>
+                                        <ChartSummary
+                                            caption="Weekly revenue summary"
+                                            rows={analytics.weeklyRevenue.map((item) => ({ label: item.label, value: money(item.revenue) }))}
+                                        />
+                                    </div>
                                 ) : <ChartEmpty message="No invoice revenue has been recorded yet." actionHref="/dashboard/invoices/create" actionText="Create invoice" />}
                             </ChartCard>
 
                             <ChartCard title="Stock Health" subtitle="Healthy versus low-stock product mix">
                                 {hasStockPie ? (
-                                    <ResponsiveContainer width="100%" height={320}>
-                                        <PieChart>
-                                            <Pie data={analytics.stockPie} dataKey="value" nameKey="name" innerRadius={70} outerRadius={110}>
-                                                {analytics.stockPie.map((entry, index) => (
-                                                    <Cell key={entry.name} fill={chartColors[index % chartColors.length]} />
-                                                ))}
-                                            </Pie>
-                                            <Tooltip contentStyle={{ background: "#050606", border: "1px solid rgba(255,255,255,0.12)", borderRadius: 8 }} />
-                                        </PieChart>
-                                    </ResponsiveContainer>
+                                    <div data-report-chart="stock-health">
+                                        <ResponsiveContainer width="100%" height={320}>
+                                            <PieChart>
+                                                <Pie data={analytics.stockPie} dataKey="value" nameKey="name" innerRadius={62} outerRadius={96} label={pieLabel} labelLine={{ stroke: "#cbd5e1" }}>
+                                                    {analytics.stockPie.map((entry, index) => (
+                                                        <Cell key={entry.name} fill={colorForCategory(entry.name, index)} />
+                                                    ))}
+                                                </Pie>
+                                                <Tooltip {...darkTooltipProps} />
+                                            </PieChart>
+                                        </ResponsiveContainer>
+                                        <PieLegendSummary data={analytics.stockPie} />
+                                    </div>
                                 ) : <ChartEmpty message="Add products to activate stock health analytics." actionHref="/dashboard/products" actionText="Add product" />}
                             </ChartCard>
                         </section>
@@ -350,29 +396,35 @@ export default function AnalyticsPage() {
                         <section className="grid grid-cols-1 gap-6 2xl:grid-cols-2">
                             <ChartCard title="Category Value" subtitle="Inventory value by product category">
                                 {hasCategoryValue ? (
-                                    <ResponsiveContainer width="100%" height={340}>
-                                        <BarChart data={analytics.categories}>
-                                            <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.08)" />
-                                            <XAxis dataKey="name" stroke="#737373" />
-                                            <YAxis stroke="#737373" />
-                                            <Tooltip contentStyle={{ background: "#050606", border: "1px solid rgba(255,255,255,0.12)", borderRadius: 8 }} />
-                                            <Bar dataKey="value" fill="#34d399" radius={[8, 8, 0, 0]} />
-                                        </BarChart>
-                                    </ResponsiveContainer>
+                                    <div data-report-chart="category-value">
+                                        <ResponsiveContainer width="100%" height={340}>
+                                            <BarChart data={analytics.categories}>
+                                                <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.08)" />
+                                                <XAxis dataKey="name" stroke="#cbd5e1" tick={{ fill: "#e2e8f0" }} />
+                                                <YAxis stroke="#cbd5e1" tick={{ fill: "#e2e8f0" }} />
+                                                <Tooltip {...darkTooltipProps} />
+                                                <Bar dataKey="value" name="Inventory value" fill="#34d399" radius={[8, 8, 0, 0]} />
+                                            </BarChart>
+                                        </ResponsiveContainer>
+                                        <ChartSummary caption="Category inventory value summary" rows={analytics.categories.map((item) => ({ label: item.name, value: money(item.value), detail: `${item.stock} units` }))} />
+                                    </div>
                                 ) : <ChartEmpty message="No category inventory value yet." actionHref="/dashboard/products" actionText="Manage products" />}
                             </ChartCard>
 
                             <ChartCard title="Product Margin Leaders" subtitle="Top profit per unit by product">
                                 {hasProductProfit ? (
-                                    <ResponsiveContainer width="100%" height={340}>
-                                        <LineChart data={analytics.productProfit}>
-                                            <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.08)" />
-                                            <XAxis dataKey="name" stroke="#737373" />
-                                            <YAxis stroke="#737373" />
-                                            <Tooltip contentStyle={{ background: "#050606", border: "1px solid rgba(255,255,255,0.12)", borderRadius: 8 }} />
-                                            <Line type="monotone" dataKey="profit" stroke="#fbbf24" strokeWidth={3} dot={{ r: 4 }} />
-                                        </LineChart>
-                                    </ResponsiveContainer>
+                                    <div data-report-chart="product-margin">
+                                        <ResponsiveContainer width="100%" height={340}>
+                                            <LineChart data={analytics.productProfit}>
+                                                <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.08)" />
+                                                <XAxis dataKey="name" stroke="#cbd5e1" tick={{ fill: "#e2e8f0" }} />
+                                                <YAxis stroke="#cbd5e1" tick={{ fill: "#e2e8f0" }} />
+                                                <Tooltip {...darkTooltipProps} />
+                                                <Line type="monotone" dataKey="profit" name="Profit per unit" stroke="#fbbf24" strokeWidth={3} dot={{ r: 4 }} />
+                                            </LineChart>
+                                        </ResponsiveContainer>
+                                        <ChartSummary caption="Product margin summary" rows={analytics.productProfit.map((item) => ({ label: item.name, value: money(item.profit), detail: `${item.stock} in stock` }))} />
+                                    </div>
                                 ) : <ChartEmpty message="Set purchase and sale rates to see margin leaders." actionHref="/dashboard/products" actionText="Update products" />}
                             </ChartCard>
                         </section>
@@ -380,16 +432,19 @@ export default function AnalyticsPage() {
                         <section className="grid grid-cols-1 gap-6 2xl:grid-cols-[0.8fr_1.2fr]">
                             <ChartCard title="Expiry Risk" subtitle="Valid, expiring soon, and expired products">
                                 {hasExpiryPie ? (
-                                    <ResponsiveContainer width="100%" height={320}>
-                                        <PieChart>
-                                            <Pie data={analytics.expiryPie} dataKey="value" nameKey="name" outerRadius={105}>
-                                                {analytics.expiryPie.map((entry, index) => (
-                                                    <Cell key={entry.name} fill={chartColors[index % chartColors.length]} />
-                                                ))}
-                                            </Pie>
-                                            <Tooltip contentStyle={{ background: "#050606", border: "1px solid rgba(255,255,255,0.12)", borderRadius: 8 }} />
-                                        </PieChart>
-                                    </ResponsiveContainer>
+                                    <div data-report-chart="expiry-risk">
+                                        <ResponsiveContainer width="100%" height={320}>
+                                            <PieChart>
+                                                <Pie data={analytics.expiryPie} dataKey="value" nameKey="name" outerRadius={94} label={pieLabel} labelLine={{ stroke: "#cbd5e1" }}>
+                                                    {analytics.expiryPie.map((entry, index) => (
+                                                        <Cell key={entry.name} fill={colorForCategory(entry.name, index)} />
+                                                    ))}
+                                                </Pie>
+                                                <Tooltip {...darkTooltipProps} />
+                                            </PieChart>
+                                        </ResponsiveContainer>
+                                        <PieLegendSummary data={analytics.expiryPie} />
+                                    </div>
                                 ) : <ChartEmpty message="Add products with expiry dates to track expiry risk." actionHref="/dashboard/products" actionText="Manage products" />}
                             </ChartCard>
 
@@ -435,6 +490,54 @@ function ChartCard({
                 <p className="mt-2 text-sm text-neutral-500">{subtitle}</p>
             </div>
             {children}
+        </div>
+    )
+}
+
+function PieLegendSummary({ data }: { data: Array<{ name: string; value: number }> }) {
+    const total = data.reduce((sum, item) => sum + item.value, 0)
+    return (
+        <div className="mt-3 grid gap-2 sm:grid-cols-2" role="list" aria-label="Chart legend and values">
+            {data.map((item, index) => {
+                const percentage = total > 0 ? Math.round((item.value / total) * 100) : 0
+                return (
+                    <div key={item.name} role="listitem" className="flex min-w-0 items-center justify-between gap-3 rounded-lg border border-white/10 bg-white/[0.04] px-3 py-2 text-sm">
+                        <span className="flex min-w-0 items-center gap-2 font-semibold text-slate-100">
+                            <span className="h-3 w-3 shrink-0 rounded-sm" style={{ background: colorForCategory(item.name, index) }} aria-hidden="true" />
+                            <span className="truncate">{item.name}</span>
+                        </span>
+                        <span className="shrink-0 text-slate-200">{item.value} · {percentage}%</span>
+                    </div>
+                )
+            })}
+        </div>
+    )
+}
+
+function ChartSummary({
+    caption,
+    rows,
+}: {
+    caption: string
+    rows: Array<{ label: string; value: string; detail?: string }>
+}) {
+    return (
+        <div className="mt-3 max-h-44 overflow-auto rounded-lg border border-white/10">
+            <table className="w-full min-w-[320px] border-collapse text-left text-xs text-slate-200">
+                <caption className="sr-only">{caption}</caption>
+                <thead className="sticky top-0 bg-slate-950 text-slate-100">
+                    <tr><th className="px-3 py-2 font-semibold">Category</th><th className="px-3 py-2 font-semibold">Value</th><th className="px-3 py-2 font-semibold">Details</th></tr>
+                </thead>
+                <tbody>
+                    {rows.map((row) => (
+                        <tr key={`${row.label}-${row.value}`} className="border-t border-white/10">
+                            <th scope="row" className="px-3 py-2 font-medium text-white">{row.label}</th>
+                            <td className="px-3 py-2">{row.value}</td>
+                            <td className="px-3 py-2 text-slate-300">{row.detail || "—"}</td>
+                        </tr>
+                    ))}
+                </tbody>
+            </table>
         </div>
     )
 }

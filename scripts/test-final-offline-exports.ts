@@ -238,13 +238,13 @@ const shareInput = {
   paidAmount: 1000,
   dueAmount: 234.5,
 }
-assert.match(createInvoiceShareText(shareInput), /attach it before sending/)
+assert.equal(createInvoiceShareText(shareInput), "Hello Customer, your invoice INV-00004 from Business is ready. Total: ₹1,234.50.\n\nPlease find the invoice attached.")
 assert.match(createWhatsAppInvoiceUrl(shareInput), /^https:\/\/wa\.me\/919876543210\?text=/)
 assert.match(createInvoiceEmailDraft(shareInput).mailtoUrl, /^mailto:/)
 const linkedShareInput = { ...shareInput, secureInvoiceUrl: "https://www.bezgrow.com/i/secure-token" }
-assert.match(createInvoiceShareText(linkedShareInput), /Thank you for your purchase from Business\./)
-assert.match(createInvoiceShareText(linkedShareInput), /View or download your invoice:\nhttps:\/\/www\.bezgrow\.com\/i\/secure-token/)
-assert.doesNotMatch(createInvoiceShareText(linkedShareInput), /attach it before sending/)
+assert.match(createInvoiceShareText(linkedShareInput), /Hello Customer, your invoice INV-00004 from Business is ready\./)
+assert.match(createInvoiceShareText(linkedShareInput), /View it securely here: https:\/\/www\.bezgrow\.com\/i\/secure-token/)
+assert.doesNotMatch(createInvoiceShareText(linkedShareInput), /find the invoice attached/)
 
 assert.equal(compareVersions("1.10.0", "1.9.9"), 1)
 assert.equal(compareVersions("1.0.0", "1.0.0"), 0)

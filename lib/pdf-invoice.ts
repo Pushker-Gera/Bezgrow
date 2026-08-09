@@ -1,4 +1,4 @@
-import { degrees, PDFDocument, PageSizes, StandardFonts, rgb, type PDFImage, type PDFPage, type PDFFont } from "pdf-lib"
+import { PDFDocument, PageSizes, StandardFonts, rgb, type PDFImage, type PDFPage, type PDFFont } from "pdf-lib"
 import QRCode from "qrcode"
 import type { PrintFormat, PrintInvoice, PrintInvoiceItem, PrintSettings } from "@/components/print/types"
 import { defaultPrintSettings } from "@/components/print/settings/defaults"
@@ -20,6 +20,18 @@ const BLUE = rgb(0.11, 0.31, 0.85)
 const BORDER = rgb(0.82, 0.87, 0.93)
 const SOFT = rgb(0.97, 0.98, 0.99)
 const WHITE = rgb(1, 1, 1)
+const IMMUTABLE_ASSET_CACHE_LIMIT = 24
+const logoByteCache = new Map<string, Promise<Uint8Array | null>>()
+const qrByteCache = new Map<string, Promise<Uint8Array | null>>()
+
+function rememberImmutableAsset<T>(cache: Map<string, Promise<T>>, key: string, value: Promise<T>) {
+  if (cache.size >= IMMUTABLE_ASSET_CACHE_LIMIT && !cache.has(key)) {
+    const oldest = cache.keys().next().value
+    if (oldest) cache.delete(oldest)
+  }
+  cache.set(key, value)
+  return value
+}
 
 function safeText(value: unknown) {
   return String(value ?? "-")
@@ -43,7 +55,7 @@ function dateText(value: string) {
 function pageSize(format: PrintFormat, settings: PrintSettings, itemCount: number): [number, number] {
   if (format === "thermal") {
     const width = (settings.thermalWidth === "58mm" ? 58 : 80) * POINTS_PER_MM
-    const fixedContentHeight = 137 + (settings.showLogo ? 47 : 0)
+    const fixedContentHeight = 162 + (settings.showLogo ? 47 : 0)
     const totalsHeight = (settings.showGstDetails ? 6 : 5) * 12 + 4
     const referenceHeight = (settings.showBarcode ? 54 : 0) + (settings.showQr ? 74 : 0)
     const footerAndSafety = 32
@@ -75,19 +87,30 @@ function accent(settings: PrintSettings) {
   return settings.blackAndWhite ? INK : BLUE
 }
 
-function drawWatermark(context: PdfContext, page: PDFPage, invoice: PrintInvoice) {
-  if (!context.settings.showWatermark) return
+function drawCenteredWatermark(
+  context: PdfContext,
+  page: PDFPage,
+  invoice: PrintInvoice,
+  box: { x: number; y: number; width: number; height: number } = { x: 0, y: 0, width: page.getWidth(), height: page.getHeight() },
+) {
   const label = safeText(invoice.watermark || "INVOICE").toUpperCase()
-  const size = Math.min(74, page.getWidth() / Math.max(5, label.length * 0.55))
+  const maximumSize = context.format === "thermal" ? 14 : context.format === "a4" ? 40 : 28
+  const availableWidth = box.width * (context.format === "thermal" ? 0.72 : 0.66)
+  const unitWidth = Math.max(1, context.bold.widthOfTextAtSize(label, 1))
+  const size = Math.max(context.format === "thermal" ? 7 : 12, Math.min(maximumSize, availableWidth / unitWidth))
+  const textWidth = context.bold.widthOfTextAtSize(label, size)
   page.drawText(label, {
-    x: page.getWidth() * 0.18,
-    y: page.getHeight() * 0.42,
+    x: box.x + Math.max(0, (box.width - textWidth) / 2),
+    y: box.y + Math.max(0, (box.height - size) / 2),
     size,
     font: context.bold,
-    color: context.settings.blackAndWhite ? rgb(0.65, 0.65, 0.65) : rgb(0.72, 0.8, 0.94),
-    opacity: 0.18,
-    rotate: degrees(32),
+    color: rgb(0.35, 0.38, 0.42),
+    opacity: 0.065,
   })
+}
+
+function drawWatermark(context: PdfContext, page: PDFPage, invoice: PrintInvoice) {
+  if (context.settings.showWatermark) drawCenteredWatermark(context, page, invoice)
 }
 
 function fitText(text: string, font: PDFFont, size: number, width: number) {
@@ -151,7 +174,7 @@ function bytesFromDataUrl(value: string) {
   return Uint8Array.from(binary, (character) => character.charCodeAt(0))
 }
 
-async function imageBytesFromUrl(url: string) {
+async function loadImageBytesFromUrl(url: string) {
   if (!url) return null
   try {
     const response = await fetch(url)
@@ -185,12 +208,49 @@ async function imageBytesFromUrl(url: string) {
   }
 }
 
+function imageBytesFromUrl(url: string) {
+  if (!url) return Promise.resolve(null)
+  return logoByteCache.get(url) || rememberImmutableAsset(logoByteCache, url, loadImageBytesFromUrl(url))
+}
+
+function qrBytes(value: string) {
+  if (!value) return Promise.resolve(null)
+  const existing = qrByteCache.get(value)
+  if (existing) return existing
+  const generated = QRCode.toDataURL(value, { width: 220, margin: 1, errorCorrectionLevel: "M" })
+    .then((dataUrl) => bytesFromDataUrl(dataUrl))
+    .catch(() => null)
+  return rememberImmutableAsset(qrByteCache, value, generated)
+}
+
 async function embedImage(document: PDFDocument, bytes: Uint8Array | null) {
   if (!bytes?.length) return null
   try {
     return bytes[0] === 0xff ? await document.embedJpg(bytes) : await document.embedPng(bytes)
   } catch {
     return null
+  }
+}
+
+async function monochromeImageBytes(bytes: Uint8Array | null) {
+  if (!bytes?.length || typeof document === "undefined") return bytes
+  const objectUrl = URL.createObjectURL(new Blob([bytes.slice().buffer as ArrayBuffer]))
+  try {
+    const image = new Image()
+    image.src = objectUrl
+    await image.decode()
+    const canvas = document.createElement("canvas")
+    canvas.width = image.naturalWidth
+    canvas.height = image.naturalHeight
+    const context = canvas.getContext("2d")
+    if (!context) return bytes
+    context.filter = "grayscale(1) contrast(1.08)"
+    context.drawImage(image, 0, 0)
+    return bytesFromDataUrl(canvas.toDataURL("image/png"))
+  } catch {
+    return bytes
+  } finally {
+    URL.revokeObjectURL(objectUrl)
   }
 }
 
@@ -212,13 +272,13 @@ async function prepareContext(invoice: PrintInvoice, settings: PrintSettings, fo
     document.embedFont(StandardFonts.Helvetica),
     document.embedFont(StandardFonts.HelveticaBold),
   ])
-  const logoBytes = settings.showLogo ? await imageBytesFromUrl(invoice.enterprise.logoUrl) : null
+  const sourceLogoBytes = settings.showLogo ? await imageBytesFromUrl(invoice.enterprise.logoUrl) : null
+  const logoBytes = settings.blackAndWhite ? await monochromeImageBytes(sourceLogoBytes) : sourceLogoBytes
   const logo = await embedImage(document, logoBytes)
   let qr: PDFImage | null = null
   if (settings.showQr && invoice.qrValue) {
     try {
-      const qrUrl = await QRCode.toDataURL(invoice.qrValue, { width: 220, margin: 1, errorCorrectionLevel: "M" })
-      qr = await document.embedPng(bytesFromDataUrl(qrUrl))
+      qr = await embedImage(document, await qrBytes(invoice.qrValue))
     } catch {
       qr = null
     }
@@ -240,22 +300,26 @@ function drawHeader(context: PdfContext, page: PDFPage, invoice: PrintInvoice, t
     drawContainedImage(page, logo, margin, top - logoSize, logoSize, logoSize)
     brandX += logoSize + 10
   }
-  drawText(page, bold, invoice.enterprise.name, brandX, top - 17, fontSize(settings, compact ? 16 : 22), INK, page.getWidth() * 0.52)
-  drawText(page, regular, invoice.enterprise.address, brandX, top - 34, fontSize(settings, compact ? 7.5 : 9), MUTED, page.getWidth() * 0.52)
+  const cardWidth = compact ? 150 : 175
+  const cardX = page.getWidth() - margin - cardWidth
+  const brandWidth = Math.max(80, cardX - brandX - 12)
+  const nameSize = fontSize(settings, compact ? 10.5 : 15.5)
+  const nameLines = wrapText(invoice.enterprise.name, bold, nameSize, brandWidth, compact ? 3 : 2)
+  nameLines.forEach((line, index) => drawText(page, bold, line, brandX, top - 15 - index * (nameSize + 2), nameSize, INK, brandWidth))
+  const detailsStart = top - (compact ? 53 : 45)
+  drawText(page, regular, invoice.enterprise.address, brandX, detailsStart, fontSize(settings, compact ? 7.2 : 8.5), MUTED, brandWidth)
   const contact = [
     invoice.enterprise.gstNumber !== "-" ? `GST: ${invoice.enterprise.gstNumber}` : "",
     invoice.enterprise.phone !== "-" ? `Phone: ${invoice.enterprise.phone}` : "",
   ].filter(Boolean).join(" | ")
-  if (contact) drawText(page, regular, contact, brandX, top - 48, fontSize(settings, compact ? 7 : 8.5), MUTED, page.getWidth() * 0.54)
+  if (contact) drawText(page, regular, contact, brandX, detailsStart - 13, fontSize(settings, compact ? 6.5 : 7.8), MUTED, brandWidth)
 
-  const cardWidth = compact ? 150 : 175
-  const cardX = page.getWidth() - margin - cardWidth
   page.drawRectangle({ x: cardX, y: top - 58, width: cardWidth, height: 56, color: SOFT, borderColor: BORDER, borderWidth: 0.8 })
   drawText(page, bold, invoice.invoiceTitle, cardX + 10, top - 17, fontSize(settings, 8), MUTED)
   drawText(page, bold, invoice.invoiceNumber, cardX + 10, top - 35, fontSize(settings, compact ? 11 : 14), accent(settings), cardWidth - 20)
   drawText(page, regular, `Date: ${dateText(invoice.invoiceDate)}`, cardX + 10, top - 49, fontSize(settings, 8), INK)
-  page.drawLine({ start: { x: margin, y: top - 70 }, end: { x: page.getWidth() - margin, y: top - 70 }, thickness: 1.4, color: INK })
-  return top - 82
+  page.drawLine({ start: { x: margin, y: top - 72 }, end: { x: page.getWidth() - margin, y: top - 72 }, thickness: 1.4, color: INK })
+  return top - 84
 }
 
 function drawCustomer(context: PdfContext, page: PDFPage, invoice: PrintInvoice, y: number, compact = false) {
@@ -512,16 +576,7 @@ function renderHalfTopInvoice(context: PdfContext, invoice: PrintInvoice) {
   const margin = 16
   if (settings.blackAndWhite) page.drawRectangle({ x: 0, y: topHalfBottom, width, height: topHalfBottom, color: WHITE })
   if (settings.showWatermark) {
-    const label = safeText(invoice.watermark || "INVOICE").toUpperCase()
-    page.drawText(label, {
-      x: width * 0.24,
-      y: topHalfBottom + 120,
-      size: Math.min(48, width / Math.max(6, label.length * 0.6)),
-      font: bold,
-      color: settings.blackAndWhite ? rgb(0.65, 0.65, 0.65) : rgb(0.72, 0.8, 0.94),
-      opacity: 0.16,
-      rotate: degrees(24),
-    })
+    drawCenteredWatermark(context, page, invoice, { x: 0, y: topHalfBottom, width, height: topHalfBottom })
   }
 
   let y = height - 15
@@ -530,9 +585,11 @@ function renderHalfTopInvoice(context: PdfContext, invoice: PrintInvoice) {
     drawContainedImage(page, logo, margin, y - 29, 29, 29)
     brandX += 36
   }
-  drawText(page, bold, invoice.enterprise.name, brandX, y - 11, fontSize(settings, 13), INK, width * 0.55)
-  drawText(page, regular, invoice.enterprise.address, brandX, y - 24, fontSize(settings, 6.8), MUTED, width * 0.55)
   const metaX = width - margin - 172
+  const brandWidth = Math.max(80, metaX - brandX - 10)
+  const businessNameLines = wrapText(invoice.enterprise.name, bold, fontSize(settings, 10.5), brandWidth, 2)
+  businessNameLines.forEach((line, index) => drawText(page, bold, line, brandX, y - 10 - index * 11, fontSize(settings, 10.5), INK, brandWidth))
+  drawText(page, regular, invoice.enterprise.address, brandX, y - 33, fontSize(settings, 6.3), MUTED, brandWidth)
   page.drawRectangle({ x: metaX, y: y - 31, width: 172, height: 31, color: SOFT, borderColor: BORDER, borderWidth: 0.7 })
   drawText(page, bold, invoice.invoiceTitle, metaX + 8, y - 11, fontSize(settings, 6.5), MUTED)
   drawText(page, bold, invoice.invoiceNumber, metaX + 8, y - 24, fontSize(settings, 9), accent(settings), 100)
@@ -628,9 +685,12 @@ function renderThermalInvoice(context: PdfContext, invoice: PrintInvoice) {
     y -= 47
   }
   const businessName = safeText(invoice.enterprise.name)
-  const nameSize = fontSize(settings, settings.thermalWidth === "58mm" ? 12 : 15)
-  drawText(page, bold, businessName, Math.max(margin, (width - bold.widthOfTextAtSize(businessName, nameSize)) / 2), y, nameSize, INK, width - margin * 2)
-  y -= 15
+  const nameSize = fontSize(settings, settings.thermalWidth === "58mm" ? 10 : 12)
+  const nameLines = wrapText(businessName, bold, nameSize, width - margin * 2, 3)
+  nameLines.forEach((line, index) => {
+    drawText(page, bold, line, Math.max(margin, (width - bold.widthOfTextAtSize(line, nameSize)) / 2), y - index * (nameSize + 2), nameSize, INK, width - margin * 2)
+  })
+  y -= nameLines.length * (nameSize + 2)
   drawText(page, regular, invoice.enterprise.address, margin, y, fontSize(settings, 7), MUTED, width - margin * 2)
   y -= 14
   page.drawLine({ start: { x: margin, y }, end: { x: width - margin, y }, thickness: 0.7, color: INK, dashArray: [3, 2] })

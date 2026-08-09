@@ -95,7 +95,11 @@ for (const [name, page] of [
 ]) {
   assert.match(page, /shouldUseWebOfflineFallback/, `${name} must explicitly reject the web fallback in packaged Tauri.`)
 }
-assert.match(dashboard, /clearWorkspaceBootstrapCache\(\)[\s\S]*clearDesktopSession\(\)[\s\S]*router\.replace\("\/login"\)/, "Logout must clear only local UI session state before navigation.")
+assert.match(
+  dashboard,
+  /clearWorkspaceBootstrapCache\(\)[\s\S]*clearDesktopSession\(\)[\s\S]*router\.replace\("\/offline\?reason=logged_out&next=%2Fdashboard"\)/,
+  "Logout must clear only local UI session state before returning to the desktop licence screen.",
+)
 assert.doesNotMatch(dashboard, /supabase|\/api\/auth\/logout/, "Desktop logout must not depend on Supabase.")
 assert.doesNotMatch(dashboard, /clearOfflineData|clearNormalizedData/, "Logout must not delete business data or the license.")
 

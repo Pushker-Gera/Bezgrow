@@ -26,7 +26,7 @@ export default function ProfilePage() {
   const checkUser = useCallback(async () => {
     const workspace = await getWorkspaceBootstrap()
     if (!workspace?.success) {
-      router.push("/login")
+      router.push("/offline?reason=license_required&next=%2Fdashboard")
       return
     }
     setUser(workspace.user || null)
@@ -43,7 +43,7 @@ export default function ProfilePage() {
   async function logout() {
     clearWorkspaceBootstrapCache()
     await clearDesktopSession()
-    router.replace("/login")
+    router.replace("/offline?reason=logged_out&next=%2Fdashboard")
   }
 
   if (loading) {
