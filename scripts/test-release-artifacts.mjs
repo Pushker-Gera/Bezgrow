@@ -78,6 +78,16 @@ assert.match(releaseWorkflow, /runs-on:\s*windows-latest/, "Windows installer mu
 assert.match(releaseWorkflow, /verify-release-artifact\.mjs/, "Workflow must validate installer bytes.")
 assert.match(releaseWorkflow, /Compute release checksums/, "Workflow must calculate SHA-256 checksums.")
 assert.match(releaseWorkflow, /internal\/testing/, "Workflow must clearly label unsigned builds as internal/testing.")
+assert.match(
+  releaseWorkflow,
+  /security import "\$CERTIFICATE_PATH"[\s\S]*HAS_SIGNING=true/,
+  "Workflow must prove the Apple PKCS#12 identity is importable before selecting a signed build."
+)
+assert.match(
+  releaseWorkflow,
+  /-u APPLE_CERTIFICATE[\s\S]*-u TAURI_SIGNING_PRIVATE_KEY[\s\S]*npm run desktop:build:mac/,
+  "An invalid signing configuration must be removed before the internal Mac fallback build."
+)
 assert.doesNotMatch(releaseWorkflow, /Stable publication and public downloads remain disabled/, "Unsigned builds must not disable real downloads.")
 assert.match(releaseManifestWriter, /productionRecommended/, "Manifest writer must separate availability from production trust.")
 assert.match(publication, /can only be published as an internal\/testing release/, "Unsigned CI metadata must be restricted to internal/testing.")

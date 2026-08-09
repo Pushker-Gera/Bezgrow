@@ -155,7 +155,22 @@ jobs:
           HAS_SIGNING=false
           HAS_NOTARY=false
           HAS_UPDATER=false
-          if [ -n "$BEZGROW_MAC_SIGNING_IDENTITY" ] || { [ -n "$APPLE_CERTIFICATE" ] && [ -n "$APPLE_CERTIFICATE_PASSWORD" ]; }; then
+          if [ -n "$APPLE_CERTIFICATE" ] && [ -n "$APPLE_CERTIFICATE_PASSWORD" ]; then
+            CERTIFICATE_PATH="$RUNNER_TEMP/bezgrow-signing-validation.p12"
+            VALIDATION_KEYCHAIN="$RUNNER_TEMP/bezgrow-signing-validation.keychain-db"
+            VALIDATION_PASSWORD="$(openssl rand -hex 24)"
+            if printf '%s' "$APPLE_CERTIFICATE" | /usr/bin/base64 -D > "$CERTIFICATE_PATH" 2>/dev/null &&
+               security create-keychain -p "$VALIDATION_PASSWORD" "$VALIDATION_KEYCHAIN" >/dev/null 2>&1 &&
+               security unlock-keychain -p "$VALIDATION_PASSWORD" "$VALIDATION_KEYCHAIN" >/dev/null 2>&1 &&
+               security import "$CERTIFICATE_PATH" -P "$APPLE_CERTIFICATE_PASSWORD" -A -k "$VALIDATION_KEYCHAIN" >/dev/null 2>&1; then
+              HAS_SIGNING=true
+            else
+              echo "The configured Apple certificate is not an importable PKCS#12 identity. Building an explicitly labelled internal DMG instead." >> "$GITHUB_STEP_SUMMARY"
+            fi
+            security delete-keychain "$VALIDATION_KEYCHAIN" >/dev/null 2>&1 || true
+            rm -f "$CERTIFICATE_PATH"
+          elif [ -n "$BEZGROW_MAC_SIGNING_IDENTITY" ] &&
+               security find-identity -v -p codesigning | grep -Fq "$BEZGROW_MAC_SIGNING_IDENTITY"; then
             HAS_SIGNING=true
           fi
           if { [ -n "$APPLE_ID" ] && [ -n "$APPLE_PASSWORD" ] && [ -n "$APPLE_TEAM_ID" ]; } ||
@@ -182,7 +197,21 @@ jobs:
           if [ "${{ steps.trust.outputs.notarized }}" = "true" ]; then
             npm run desktop:build:mac:public
           else
-            npm run desktop:build:mac
+            env \
+              -u BEZGROW_MAC_SIGNING_IDENTITY \
+              -u BEZGROW_MAC_PROVIDER_SHORT_NAME \
+              -u APPLE_CERTIFICATE \
+              -u APPLE_CERTIFICATE_PASSWORD \
+              -u APPLE_ID \
+              -u APPLE_PASSWORD \
+              -u APPLE_TEAM_ID \
+              -u APPLE_API_KEY \
+              -u APPLE_API_ISSUER \
+              -u APPLE_API_KEY_PATH \
+              -u TAURI_SIGNING_PRIVATE_KEY \
+              -u TAURI_SIGNING_PRIVATE_KEY_PASSWORD \
+              -u BEZGROW_UPDATER_PUBLIC_KEY \
+              npm run desktop:build:mac
           fi
 
       - name: Verify and stage Mac installer
