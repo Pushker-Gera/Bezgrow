@@ -7,6 +7,12 @@ import { desktopArchitecture } from "@/lib/desktop/tauri"
 import { localLicenseSnapshot } from "@/lib/offline/local/license"
 import { getLocalDatabaseService } from "@/lib/offline/local/service"
 
+const buildCommit = process.env.NEXT_PUBLIC_BEZGROW_BUILD_COMMIT || "unavailable"
+const buildTimestamp = process.env.NEXT_PUBLIC_BEZGROW_BUILD_TIMESTAMP || "unavailable"
+const buildVersion = process.env.NEXT_PUBLIC_BEZGROW_BUILD_VERSION || packageJson.version
+const buildChannel = process.env.NEXT_PUBLIC_BEZGROW_BUILD_CHANNEL || "development"
+const shortBuildCommit = /^[a-f0-9]{7,40}$/i.test(buildCommit) ? buildCommit.slice(0, 7) : buildCommit
+
 function localServerSummary() {
   if (typeof window === "undefined") return null
 
@@ -32,9 +38,11 @@ async function buildSafeDiagnostics() {
     capturedAt: new Date().toISOString(),
     application: {
       name: "Bezgrow",
-      version: packageJson.version,
+      version: buildVersion,
+      gitCommit: buildCommit,
+      buildTimestamp,
       architecture: desktopArchitecture(),
-      releaseChannel: "stable",
+      releaseChannel: buildChannel,
     },
     operatingSystem: {
       platform: typeof navigator === "undefined" ? "" : navigator.platform,
@@ -71,7 +79,7 @@ async function buildSafeDiagnostics() {
           graceDays: 0,
         },
     updater: {
-      currentVersion: packageJson.version,
+      currentVersion: buildVersion,
       online: typeof navigator === "undefined" ? false : navigator.onLine,
       installationMode: "verified-manual-installer",
     },
@@ -108,6 +116,20 @@ export default function DesktopDiagnosticsPanel() {
         Save a technical report for support. It never includes passwords, tokens, license keys,
         customers, products, invoices, or other business records.
       </p>
+      <div className="mt-5 grid gap-3 text-sm sm:grid-cols-3" aria-label="Application build identity">
+        <div className="rounded-2xl border border-white/10 bg-black/35 p-4">
+          <p className="text-xs font-black uppercase tracking-[0.16em] text-neutral-500">Application</p>
+          <p className="mt-2 font-black text-white">Bezgrow {buildVersion}</p>
+        </div>
+        <div className="rounded-2xl border border-white/10 bg-black/35 p-4">
+          <p className="text-xs font-black uppercase tracking-[0.16em] text-neutral-500">Build</p>
+          <code className="mt-2 block font-black text-cyan-100">{shortBuildCommit}</code>
+        </div>
+        <div className="rounded-2xl border border-white/10 bg-black/35 p-4">
+          <p className="text-xs font-black uppercase tracking-[0.16em] text-neutral-500">Built</p>
+          <p className="mt-2 font-semibold text-white">{buildTimestamp}</p>
+        </div>
+      </div>
       <button
         type="button"
         disabled={busy}

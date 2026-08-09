@@ -31,6 +31,7 @@ type InstallerInfo = {
   platform: "macos" | "windows"
   version?: string | null
   architecture?: string | null
+  sha256?: string | null
 }
 
 function formatFileSize(bytes: number) {
@@ -77,6 +78,7 @@ function getInstallerInfo(
     platform: release.platform,
     version: release.version,
     architecture: release.architecture,
+    sha256: release.sha256,
     statusLabel: release.available ? statusParts.join(" · ") : release.blockedReason || release.reason,
   }
 }
@@ -131,6 +133,11 @@ function InstallerCard({
       <p className="mt-2 text-center text-xs font-bold text-white/45">
         {info.statusLabel}
       </p>
+      {info.available && info.sha256 && (
+        <p className="mt-2 text-center text-[11px] font-semibold text-white/40">
+          SHA-256: <code className="break-all text-white/55">{info.sha256}</code>
+        </p>
+      )}
       {info.warning && (
         <div className="mt-3 rounded-2xl border border-amber-300/25 bg-amber-300/10 px-4 py-3 text-sm font-bold leading-6 text-amber-100">
           <p>{info.warning}</p>

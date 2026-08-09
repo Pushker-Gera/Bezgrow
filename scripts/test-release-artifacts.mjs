@@ -19,11 +19,11 @@ const validator = read("lib/releases/artifact-validation.ts")
 const desktopReleaseRoute = read("app/api/desktop-release/route.ts")
 const desktopDownloadRoute = read("app/api/downloads/desktop/route.ts")
 const downloadPage = read("app/download/page.tsx")
-const nextConfig = read("next.config.ts")
 const releaseWorkflow = read(".github/workflows/desktop-release.yml")
 const releaseManifestWriter = read("scripts/write-desktop-release-manifest.mjs")
 const publication = read("scripts/publish-release-metadata.mjs")
 const productionWindowsVerifier = read("scripts/verify-production-windows-download.mjs")
+const productionMacVerifier = read("scripts/verify-production-mac-download.mjs")
 const desktopBuild = read("scripts/build-desktop.mjs")
 
 for (const field of [
@@ -72,8 +72,8 @@ assert.match(
   "Windows internal-build warning is missing."
 )
 assert.match(downloadPage, /right-click the Bezgrow app, choose Open/, "macOS right-click Open guidance is missing.")
-assert.match(nextConfig, /application\/x-apple-diskimage/, "DMG content type is not explicit.")
-assert.match(nextConfig, /Content-Disposition[\s\S]*Bezgrow-mac\.dmg/, "DMG download filename is not explicit.")
+assert.match(desktopDownloadRoute, /application\/x-apple-diskimage/, "DMG content type is not explicit.")
+assert.match(desktopDownloadRoute, /Content-Disposition/, "DMG download filename is not explicit.")
 assert.match(releaseWorkflow, /runs-on:\s*windows-latest/, "Windows installer must build on windows-latest.")
 assert.match(releaseWorkflow, /verify-release-artifact\.mjs/, "Workflow must validate installer bytes.")
 assert.match(releaseWorkflow, /Compute release checksums/, "Workflow must calculate SHA-256 checksums.")
@@ -101,6 +101,10 @@ assert.match(productionWindowsVerifier, /method: "GET"/, "Production verificatio
 assert.match(productionWindowsVerifier, /createHash\("sha256"\)/, "Production verification must hash downloaded installer bytes.")
 assert.match(productionWindowsVerifier, /peArchitecture\(firstBytes\)/, "Production verification must validate a real PE executable.")
 assert.match(productionWindowsVerifier, /releases\\\/download/, "Production verification must require durable GitHub Release storage.")
+assert.match(productionMacVerifier, /method: "GET"/, "Production Mac verification must download the complete installer with GET.")
+assert.match(productionMacVerifier, /hdiutil/, "Production Mac verification must mount the downloaded DMG.")
+assert.match(productionMacVerifier, /Create secure share link/, "Production Mac verification must reject the obsolete sharing implementation.")
+assert.match(productionMacVerifier, /desktop_open_pdf_for_print/, "Production Mac verification must require the canonical native print command.")
 
 const peFixtureDirectory = mkdtempSync(join(tmpdir(), "bezgrow-pe-validator-"))
 try {

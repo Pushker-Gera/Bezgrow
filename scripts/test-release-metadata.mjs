@@ -23,6 +23,8 @@ for (const [key, installer] of Object.entries(manifest)) {
     "metadataValid",
     "productionRecommended",
     "releaseChannel",
+    "buildCommit",
+    "buildTimestamp",
   ]) {
     assert.notEqual(installer[field], undefined, `${key}.${field} is missing.`)
   }
@@ -30,6 +32,8 @@ for (const [key, installer] of Object.entries(manifest)) {
   assert.ok(["arm64", "x64", "x86_64"].includes(installer.architecture), `${key} architecture is invalid.`)
   assert.match(installer.sha256, /^[a-f0-9]{64}$/i, `${key} SHA-256 is invalid.`)
   assert.ok(installer.size > 0, `${key} size must be non-zero.`)
+  assert.match(installer.buildCommit, /^[a-f0-9]{40}$/i, `${key} build commit is invalid.`)
+  assert.ok(!Number.isNaN(Date.parse(installer.buildTimestamp)), `${key} build timestamp is invalid.`)
   if (installer.file?.startsWith("/downloads/")) {
     const path = `public${installer.file}`
     assert.ok(existsSync(path), `${key} local installer is missing.`)

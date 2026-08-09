@@ -48,17 +48,6 @@ const nextConfig: NextConfig = {
         headers: iconHeaders,
       })),
       {
-        source: "/downloads/Bezgrow-mac.dmg",
-        headers: [
-          { key: "Content-Type", value: "application/x-apple-diskimage" },
-          { key: "Content-Disposition", value: "attachment; filename=\"Bezgrow-mac.dmg\"" },
-          { key: "X-Content-Type-Options", value: "nosniff" },
-          { key: "Cache-Control", value: "public, max-age=3600, must-revalidate" },
-          { key: "X-Bezgrow-Release-Status", value: "internal-testing" },
-          { key: "X-Robots-Tag", value: "noindex, nofollow" },
-        ],
-      },
-      {
         source: "/downloads/Bezgrow-windows.exe",
         headers: [
           { key: "Content-Type", value: "application/vnd.microsoft.portable-executable" },

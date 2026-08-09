@@ -157,7 +157,10 @@ function buildInstaller(prefix, version, architecture) {
     publicationStatus,
     releaseDate: generatedAt,
     mandatoryAfter: readArg("--mandatory-after") || undefined,
-    buildCommit: readArg("--build-commit") || undefined,
+    buildCommit:
+      readArg(`--${prefix}-build-commit`) || readArg("--build-commit") || undefined,
+    buildTimestamp:
+      readArg(`--${prefix}-build-timestamp`) || readArg("--build-timestamp") || generatedAt,
     workflowRunId: readArg("--workflow-run-id") || undefined,
   };
 }
@@ -197,6 +200,7 @@ mkdirSync(dirname(manifestPath), { recursive: true });
 writeFileSync(manifestPath, `${JSON.stringify(nextManifest, null, 2)}\n`);
 
 for (const [key, filename] of [
+  ["mac", "Bezgrow-mac.dmg.release.json"],
   ["windows", "Bezgrow-windows.exe.release.json"],
   ["windowsMsi", "Bezgrow-windows.msi.release.json"],
   ["windowsMsix", "Bezgrow-windows.msix.release.json"],

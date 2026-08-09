@@ -10,6 +10,9 @@ const rust = read("src-tauri/src/lib.rs")
 assert.match(settings, /DesktopDiagnosticsPanel/, "Desktop diagnostics must be available from Settings.")
 assert.match(panel, /database[\s\S]*integrityStatus[\s\S]*startupStages/, "Diagnostics must report SQLite health and startup state.")
 assert.match(panel, /license[\s\S]*expiresAt[\s\S]*graceDays/, "Diagnostics must include only a redacted license summary.")
+assert.match(panel, /NEXT_PUBLIC_BEZGROW_BUILD_COMMIT/, "Diagnostics must expose the artifact's Git commit identity.")
+assert.match(panel, /NEXT_PUBLIC_BEZGROW_BUILD_TIMESTAMP/, "Diagnostics must expose the artifact's build timestamp.")
+assert.match(panel, /Bezgrow \{buildVersion\}/, "Settings must display the application version.")
 for (const forbidden of ["license_key", "device_id", "SUPABASE_SERVICE_ROLE_KEY", "BEZGROW_LICENSE_PRIVATE_KEY"]) {
   assert.doesNotMatch(panel, new RegExp(forbidden), `Diagnostic export must not include ${forbidden}.`)
 }

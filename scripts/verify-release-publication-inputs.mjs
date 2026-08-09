@@ -74,12 +74,25 @@ assert(checksumEntries.size === releaseFiles.length, "SHA256SUMS contains missin
 const verifiedPlatforms = []
 const macDirectory = path.join(root, "mac")
 if (existsSync(macDirectory)) {
-  const dmg = path.join(macDirectory, "Bezgrow-mac.dmg")
-  assert(existsSync(dmg), "The macOS artifact set does not contain Bezgrow-mac.dmg.")
   const dmgFiles = filesUnder(macDirectory).filter((filename) => filename.toLowerCase().endsWith(".dmg"))
-  assert(dmgFiles.length === 1 && path.resolve(dmgFiles[0]) === path.resolve(dmg), "The macOS artifact set contains an unrecorded DMG.")
+  assert(dmgFiles.length === 1, "The macOS artifact set must contain exactly one DMG.")
+  const dmg = dmgFiles[0]
   const architecture = readFileSync(path.join(macDirectory, "mac-architecture.txt"), "utf8").trim()
   assert(["arm64", "x64"].includes(architecture), `Unsupported macOS architecture: ${architecture}`)
+  const expectedDmgName = `Bezgrow-${version}-${architecture}.dmg`
+  assert(path.basename(dmg) === expectedDmgName, `The macOS artifact must use the immutable versioned name ${expectedDmgName}.`)
+  const buildManifestPath = path.join(macDirectory, "mac-build.json")
+  assert(existsSync(buildManifestPath), "The Mac build provenance manifest is missing.")
+  const build = JSON.parse(readFileSync(buildManifestPath, "utf8"))
+  assert(build.version === version, `Mac build version ${build.version} does not match ${version}.`)
+  assert(build.platform === "macos", "Mac build provenance has the wrong platform.")
+  assert(build.architecture === architecture, "Mac build provenance has the wrong architecture.")
+  assert(/^[a-f0-9]{40}$/i.test(build.sourceCommit || ""), "Mac build provenance is missing the full source commit.")
+  assert(!Number.isNaN(Date.parse(build.builtAt)), "Mac build provenance is missing a valid build timestamp.")
+  assert(build.sourceTreeDirty === false, "Mac release provenance reports a dirty source tree.")
+  assert(build.artifact?.filename === expectedDmgName, "Mac build provenance has the wrong artifact filename.")
+  assert(build.artifact?.bytes === statSync(dmg).size, "Mac build provenance byte size does not match the DMG.")
+  assert(build.artifact?.sha256 === sha256(dmg), "Mac build provenance SHA-256 does not match the DMG.")
   readStatus(path.join(macDirectory, "mac-signing-status.txt"), ["true", "false"])
   readStatus(path.join(macDirectory, "mac-notarization-status.txt"), ["true", "false"])
   readStatus(path.join(macDirectory, "mac-updater-status.txt"), ["true", "false"])

@@ -207,9 +207,61 @@ jobs:
               exit 1
               ;;
           esac
-          mkdir -p release-artifacts
-          cp "$DMG" release-artifacts/Bezgrow-mac.dmg
           VERSION="$(node -p "require('./package.json').version")"
+          DMG_NAME="Bezgrow-${VERSION}-${RELEASE_ARCHITECTURE}.dmg"
+          mkdir -p release-artifacts
+          cp "$DMG" "release-artifacts/$DMG_NAME"
+          DMG_SHA="$(shasum -a 256 "release-artifacts/$DMG_NAME" | awk '{print $1}')"
+          DMG_BYTES="$(stat -f '%z' "release-artifacts/$DMG_NAME")"
+          BUILD_IDENTITY="desktop-runtime/next-server/public/desktop-build.json"
+          if [ ! -f "$BUILD_IDENTITY" ]; then
+            echo "The embedded desktop build identity is missing."
+            exit 1
+          fi
+          node -e '
+            const fs = require("fs");
+            const [identityPath, outputPath, artifactFilename, artifactSha, artifactBytes, architecture, sourceCommit] = process.argv.slice(1);
+            const identity = JSON.parse(fs.readFileSync(identityPath, "utf8"));
+            if (identity.gitCommit !== sourceCommit) throw new Error(`Embedded commit ${identity.gitCommit} does not match ${sourceCommit}.`);
+            if (identity.sourceTreeDirty !== false) throw new Error("Release builds must come from a clean source tree.");
+            fs.writeFileSync(outputPath, JSON.stringify({
+              version: identity.applicationVersion,
+              sourceCommit,
+              builtAt: identity.builtAt,
+              sourceTreeDirty: identity.sourceTreeDirty,
+              platform: "macos",
+              architecture,
+              artifact: { filename: artifactFilename, bytes: Number(artifactBytes), sha256: artifactSha },
+            }, null, 2) + "\n");
+          ' "$BUILD_IDENTITY" release-artifacts/mac-build.json "$DMG_NAME" "$DMG_SHA" "$DMG_BYTES" "$RELEASE_ARCHITECTURE" "$GITHUB_SHA"
+
+          MOUNT_DIR="$(mktemp -d)"
+          hdiutil attach -quiet -readonly -nobrowse -mountpoint "$MOUNT_DIR" "release-artifacts/$DMG_NAME"
+          trap 'hdiutil detach -quiet "$MOUNT_DIR" || true; rmdir "$MOUNT_DIR" || true' EXIT
+          BUNDLED_APP="$MOUNT_DIR/Bezgrow.app"
+          BUNDLE_VERSION="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$BUNDLED_APP/Contents/Info.plist")"
+          if [ "$BUNDLE_VERSION" != "$VERSION" ]; then
+            echo "Mounted bundle version $BUNDLE_VERSION does not match $VERSION."
+            exit 1
+          fi
+          node -e '
+            const fs = require("fs");
+            const [identityPath, expectedVersion, expectedCommit] = process.argv.slice(1);
+            const identity = JSON.parse(fs.readFileSync(identityPath, "utf8"));
+            if (identity.applicationVersion !== expectedVersion || identity.gitCommit !== expectedCommit || Number.isNaN(Date.parse(identity.builtAt)) || identity.sourceTreeDirty !== false) {
+              throw new Error("Mounted app build identity does not match the release source.");
+            }
+          ' "$BUNDLED_APP/Contents/Resources/next-server/public/desktop-build.json" "$VERSION" "$GITHUB_SHA"
+          if grep -R -a -q 'Create secure share link' "$BUNDLED_APP/Contents/Resources/next-server"; then
+            echo "Mounted app still contains the obsolete secure-share modal."
+            exit 1
+          fi
+          grep -R -a -q 'The exact previewed invoice PDF remains on this device' "$BUNDLED_APP/Contents/Resources/next-server"
+          grep -a -q 'desktop_open_pdf_for_print' "$BUNDLED_APP/Contents/MacOS/Bezgrow"
+          hdiutil detach -quiet "$MOUNT_DIR"
+          rmdir "$MOUNT_DIR"
+          trap - EXIT
+
           if [ "${{ steps.trust.outputs.updater }}" = "true" ]; then
             UPDATER="$(find src-tauri/target/release/bundle/macos -type f -name '*.app.tar.gz' -print -quit)"
             if [ -z "$UPDATER" ] || [ ! -f "$UPDATER.sig" ]; then
@@ -229,7 +281,7 @@ jobs:
           echo "${{ steps.trust.outputs.notarized }}" > release-artifacts/mac-notarization-status.txt
           echo "${{ steps.trust.outputs.updater }}" > release-artifacts/mac-updater-status.txt
           node scripts/verify-release-artifact.mjs \
-            --file release-artifacts/Bezgrow-mac.dmg \
+            --file "release-artifacts/$DMG_NAME" \
             --platform macos \
             --architecture "$RELEASE_ARCHITECTURE" \
             --version "$(node -p "require('./package.json').version")"
@@ -676,7 +728,7 @@ jobs:
           if [ "$CHANNEL" = "stable" ]; then PRERELEASE=false; else PRERELEASE=true; fi
           NOTES="${{ inputs.release_notes }}"
           if [ -z "$NOTES" ]; then
-            NOTES="Bezgrow $VERSION Windows x64 desktop release with integrity-verified installers."
+            NOTES="Bezgrow $VERSION desktop release with integrity-verified installers."
           fi
           MINIMUM_VERSION="${{ inputs.minimum_supported_version }}"
           if [ -z "$MINIMUM_VERSION" ]; then MINIMUM_VERSION="0.1.0"; fi
@@ -740,20 +792,25 @@ jobs:
             --workflow-run-id "${{ github.run_id }}"
           )
 
-          if [ -f "release-artifacts/mac/Bezgrow-mac.dmg" ]; then
+          MAC_DMG="$(find release-artifacts/mac -maxdepth 1 -name "Bezgrow-${VERSION}-*.dmg" -print -quit 2>/dev/null || true)"
+          if [ -n "$MAC_DMG" ] && [ -f "$MAC_DMG" ]; then
             MAC_ARCHITECTURE="$(cat release-artifacts/mac/mac-architecture.txt)"
+            MAC_DMG_NAME="$(basename "$MAC_DMG")"
             MAC_SIGNED="$(tr -d '\r\n' < release-artifacts/mac/mac-signing-status.txt)"
             MAC_NOTARIZED="$(tr -d '\r\n' < release-artifacts/mac/mac-notarization-status.txt)"
+            MAC_BUILD_TIMESTAMP="$(node -p "require('./release-artifacts/mac/mac-build.json').builtAt")"
             MAC_CHANNEL="internal"
             if [ "$MAC_SIGNED" = "true" ] && [ "$MAC_NOTARIZED" = "true" ]; then MAC_CHANNEL="stable"; fi
             MANIFEST_ARGS+=(
-              --mac-url "$BASE_URL/Bezgrow-mac.dmg"
-              --mac-file "release-artifacts/mac/Bezgrow-mac.dmg"
+              --mac-url "$BASE_URL/$MAC_DMG_NAME"
+              --mac-file "$MAC_DMG"
+              --mac-filename "$MAC_DMG_NAME"
               --mac-architecture "$MAC_ARCHITECTURE"
               --mac-signed "$MAC_SIGNED"
               --mac-notarized "$MAC_NOTARIZED"
               --mac-channel "$MAC_CHANNEL"
               --mac-installer-type "dmg"
+              --mac-build-timestamp "$MAC_BUILD_TIMESTAMP"
             )
             MAC_UPDATER="$(find release-artifacts/mac -maxdepth 1 -name '*.app.tar.gz' -print -quit)"
             if [ -n "$MAC_UPDATER" ]; then
@@ -865,13 +922,14 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add \
             public/downloads/desktop-release.json \
+            public/downloads/Bezgrow-mac.dmg.release.json \
             public/downloads/Bezgrow-windows.exe.release.json \
             public/downloads/Bezgrow-windows.msi.release.json
           if git diff --cached --quiet; then
             echo "Website release metadata is already up to date."
             exit 0
           fi
-          git commit -m "Publish Windows desktop release ${{ steps.release.outputs.version }}"
+          git commit -m "Publish desktop release ${{ steps.release.outputs.version }}"
           git push origin "HEAD:${{ github.event.repository.default_branch }}"
 
       - name: Verify production Windows metadata and binary endpoint
@@ -880,5 +938,33 @@ jobs:
           node scripts/verify-production-windows-download.mjs
           --site https://www.bezgrow.com
           --version "${{ steps.release.outputs.version }}"
+          --attempts 40
+          --interval-ms 15000
+
+  verify-production-mac:
+    name: Verify Production Mac Download
+    runs-on: macos-14
+    needs:
+      - mac
+      - publish
+    if: >-
+      always() &&
+      !cancelled() &&
+      needs.mac.result == 'success' &&
+      needs.publish.result == 'success'
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+      - name: Download, mount, and inspect the exact production Mac artifact
+        run: >-
+          node scripts/verify-production-mac-download.mjs
+          --site https://www.bezgrow.com
+          --version "$(node -p "require('./package.json').version")"
+          --commit "${{ github.sha }}"
           --attempts 40
           --interval-ms 15000

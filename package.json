@@ -1,6 +1,6 @@
 {
   "name": "saas-project",
-  "version": "0.1.7",
+  "version": "0.1.8",
   "private": true,
   "engines": {
     "node": ">=22 <23"
@@ -70,6 +70,7 @@
     "desktop:build:mac:public": "node scripts/build-desktop.mjs --public-mac --bundles dmg",
     "desktop:build:windows": "node scripts/build-desktop.mjs --bundles msi,nsis",
     "desktop:build:windows:public": "node scripts/build-desktop.mjs --public-windows --bundles msi,nsis",
+    "desktop:verify:production:mac": "node scripts/verify-production-mac-download.mjs",
     "desktop:package:windows:portable": "node scripts/build-windows-portable.mjs",
     "preflight:final": "node scripts/preflight-final-hardening.mjs"
   },

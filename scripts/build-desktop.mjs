@@ -7,6 +7,15 @@ import { fileURLToPath } from "node:url";
 const root = dirname(dirname(fileURLToPath(import.meta.url)));
 const packageJson = JSON.parse(readFileSync(join(root, "package.json"), "utf8"));
 const packageVersion = packageJson.version;
+const gitResult = spawnSync("git", ["rev-parse", "HEAD"], { cwd: root, encoding: "utf8" });
+const buildCommit = (process.env.BEZGROW_BUILD_COMMIT || gitResult.stdout || "").trim();
+const buildTimestamp = (process.env.BEZGROW_BUILD_TIMESTAMP || new Date().toISOString()).trim();
+if (!/^[a-f0-9]{40}$/i.test(buildCommit)) {
+  throw new Error("Desktop builds require a complete 40-character Git commit SHA.");
+}
+if (Number.isNaN(Date.parse(buildTimestamp))) {
+  throw new Error("Desktop builds require a valid ISO-8601 build timestamp.");
+}
 const releaseNotes =
   (process.env.BEZGROW_RELEASE_NOTES || "").trim() ||
   `Bezgrow ${packageVersion} supervises the bundled production runtime, recovers before exposing a browser error, and preserves the authoritative offline SQLite database.`;
@@ -15,7 +24,6 @@ const generatedConfigDir = join(root, "src-tauri");
 const generatedConfigPath = join(generatedConfigDir, "tauri.generated.conf.json");
 const tauriCli = join(root, "node_modules", "@tauri-apps", "cli", "tauri.js");
 const publicDownloadsDir = join(root, "public", "downloads");
-const publicMacDmg = join(publicDownloadsDir, "Bezgrow-mac.dmg");
 const publicMacReleaseManifest = join(root, "public", "downloads", "Bezgrow-mac.dmg.release.json");
 const publicWindowsExe = join(publicDownloadsDir, "Bezgrow-windows.exe");
 const publicWindowsMsi = join(publicDownloadsDir, "Bezgrow-windows.msi");
@@ -34,6 +42,9 @@ const targetTriple = targetArgumentIndex >= 0 ? tauriArgs[targetArgumentIndex + 
 const releaseRoot = targetTriple
   ? join(root, "src-tauri", "target", targetTriple, "release")
   : join(root, "src-tauri", "target", "release");
+const publicMacFilename = `Bezgrow-${packageVersion}-${buildArchitecture("macos")}.dmg`;
+const publicMacDmg = join(publicDownloadsDir, publicMacFilename);
+const publicMacDownloadPath = `/downloads/${publicMacFilename}`;
 
 function preserveMacAppBundle(args) {
   if (process.platform !== "darwin") return args;
@@ -81,6 +92,8 @@ function releaseTrustMetadata({ platform, filename, signed, notarized = false, p
     warning,
     blockedReason: null,
     releaseChannel: productionTrusted ? "stable" : "internal",
+    buildCommit,
+    buildTimestamp,
   };
 }
 
@@ -192,6 +205,9 @@ function tauriBuildEnv() {
   if (targetTriple) {
     env.BEZGROW_DESKTOP_TARGET = targetTriple;
   }
+  env.BEZGROW_BUILD_COMMIT = buildCommit;
+  env.BEZGROW_BUILD_TIMESTAMP = buildTimestamp;
+  env.BEZGROW_BUILD_CHANNEL = publicMacBuild || publicWindowsBuild ? "stable" : "internal";
 
   return env;
 }
@@ -249,14 +265,14 @@ function verifyPublicMacDmg() {
     publicMacReleaseManifest,
     JSON.stringify(
       {
-        file: "/downloads/Bezgrow-mac.dmg",
-        downloadUrl: "/downloads/Bezgrow-mac.dmg",
+        file: publicMacDownloadPath,
+        downloadUrl: publicMacDownloadPath,
         version: packageVersion,
         sha256,
         size: bytes.length,
         ...releaseTrustMetadata({
           platform: "macos",
-          filename: "Bezgrow-mac.dmg",
+          filename: publicMacFilename,
           signed: true,
           notarized: true,
           productionTrusted: true,
@@ -269,14 +285,14 @@ function verifyPublicMacDmg() {
   );
   writeDesktopReleaseManifest({
     mac: {
-      file: "/downloads/Bezgrow-mac.dmg",
-      downloadUrl: "/downloads/Bezgrow-mac.dmg",
+      file: publicMacDownloadPath,
+      downloadUrl: publicMacDownloadPath,
       version: packageVersion,
       sha256,
       size: bytes.length,
       ...releaseTrustMetadata({
         platform: "macos",
-        filename: "Bezgrow-mac.dmg",
+        filename: publicMacFilename,
         signed: true,
         notarized: true,
         productionTrusted: true,
@@ -463,14 +479,14 @@ function copyGeneratedInstallersForDownloads() {
     writeInstallerReleaseManifest(
       publicMacReleaseManifest,
       {
-        file: "/downloads/Bezgrow-mac.dmg",
-        downloadUrl: "/downloads/Bezgrow-mac.dmg",
+        file: publicMacDownloadPath,
+        downloadUrl: publicMacDownloadPath,
         version: packageVersion,
         sha256,
         size: bytes.length,
         ...releaseTrustMetadata({
           platform: "macos",
-          filename: "Bezgrow-mac.dmg",
+          filename: publicMacFilename,
           signed,
           notarized,
           productionTrusted: Boolean(publicMacBuild),
@@ -480,14 +496,14 @@ function copyGeneratedInstallersForDownloads() {
     );
     writeDesktopReleaseManifest({
       mac: {
-        file: "/downloads/Bezgrow-mac.dmg",
-        downloadUrl: "/downloads/Bezgrow-mac.dmg",
+        file: publicMacDownloadPath,
+        downloadUrl: publicMacDownloadPath,
         version: packageVersion,
         sha256,
         size: bytes.length,
         ...releaseTrustMetadata({
           platform: "macos",
-          filename: "Bezgrow-mac.dmg",
+          filename: publicMacFilename,
           signed,
           notarized,
           productionTrusted: Boolean(publicMacBuild),

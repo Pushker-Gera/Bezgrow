@@ -18,7 +18,12 @@ assert.match(publisher, /Recorded Windows artifact SHA-256 mismatch/, "Publicati
 assert.match(publisher, /Unrecorded Windows release asset is blocked/, "Publication must reject unrecorded Windows installer files.")
 assert.match(publisher, /No checksum was recorded/, "Every release file must be checksum-gated.")
 assert.match(publisher, /verify-release-artifact\.mjs/, "Publication must revalidate genuine installer bytes.")
+assert.match(publisher, /immutable versioned name/, "Mac publication must require a versioned immutable DMG filename.")
+assert.match(publisher, /sourceCommit/, "Mac publication must verify source-commit provenance.")
 assert.match(writer, /Published release metadata requires a local verified installer file/, "Published metadata must fail closed without a local installer.")
+assert.match(writer, /Bezgrow-mac\.dmg\.release\.json/, "Publication must write the Mac sidecar manifest.")
+assert.match(writer, /buildTimestamp/, "Published artifacts must record their build timestamp.")
+assert.match(workflow, /mac-build\.json/, "The Mac release must carry a checked build-provenance record.")
 
 const releaseGateScript = packageJson.scripts["test:release-gates"] || ""
 for (const required of [
