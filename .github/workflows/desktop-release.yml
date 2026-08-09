@@ -949,11 +949,15 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add \
-            public/downloads/desktop-release.json \
-            public/downloads/Bezgrow-mac.dmg.release.json \
-            public/downloads/Bezgrow-windows.exe.release.json \
+          METADATA_FILES=(
+            public/downloads/desktop-release.json
+            public/downloads/Bezgrow-mac.dmg.release.json
+            public/downloads/Bezgrow-windows.exe.release.json
             public/downloads/Bezgrow-windows.msi.release.json
+          )
+          for METADATA_FILE in "${METADATA_FILES[@]}"; do
+            if [ -f "$METADATA_FILE" ]; then git add "$METADATA_FILE"; fi
+          done
           if git diff --cached --quiet; then
             echo "Website release metadata is already up to date."
             exit 0

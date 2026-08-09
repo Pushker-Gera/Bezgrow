@@ -88,6 +88,11 @@ assert.match(
   /-u APPLE_CERTIFICATE[\s\S]*-u TAURI_SIGNING_PRIVATE_KEY[\s\S]*npm run desktop:build:mac/,
   "An invalid signing configuration must be removed before the internal Mac fallback build."
 )
+assert.match(
+  releaseWorkflow,
+  /if \[ -f "\$METADATA_FILE" \]; then git add "\$METADATA_FILE"; fi/,
+  "Platform-specific metadata publication must stage only sidecars that the successful artifact jobs produced."
+)
 assert.doesNotMatch(releaseWorkflow, /Stable publication and public downloads remain disabled/, "Unsigned builds must not disable real downloads.")
 assert.match(releaseManifestWriter, /productionRecommended/, "Manifest writer must separate availability from production trust.")
 assert.match(publication, /can only be published as an internal\/testing release/, "Unsigned CI metadata must be restricted to internal/testing.")

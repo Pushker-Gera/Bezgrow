@@ -1,9 +1,41 @@
 {
   "version": "0.1.8",
   "releaseNotes": [
-    "Bezgrow 0.1.8 desktop artifacts are pending a verified release build."
+    "Bezgrow 0.1.8 desktop release with the canonical local-first invoice PDF and print pipeline."
   ],
-  "generatedAt": "2026-08-09T23:00:00.000Z",
-  "publicationStatus": "draft",
-  "minimumSupportedVersion": "0.1.0"
+  "generatedAt": "2026-08-09T23:38:09.953Z",
+  "publicationStatus": "published",
+  "minimumSupportedVersion": "0.1.0",
+  "mac": {
+    "downloadUrl": "https://github.com/Pushker-Gera/Bezgrow/releases/download/v0.1.8/Bezgrow-0.1.8-arm64.dmg",
+    "publicUrl": "https://github.com/Pushker-Gera/Bezgrow/releases/download/v0.1.8/Bezgrow-0.1.8-arm64.dmg",
+    "url": "https://github.com/Pushker-Gera/Bezgrow/releases/download/v0.1.8/Bezgrow-0.1.8-arm64.dmg",
+    "filename": "Bezgrow-0.1.8-arm64.dmg",
+    "installerType": "dmg",
+    "version": "0.1.8",
+    "platform": "macos",
+    "architecture": "arm64",
+    "size": 66122399,
+    "sha256": "d8d46e92a1834d5dcb8701b34c832be651d5f59c16c771e110327ec3a4c022bf",
+    "available": true,
+    "signed": false,
+    "notarized": false,
+    "checksumVerified": true,
+    "metadataValid": true,
+    "productionRecommended": false,
+    "warning": "Internal/testing build: this macOS installer is not notarized and macOS may show a security warning.",
+    "blockedReason": null,
+    "releaseChannel": "internal",
+    "generatedAt": "2026-08-09T23:38:09.948Z",
+    "createdAt": "2026-08-09T23:38:09.948Z",
+    "releaseNotes": "Bezgrow 0.1.8 desktop release with the canonical local-first invoice PDF and print pipeline.",
+    "minimumSupportedVersion": "0.1.0",
+    "updaterCompatibility": "tauri-v2",
+    "updaterSignatureVerified": false,
+    "publicationStatus": "published",
+    "releaseDate": "2026-08-09T23:38:09.948Z",
+    "buildCommit": "456d9a93ca09f33276b10b7dcd5a68030c6096a7",
+    "buildTimestamp": "2026-08-09T23:22:59.040Z",
+    "workflowRunId": "31341576720"
+  }
 }
