@@ -281,12 +281,9 @@ jobs:
               throw new Error("Mounted app build identity does not match the release source.");
             }
           ' "$BUNDLED_APP/Contents/Resources/next-server/public/desktop-build.json" "$VERSION" "$GITHUB_SHA"
-          if grep -R -a -q 'Create secure share link' "$BUNDLED_APP/Contents/Resources/next-server"; then
-            echo "Mounted app still contains the obsolete secure-share modal."
-            exit 1
-          fi
-          grep -R -a -q 'Automatic mode sends only this explicitly selected invoice PDF' "$BUNDLED_APP/Contents/Resources/next-server"
-          grep -a -q 'desktop_open_pdf_for_print' "$BUNDLED_APP/Contents/MacOS/Bezgrow"
+          node scripts/verify-packaged-invoice-delivery.mjs \
+            --server-root "$BUNDLED_APP/Contents/Resources/next-server/.next" \
+            --executable "$BUNDLED_APP/Contents/MacOS/Bezgrow"
           hdiutil detach -quiet "$MOUNT_DIR"
           rmdir "$MOUNT_DIR"
           trap - EXIT

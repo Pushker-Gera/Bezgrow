@@ -26,7 +26,7 @@ assert.match(writer, /Published release metadata requires a local verified insta
 assert.match(writer, /Bezgrow-mac\.dmg\.release\.json/, "Publication must write the Mac sidecar manifest.")
 assert.match(writer, /buildTimestamp/, "Published artifacts must record their build timestamp.")
 assert.match(workflow, /mac-build\.json/, "The Mac release must carry a checked build-provenance record.")
-assert.match(workflow, /Automatic mode sends only this explicitly selected invoice PDF/, "Mac artifact staging must verify the current professional invoice-delivery UI.")
+assert.match(workflow, /verify-packaged-invoice-delivery\.mjs/, "Mac artifact staging must verify the packaged professional invoice-delivery implementation.")
 assert.doesNotMatch(workflow, /The exact previewed invoice PDF remains on this device/, "Mac artifact staging must not require obsolete invoice-share copy.")
 
 const releaseGateScript = packageJson.scripts["test:release-gates"] || ""

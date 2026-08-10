@@ -138,8 +138,8 @@ async function inspectMountedDmg(dmgPath, installer, temporaryRoot) {
     if (packagedJavaScript.some((source) => source.includes("Create secure share link"))) {
       throw new Error("Mounted production app still contains the obsolete secure-share modal.")
     }
-    if (!packagedJavaScript.some((source) => source.includes("The exact previewed invoice PDF remains on this device"))) {
-      throw new Error("Mounted production app is missing the local-first WhatsApp/PDF marker.")
+    if (!packagedJavaScript.some((source) => source.includes("Automatic mode sends only this explicitly selected invoice PDF"))) {
+      throw new Error("Mounted production app is missing the explicit WhatsApp Business delivery boundary.")
     }
     if (!packagedJavaScript.some((source) => source.includes("canonical-pdf-preview"))) {
       throw new Error("Mounted production app is missing the canonical PDF preview implementation.")

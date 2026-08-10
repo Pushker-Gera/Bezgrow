@@ -119,6 +119,7 @@ assert.match(productionWindowsVerifier, /releases\\\/download/, "Production veri
 assert.match(productionMacVerifier, /method: "GET"/, "Production Mac verification must download the complete installer with GET.")
 assert.match(productionMacVerifier, /hdiutil/, "Production Mac verification must mount the downloaded DMG.")
 assert.match(productionMacVerifier, /Create secure share link/, "Production Mac verification must reject the obsolete sharing implementation.")
+assert.match(productionMacVerifier, /Automatic mode sends only this explicitly selected invoice PDF/, "Production Mac verification must require the explicit invoice-delivery boundary.")
 assert.match(productionMacVerifier, /desktop_open_pdf_for_print/, "Production Mac verification must require the canonical native print command.")
 
 const peFixtureDirectory = mkdtempSync(join(tmpdir(), "bezgrow-pe-validator-"))
