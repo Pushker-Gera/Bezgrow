@@ -10,7 +10,7 @@ export type DesktopSavedFile = {
 
 export type DesktopOpenedPdf = DesktopSavedFile & {
   pageCount: number
-  status: "opened"
+  status: "dialog_opened" | "completed" | "cancelled"
 }
 
 export type CsvColumn<Row> = {
@@ -155,16 +155,28 @@ export async function openPdfForNativePrinting(
   }
 
   const objectUrl = URL.createObjectURL(new Blob([bytes.slice().buffer as ArrayBuffer], { type: "application/pdf" }))
-  const link = document.createElement("a")
-  link.href = objectUrl
-  link.target = "_blank"
-  link.rel = "noopener noreferrer"
-  link.style.display = "none"
-  document.body.appendChild(link)
-  link.click()
-  link.remove()
-  globalThis.setTimeout(() => URL.revokeObjectURL(objectUrl), 5 * 60_000)
-  return { path: filename, filename, bytes: bytes.byteLength, pageCount: expectedPageCount, status: "opened" }
+  const frame = document.createElement("iframe")
+  frame.title = `Print ${filename}`
+  frame.style.position = "fixed"
+  frame.style.width = "1px"
+  frame.style.height = "1px"
+  frame.style.right = "0"
+  frame.style.bottom = "0"
+  frame.style.border = "0"
+  frame.style.opacity = "0"
+  frame.src = objectUrl
+  frame.addEventListener("load", () => {
+    globalThis.setTimeout(() => {
+      frame.contentWindow?.focus()
+      frame.contentWindow?.print()
+    }, 50)
+  }, { once: true })
+  document.body.appendChild(frame)
+  globalThis.setTimeout(() => {
+    frame.remove()
+    URL.revokeObjectURL(objectUrl)
+  }, 5 * 60_000)
+  return { path: filename, filename, bytes: bytes.byteLength, pageCount: expectedPageCount, status: "dialog_opened" }
 }
 
 export async function exportCsv<Row>(

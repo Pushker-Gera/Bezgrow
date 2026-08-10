@@ -11,6 +11,7 @@ const ALLOWED_CONTROL_PLANE_PATHS = [
   "/api/desktop-release",
   "/api/desktop-updater/",
   "/api/diagnostics/upload",
+  "/api/integrations/whatsapp/invoice",
 ]
 
 function isAllowedControlPlanePath(apiPath: string) {

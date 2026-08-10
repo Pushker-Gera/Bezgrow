@@ -3,11 +3,16 @@
 import { useEffect, useMemo, useRef, useState } from "react"
 import {
   createInvoiceEmailDraft,
+  createProfessionalInvoiceMessage,
   createInvoiceShareText,
   createWhatsAppInvoiceUrl,
   normalizeWhatsAppPhone,
   validateCustomerEmail,
 } from "@/lib/invoice-share"
+import {
+  getWhatsAppBusinessAvailability,
+  sendCanonicalInvoiceWithWhatsAppBusiness,
+} from "@/lib/whatsapp-business-client"
 import {
   downloadInvoicePdf,
   saveInvoicePdf,
@@ -48,6 +53,9 @@ type ShareDialogState = {
   busy: boolean
   error: string
   preparedFile?: DesktopSavedFile
+  automaticStatus?: "checking" | "available" | "unavailable"
+  automaticLabel?: string
+  automaticDetail?: string
 }
 
 const PDF_REGENERATION_DEBOUNCE_MS = 180
@@ -173,15 +181,21 @@ export function PrintEngine({
   }
 
   function printInvoice() {
-    void runAction("Opening PDF", async () => {
+    void runAction("Opening print dialog", async () => {
       const document = await currentDocument()
       const opened = await openPdfForNativePrinting(document.filename, document.bytes, document.pageCount)
       if (opened.bytes !== document.bytes.byteLength || opened.pageCount !== document.pageCount) {
         throw new Error("The operating system received a different PDF than the validated preview.")
       }
-      rememberPdfOpenedForPrint(effectiveInvoice, format)
-      setHistory(getReprintHistory().filter((entry) => entry.invoiceId === invoice.id))
-      setNotice("The exact validated PDF opened in your default PDF app. Choose Print there to use the operating-system printer dialog; cancelling it does not leave Bezgrow loading.")
+      if (opened.status !== "cancelled") {
+        rememberPdfOpenedForPrint(effectiveInvoice, format)
+        setHistory(getReprintHistory().filter((entry) => entry.invoiceId === invoice.id))
+      }
+      setNotice(opened.status === "cancelled"
+        ? "Printing was cancelled. The validated invoice remains ready, and you can print again immediately."
+        : opened.status === "completed"
+          ? "The operating system accepted the exact validated invoice PDF for printing."
+          : "The system print dialog opened with the exact validated invoice PDF. Closing or cancelling it leaves Bezgrow ready to print again.")
     })
   }
 
@@ -200,9 +214,13 @@ export function PrintEngine({
       if (opened.bytes !== document.bytes.byteLength || opened.pageCount !== document.pageCount) {
         throw new Error("The operating system received a different PDF than the validated preview.")
       }
-      rememberPdfOpenedForPrint(effectiveInvoice, format)
-      setHistory(getReprintHistory().filter((entry) => entry.invoiceId === invoice.id))
-      setNotice(`${resultNotice("PDF saved", result)}. Auto Print After Save opened that exact PDF in your default PDF app.`)
+      if (opened.status !== "cancelled") {
+        rememberPdfOpenedForPrint(effectiveInvoice, format)
+        setHistory(getReprintHistory().filter((entry) => entry.invoiceId === invoice.id))
+      }
+      setNotice(opened.status === "cancelled"
+        ? `${resultNotice("PDF saved", result)}. Automatic printing was cancelled; you can print again immediately.`
+        : `${resultNotice("PDF saved", result)}. Auto Print After Save passed that exact PDF to the system print dialog.`)
     })
   }
 
@@ -233,15 +251,38 @@ export function PrintEngine({
   function prepareInvoiceShare(channel: ShareChannel) {
     void runAction(channel === "whatsapp" ? "Preparing WhatsApp" : "Preparing email", async () => {
       const document = await currentDocument()
-      setShareDialog({
+      const dialog: ShareDialogState = {
         channel,
         artifact: document,
         phone: normalizeWhatsAppPhone(invoice.customer.phone) || (invoice.customer.phone === "-" ? "" : invoice.customer.phone),
         email: validateCustomerEmail(invoice.customer.email) || (invoice.customer.email === "-" ? "" : invoice.customer.email),
         busy: false,
         error: "",
-      })
+        ...(channel === "whatsapp" ? { automaticStatus: "checking" as const } : {}),
+      }
+      setShareDialog(dialog)
       setNotice("The exact previewed invoice PDF is ready locally.")
+      if (channel === "whatsapp") {
+        try {
+          const availability = await getWhatsAppBusinessAvailability(invoice.enterprise.organizationId)
+          setShareDialog((current) => current?.artifact.key === document.key ? {
+            ...current,
+            automaticStatus: availability.configured ? "available" : "unavailable",
+            automaticLabel: availability.senderLabel,
+            automaticDetail: availability.configured
+              ? "Official WhatsApp Business delivery is configured for this business."
+              : "Official WhatsApp Business delivery is not configured. Manual fallback remains available.",
+          } : current)
+        } catch (error) {
+          setShareDialog((current) => current?.artifact.key === document.key ? {
+            ...current,
+            automaticStatus: "unavailable",
+            automaticDetail: error instanceof Error
+              ? `Automatic delivery is unavailable: ${error.message}`
+              : "Automatic delivery is unavailable. Manual fallback remains available.",
+          } : current)
+        }
+      }
     })
   }
 
@@ -251,6 +292,7 @@ export function PrintEngine({
       customerPhone: contact.phone,
       customerEmail: contact.email,
       enterpriseName: invoice.enterprise.name,
+      enterprisePhone: invoice.enterprise.phone,
       invoiceNumber: invoice.invoiceNumber,
       invoiceDate: invoice.invoiceDate,
       amount: invoice.totals.grandTotal,
@@ -267,7 +309,7 @@ export function PrintEngine({
       setNotice("Prepared email message copied.")
       return
     }
-    await navigator.clipboard.writeText(createInvoiceShareText(input))
+    await navigator.clipboard.writeText(createProfessionalInvoiceMessage(input, "manual"))
     setNotice("Prepared WhatsApp message copied.")
   }
 
@@ -353,7 +395,7 @@ export function PrintEngine({
         const url = createWhatsAppInvoiceUrl(preparedShareInput({ ...dialog, phone }))
         if (!url) throw new Error("The WhatsApp number is invalid.")
         await openExternalUrl(url)
-        setNotice("WhatsApp opened on the correct customer with the prepared message, and the exact local PDF is selected for attachment. Bezgrow did not upload or automatically send anything.")
+        setNotice("WhatsApp opened in manual mode with the professional message. The exact local PDF is ready to attach; Bezgrow did not upload it or press Send.")
       } else {
         const draft = createInvoiceEmailDraft(preparedShareInput({ ...dialog, email }))
         await openExternalUrl(draft.mailtoUrl)
@@ -371,6 +413,33 @@ export function PrintEngine({
         ...current,
         busy: false,
         error: error instanceof Error ? error.message : "The prepared message could not be opened.",
+      } : null)
+    }
+  }
+
+  async function sendAutomaticWhatsApp(dialog: ShareDialogState) {
+    if (dialog.busy || dialog.automaticStatus !== "available") return
+    const phone = normalizeWhatsAppPhone(dialog.phone)
+    if (!phone) {
+      setShareDialog({ ...dialog, error: "Enter a valid mobile number with country code." })
+      return
+    }
+    setShareDialog({ ...dialog, phone, busy: true, error: "" })
+    try {
+      const result = await sendCanonicalInvoiceWithWhatsAppBusiness({
+        organizationId: invoice.enterprise.organizationId,
+        destination: phone,
+        message: createProfessionalInvoiceMessage(preparedShareInput({ ...dialog, phone }), "attached"),
+        artifact: dialog.artifact,
+      })
+      setNotice(`Invoice ${invoice.invoiceNumber} was accepted by ${result.senderLabel} for WhatsApp delivery. Message ID: ${result.messageId}.`)
+      setShareDialog((current) => current ? { ...current, phone, busy: false, error: "" } : null)
+    } catch (error) {
+      setShareDialog((current) => current ? {
+        ...current,
+        phone,
+        busy: false,
+        error: error instanceof Error ? `Unable to send invoice: ${error.message}` : "Unable to send invoice through WhatsApp Business.",
       } : null)
     }
   }
@@ -495,7 +564,7 @@ export function PrintEngine({
           {notice && <p className="print-notice">{notice}</p>}
 
           <section className="action-grid">
-            <button onClick={printInvoice} disabled={Boolean(pendingAction)}>{pendingAction === "Opening PDF" ? "Opening..." : "Print"}</button>
+            <button onClick={printInvoice} disabled={Boolean(pendingAction)}>{pendingAction === "Opening print dialog" ? "Opening..." : "Print"}</button>
             <button onClick={savePdf} disabled={Boolean(pendingAction)}>{pendingAction === "Saving PDF" ? "Saving..." : "Save PDF"}</button>
             <button onClick={downloadPdf} disabled={Boolean(pendingAction)}>{pendingAction === "Downloading PDF" ? "Downloading..." : "Download PDF"}</button>
             <button onClick={sharePdf} disabled={Boolean(pendingAction)}>{pendingAction === "Sharing PDF" ? "Sharing..." : "Share PDF"}</button>
@@ -544,14 +613,16 @@ export function PrintEngine({
           <section className="share-confirm-modal" role="dialog" aria-modal="true" aria-labelledby="share-dialog-title">
             <div>
               <p className="panel-eyebrow">{shareDialog.channel === "whatsapp" ? "WhatsApp Invoice" : "Email Invoice"}</p>
-              <h2 id="share-dialog-title">Prepare local PDF share</h2>
-              <p className="share-modal-helper">The exact previewed invoice PDF remains on this device. Bezgrow does not upload it or require an online Bezgrow sign-in.</p>
+              <h2 id="share-dialog-title">{shareDialog.channel === "whatsapp" ? "Send invoice PDF" : "Prepare email draft"}</h2>
+              <p className="share-modal-helper">{shareDialog.channel === "whatsapp" && shareDialog.automaticStatus === "available"
+                ? "Automatic mode sends only this explicitly selected invoice PDF, destination number, and message through the configured official WhatsApp Business account."
+                : "Manual mode keeps the PDF local and leaves the final attachment and Send action under your control."}</p>
             </div>
             <dl className="share-summary-grid">
               <div><dt>Invoice</dt><dd>{invoice.invoiceNumber}</dd></div>
               <div><dt>Customer</dt><dd>{invoice.customer.name}</dd></div>
               <div><dt>File</dt><dd>{shareDialog.artifact.filename}</dd></div>
-              <div><dt>Storage</dt><dd>Local-only</dd></div>
+              <div><dt>Delivery</dt><dd>{shareDialog.channel === "whatsapp" && shareDialog.automaticStatus === "available" ? "Official API or manual" : "Manual fallback"}</dd></div>
             </dl>
             {shareDialog.channel === "whatsapp" ? (
               <label className="share-field">
@@ -564,13 +635,28 @@ export function PrintEngine({
                 <input value={shareDialog.email} onChange={(event) => setShareDialog({ ...shareDialog, email: event.target.value, error: "" })} inputMode="email" placeholder="customer@example.com" />
               </label>
             )}
-            {shareDialog.error && <div className="share-offline-box"><strong>{shareDialog.error}</strong><p>The PDF remains on this device.</p></div>}
+            {shareDialog.channel === "whatsapp" && (
+              <div className="share-offline-box">
+                <strong>{shareDialog.automaticStatus === "checking"
+                  ? "Checking official WhatsApp Business availability…"
+                  : shareDialog.automaticStatus === "available"
+                    ? `Automatic delivery available via ${shareDialog.automaticLabel || "WhatsApp Business"}.`
+                    : "Automatic delivery unavailable — manual fallback is ready."}</strong>
+                {shareDialog.automaticDetail && <p>{shareDialog.automaticDetail}</p>}
+              </div>
+            )}
+            {shareDialog.error && <div className="share-offline-box"><strong>{shareDialog.error}</strong><p>No delivery success has been claimed. The local canonical PDF remains unchanged.</p></div>}
             <div className="share-modal-actions">
               <button type="button" onClick={() => void savePreparedPdf(shareDialog)} disabled={shareDialog.busy}>Save PDF</button>
               <button type="button" onClick={() => void sharePreparedAttachment(shareDialog)} disabled={shareDialog.busy}>Share PDF with OS</button>
               <button type="button" onClick={() => void copyPreparedMessage(shareDialog)} disabled={shareDialog.busy}>{shareDialog.channel === "email" ? "Copy Email Message" : "Copy prepared message"}</button>
-              <button type="button" className="primary" onClick={() => void openPreparedMessage(shareDialog)} disabled={shareDialog.busy}>
-                {shareDialog.busy ? "Opening..." : shareDialog.channel === "email" ? "Open Email Draft" : "Open WhatsApp"}
+              {shareDialog.channel === "whatsapp" && shareDialog.automaticStatus === "available" && (
+                <button type="button" className="primary" onClick={() => void sendAutomaticWhatsApp(shareDialog)} disabled={shareDialog.busy}>
+                  {shareDialog.busy ? "Sending…" : "Send PDF automatically"}
+                </button>
+              )}
+              <button type="button" className={shareDialog.channel === "email" || shareDialog.automaticStatus !== "available" ? "primary" : ""} onClick={() => void openPreparedMessage(shareDialog)} disabled={shareDialog.busy}>
+                {shareDialog.busy ? "Opening..." : shareDialog.channel === "email" ? "Open Email Draft" : "Open WhatsApp manually"}
               </button>
               <button type="button" onClick={() => setShareDialog(null)} disabled={shareDialog.busy}>Close</button>
             </div>

@@ -11,6 +11,8 @@ assert.match(workflow, /release-gates:\s*[\s\S]*npm run test:release-gates/, "De
 assert.match(workflow, /mac:\s*[\s\S]*needs:\s*release-gates/, "The Mac build must require the release-gate job.")
 assert.match(workflow, /windows:\s*[\s\S]*needs:\s*release-gates/, "The Windows build must require the release-gate job.")
 assert.match(workflow, /runs-on:\s*windows-latest[\s\S]*--bundles", "msi,nsis"/, "Genuine Windows x64 NSIS and MSI builds must run on windows-latest.")
+assert.match(workflow, /needs\.mac\.result == 'success' &&[\s\S]*needs\.windows\.result == 'success'/, "Publication must require both platform builds from the same workflow.")
+assert.match(publisher, /verifiedPlatforms\.includes\("macos"\)[\s\S]*verifiedPlatforms\.includes\("windows-x64-nsis-msi"\)/, "Publication input verification must reject partial platform releases.")
 assert.match(workflow, /Compute release checksums[\s\S]*Verify genuine publication inputs[\s\S]*Create or update GitHub Release/, "Checksums and installer bytes must pass before GitHub Release mutation.")
 assert.match(workflow, /verify-release-publication-inputs\.mjs/, "The release workflow must execute the publication input verifier.")
 assert.match(publisher, /\["nsis", "msi"\]/, "Publication must require both NSIS and MSI records.")

@@ -539,6 +539,34 @@ export async function localLicenseSnapshot(organizationId = workspaceOrganizatio
   return { device_id: deviceId, ...status }
 }
 
+export async function getExplicitControlPlaneActionAuth(
+  organizationId = workspaceOrganizationId() || "global",
+) {
+  const [deviceId, status] = await Promise.all([
+    getOrCreateDeviceId(),
+    getLocalLicenseStatus(organizationId),
+  ])
+  if (!status.allowed || !status.license) {
+    throw new Error(status.reason || "A valid local licence is required for this online action.")
+  }
+
+  const license = status.license as StoredLicenseRow & Record<string, unknown>
+  const licenseKey = stringValue(license.license_key) || await readDesktopSecret(LICENSE_SECRET_KEY) || ""
+  if (!licenseKey) throw new Error("The signed local licence key is unavailable.")
+  const parsed = parseLicenseInput(licenseKey)
+  if (parsed.payload.device_id !== deviceId) {
+    throw new Error("The signed licence does not match this device.")
+  }
+  if (organizationId !== "global" && parsed.payload.business_id !== organizationId) {
+    throw new Error("The signed licence does not match this business.")
+  }
+  return {
+    licenseKey,
+    deviceId,
+    businessId: parsed.payload.business_id,
+  }
+}
+
 export async function removeLocalLicenseFromDevice(confirmation: string) {
   if (confirmation.trim().toUpperCase() !== REMOVE_LICENSE_CONFIRMATION) {
     throw new Error(`Type ${REMOVE_LICENSE_CONFIRMATION} to confirm licence removal.`)

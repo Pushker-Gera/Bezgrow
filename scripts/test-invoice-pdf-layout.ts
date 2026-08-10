@@ -119,7 +119,7 @@ async function run() {
   const fixtureDirectory = process.env.BEZGROW_PRINT_EVIDENCE_DIR || "tmp/pdfs/bezgrow-invoice-layout-qa"
   const keepFixtures = process.env.BEZGROW_KEEP_PDF_FIXTURES === "1"
   if (keepFixtures) mkdirSync(fixtureDirectory, { recursive: true })
-  for (const itemCount of [1, 5, 20]) {
+  for (const itemCount of [1, 5, 10, 20]) {
     for (const gst of [true, false]) {
       for (const expected of formats) {
         const bytes = await createInvoicePdf(

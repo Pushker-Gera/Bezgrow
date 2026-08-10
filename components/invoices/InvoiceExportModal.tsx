@@ -304,7 +304,11 @@ export function InvoiceExportModal(props: Props) {
       if (opened.bytes !== result.bytes.byteLength || opened.pageCount !== result.pageCount) {
         throw new Error("The operating system received a different report PDF than the preview.")
       }
-      props.onNotice("The exact report PDF opened in your default PDF app. Choose Print there to use the operating-system printer dialog.")
+      props.onNotice(opened.status === "cancelled"
+        ? "Report printing was cancelled. The exact report PDF remains ready to print again."
+        : opened.status === "completed"
+          ? "The operating system accepted the exact report PDF for printing."
+          : "The system print dialog opened with the exact report PDF.")
     } catch (nextError) {
       setError(nextError instanceof Error ? nextError.message : "The operating system rejected printing.")
     } finally {

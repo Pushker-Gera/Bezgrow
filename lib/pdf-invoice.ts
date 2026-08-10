@@ -366,7 +366,7 @@ function drawHeader(context: PdfContext, page: PDFPage, invoice: PrintInvoice, t
   const nameLines = wrapText(invoice.enterprise.name, bold, nameSize, brandWidth, compact ? 3 : 2)
   nameLines.forEach((line, index) => drawText(page, bold, line, brandX, top - 15 - index * (nameSize + 2), nameSize, ink(settings), brandWidth))
   const detailsStart = top - (compact ? 53 : 45)
-  drawText(page, regular, invoice.enterprise.address, brandX, detailsStart, fontSize(settings, compact ? 7.2 : 8.5), muted(settings), brandWidth)
+  drawText(page, regular, invoice.enterprise.address, brandX, detailsStart, fontSize(settings, compact ? 7.2 : 8.2), muted(settings), brandWidth)
   const contact = [
     invoice.enterprise.gstNumber !== "-" ? `GST: ${invoice.enterprise.gstNumber}` : "",
     invoice.enterprise.phone !== "-" ? `Phone: ${invoice.enterprise.phone}` : "",
@@ -374,9 +374,9 @@ function drawHeader(context: PdfContext, page: PDFPage, invoice: PrintInvoice, t
   if (contact) drawText(page, regular, contact, brandX, detailsStart - 13, fontSize(settings, compact ? 6.5 : 7.8), muted(settings), brandWidth)
   if (!compact) {
     const secondary = [
-      invoice.enterprise.email !== "-" ? invoice.enterprise.email : "",
+      invoice.enterprise.email !== "-" ? `Email: ${invoice.enterprise.email}` : "",
       invoice.enterprise.fssai !== "-" ? `FSSAI: ${invoice.enterprise.fssai}` : "",
-      invoice.enterprise.branchName !== "-" ? `Branch: ${invoice.enterprise.branchName}` : "",
+      invoice.enterprise.website !== "-" ? invoice.enterprise.website : "",
     ].filter(Boolean).join(" | ")
     if (secondary) drawText(page, regular, secondary, brandX, detailsStart - 24, fontSize(settings, 6.7), muted(settings), brandWidth)
   }
@@ -384,9 +384,18 @@ function drawHeader(context: PdfContext, page: PDFPage, invoice: PrintInvoice, t
   page.drawRectangle({ x: cardX, y: top - 58, width: cardWidth, height: 56, color: soft(settings), borderColor: border(settings), borderWidth: 0.8 })
   drawText(page, bold, invoice.invoiceTitle, cardX + 10, top - 17, fontSize(settings, 8), muted(settings))
   drawText(page, bold, invoice.invoiceNumber, cardX + 10, top - 35, fontSize(settings, compact ? 11 : 14), accent(settings), cardWidth - 20)
-  drawText(page, regular, `Date: ${dateText(invoice.invoiceDate)}`, cardX + 10, top - 49, fontSize(settings, 8), ink(settings))
-  page.drawLine({ start: { x: margin, y: top - 72 }, end: { x: page.getWidth() - margin, y: top - 72 }, thickness: 1.4, color: ink(settings) })
-  return top - 84
+  drawText(page, regular, `Date: ${dateText(invoice.invoiceDate)}`, cardX + 10, top - 49, fontSize(settings, 7.4), ink(settings))
+  if (!compact) {
+    drawText(page, regular, `Due: ${dateText(invoice.dueDate)}`, cardX + 88, top - 49, fontSize(settings, 7.4), ink(settings), cardWidth - 98)
+    const operational = [
+      invoice.enterprise.branchName !== "-" ? `Branch: ${invoice.enterprise.branchName}` : "",
+      invoice.salesperson !== "-" ? `Salesperson: ${invoice.salesperson}` : "",
+    ].filter(Boolean).join(" | ")
+    if (operational) drawText(page, regular, operational, cardX + 10, top - 66, fontSize(settings, 6.5), muted(settings), cardWidth - 20)
+  }
+  const dividerY = top - (compact ? 72 : 78)
+  page.drawLine({ start: { x: margin, y: dividerY }, end: { x: page.getWidth() - margin, y: dividerY }, thickness: 1.4, color: ink(settings) })
+  return dividerY - 12
 }
 
 function drawCustomer(context: PdfContext, page: PDFPage, invoice: PrintInvoice, y: number, compact = false) {
@@ -400,28 +409,52 @@ function drawCustomer(context: PdfContext, page: PDFPage, invoice: PrintInvoice,
   }
   drawText(page, bold, "BILL TO", margin + 10, y - 15, fontSize(settings, 7), accent(settings))
   drawText(page, bold, invoice.customer.name, margin + 10, y - 31, fontSize(settings, compact ? 10 : 12), ink(settings), width - 20)
-  drawText(page, regular, invoice.customer.phone, margin + 10, y - 45, fontSize(settings, 8), muted(settings), width - 20)
-  if (!compact) drawText(page, regular, invoice.customer.address, margin + 10, y - 58, fontSize(settings, 8), muted(settings), width - 20)
+  const customerContact = [invoice.customer.phone, invoice.customer.email].filter((value) => value && value !== "-").join(" | ") || "-"
+  drawText(page, regular, customerContact, margin + 10, y - 45, fontSize(settings, compact ? 7 : 7.5), muted(settings), width - 20)
+  if (!compact) drawText(page, regular, invoice.customer.address, margin + 10, y - 58, fontSize(settings, 7.4), muted(settings), width - 20)
   const taxX = margin + width + gap + 10
   drawText(page, bold, "TAX & PAYMENT", taxX, y - 15, fontSize(settings, 7), accent(settings))
-  if (settings.showGstDetails) drawText(page, regular, `GSTIN: ${invoice.customer.gstin}`, taxX, y - 31, fontSize(settings, 8), ink(settings), width - 20)
-  drawText(page, regular, `Payment: ${invoice.payment.mode}`, taxX, y - 45, fontSize(settings, 8), ink(settings), width - 20)
-  if (!compact) drawText(page, regular, `Due: ${dateText(invoice.dueDate)}`, taxX, y - 58, fontSize(settings, 8), ink(settings), width - 20)
+  if (settings.showGstDetails) drawText(page, regular, `GSTIN: ${invoice.customer.gstin}`, taxX, y - 31, fontSize(settings, 7.5), ink(settings), width - 20)
+  drawText(page, regular, `State: ${invoice.customer.state} (${invoice.customer.stateCode})`, taxX, y - 44, fontSize(settings, compact ? 6.8 : 7.2), muted(settings), width - 20)
+  drawText(page, regular, `Payment: ${invoice.payment.mode}`, taxX, y - (compact ? 56 : 57), fontSize(settings, 7.4), ink(settings), width - 20)
   return y - height - 10
 }
 
 function tableColumns(page: PDFPage, settings: PrintSettings, compact: boolean) {
   const margin = pageMargin(settings, compact)
   const available = page.getWidth() - margin * 2
-  const columns = [
-    { key: "item", label: "Item", ratio: settings.pharmaMode ? 0.35 : 0.42 },
-    ...(settings.pharmaMode ? [{ key: "batch", label: "Batch / Exp", ratio: 0.17 }] : []),
-    ...(settings.showHsn ? [{ key: "hsn", label: "HSN", ratio: 0.11 }] : []),
-    { key: "qty", label: "Qty", ratio: 0.09 },
-    { key: "rate", label: "Rate", ratio: 0.14 },
-    ...(settings.showGstDetails ? [{ key: "gst", label: "GST", ratio: 0.10 }] : []),
-    { key: "amount", label: "Amount", ratio: 0.16 },
-  ]
+  const columns = compact
+    ? [
+        { key: "index", label: "#", ratio: 0.055 },
+        { key: "item", label: "Item", ratio: settings.pharmaMode ? 0.33 : 0.41 },
+        ...(settings.pharmaMode ? [{ key: "batch", label: "Batch / Exp", ratio: 0.15 }] : []),
+        ...(settings.showHsn ? [{ key: "hsn", label: "HSN", ratio: 0.11 }] : []),
+        { key: "qty", label: "Qty", ratio: 0.09 },
+        { key: "rate", label: "Rate", ratio: 0.13 },
+        ...(settings.showGstDetails ? [{ key: "gst", label: "GST", ratio: 0.095 }] : []),
+        { key: "amount", label: "Amount", ratio: 0.16 },
+      ]
+    : [
+        { key: "index", label: "Sr", ratio: 0.035 },
+        { key: "item", label: "Item", ratio: settings.pharmaMode ? 0.135 : 0.19 },
+        ...(settings.pharmaMode ? [{ key: "batch", label: "Batch / Exp", ratio: 0.09 }] : []),
+        ...(settings.showHsn ? [{ key: "hsn", label: "HSN", ratio: 0.062 }] : []),
+        { key: "qty", label: "Qty", ratio: 0.047 },
+        { key: "free", label: "Free", ratio: 0.04 },
+        { key: "unit", label: "Unit", ratio: 0.045 },
+        { key: "mrp", label: "MRP", ratio: 0.06 },
+        { key: "rate", label: "Rate", ratio: 0.06 },
+        { key: "discount", label: "Disc", ratio: 0.055 },
+        { key: "taxable", label: "Taxable", ratio: 0.072 },
+        ...(settings.showGstDetails
+          ? [
+              { key: "cgst", label: "CGST", ratio: 0.066 },
+              { key: "sgst", label: "SGST", ratio: 0.066 },
+              { key: "igst", label: "IGST", ratio: 0.066 },
+            ]
+          : []),
+        { key: "amount", label: "Amount", ratio: 0.078 },
+      ]
   const totalRatio = columns.reduce((sum, column) => sum + column.ratio, 0)
   let x = margin
   return columns.map((column) => {
@@ -439,26 +472,36 @@ function drawTableHeader(context: PdfContext, page: PDFPage, y: number, compact:
   const height = compact ? 18 : 21
   page.drawRectangle({ x: margin, y: y - height, width: page.getWidth() - margin * 2, height, color: ink(settings) })
   for (const column of columns) {
-    drawText(page, bold, column.label, column.x + 4, y - height + 6, fontSize(settings, compact ? 6.2 : 7), WHITE, column.width - 8)
+    drawText(page, bold, column.label, column.x + (compact ? 4 : 2), y - height + 6, fontSize(settings, compact ? 6.2 : 5), WHITE, column.width - (compact ? 8 : 4))
   }
   return { columns, y: y - height }
 }
 
-function itemCell(item: PrintInvoiceItem, key: string) {
+function itemCell(item: PrintInvoiceItem, key: string, index = 0) {
+  if (key === "index") return String(index + 1)
   if (key === "item") return item.name
   if (key === "batch") return `${item.batchNumber} / ${item.expiryDate}`
   if (key === "hsn") return item.hsnCode
-  if (key === "qty") return `${item.quantity} ${item.unit}`
+  if (key === "qty") return String(item.quantity)
+  if (key === "free") return String(item.freeQuantity)
+  if (key === "unit") return item.unit
+  if (key === "mrp") return item.mrp.toFixed(2)
   if (key === "rate") return money(item.rate)
   if (key === "gst") return `${item.cgstPercent + item.sgstPercent + item.igstPercent}%`
+  if (key === "discount") return `${item.discountPercent.toFixed(1)}% ${item.discountAmount.toFixed(2)}`
+  if (key === "taxable") return item.taxableValue.toFixed(2)
+  if (key === "cgst") return `${item.cgstPercent.toFixed(1)}% ${item.cgstAmount.toFixed(2)}`
+  if (key === "sgst") return `${item.sgstPercent.toFixed(1)}% ${item.sgstAmount.toFixed(2)}`
+  if (key === "igst") return `${item.igstPercent.toFixed(1)}% ${item.igstAmount.toFixed(2)}`
   return money(item.finalAmount)
 }
 
-function drawItemRow(context: PdfContext, page: PDFPage, item: PrintInvoiceItem, y: number, compact: boolean, rowHeight?: number) {
+function drawItemRow(context: PdfContext, page: PDFPage, item: PrintInvoiceItem, index: number, y: number, compact: boolean, rowHeight?: number) {
   const { regular, bold, settings } = context
   const columns = tableColumns(page, settings, compact)
   const margin = pageMargin(settings, compact)
   const height = rowHeight || (compact ? 22 : 28)
+  const rowFontSize = fontSize(settings, compact ? 6.6 : 5.15)
   page.drawRectangle({
     x: margin,
     y: y - height,
@@ -472,12 +515,12 @@ function drawItemRow(context: PdfContext, page: PDFPage, item: PrintInvoiceItem,
     drawText(
       page,
       column.key === "item" || column.key === "amount" ? bold : regular,
-      itemCell(item, column.key),
-      column.x + 4,
-      y - height + Math.max(3, (height - fontSize(settings, compact ? 6.6 : 7.7)) / 2),
-      fontSize(settings, compact ? 6.6 : 7.7),
+      itemCell(item, column.key, index),
+      column.x + (compact ? 4 : 2),
+      y - height + Math.max(3, (height - rowFontSize) / 2),
+      rowFontSize,
       ink(settings),
-      column.width - 8
+      column.width - (compact ? 8 : 4)
     )
   }
   return y - height
@@ -621,14 +664,14 @@ function renderPagedInvoice(context: PdfContext, invoice: PrintInvoice) {
     : defaultRowHeight
   const rowHeight = Math.max(minimumRowHeight, Math.min(defaultRowHeight, fittedRowHeight))
 
-  for (const item of invoice.items) {
+  for (const [itemIndex, item] of invoice.items.entries()) {
     if (y - rowHeight < bottomReserve) {
       current = addDocumentPage(context, invoice, true)
       pageRecords.push({ page: current.page, compact: current.compact })
       header = drawTableHeader(context, current.page, current.y, current.compact)
       y = header.y
     }
-    y = drawItemRow(context, current.page, item, y, current.compact, rowHeight)
+    y = drawItemRow(context, current.page, item, itemIndex, y, current.compact, rowHeight)
   }
   if (y < bottomReserve + 10) {
     current = addDocumentPage(context, invoice, true)
@@ -655,40 +698,48 @@ function renderHalfTopInvoice(context: PdfContext, invoice: PrintInvoice) {
   const width = page.getWidth()
   const height = page.getHeight()
   const topHalfBottom = height / 2
-  const margin = 16
+  const margin = 20
   if (settings.blackAndWhite) page.drawRectangle({ x: 0, y: topHalfBottom, width, height: topHalfBottom, color: WHITE })
   if (settings.showWatermark) {
     drawCenteredWatermark(context, page, invoice, { x: 0, y: topHalfBottom, width, height: topHalfBottom })
   }
 
-  let y = height - 15
+  let y = height - 18
   let brandX = margin
   if (settings.showLogo && logo) {
-    drawContainedImage(page, logo, margin, y - 29, 29, 29)
-    brandX += 36
+    drawContainedImage(page, logo, margin, y - 42, 42, 42)
+    brandX += 50
   }
-  const metaX = width - margin - 172
+  const metaX = width - margin - 186
   const brandWidth = Math.max(80, metaX - brandX - 10)
-  const businessNameLines = wrapText(invoice.enterprise.name, bold, fontSize(settings, 10.5), brandWidth, 2)
-  businessNameLines.forEach((line, index) => drawText(page, bold, line, brandX, y - 10 - index * 11, fontSize(settings, 10.5), ink(settings), brandWidth))
-  drawText(page, regular, invoice.enterprise.address, brandX, y - 33, fontSize(settings, 6.3), muted(settings), brandWidth)
-  page.drawRectangle({ x: metaX, y: y - 31, width: 172, height: 31, color: soft(settings), borderColor: border(settings), borderWidth: 0.7 })
-  drawText(page, bold, invoice.invoiceTitle, metaX + 8, y - 11, fontSize(settings, 6.5), muted(settings))
-  drawText(page, bold, invoice.invoiceNumber, metaX + 8, y - 24, fontSize(settings, 9), accent(settings), 100)
-  drawText(page, regular, dateText(invoice.invoiceDate), metaX + 116, y - 24, fontSize(settings, 6.5), ink(settings), 48)
-  y -= 39
+  const businessNameSize = fontSize(settings, 14)
+  const businessNameLines = wrapText(invoice.enterprise.name, bold, businessNameSize, brandWidth, 2)
+  businessNameLines.forEach((line, index) => drawText(page, bold, line, brandX, y - 13 - index * 14, businessNameSize, ink(settings), brandWidth))
+  drawText(page, regular, invoice.enterprise.address, brandX, y - 43, fontSize(settings, 7.4), muted(settings), brandWidth)
+  const enterpriseIdentity = [
+    invoice.enterprise.gstNumber !== "-" ? `GST: ${invoice.enterprise.gstNumber}` : "",
+    invoice.enterprise.phone !== "-" ? `Phone: ${invoice.enterprise.phone}` : "",
+  ].filter(Boolean).join(" | ")
+  if (enterpriseIdentity) drawText(page, regular, enterpriseIdentity, brandX, y - 54, fontSize(settings, 6.6), muted(settings), brandWidth)
+  page.drawRectangle({ x: metaX, y: y - 52, width: 186, height: 52, color: soft(settings), borderColor: border(settings), borderWidth: 0.7 })
+  drawText(page, bold, invoice.invoiceTitle, metaX + 10, y - 14, fontSize(settings, 7.4), muted(settings))
+  drawText(page, bold, invoice.invoiceNumber, metaX + 10, y - 32, fontSize(settings, 11.5), accent(settings), 112)
+  drawText(page, regular, `Date: ${dateText(invoice.invoiceDate)}`, metaX + 10, y - 45, fontSize(settings, 7), ink(settings), 82)
+  drawText(page, regular, `Due: ${dateText(invoice.dueDate)}`, metaX + 96, y - 45, fontSize(settings, 7), ink(settings), 80)
+  y -= 60
   page.drawLine({ start: { x: margin, y }, end: { x: width - margin, y }, thickness: 1, color: ink(settings) })
-  y -= 16
-  drawText(page, bold, "BILL TO", margin, y, fontSize(settings, 6.2), accent(settings))
-  drawText(page, bold, invoice.customer.name, margin + 44, y, fontSize(settings, 8), ink(settings), 155)
-  drawText(page, regular, invoice.customer.phone, margin + 205, y, fontSize(settings, 7), muted(settings), 80)
-  drawText(page, regular, invoice.customer.address, margin + 290, y, fontSize(settings, 7), muted(settings), width - margin * 2 - 290)
-  y -= 10
+  y -= 15
+  drawText(page, bold, "BILL TO", margin, y, fontSize(settings, 7), accent(settings))
+  drawText(page, bold, invoice.customer.name, margin + 50, y, fontSize(settings, 9.2), ink(settings), 200)
+  drawText(page, regular, invoice.customer.phone, margin + 255, y, fontSize(settings, 7.5), muted(settings), 85)
+  drawText(page, regular, invoice.customer.address, margin + 345, y, fontSize(settings, 7.2), muted(settings), width - margin * 2 - 345)
+  y -= 12
   if (settings.showGstDetails) {
-    drawText(page, regular, `GSTIN: ${invoice.customer.gstin}`, margin + 44, y, fontSize(settings, 6.5), muted(settings), 180)
+    drawText(page, regular, `GSTIN: ${invoice.customer.gstin}`, margin + 50, y, fontSize(settings, 6.8), muted(settings), 190)
   }
-  drawText(page, regular, `Payment: ${invoice.payment.mode}`, margin + 290, y, fontSize(settings, 6.5), muted(settings), 100)
-  y -= 11
+  drawText(page, regular, `State: ${invoice.customer.state} (${invoice.customer.stateCode})`, margin + 255, y, fontSize(settings, 6.8), muted(settings), 135)
+  drawText(page, regular, `Payment: ${invoice.payment.mode}`, margin + 395, y, fontSize(settings, 6.8), muted(settings), 130)
+  y -= 13
 
   const columns = [
     { label: "#", x: margin, width: 24 },
@@ -700,15 +751,15 @@ function renderHalfTopInvoice(context: PdfContext, invoice: PrintInvoice) {
   ]
   const amountX = columns.at(-1)!.x + columns.at(-1)!.width
   columns.push({ label: "Amount", x: amountX, width: width - margin - amountX })
-  const headerHeight = 13
+  const headerHeight = 16
   page.drawRectangle({ x: margin, y: y - headerHeight, width: width - margin * 2, height: headerHeight, color: ink(settings) })
-  columns.forEach((column) => drawText(page, bold, column.label, column.x + 3, y - 9, fontSize(settings, 5.8), WHITE, column.width - 6))
+  columns.forEach((column) => drawText(page, bold, column.label, column.x + 3, y - 11, fontSize(settings, 6.2), WHITE, column.width - 6))
   y -= headerHeight
 
-  const footerReserve = 105
+  const footerReserve = 110
   const rowHeight = invoice.items.length > 0
-    ? Math.max(7.2, Math.min(12, (y - topHalfBottom - footerReserve) / invoice.items.length))
-    : 12
+    ? Math.max(7.4, Math.min(13, (y - topHalfBottom - footerReserve) / invoice.items.length))
+    : 13
   for (const [index, item] of invoice.items.entries()) {
     if (y - rowHeight < topHalfBottom + footerReserve - 0.5) {
       throw new Error("Half A4 Top supports up to 20 standard invoice lines without clipping.")
@@ -718,35 +769,35 @@ function renderHalfTopInvoice(context: PdfContext, invoice: PrintInvoice) {
       String(index + 1), item.name, ...(settings.showHsn ? [item.hsnCode] : []), `${item.quantity} ${item.unit}`,
       money(item.rate), ...(settings.showGstDetails ? [`${item.cgstPercent + item.sgstPercent + item.igstPercent}%`] : []), money(item.finalAmount),
     ]
-    columns.forEach((column, columnIndex) => drawText(page, columnIndex === 1 || columnIndex === columns.length - 1 ? bold : regular, values[columnIndex], column.x + 3, y - rowHeight + Math.max(2, (rowHeight - 6.2) / 2), fontSize(settings, 6.2), ink(settings), column.width - 6))
+    columns.forEach((column, columnIndex) => drawText(page, columnIndex === 1 || columnIndex === columns.length - 1 ? bold : regular, values[columnIndex], column.x + 3, y - rowHeight + Math.max(2, (rowHeight - 6.6) / 2), fontSize(settings, 6.6), ink(settings), column.width - 6))
     y -= rowHeight
   }
 
   y -= 5
   const totalsX = width - margin - 178
-  drawText(page, bold, "Amount in words", margin, y - 8, fontSize(settings, 6), accent(settings))
-  wrapText(invoice.totals.amountInWords, regular, fontSize(settings, 7), totalsX - margin - 10, 2).forEach((line, index) => drawText(page, regular, line, margin, y - 19 - index * 9, fontSize(settings, 7), ink(settings)))
+  drawText(page, bold, "Amount in words", margin, y - 8, fontSize(settings, 6.6), accent(settings))
+  wrapText(invoice.totals.amountInWords, regular, fontSize(settings, 7.4), totalsX - margin - 10, 2).forEach((line, index) => drawText(page, regular, line, margin, y - 19 - index * 9, fontSize(settings, 7.4), ink(settings)))
   if (invoice.terms.length) {
-    drawText(page, bold, "Terms", margin, y - 40, fontSize(settings, 5.8), accent(settings))
-    drawText(page, regular, invoice.terms.join(" | "), margin + 30, y - 40, fontSize(settings, 5.8), muted(settings), totalsX - margin - 40)
+    drawText(page, bold, "Terms", margin, y - 40, fontSize(settings, 6.1), accent(settings))
+    drawText(page, regular, invoice.terms.join(" | "), margin + 32, y - 40, fontSize(settings, 6.1), muted(settings), totalsX - margin - 42)
   }
   const totalLines = [
     ["Subtotal", invoice.totals.subtotal], ["Discount", invoice.totals.discount],
     ...(settings.showGstDetails ? [["CGST", invoice.totals.cgst], ["SGST", invoice.totals.sgst], ["IGST", invoice.totals.igst]] as Array<[string, number]> : []),
   ] as Array<[string, number]>
   totalLines.forEach(([label, value], index) => {
-    drawText(page, regular, label, totalsX, y - 7 - index * 8, fontSize(settings, 6), muted(settings))
+    drawText(page, regular, label, totalsX, y - 7 - index * 8, fontSize(settings, 6.4), muted(settings))
     const valueText = money(value)
-    drawText(page, bold, valueText, width - margin - bold.widthOfTextAtSize(valueText, fontSize(settings, 6)), y - 7 - index * 8, fontSize(settings, 6), ink(settings))
+    drawText(page, bold, valueText, width - margin - bold.widthOfTextAtSize(valueText, fontSize(settings, 6.4)), y - 7 - index * 8, fontSize(settings, 6.4), ink(settings))
   })
   const grandY = y - 10 - totalLines.length * 8
-  drawText(page, bold, "Grand Total", totalsX, grandY, fontSize(settings, 8), accent(settings))
+  drawText(page, bold, "Grand Total", totalsX, grandY, fontSize(settings, 8.5), accent(settings))
   const grandText = money(invoice.totals.grandTotal)
-  drawText(page, bold, grandText, width - margin - bold.widthOfTextAtSize(grandText, fontSize(settings, 8)), grandY, fontSize(settings, 8), accent(settings))
+  drawText(page, bold, grandText, width - margin - bold.widthOfTextAtSize(grandText, fontSize(settings, 8.5)), grandY, fontSize(settings, 8.5), accent(settings))
 
   const codeY = topHalfBottom + 19
   if (settings.showBarcode) drawCode39(page, invoice.barcodeValue, margin, codeY + 12, 115, 21, ink(settings))
-  if (settings.showQr && qr) drawContainedImage(page, qr, margin + (settings.showBarcode ? 129 : 0), codeY, 34, 34)
+  if (settings.showQr && qr) drawContainedImage(page, qr, margin + (settings.showBarcode ? 129 : 0), codeY, 36, 36)
   if (settings.showSignature) {
     page.drawLine({ start: { x: width - margin - 112, y: codeY + 11 }, end: { x: width - margin, y: codeY + 11 }, thickness: 0.6, color: muted(settings) })
     drawText(page, regular, "Authorized Signatory", width - margin - 112, codeY, fontSize(settings, 6.2), muted(settings), 112)
@@ -849,7 +900,14 @@ function renderThermalInvoice(context: PdfContext, invoice: PrintInvoice) {
   }
   const thankYouY = Math.max(19, y)
   drawCenteredText(page, bold, "Thank you", thankYouY, fontSize(settings, 8), ink(settings))
-  drawCenteredText(page, regular, "Generated by Bezgrow", thankYouY - 10, fontSize(settings, 6.6), muted(settings))
+  drawCenteredText(
+    page,
+    regular,
+    "Generated by Bezgrow",
+    thankYouY - 10,
+    fontSize(settings, settings.thermalWidth === "58mm" ? 4.6 : 5.8),
+    muted(settings),
+  )
 }
 
 export async function createInvoicePdf(

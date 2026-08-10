@@ -47,6 +47,22 @@ use sqlx::{
 };
 use tauri::{Manager, WebviewUrl};
 
+#[cfg(target_os = "macos")]
+use objc2::MainThreadMarker;
+#[cfg(target_os = "macos")]
+use objc2_app_kit::NSPrintInfo;
+#[cfg(target_os = "macos")]
+use objc2_foundation::NSData;
+#[cfg(target_os = "macos")]
+use objc2_pdf_kit::{PDFDocument, PDFPrintScalingMode};
+
+#[cfg(target_os = "windows")]
+use webview2_com::Microsoft::Web::WebView2::Win32::{
+    ICoreWebView2_16, COREWEBVIEW2_PRINT_DIALOG_KIND_SYSTEM,
+};
+#[cfg(target_os = "windows")]
+use windows::core::Interface;
+
 const KEYCHAIN_SERVICE: &str = "com.bezgrow.erp";
 const LOCAL_DATABASE_NAME: &str = "bezgrow-offline.db";
 const WINDOWS_APP_DATA_DIR: &str = "Bezgrow";
@@ -1160,45 +1176,168 @@ fn unique_pdf_print_path(directory: &Path, filename: &str) -> PathBuf {
     directory.join(format!("{stem}-{unique}.pdf"))
 }
 
-fn open_pdf_with_default_application(path: &Path) -> Result<(), String> {
+fn cleanup_stale_pdf_print_files(directory: &Path) {
+    let Ok(entries) = fs::read_dir(directory) else {
+        return;
+    };
+    let mut files = entries
+        .flatten()
+        .map(|entry| entry.path())
+        .filter(|path| path.extension().and_then(|value| value.to_str()) == Some("pdf"))
+        .filter_map(|path| {
+            let modified = fs::metadata(&path).ok()?.modified().ok()?;
+            Some((path, modified))
+        })
+        .collect::<Vec<_>>();
+    files.sort_by(|left, right| right.1.cmp(&left.1));
+    let now = SystemTime::now();
+    for (index, (path, modified)) in files.into_iter().enumerate() {
+        let expired = now
+            .duration_since(modified)
+            .is_ok_and(|age| age.as_secs() > 24 * 60 * 60);
+        if index >= 24 || expired {
+            let _ = fs::remove_file(path);
+        }
+    }
+}
+
+fn open_validated_pdf_with_native_print_dialog<R: tauri::Runtime>(
+    app: &tauri::AppHandle<R>,
+    path: &Path,
+    bytes: Vec<u8>,
+) -> Result<&'static str, String> {
     #[cfg(target_os = "macos")]
     {
-        Command::new("open").arg(path).spawn().map_err(|error| {
-            format!("Unable to open the invoice in the macOS PDF application: {error}")
-        })?;
-        return Ok(());
+        use std::sync::Arc;
+
+        let main_window = app
+            .get_webview_window("main")
+            .ok_or_else(|| "The Bezgrow window is unavailable for native printing.".to_string())?;
+        let print_result = Arc::new(Mutex::new(None::<Result<bool, String>>));
+        let callback_result = Arc::clone(&print_result);
+        main_window
+            .with_webview(move |_platform_webview| {
+                let result = (|| unsafe {
+                    let mtm = MainThreadMarker::new().ok_or_else(|| {
+                        "The macOS print panel must be opened on the main thread.".to_string()
+                    })?;
+                    let data = NSData::with_bytes(&bytes);
+                    let document = PDFDocument::initWithData(mtm.alloc::<PDFDocument>(), &data)
+                        .ok_or_else(|| {
+                            "PDFKit could not load the validated invoice PDF.".to_string()
+                        })?;
+                    if !document.allowsPrinting() {
+                        return Err("The invoice PDF does not permit printing.".to_string());
+                    }
+                    let print_info = NSPrintInfo::sharedPrintInfo();
+                    let operation = document
+                        .printOperationForPrintInfo_scalingMode_autoRotate(
+                            Some(&print_info),
+                            PDFPrintScalingMode::PageScaleDownToFit,
+                            true,
+                            mtm,
+                        )
+                        .ok_or_else(|| {
+                            "PDFKit could not create the native invoice print operation."
+                                .to_string()
+                        })?;
+                    operation.setShowsPrintPanel(true);
+                    operation.setShowsProgressPanel(true);
+                    Ok(operation.runOperation())
+                })();
+                if let Ok(mut slot) = callback_result.lock() {
+                    *slot = Some(result);
+                }
+            })
+            .map_err(|error| format!("Unable to open the macOS system print dialog: {error}"))?;
+        let completed = print_result
+            .lock()
+            .map_err(|_| "The macOS print result could not be read.".to_string())?
+            .take()
+            .ok_or_else(|| "The macOS print operation did not start.".to_string())??;
+        let _ = path;
+        return Ok(if completed { "completed" } else { "cancelled" });
     }
 
     #[cfg(target_os = "windows")]
     {
-        windows_hidden_command("rundll32.exe")
-            .arg("url.dll,FileProtocolHandler")
-            .arg(path)
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .spawn()
-            .map_err(|error| {
-                format!("Unable to open the invoice in the Windows PDF application: {error}")
+        let url = tauri::Url::from_file_path(path)
+            .map_err(|_| "Unable to convert the invoice PDF path into a local URL.".to_string())?;
+        if let Some(window) = app.get_webview_window("invoice-native-print") {
+            window.navigate(url).map_err(|error| {
+                format!("Unable to load the invoice in the native print bridge: {error}")
             })?;
-        return Ok(());
+            return Ok("dialog_opened");
+        }
+
+        let print_app = app.clone();
+        let builder = tauri::WebviewWindowBuilder::new(
+            app,
+            "invoice-native-print",
+            WebviewUrl::External(url),
+        )
+        .title("Bezgrow Native Invoice Print")
+        .inner_size(1.0, 1.0)
+        .visible(false)
+        .skip_taskbar(true)
+        .decorations(false)
+        .resizable(false)
+        .on_page_load(move |window, payload| {
+            if payload.event() != tauri::webview::PageLoadEvent::Finished {
+                return;
+            }
+            let callback_app = print_app.clone();
+            let schedule_result = window.with_webview(move |platform_webview| {
+                let print_result = (|| unsafe {
+                    let controller = platform_webview.controller();
+                    let webview = controller.CoreWebView2().map_err(|error| {
+                        format!("Unable to access the WebView2 document: {error}")
+                    })?;
+                    let print_webview: ICoreWebView2_16 = webview.cast().map_err(|error| {
+                        format!(
+                            "This WebView2 runtime does not support the system print UI: {error}"
+                        )
+                    })?;
+                    print_webview
+                        .ShowPrintUI(COREWEBVIEW2_PRINT_DIALOG_KIND_SYSTEM)
+                        .map_err(|error| {
+                            format!("Windows could not open the system print dialog: {error}")
+                        })?;
+                    Ok::<(), String>(())
+                })();
+                match print_result {
+                    Ok(()) => append_startup_log_handle(
+                        &callback_app,
+                        "Windows system print dialog opened for the validated invoice PDF",
+                    ),
+                    Err(error) => append_startup_log_handle(
+                        &callback_app,
+                        format!("Windows system print dialog failed: {error}"),
+                    ),
+                }
+            });
+            if let Err(error) = schedule_result {
+                append_startup_log_handle(
+                    &print_app,
+                    format!("Unable to schedule the Windows native print dialog: {error}"),
+                );
+            }
+        });
+        let builder = builder.data_directory(managed_data_directory(app, "WebViewInvoicePrint")?);
+        builder.build().map_err(|error| {
+            format!("Unable to create the Windows native print bridge: {error}")
+        })?;
+        let _ = bytes;
+        return Ok("dialog_opened");
     }
 
-    #[cfg(target_os = "linux")]
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     {
-        Command::new("xdg-open")
-            .arg(path)
-            .spawn()
-            .map_err(|error| {
-                format!("Unable to open the invoice in the system PDF application: {error}")
-            })?;
-        return Ok(());
-    }
-
-    #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
-    {
-        let _ = path;
-        Err("Opening a PDF for printing is not supported on this platform.".to_string())
+        let _ = (app, path, bytes);
+        Err(
+            "The native invoice print dialog is supported on macOS and Windows desktop builds."
+                .to_string(),
+        )
     }
 }
 
@@ -1215,6 +1354,7 @@ fn desktop_open_pdf_for_print<R: tauri::Runtime>(
     fs::create_dir_all(&directory).map_err(|error| {
         format!("Unable to create Bezgrow's temporary PDF print folder: {error}")
     })?;
+    cleanup_stale_pdf_print_files(&directory);
     let destination = unique_pdf_print_path(&directory, &filename);
     let temporary = destination.with_extension("pdf.tmp");
 
@@ -1239,10 +1379,11 @@ fn desktop_open_pdf_for_print<R: tauri::Runtime>(
     if written != bytes {
         return Err("The temporary invoice PDF bytes changed after writing.".to_string());
     }
-    open_pdf_with_default_application(&destination)?;
+    let print_status =
+        open_validated_pdf_with_native_print_dialog(&app, &destination, written.clone())?;
     append_startup_log_handle(
         &app,
-        "Validated PDF opened in the operating-system PDF application",
+        format!("Validated invoice PDF passed to native print UI; status={print_status}"),
     );
 
     Ok(DesktopOpenedPdf {
@@ -1254,7 +1395,7 @@ fn desktop_open_pdf_for_print<R: tauri::Runtime>(
             .to_string(),
         bytes: written.len() as u64,
         page_count: written_page_count,
-        status: "opened",
+        status: print_status,
     })
 }
 
@@ -3321,10 +3462,13 @@ pub fn run() {
         .on_window_event(|window, event| match event {
             tauri::WindowEvent::CloseRequested { api, .. } => {
                 let app = window.app_handle().clone();
-                if window.label() == "platform-admin" {
+                if window.label() == "platform-admin" || window.label() == "invoice-native-print" {
                     append_startup_log_handle(
                         &app,
-                        "Auxiliary window platform-admin closed; local ERP remains open",
+                        format!(
+                            "Auxiliary window {} closed; local ERP remains open",
+                            window.label()
+                        ),
                     );
                     return;
                 }
