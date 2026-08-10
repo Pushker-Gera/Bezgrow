@@ -83,9 +83,16 @@ function Get-BezgrowProcessTree([int]$RootProcessId) {
 
 function Assert-NoVisibleConsoleProcess([System.Diagnostics.Process]$ApplicationProcess, [int]$Cycle) {
   $tree = @(Get-BezgrowProcessTree $ApplicationProcess.Id)
-  $forbidden = @($tree | Where-Object { $_.Name -in @("cmd.exe", "powershell.exe", "pwsh.exe", "conhost.exe", "WindowsTerminal.exe") })
-  if ($forbidden.Count -gt 0) {
-    throw "Launch cycle $Cycle created a console/terminal process: $($forbidden.Name -join ', ')."
+  $visibleConsoles = @(
+    $tree |
+      Where-Object { $_.Name -in @("cmd.exe", "powershell.exe", "pwsh.exe", "conhost.exe", "WindowsTerminal.exe") } |
+      ForEach-Object {
+        $process = Get-Process -Id $_.ProcessId -ErrorAction SilentlyContinue
+        if ($process -and $process.MainWindowHandle -ne [IntPtr]::Zero) { $_ }
+      }
+  )
+  if ($visibleConsoles.Count -gt 0) {
+    throw "Launch cycle $Cycle exposed a visible console/terminal window: $($visibleConsoles.Name -join ', ')."
   }
   foreach ($node in @(Get-BezgrowNodeProcesses)) {
     $process = Get-Process -Id $node.ProcessId -ErrorAction SilentlyContinue
@@ -394,6 +401,7 @@ function Invoke-AppLaunchCycle(
   } 15 "Launch cycle $Cycle left an orphan bundled Node process."
 }
 
+try {
 Invoke-Installer @("/S")
 Assert-Path $application "Program Files application was not installed."
 Assert-Path $uninstaller "Uninstaller was not registered."
@@ -457,3 +465,13 @@ Invoke-InstalledSqliteCrud "verify"
 
 Write-SmokeDiagnostics "All installer smoke checks completed successfully." $null
 Write-Host "windows-installer-smoke-ok cycles=4 start_menu=ok desktop_shortcut=ok console_windows=none fixed_port=43124 health=ok route=ok sqlite_crud=ok license_persistence=ok offline=ok runtime_recovery=ok window_controls=ok external_browser=none orphan_processes=0 update_preservation=ok uninstall_preservation=ok reinstall=ok"
+} catch {
+  Write-SmokeDiagnostics "Installer smoke failed: $($_.Exception.Message)" $null
+  throw
+} finally {
+  Remove-BezgrowOfflineRules
+  Get-Process -Name "Bezgrow" -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+  Get-BezgrowNodeProcesses | ForEach-Object {
+    Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue
+  }
+}

@@ -94,6 +94,8 @@ assert.match(workflow, /test-windows-installer\.ps1/, "Windows CI must validate 
 assert.match(workflow, /Bezgrow-\$\{version\}-windows-x64-setup\.exe/, "The published NSIS filename must be stable, versioned, and platform-specific.")
 assert.match(workflow, /Bezgrow-\$\{version\}-windows-x64\.msi/, "The published MSI filename must be stable, versioned, and platform-specific.")
 assert.match(installerTest, /ProgramFiles[\s\S]*CommonDesktopDirectory[\s\S]*CommonPrograms/, "Installer QA must verify Program Files and shortcuts.")
+assert.match(installerTest, /visibleConsoles[\s\S]*MainWindowHandle -ne \[IntPtr\]::Zero/, "Installer QA must distinguish a real visible console window from an invisible Windows console host.")
+assert.match(installerTest, /finally[\s\S]*Get-Process -Name "Bezgrow"[\s\S]*Get-BezgrowNodeProcesses/, "Installer QA must clean the application and managed server after every failure path.")
 assert.match(installerTest, /update-preservation-test[\s\S]*\/UPDATE[\s\S]*Uninstall removed Bezgrow user data/, "Installer QA must verify update and uninstall data preservation.")
 assert.match(installerTest, /bundled server[\s\S]*\/login[\s\S]*authoritative SQLite database/i, "Installer QA must launch the installed app and verify its local server and database.")
 assert.match(installerTest, /orphan bundled Node process/i, "Installer QA must reject orphaned background server processes.")
