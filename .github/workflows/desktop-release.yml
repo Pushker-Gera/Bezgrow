@@ -285,7 +285,7 @@ jobs:
             echo "Mounted app still contains the obsolete secure-share modal."
             exit 1
           fi
-          grep -R -a -q 'The exact previewed invoice PDF remains on this device' "$BUNDLED_APP/Contents/Resources/next-server"
+          grep -R -a -q 'Automatic mode sends only this explicitly selected invoice PDF' "$BUNDLED_APP/Contents/Resources/next-server"
           grep -a -q 'desktop_open_pdf_for_print' "$BUNDLED_APP/Contents/MacOS/Bezgrow"
           hdiutil detach -quiet "$MOUNT_DIR"
           rmdir "$MOUNT_DIR"
