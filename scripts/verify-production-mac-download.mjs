@@ -50,6 +50,16 @@ function jsFilesUnder(root) {
   return files
 }
 
+function allFilesUnder(root) {
+  const files = []
+  for (const entry of readdirSync(root, { withFileTypes: true })) {
+    const filename = join(root, entry.name)
+    if (entry.isDirectory()) files.push(...allFilesUnder(filename))
+    else files.push(filename)
+  }
+  return files
+}
+
 async function download(url, installer, label, outputPath) {
   const response = await fetch(url, {
     method: "GET",
@@ -133,6 +143,13 @@ async function inspectMountedDmg(dmgPath, installer, temporaryRoot) {
       throw new Error("Mounted production app was built from a dirty source tree.")
     }
 
+    const privateDataFiles = allFilesUnder(app).filter((filename) =>
+      /(?:\.db(?:-wal|-shm)?|\.sqlite(?:3)?|runtime\.json|device-id\.json|local-license\.json)$/i.test(filename)
+    )
+    if (privateDataFiles.length > 0) {
+      throw new Error(`Mounted production app contains private runtime or ERP data: ${privateDataFiles.join(", ")}`)
+    }
+
     const serverRoot = join(app, "Contents", "Resources", "next-server", ".next")
     const packagedJavaScript = jsFilesUnder(serverRoot).map((filename) => readFileSync(filename, "utf8"))
     if (packagedJavaScript.some((source) => source.includes("Create secure share link"))) {
@@ -168,6 +185,7 @@ async function inspectMountedDmg(dmgPath, installer, temporaryRoot) {
       pdf: "canonical",
       print: "desktop_open_pdf_for_print",
       launched: launch,
+      bundledPrivateDataFiles: 0,
       artifactFilename: installer.filename,
     }
   } finally {

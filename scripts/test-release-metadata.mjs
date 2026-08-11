@@ -50,11 +50,11 @@ for (const [key, installer] of Object.entries(manifest)) {
     if (installer.platform === "windows") {
       assert.match(
         installer.warning,
-        /Microsoft Defender SmartScreen warning because this installer is not yet code-signed/,
+        /SmartScreen/,
         `${key} Windows trust warning is missing.`
       )
     } else {
-      assert.match(installer.warning, /Internal\/testing build:/, `${key} trust warning is missing.`)
+      assert.match(installer.warning, /notarized|notarization/i, `${key} trust warning is missing.`)
     }
   }
 }

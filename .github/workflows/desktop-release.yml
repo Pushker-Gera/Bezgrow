@@ -10,7 +10,7 @@ on:
       platform:
         description: "Desktop platform to build. Publishing requires all; a single platform produces CI artifacts only."
         required: true
-        default: windows
+        default: all
         type: choice
         options:
           - windows
@@ -558,8 +558,8 @@ jobs:
 
           New-Item -ItemType Directory -Force release-artifacts | Out-Null
           $staged = [ordered]@{
-            nsis = "release-artifacts\Bezgrow-${version}-windows-x64-setup.exe"
-            msi = "release-artifacts\Bezgrow-${version}-windows-x64.msi"
+            nsis = "release-artifacts\Bezgrow-Setup-${version}-x64.exe"
+            msi = "release-artifacts\Bezgrow-${version}-x64.msi"
             native = "release-artifacts\Bezgrow-${version}-windows-x64.exe"
             portable = "release-artifacts\Bezgrow-${version}-x64-portable.exe"
             portableZip = "release-artifacts\Bezgrow-${version}-x64-portable.zip"
@@ -797,7 +797,22 @@ jobs:
             echo "No genuine release assets were downloaded."
             exit 1
           fi
-          gh release upload "$TAG" "${ASSETS[@]}" --clobber
+          for ASSET in "${ASSETS[@]}"; do
+            ASSET_NAME="$(basename "$ASSET")"
+            if gh release view "$TAG" --json assets --jq '.assets[].name' | grep -Fxq "$ASSET_NAME"; then
+              EXISTING_DIRECTORY="$(mktemp -d)"
+              gh release download "$TAG" --pattern "$ASSET_NAME" --dir "$EXISTING_DIRECTORY"
+              if ! cmp -s "$ASSET" "$EXISTING_DIRECTORY/$ASSET_NAME"; then
+                echo "Immutable release asset $ASSET_NAME already exists with different bytes."
+                rm -rf "$EXISTING_DIRECTORY"
+                exit 1
+              fi
+              rm -rf "$EXISTING_DIRECTORY"
+              echo "Immutable release asset $ASSET_NAME already exists with identical bytes."
+            else
+              gh release upload "$TAG" "$ASSET"
+            fi
+          done
 
       - name: Write verified website release metadata
         if: steps.release.outputs.draft != 'true'
@@ -861,8 +876,8 @@ jobs:
               WINDOWS_SIGNED=true
               WINDOWS_CHANNEL="stable"
             fi
-            WINDOWS_EXE="$(find "$WINDOWS_DIR" -maxdepth 1 -name 'Bezgrow-*-windows-x64-setup.exe' -print -quit)"
-            WINDOWS_MSI="$(find "$WINDOWS_DIR" -maxdepth 1 -name 'Bezgrow-*-windows-x64.msi' -print -quit)"
+            WINDOWS_EXE="$(find "$WINDOWS_DIR" -maxdepth 1 -name 'Bezgrow-Setup-*-x64.exe' -print -quit)"
+            WINDOWS_MSI="$(find "$WINDOWS_DIR" -maxdepth 1 -name 'Bezgrow-*-x64.msi' -print -quit)"
             WINDOWS_PORTABLE="$(find "$WINDOWS_DIR" -maxdepth 1 -name 'Bezgrow-*-x64-portable.exe' -print -quit)"
             WINDOWS_PORTABLE_ZIP="$(find "$WINDOWS_DIR" -maxdepth 1 -name 'Bezgrow-*-x64-portable.zip' -print -quit)"
             if [ -z "$WINDOWS_EXE" ] || [ -z "$WINDOWS_MSI" ]; then

@@ -424,11 +424,12 @@ async function validateUncached(candidate: InstallerCandidate): Promise<Validate
       metadataValid &&
       releaseChannel === "stable"
   )
+  const available = checksumVerified && metadataValid
   const warning =
     candidate.platform === "macos" && (!signed || !notarized)
-      ? "Internal/testing build: this macOS installer is not notarized and macOS may show a security warning."
+      ? "Unsigned development distribution. macOS may display a security warning. This build has not yet been Apple notarized."
       : candidate.platform === "windows" && !signed
-        ? "Windows may show a Microsoft Defender SmartScreen warning because this installer is not yet code-signed. Verify that the publisher is Bezgrow and continue only if downloaded from bezgrow.com."
+        ? "Unsigned Windows build. Windows SmartScreen may show a warning because an Authenticode certificate has not yet been configured."
         : !metadataValid
           ? "Installer is available, but some release metadata is incomplete."
           : null
@@ -445,14 +446,16 @@ async function validateUncached(candidate: InstallerCandidate): Promise<Validate
     contentType: contentTypes[extension] || bytes.contentType,
     size: bytes.size,
     sha256: bytes.sha256,
-    available: true,
+    available,
     signed,
     notarized,
     checksumVerified,
     metadataValid,
     productionRecommended,
     warning,
-    blockedReason: null,
+    blockedReason: available
+      ? null
+      : "Installer bytes passed package validation, but immutable version, architecture, size, filename, and SHA-256 metadata are required before download.",
     releaseChannel,
     generatedAt: candidate.generatedAt || null,
     releaseNotes: candidate.releaseNotes || null,

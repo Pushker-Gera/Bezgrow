@@ -15,6 +15,8 @@ assert.match(route, /binaryInstallerResponse/, "Validated installers must be ret
 assert.match(route, /status:\s*200/, "The download endpoint must return HTTP 200 for genuine installer bytes.")
 assert.match(route, /Content-Disposition/, "The download endpoint must set an explicit installer filename.")
 assert.match(route, /Content-Type/, "The download endpoint must set a binary installer content type.")
+assert.match(route, /X-Bezgrow-Artifact-Sha256/, "The download endpoint must expose the verified SHA-256 identity.")
+assert.match(route, /metadata expects[\s\S]*source reports/, "The download endpoint must reject source-size drift.")
 assert.doesNotMatch(route, /signed\s*!==\s*true|notarized\s*!==\s*true/, "Trust status must not disable downloads.")
 assert.match(page, /<DownloadButton href=\{downloadHref\} available=\{info\.available\}>/, "Button state must follow availability.")
 assert.match(page, /disabled/, "Unavailable platforms must render a disabled button.")

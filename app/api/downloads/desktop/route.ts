@@ -22,7 +22,11 @@ async function binaryInstallerResponse(
   request: Request,
   filename: string,
   contentType: string,
-  expectedSize: number | null
+  expectedSize: number | null,
+  expectedSha256: string,
+  version: string,
+  signed: boolean,
+  notarized: boolean
 ) {
   const upstream = await fetch(new URL(href, request.url), {
     method: "GET",
@@ -58,8 +62,19 @@ async function binaryInstallerResponse(
     "X-Bezgrow-Artifact-Validation": "sha256-verified",
   })
   const upstreamLength = Number(upstream.headers.get("content-length") || 0)
+  if (expectedSize && upstreamLength > 0 && expectedSize !== upstreamLength) {
+    return jsonError(
+      `Installer integrity error: metadata expects ${expectedSize} bytes but the source reports ${upstreamLength}.`,
+      502
+    )
+  }
   const contentLength = expectedSize || upstreamLength
   if (contentLength > 0) headers.set("Content-Length", String(contentLength))
+  headers.set("ETag", `"sha256-${expectedSha256}"`)
+  headers.set("X-Bezgrow-Artifact-Sha256", expectedSha256)
+  headers.set("X-Bezgrow-Artifact-Version", version)
+  headers.set("X-Bezgrow-Code-Signed", String(signed))
+  headers.set("X-Bezgrow-Apple-Notarized", String(notarized))
 
   return new NextResponse(upstream.body, { status: 200, headers })
 }
@@ -93,6 +108,10 @@ export async function GET(request: Request) {
     request,
     safeDownloadFilename(installer.filename, platform),
     installer.contentType || "application/octet-stream",
-    installer.size
+    installer.size,
+    installer.sha256 || "",
+    installer.version || "",
+    installer.signed,
+    installer.notarized
   )
 }

@@ -63,6 +63,11 @@ function getInstallerInfo(
     sizeLabel,
     release.checksumVerified ? "SHA-256 verified" : null,
     release.signed ? "Code signed" : "Unsigned",
+    release.platform === "macos"
+      ? release.notarized
+        ? "Notarized"
+        : "Not notarized"
+      : null,
     release.filename?.toLowerCase().endsWith(".msi")
       ? "MSI"
       : release.platform === "windows"

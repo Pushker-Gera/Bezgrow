@@ -75,9 +75,9 @@ function buildArchitecture(platform) {
 function releaseTrustMetadata({ platform, filename, signed, notarized = false, productionTrusted = false }) {
   const warning =
     platform === "macos" && (!signed || !notarized)
-      ? "Internal/testing build: this macOS installer is not notarized and macOS may show a security warning."
+      ? "Unsigned development distribution. macOS may display a security warning. This build has not yet been Apple notarized."
       : platform === "windows" && !signed
-        ? "Windows may show a Microsoft Defender SmartScreen warning because this installer is not yet code-signed. Verify that the publisher is Bezgrow and continue only if downloaded from bezgrow.com."
+        ? "Unsigned Windows build. Windows SmartScreen may show a warning because an Authenticode certificate has not yet been configured."
         : null;
   return {
     filename,

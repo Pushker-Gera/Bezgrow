@@ -51,6 +51,7 @@ assert.match(
 assert.match(validator, /application\/json/, "HTML/JSON installer rejection is missing.")
 assert.match(validator, /function inferredVersion[\s\S]*\\d\+\\\.\\d\+\\\.\\d\+[\s\S]*\?=\[-_\.\]/, "Version parsing must stop before the x64 filename suffix.")
 assert.match(validator, /Installer SHA-256 does not match release metadata/, "Checksum mismatch must block downloads.")
+assert.match(validator, /const available = checksumVerified && metadataValid/, "Downloads must require both verified bytes and complete immutable metadata.")
 assert.match(validator, /Installer architecture .* does not match metadata architecture/, "Architecture mismatch must block downloads.")
 assert.match(publicReleaseSource, /checkedInCandidates/, "Local public/downloads artifacts must be discovered.")
 assert.match(publicReleaseSource, /configuredCandidates/, "Configured installer URLs must be discovered.")
@@ -63,17 +64,21 @@ assert.doesNotMatch(desktopDownloadRoute, /signed\s*!==\s*true|notarized\s*!==\s
 assert.match(downloadPage, /available:\s*release\.available/, "Download buttons must use independent integrity availability.")
 assert.match(
   validator,
-  /Internal\/testing build: this macOS installer is not notarized and macOS may show a security warning\./,
+  /Unsigned development distribution\. macOS may display a security warning\. This build has not yet been Apple notarized\./,
   "macOS internal-build warning is missing."
 )
 assert.match(
   validator,
-  /Windows may show a Microsoft Defender SmartScreen warning because this installer is not yet code-signed\./,
+  /Unsigned Windows build\. Windows SmartScreen may show a warning because an Authenticode certificate has not yet been configured\./,
   "Windows internal-build warning is missing."
 )
 assert.match(downloadPage, /right-click the Bezgrow app, choose Open/, "macOS right-click Open guidance is missing.")
 assert.match(desktopDownloadRoute, /application\/x-apple-diskimage/, "DMG content type is not explicit.")
 assert.match(desktopDownloadRoute, /Content-Disposition/, "DMG download filename is not explicit.")
+assert.match(desktopDownloadRoute, /Installer integrity error: metadata expects/, "Download route must reject source-size drift before streaming bytes.")
+assert.match(desktopDownloadRoute, /X-Bezgrow-Artifact-Sha256/, "Download responses must identify the exact verified checksum.")
+assert.match(desktopDownloadRoute, /X-Bezgrow-Artifact-Version/, "Download responses must identify the exact installer version.")
+assert.match(downloadPage, /Not notarized/, "The Mac download metadata must show notarization status separately.")
 assert.match(releaseWorkflow, /runs-on:\s*windows-latest/, "Windows installer must build on windows-latest.")
 assert.match(releaseWorkflow, /verify-release-artifact\.mjs/, "Workflow must validate installer bytes.")
 assert.match(releaseWorkflow, /Compute release checksums/, "Workflow must calculate SHA-256 checksums.")
@@ -94,6 +99,8 @@ assert.match(
   "Platform-specific metadata publication must stage only sidecars that the successful artifact jobs produced."
 )
 assert.doesNotMatch(releaseWorkflow, /Stable publication and public downloads remain disabled/, "Unsigned builds must not disable real downloads.")
+assert.doesNotMatch(releaseWorkflow, /gh release upload[^\n]*--clobber/, "Versioned release assets must never be silently replaced.")
+assert.match(releaseWorkflow, /cmp -s[\s\S]*Immutable release asset/, "Existing release assets must be byte-identical before reuse.")
 assert.match(releaseManifestWriter, /productionRecommended/, "Manifest writer must separate availability from production trust.")
 assert.match(publication, /can only be published as an internal\/testing release/, "Unsigned CI metadata must be restricted to internal/testing.")
 assert.match(publication, /signature_status: installer\.signed === true \? "valid" : "invalid"/, "CI metadata must preserve signing truth.")
@@ -118,6 +125,7 @@ assert.match(productionWindowsVerifier, /peArchitecture\(firstBytes\)/, "Product
 assert.match(productionWindowsVerifier, /releases\\\/download/, "Production verification must require durable GitHub Release storage.")
 assert.match(productionMacVerifier, /method: "GET"/, "Production Mac verification must download the complete installer with GET.")
 assert.match(productionMacVerifier, /hdiutil/, "Production Mac verification must mount the downloaded DMG.")
+assert.match(productionMacVerifier, /bundledPrivateDataFiles:\s*0/, "Mounted DMG verification must reject bundled SQLite, license, Device ID, and runtime data.")
 assert.match(productionMacVerifier, /Create secure share link/, "Production Mac verification must reject the obsolete sharing implementation.")
 assert.match(productionMacVerifier, /Automatic mode sends only this explicitly selected invoice PDF/, "Production Mac verification must require the explicit invoice-delivery boundary.")
 assert.match(productionMacVerifier, /desktop_open_pdf_for_print/, "Production Mac verification must require the canonical native print command.")
@@ -150,6 +158,30 @@ try {
     { encoding: "utf8" }
   )
   assert.equal(setupVerification.status, 0, setupVerification.stderr || "NSIS x86 bootstrap validation failed.")
+
+  const staleSetupFixture = join(peFixtureDirectory, "Bezgrow-Setup-0.1.9-x64.exe")
+  writeFileSync(staleSetupFixture, nsisStub)
+  const staleSetupVerification = spawnSync(
+    process.execPath,
+    [
+      "scripts/verify-release-artifact.mjs",
+      "--file",
+      staleSetupFixture,
+      "--platform",
+      "windows",
+      "--architecture",
+      "x64",
+      "--version",
+      "0.1.10",
+    ],
+    { encoding: "utf8" }
+  )
+  assert.notEqual(staleSetupVerification.status, 0, "A 0.1.9 installer must never satisfy 0.1.10 metadata.")
+  assert.match(
+    staleSetupVerification.stderr,
+    /Installer version 0\.1\.9 does not match 0\.1\.10/,
+    "Old-version installer rejection must identify the exact mismatch."
+  )
 
   const nativeVerification = spawnSync(
     process.execPath,
