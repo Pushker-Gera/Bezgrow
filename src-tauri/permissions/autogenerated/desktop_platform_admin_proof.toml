@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-desktop-platform-admin-proof"
+description = "Enables the desktop_platform_admin_proof command without any pre-configured scope."
+commands.allow = ["desktop_platform_admin_proof"]
+
+[[permission]]
+identifier = "deny-desktop-platform-admin-proof"
+description = "Denies the desktop_platform_admin_proof command without any pre-configured scope."
+commands.deny = ["desktop_platform_admin_proof"]

@@ -1,8 +1,24 @@
 import { NextResponse } from "next/server"
+import {
+  DESKTOP_ADMIN_PAGE_COOKIE,
+  desktopAdminPageCookieOptions,
+  issueDesktopAdminPageSession,
+} from "@/lib/desktop/runtime-admin-session"
 
 export const dynamic = "force-dynamic"
 
-const FORWARDED_HEADERS = ["accept", "authorization", "content-type"]
+const FORWARDED_HEADERS = [
+  "accept",
+  "authorization",
+  "content-type",
+  "idempotency-key",
+  "x-bezgrow-desktop-admin",
+  "x-bezgrow-device-id",
+  "x-bezgrow-device-public-key",
+  "x-bezgrow-device-signature",
+  "x-bezgrow-device-timestamp",
+  "x-bezgrow-device-nonce",
+]
 const ALLOWED_CONTROL_PLANE_PATHS = [
   "/api/auth/",
   "/api/desktop-auth/",
@@ -12,6 +28,9 @@ const ALLOWED_CONTROL_PLANE_PATHS = [
   "/api/desktop-updater/",
   "/api/diagnostics/upload",
   "/api/integrations/whatsapp/invoice",
+  "/api/platform-admin/device/authorize",
+  "/api/platform-admin/device/status",
+  "/api/admin/",
 ]
 
 function isAllowedControlPlanePath(apiPath: string) {
@@ -45,7 +64,6 @@ async function proxyRequest(request: Request) {
   if (
     !apiPath.startsWith("/api/") ||
     apiPath.startsWith("/api/desktop-proxy") ||
-    apiPath.startsWith("/api/admin") ||
     !isAllowedControlPlanePath(apiPath)
   ) {
     return NextResponse.json({ error: "Only explicit platform-control actions may use the desktop network proxy." }, { status: 400 })
@@ -72,13 +90,42 @@ async function proxyRequest(request: Request) {
   const responseHeaders = new Headers()
   const contentType = upstream.headers.get("content-type")
   if (contentType) responseHeaders.set("content-type", contentType)
+  const contentDisposition = upstream.headers.get("content-disposition")
+  if (contentDisposition) responseHeaders.set("content-disposition", contentDisposition)
   responseHeaders.set("cache-control", "no-store")
 
-  return new NextResponse(upstream.body, {
+  const bodyBytes = await upstream.arrayBuffer()
+  const response = new NextResponse(bodyBytes, {
     status: upstream.status,
     statusText: upstream.statusText,
     headers: responseHeaders,
   })
+
+  const deviceVerification =
+    apiPath === "/api/platform-admin/device/authorize" ||
+    apiPath === "/api/platform-admin/device/status"
+  const authenticatedAdminRequest = apiPath.startsWith("/api/admin/")
+  if (deviceVerification || authenticatedAdminRequest) {
+    let deviceAuthorized = false
+    if (deviceVerification && upstream.ok && contentType?.includes("application/json")) {
+      try {
+        const payload = JSON.parse(new TextDecoder().decode(bodyBytes) || "null") as { authorized?: boolean } | null
+        deviceAuthorized = payload?.authorized === true
+      } catch {
+        deviceAuthorized = false
+      }
+    }
+    const pageSession = (
+      (deviceVerification && deviceAuthorized) ||
+      (authenticatedAdminRequest && upstream.ok)
+    ) ? issueDesktopAdminPageSession() : null
+    response.cookies.set(DESKTOP_ADMIN_PAGE_COOKIE, pageSession || "", {
+      ...desktopAdminPageCookieOptions,
+      maxAge: pageSession ? desktopAdminPageCookieOptions.maxAge : 0,
+    })
+  }
+
+  return response
 }
 
 export const GET = proxyRequest

@@ -10,7 +10,7 @@ export type DesktopSavedFile = {
 
 export type DesktopOpenedPdf = DesktopSavedFile & {
   pageCount: number
-  status: "dialog_opened" | "completed" | "cancelled"
+  status: "dialog_opened" | "printed" | "cancelled"
 }
 
 export type CsvColumn<Row> = {

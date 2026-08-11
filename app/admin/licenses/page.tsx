@@ -15,6 +15,7 @@ import {
   formatAdminDate,
   useAdminList,
 } from "@/components/admin/ControlPlaneUi"
+import { downloadAdminFile, secureAdminFetch } from "@/lib/platform-admin/client"
 import {
   createLicenseSchema,
   licenseValidationErrors,
@@ -178,7 +179,7 @@ export default function LicensesPage() {
   async function viewHistory(row: Record<string, unknown>) {
     setActionError("")
     try {
-      const response = await fetch(`/api/admin/licenses/${row.id}/events`, { cache: "no-store", credentials: "include" })
+      const response = await secureAdminFetch(`/api/admin/licenses/${row.id}/events`, { cache: "no-store" })
       const payload = (await response.json().catch(() => ({}))) as { success?: boolean; error?: string; data?: Array<Record<string, unknown>> }
       if (!response.ok || !payload.success) throw new Error(payload.error || "License history failed to load.")
       setHistory(payload.data || [])
@@ -290,7 +291,7 @@ export default function LicensesPage() {
             render: (row) => (
               <div className="flex min-w-[270px] flex-wrap gap-2">
                 <button type="button" onClick={() => void navigator.clipboard.writeText(String(row.signed_license_key || ""))} disabled={!row.signed_license_key} className="rounded-lg border border-white/10 px-2.5 py-1.5 text-xs font-bold disabled:opacity-30">Copy key</button>
-                <a href={`/api/admin/licenses/${row.id}/download`} className="rounded-lg border border-white/10 px-2.5 py-1.5 text-xs font-bold">Download</a>
+                <button type="button" onClick={() => void downloadAdminFile(`/api/admin/licenses/${row.id}/download`).catch((error) => setActionError(error instanceof Error ? error.message : "License download failed."))} className="rounded-lg border border-white/10 px-2.5 py-1.5 text-xs font-bold">Download</button>
                 <button type="button" onClick={() => void viewHistory(row)} className="rounded-lg border border-white/10 px-2.5 py-1.5 text-xs font-bold">History</button>
                 <button type="button" onClick={() => void runAction(row, "renew")} className="rounded-lg border border-cyan-400/25 px-2.5 py-1.5 text-xs font-bold text-cyan-100">Renew</button>
                 <button type="button" onClick={() => void runAction(row, "extend")} className="rounded-lg border border-white/10 px-2.5 py-1.5 text-xs font-bold">Extend</button>

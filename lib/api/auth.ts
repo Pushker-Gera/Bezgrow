@@ -9,6 +9,10 @@ import {
 import { checkRateLimit, rateLimitKey } from "@/lib/security/rate-limit"
 import { adminSupabase } from "@/lib/supabase/admin"
 import { createServerSupabase } from "@/lib/supabase/server"
+import {
+  PLATFORM_ADMIN_DEVICE_DENIED,
+  verifyPlatformAdminDeviceRequest,
+} from "@/lib/platform-admin/device-authorization"
 
 const bearerSchema = z.string().min(20)
 
@@ -19,6 +23,8 @@ export type AdminContext = {
   requestId: string
   ipAddress: string | null
   userAgent: string | null
+  deviceId: string
+  registeredDeviceId: string
 }
 
 export type AdminAuditInput = {
@@ -100,6 +106,9 @@ export async function requireAdmin(request: Request): Promise<
   | { ok: false; status: number; error: string }
 > {
   const currentRequestId = requestId(request)
+  if (!getBearerToken(request)) {
+    return { ok: false, status: 403, error: PLATFORM_ADMIN_DEVICE_DENIED }
+  }
   if (!validateMutationOrigin(request)) {
     return { ok: false, status: 403, error: "Invalid request origin." }
   }
@@ -137,6 +146,9 @@ export async function requireAdmin(request: Request): Promise<
     return { ok: false, status: 403, error: "Admin account is suspended." }
   }
 
+  const device = await verifyPlatformAdminDeviceRequest(request, { adminUserId: user.id })
+  if (!device.ok) return device
+
   return {
     ok: true,
     context: {
@@ -149,6 +161,8 @@ export async function requireAdmin(request: Request): Promise<
         request.headers.get("x-real-ip") ||
         null,
       userAgent: request.headers.get("user-agent"),
+      deviceId: device.context.deviceId,
+      registeredDeviceId: device.context.registeredDeviceId,
     },
   }
 }

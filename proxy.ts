@@ -1,5 +1,9 @@
 import { createServerClient } from "@supabase/ssr"
 import { NextResponse, type NextRequest } from "next/server"
+import {
+  DESKTOP_ADMIN_PAGE_COOKIE,
+  verifyDesktopAdminPageSession,
+} from "@/lib/desktop/runtime-admin-session"
 import { authCookieOptions } from "@/lib/supabase/session"
 
 const protectedPrefixes = ["/dashboard", "/profile"]
@@ -14,11 +18,6 @@ type ProfileGate = {
   role: string | null
   business_created: boolean | null
   is_suspended: boolean | null
-}
-
-function isConfiguredAdmin(email: string | null | undefined, role?: string | null) {
-  void email
-  return role === "admin" || role === "platform_admin"
 }
 
 function redirectWithCookies(request: NextRequest, response: NextResponse, pathname: string) {
@@ -48,12 +47,12 @@ export async function proxy(request: NextRequest) {
     request.headers.get("next-router-prefetch") === "1" ||
     request.headers.has("next-router-prefetch")
 
-  if (isPrefetch) {
-    return NextResponse.next()
-  }
-
   const protectedRoute = protectedPrefixes.some((prefix) => pathname.startsWith(prefix))
   const adminRoute = adminPrefixes.some((prefix) => pathname.startsWith(prefix))
+
+  if (isPrefetch && !adminRoute) {
+    return NextResponse.next()
+  }
 
   if (!protectedRoute && !adminRoute) {
     return NextResponse.next()
@@ -61,8 +60,15 @@ export async function proxy(request: NextRequest) {
 
   const desktopAuthMarked = request.cookies.get(desktopAuthMarkerCookie)?.value === "1"
 
-  if (localDesktopHost && adminRoute && (desktopServerBuild || desktopAuthMarked)) {
-    return redirectWithCookies(request, NextResponse.next({ request }), "/platform-admin")
+  if (localDesktopHost && adminRoute) {
+    const pageSession = request.cookies.get(DESKTOP_ADMIN_PAGE_COOKIE)?.value
+    if (desktopServerBuild && verifyDesktopAdminPageSession(pageSession)) {
+      return NextResponse.next({ request })
+    }
+    return new NextResponse("Platform Administration is available only inside an authorized Bezgrow desktop application.", {
+      status: 403,
+      headers: { "Cache-Control": "no-store", "Content-Type": "text/plain; charset=utf-8" },
+    })
   }
 
   if (localDesktopHost && desktopAuthMarked && protectedRoute) {
@@ -83,6 +89,13 @@ export async function proxy(request: NextRequest) {
 
   if (protectedRoute) {
     return redirectWithCookies(request, NextResponse.next({ request }), "/download?erp=desktop_local_only")
+  }
+
+  if (adminRoute) {
+    return new NextResponse("Platform Administration is available only inside an authorized Bezgrow desktop application.", {
+      status: 403,
+      headers: { "Cache-Control": "no-store", "Content-Type": "text/plain; charset=utf-8" },
+    })
   }
 
   if (!supabaseUrl || !supabaseAnonKey) {
@@ -125,13 +138,6 @@ export async function proxy(request: NextRequest) {
 
   if (!profile || profile.is_suspended) {
     return redirectWithCookies(request, response, profile?.is_suspended ? "/login?error=account_suspended" : "/login?error=profile_missing")
-  }
-
-  if (adminRoute) {
-    if (!isConfiguredAdmin(user.email, profile.role)) {
-      return redirectWithCookies(request, response, "/login?next=/admin&platform_admin=1&error=admin_required")
-    }
-    return response
   }
 
   return response

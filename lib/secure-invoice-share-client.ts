@@ -19,7 +19,7 @@ export type SecureInvoiceShareResult = {
 
 export class InvoiceShareOfflineError extends Error {
   constructor() {
-    super("Cloud PDF upload is disabled. Save the PDF locally and attach it using the operating-system share sheet, email app, or WhatsApp.")
+    super("Cloud PDF upload is disabled. Use the local operating-system share sheet, email app, or WhatsApp.")
     this.name = "InvoiceShareOfflineError"
   }
 }

@@ -87,7 +87,7 @@ export async function sendInvoiceWithWhatsAppBusiness(input: {
     throw new Error("The selected invoice PDF is empty or exceeds the 20 MB delivery limit.")
   }
   if (new TextDecoder().decode(input.pdfBytes.slice(0, 5)) !== "%PDF-") {
-    throw new Error("The selected invoice attachment is not a valid PDF.")
+    throw new Error("The selected invoice document is not a valid PDF.")
   }
   const tail = input.pdfBytes.slice(Math.max(0, input.pdfBytes.byteLength - 2_048))
   if (!new TextDecoder().decode(tail).includes("%%EOF")) {

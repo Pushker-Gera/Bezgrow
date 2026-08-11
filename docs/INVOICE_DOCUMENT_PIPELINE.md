@@ -10,7 +10,7 @@ local SQLite invoice data
      -> PDF.js embedded preview
      -> Save PDF / Download PDF
      -> operating-system PDF application for printing
-     -> OS share sheet / WhatsApp / email attachment fallback
+     -> OS share sheet / WhatsApp / email delivery
 ```
 
 The `Uint8Array` in `CanonicalInvoiceDocument` is the invoice document source of truth. Preview, Save, Download, Print, generic Share, WhatsApp, and Email receive that same artifact. Actions do not create a second HTML, canvas, screenshot, or PDF render.
@@ -54,7 +54,7 @@ Ordinary WhatsApp and Email actions require no Bezgrow cloud session. They:
 2. prepare it in Bezgrow's managed `Exports/Invoice Shares` directory;
 3. use an OS file share sheet when supported; otherwise reveal/select the file;
 4. open the normalized WhatsApp customer chat or default email composer with the prepared message;
-5. leave attachment and Send under the user's control when the platform has no supported automatic-attachment API.
+5. leave the final delivery and Send action under the user's control when direct file sharing is unavailable.
 
 No normal invoice action uploads PDF bytes or ERP records to Supabase. Legacy cloud share endpoints remain fail-closed after the local-first cutover. A future online link service must be a separate explicit opt-in action with upload consent; it must never block local printing, saving, or sharing.
 

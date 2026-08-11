@@ -14,6 +14,11 @@ import {
 import { isTauriRuntimeAsync, openExternalUrl } from "@/lib/desktop/tauri"
 import { localLicenseSnapshot, restoreLicensedWorkspaceContext } from "@/lib/offline/local/license"
 import { getLocalDatabaseService } from "@/lib/offline/local/service"
+import {
+    PLATFORM_ADMIN_DEVICE_DENIED,
+    secureAdminFetch,
+    verifyThisPlatformAdminDevice,
+} from "@/lib/platform-admin/client"
 import { supabase } from "@/lib/supabase"
 
 type LoginResponse = {
@@ -55,6 +60,7 @@ export default function LoginPage() {
     const [resetLoading, setResetLoading] = useState(false)
     const [checkingSession, setCheckingSession] = useState(true)
     const [adminLoginView, setAdminLoginView] = useState(false)
+    const [adminDeviceDenied, setAdminDeviceDenied] = useState(false)
 
     const getSafeNextPath = useCallback((fallback: string) => {
         if (typeof window === "undefined") {
@@ -190,6 +196,38 @@ export default function LoginPage() {
             }
 
             const desktopRuntime = (await withTimeout(isTauriRuntimeAsync(), 2500)) || false
+            if (platformAdminRequested()) {
+                if (!desktopRuntime) {
+                    setAdminDeviceDenied(true)
+                    setErrorMessage(PLATFORM_ADMIN_DEVICE_DENIED)
+                    setCheckingSession(false)
+                    return
+                }
+                if (!navigator.onLine) {
+                    setErrorMessage("Platform Administration requires an internet connection.")
+                    setCheckingSession(false)
+                    return
+                }
+                try {
+                    await verifyThisPlatformAdminDevice()
+                } catch (error) {
+                    setAdminDeviceDenied(true)
+                    setErrorMessage(error instanceof Error ? error.message : PLATFORM_ADMIN_DEVICE_DENIED)
+                    setCheckingSession(false)
+                    return
+                }
+                const { data } = await supabase.auth.getSession()
+                if (data.session?.access_token) {
+                    const adminResponse = await secureAdminFetch("/api/admin/session").catch(() => null)
+                    if (adminResponse?.ok) {
+                        navigate(getSafeNextPath("/admin?desktop=1"))
+                        return
+                    }
+                    await supabase.auth.signOut().catch(() => undefined)
+                }
+                setCheckingSession(false)
+                return
+            }
             if (desktopRuntime) {
                 await withTimeout(getLocalDatabaseService().ensureReady(), 5000)
                 if (isDesktopExplicitlyLoggedOut() && !platformAdminRequested()) {
@@ -211,22 +249,6 @@ export default function LoginPage() {
                 setErrorMessage("Internet is required for platform account or administrator login. The desktop ERP opens with its local license.")
                 setCheckingSession(false)
                 return
-            }
-
-            if (platformAdminRequested()) {
-                const adminResponse = await withTimeout(fetch("/api/admin/session", {
-                    cache: "no-store",
-                    credentials: "include",
-                }), SESSION_CHECK_TIMEOUT_MS)
-                if (adminResponse?.ok) {
-                    navigate(getSafeNextPath("/admin"))
-                    return
-                }
-                if (adminResponse?.status === 403) {
-                    setErrorMessage("This account is not authorized for Platform Administration.")
-                    setCheckingSession(false)
-                    return
-                }
             }
 
             if (active && !navigating) setCheckingSession(false)
@@ -263,6 +285,34 @@ export default function LoginPage() {
             if (!email.trim() || !password.trim()) {
                 setErrorMessage("Please enter email and password")
                 setLoading(false)
+                return
+            }
+
+            if (platformAdminRequested()) {
+                if (!(await isTauriRuntimeAsync().catch(() => false))) {
+                    setAdminDeviceDenied(true)
+                    setErrorMessage(PLATFORM_ADMIN_DEVICE_DENIED)
+                    return
+                }
+                await verifyThisPlatformAdminDevice()
+                const { data, error } = await supabase.auth.signInWithPassword({
+                    email: email.trim(),
+                    password,
+                })
+                if (error || !data.session?.access_token) {
+                    setErrorMessage("Incorrect email or password")
+                    return
+                }
+                const adminResponse = await secureAdminFetch("/api/admin/session")
+                const adminPayload = (await adminResponse.json().catch(() => ({}))) as LoginResponse
+                if (!adminResponse.ok || !adminPayload.success) {
+                    await supabase.auth.signOut().catch(() => undefined)
+                    setErrorMessage(adminResponse.status === 403
+                        ? PLATFORM_ADMIN_DEVICE_DENIED
+                        : adminPayload.error || "This account is not authorized for Platform Administration.")
+                    return
+                }
+                router.replace("/admin?desktop=1")
                 return
             }
 
@@ -428,6 +478,18 @@ export default function LoginPage() {
         )
     }
 
+    if (adminLoginView && adminDeviceDenied) {
+        return (
+            <main className="inventory-grid-bg flex min-h-dvh items-center justify-center px-5 text-white">
+                <section className="w-full max-w-md rounded-[28px] border border-red-500/25 bg-neutral-950/90 p-8 text-center">
+                    <BezgrowLogoMark className="mx-auto h-12 w-12" size={48} priority />
+                    <h1 className="mt-5 text-2xl font-black">Access denied</h1>
+                    <p className="mt-4 text-sm leading-6 text-red-200">{PLATFORM_ADMIN_DEVICE_DENIED}</p>
+                </section>
+            </main>
+        )
+    }
+
     return (
         <div className="inventory-grid-bg flex min-h-dvh w-full overflow-x-hidden items-center justify-center px-3 py-5 text-white sm:px-5 sm:py-8">
 
@@ -499,7 +561,7 @@ export default function LoginPage() {
                     {loading ? "Logging in..." : "Login"}
                 </button>
 
-                <div className="flex items-center my-4">
+                {!adminLoginView && <><div className="flex items-center my-4">
 
                     <div className="flex-1 h-[1px] bg-gray-700"></div>
 
@@ -519,6 +581,7 @@ export default function LoginPage() {
                 >
                     {googleLoading ? "Opening Google..." : "Continue with Google"}
                 </button>
+                </>}
 
                 <p className="mt-6 break-words text-center text-sm text-gray-500">
                     {adminLoginView

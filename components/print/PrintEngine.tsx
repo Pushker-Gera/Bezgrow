@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from "react"
 import {
   createInvoiceEmailDraft,
-  createInvoiceShareText,
+  createProfessionalInvoiceMessage,
   createWhatsAppInvoiceUrl,
   normalizeWhatsAppPhone,
   validateCustomerEmail,
@@ -75,7 +75,13 @@ export function PrintEngine({
   const requestedShareHandled = useRef(false)
   const requestedPrintHandled = useRef(false)
   const actionInFlight = useRef(false)
+  const mounted = useRef(true)
   const renderSequence = useRef(0)
+
+  useEffect(() => () => {
+    mounted.current = false
+    actionInFlight.current = false
+  }, [])
 
   const effectiveInvoice = useMemo<PrintInvoice>(() => ({
     ...invoice,
@@ -159,7 +165,7 @@ export function PrintEngine({
       if (released) return
       released = true
       actionInFlight.current = false
-      setPendingAction("")
+      if (mounted.current) setPendingAction("")
     }
     try {
       await action(release)
@@ -179,12 +185,19 @@ export function PrintEngine({
       const document = await currentDocument()
       const opened = await openPdfForNativePrinting(document.filename, document.bytes, document.pageCount)
       release()
+      void invokeTauri<void>("desktop_startup_log", { message: `Frontend print state reset; status=${opened.status}` }).catch(() => undefined)
       if (opened.bytes !== document.bytes.byteLength || opened.pageCount !== document.pageCount) {
         throw new Error("The operating system received a different PDF than the validated preview.")
       }
+      if (opened.status === "cancelled") {
+        setNotice("Printing was cancelled. Bezgrow is ready to print again.")
+        return
+      }
       rememberPdfOpenedForPrint(effectiveInvoice, format)
       setHistory(getReprintHistory().filter((entry) => entry.invoiceId === invoice.id))
-      setNotice("The system print dialog opened with the exact validated invoice PDF. Bezgrow is ready immediately whether you print or cancel.")
+      setNotice(opened.status === "printed"
+        ? "The exact validated invoice PDF was accepted for printing."
+        : "The system print dialog opened with the exact validated invoice PDF.")
     })
   }
 
@@ -201,12 +214,17 @@ export function PrintEngine({
 
       const opened = await openPdfForNativePrinting(document.filename, document.bytes, document.pageCount)
       release()
+      void invokeTauri<void>("desktop_startup_log", { message: `Frontend print state reset; status=${opened.status}` }).catch(() => undefined)
       if (opened.bytes !== document.bytes.byteLength || opened.pageCount !== document.pageCount) {
         throw new Error("The operating system received a different PDF than the validated preview.")
       }
+      if (opened.status === "cancelled") {
+        setNotice(`${resultNotice("PDF saved", result)}. Printing was cancelled; Bezgrow is ready to print again.`)
+        return
+      }
       rememberPdfOpenedForPrint(effectiveInvoice, format)
       setHistory(getReprintHistory().filter((entry) => entry.invoiceId === invoice.id))
-      setNotice(`${resultNotice("PDF saved", result)}. Auto Print After Save opened the system print dialog and Bezgrow is ready immediately.`)
+      setNotice(`${resultNotice("PDF saved", result)}. Auto Print After Save completed the native print flow.`)
     })
   }
 
@@ -225,7 +243,7 @@ export function PrintEngine({
       const document = await currentDocument()
       const result = await shareInvoicePdf(document, {
         title: `Invoice ${invoice.invoiceNumber}`,
-        text: createInvoiceShareText(preparedShareInput({ phone: invoice.customer.phone, email: invoice.customer.email })),
+        text: createProfessionalInvoiceMessage(effectiveInvoice),
       })
       if (!result) return
       setNotice(result.shared
@@ -257,7 +275,7 @@ export function PrintEngine({
       const url = createWhatsAppInvoiceUrl(effectiveInvoice, phone)
       if (!url) throw new Error("The WhatsApp destination could not be normalized safely.")
       await openExternalUrl(url)
-      setNotice("WhatsApp opened for the customer with the complete text invoice. Bezgrow did not create, upload, or attach a PDF, and the final Send action remains under your control.")
+      setNotice("WhatsApp opened for the customer with the complete invoice summary. Bezgrow did not upload a PDF, and the final Send action remains under your control.")
     })
   }
 
@@ -285,7 +303,7 @@ export function PrintEngine({
   async function savePreparedPdf(dialog: ShareDialogState) {
     const result = await saveDesktopBytes(dialog.artifact.filename, dialog.artifact.bytes, "pdf")
     if (!result) return
-    if (result.bytes !== dialog.artifact.bytes.byteLength) throw new Error("The saved attachment does not match the validated invoice PDF.")
+    if (result.bytes !== dialog.artifact.bytes.byteLength) throw new Error("The saved PDF does not match the validated invoice PDF.")
     setNotice(resultNotice("PDF saved", result))
   }
 
@@ -305,7 +323,7 @@ export function PrintEngine({
       if (canShareFiles) {
         await navigator.share({
           title: `Invoice ${invoice.invoiceNumber}`,
-          text: createInvoiceShareText(preparedShareInput(dialog)),
+          text: createProfessionalInvoiceMessage(effectiveInvoice),
           files: [file],
         })
         setNotice("The exact invoice PDF was handed to the OS share sheet. Bezgrow did not upload or send it.")
@@ -313,10 +331,10 @@ export function PrintEngine({
         const prepared = await ensurePreparedShareFile(dialog)
         if (prepared) {
           await invokeTauri<void>("desktop_reveal_file", { path: prepared.path })
-          setNotice(`Direct attachment sharing is unavailable. The exact PDF is selected at ${prepared.path}; attach it in your chosen app and press Send yourself.`)
+          setNotice(`Direct file sharing is unavailable. The exact PDF is available at ${prepared.path}; complete delivery in your chosen app.`)
         } else {
           const saved = await saveDesktopBytes(dialog.artifact.filename, dialog.artifact.bytes, "pdf")
-          if (saved) setNotice("Direct attachment sharing is unavailable. The exact PDF was downloaded for you to attach manually.")
+          if (saved) setNotice("Direct file sharing is unavailable. The exact PDF was downloaded and remains ready for delivery.")
         }
       }
       setShareDialog((current) => current ? { ...current, busy: false, error: "" } : null)
@@ -357,7 +375,7 @@ export function PrintEngine({
 
       const draft = createInvoiceEmailDraft(preparedShareInput({ ...dialog, email }))
       await openExternalUrl(draft.mailtoUrl)
-      setNotice("Your default email app opened with the prepared draft, and the exact local PDF is selected for attachment. Bezgrow did not upload it.")
+      setNotice("Your default email app opened with the prepared draft. The exact PDF remains available locally, and Bezgrow did not upload it.")
       setShareDialog((current) => current ? {
         ...current,
         email,
@@ -543,7 +561,7 @@ export function PrintEngine({
             <div>
               <p className="panel-eyebrow">Email Invoice</p>
               <h2 id="share-dialog-title">Prepare email draft</h2>
-              <p className="share-modal-helper">The PDF stays local and the final attachment and Send action remain under your control.</p>
+              <p className="share-modal-helper">The PDF stays local and the final Send action remains under your control.</p>
             </div>
             <dl className="share-summary-grid">
               <div><dt>Invoice</dt><dd>{invoice.invoiceNumber}</dd></div>

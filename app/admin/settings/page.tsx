@@ -9,6 +9,7 @@ import {
   adminMutation,
   useAdminOnline,
 } from "@/components/admin/ControlPlaneUi"
+import { secureAdminFetch } from "@/lib/platform-admin/client"
 
 type Settings = {
   platform_name: string
@@ -61,7 +62,7 @@ export default function PlatformSettingsPage() {
     if (!online) return
     const controller = new AbortController()
     queueMicrotask(() => setLoading(true))
-    fetch("/api/admin/settings", { cache: "no-store", credentials: "include", signal: controller.signal })
+    secureAdminFetch("/api/admin/settings", { cache: "no-store", signal: controller.signal })
       .then(async (response) => {
         const payload = (await response.json().catch(() => ({}))) as { success?: boolean; error?: string; settings?: Partial<Settings> | null }
         if (!response.ok || !payload.success) throw new Error(payload.error || "Platform settings failed to load.")

@@ -40,8 +40,9 @@ assert.match(engine, /PDF_REGENERATION_DEBOUNCE_MS = 180/, "PDF preview regenera
 assert.match(engine, /renderSequence\.current !== sequence/, "Stale PDF renders must not replace a newer artifact.")
 assert.match(engine, /actionInFlight\.current/, "Native document actions must reject rapid duplicate invocations.")
 assert.match(engine, /const release = \(\) => \{[\s\S]*actionInFlight\.current = false[\s\S]*setPendingAction\(""\)/, "Print launch, cancellation, and failures must always clear the action guard and spinner.")
-assert.match(engine, /openPdfForNativePrinting\([\s\S]*release\(\)/, "The invoice UI must release its busy state as soon as native printing is accepted.")
-assert.doesNotMatch(engine, /opened\.status === "cancelled"|opened\.status === "completed"/, "The invoice UI must not wait for or interpret the operating-system print result.")
+assert.match(engine, /openPdfForNativePrinting\([\s\S]*release\(\)/, "The invoice UI must release its busy state after every native terminal result.")
+assert.match(engine, /opened\.status === "cancelled"[\s\S]*Bezgrow is ready to print again/, "Cancel must be a normal terminal result that immediately resets the invoice UI.")
+assert.match(engine, /mounted\.current = false[\s\S]*actionInFlight\.current = false/, "Unmount must clear the frontend print guard.")
 assert.match(engine, /<InvoicePdfPreview artifact=\{artifact\}/, "The embedded preview must render the canonical PDF artifact.")
 assert.match(engine, /openPdfForNativePrinting\(document\.filename, document\.bytes, document\.pageCount\)/, "Print must open the canonical PDF bytes.")
 assert.match(engine, /settings\.autoPrintAfterSave[\s\S]*openPdfForNativePrinting\(document\.filename, document\.bytes, document\.pageCount\)/, "Auto Print After Save must open the same canonical PDF bytes.")
@@ -49,13 +50,20 @@ assert.match(engine, /saveInvoicePdf\(document\)/, "Save PDF must consume the ca
 assert.match(engine, /downloadInvoicePdf\(document\)/, "Download must consume the canonical artifact.")
 assert.match(engine, /shareInvoicePdf\(document,/, "Generic share must consume the canonical artifact.")
 assert.match(engine, /function openWhatsAppInvoice\(\)[\s\S]*createWhatsAppInvoiceUrl\(effectiveInvoice, phone\)[\s\S]*openExternalUrl\(url\)/, "WhatsApp must open a full text invoice from the current canonical local invoice data.")
-assert.match(engine, /complete text invoice[\s\S]*did not create, upload, or attach a PDF/, "WhatsApp must state its text-only, no-upload boundary.")
+assert.match(engine, /complete invoice summary[\s\S]*did not upload a PDF/, "WhatsApp must state its text-only, no-upload boundary.")
 assert.doesNotMatch(engine, /from "@\/lib\/whatsapp-business-client"|sendCanonicalInvoiceWithWhatsAppBusiness|getWhatsAppBusinessAvailability/, "The standard WhatsApp button must not invoke the cloud WhatsApp Business delivery client.")
 const whatsAppAction = engine.match(/function openWhatsAppInvoice\(\) \{([\s\S]*?)\n  \}\n\n  function preparedShareInput/)?.[1] || ""
 assert.ok(whatsAppAction, "The dedicated WhatsApp text action must remain present.")
 assert.doesNotMatch(whatsAppAction, /currentDocument|getCanonicalInvoiceDocument|prepareDesktopInvoiceShare|saveDesktopBytes|shareInvoicePdf|invokeTauri|fetch\s*\(/, "WhatsApp must not generate, save, upload, attach, or cloud-share a PDF.")
-assert.match(invoiceShare, /\*Items\*[\s\S]*Qty:[\s\S]*Rate:[\s\S]*GST:[\s\S]*Amount:/, "WhatsApp text must enumerate complete line-item details.")
-assert.match(invoiceShare, /\*Invoice Summary\*[\s\S]*Subtotal:[\s\S]*Taxable Amount:[\s\S]*CGST:[\s\S]*SGST:[\s\S]*IGST:[\s\S]*Grand Total:[\s\S]*Balance Due:/, "WhatsApp text must contain canonical invoice totals.")
+assert.match(invoiceShare, /\*Items\*[\s\S]*Quantity:[\s\S]*Rate:[\s\S]*Amount:/, "WhatsApp text must enumerate complete line-item details.")
+assert.match(invoiceShare, /\*Invoice Summary\*[\s\S]*Subtotal:[\s\S]*Discount:[\s\S]*CGST:[\s\S]*SGST:[\s\S]*IGST:[\s\S]*Grand Total:[\s\S]*Payment Status:[\s\S]*Paid Amount:[\s\S]*Due Amount:/, "WhatsApp text must contain canonical totals and payment fields.")
+const forbiddenAttachmentCopy = new RegExp([
+  "prepared" + " separately",
+  "attach it" + " before sending",
+  "attach" + " manually",
+  "manual" + " attachment",
+].join("|"), "i")
+assert.doesNotMatch(invoiceShare, forbiddenAttachmentCopy, "Invoice messages must not contain manual PDF instructions.")
 assert.doesNotMatch(engine, /createSecureInvoiceShare|revokeSecureInvoiceShare|Sign in while online before creating a secure invoice link/i, "Ordinary invoice actions must not require or invoke cloud sharing.")
 assert.doesNotMatch(engine, /window\.print|printFromHiddenFrame|prepareDedicatedPrintRoot|<iframe|createPortal|html2canvas|jsPDF/, "Invoice printing must not retain an alternate HTML/canvas print tree.")
 
@@ -111,11 +119,12 @@ assert.match(rust, /prepared invoice PDF bytes do not match the validated docume
 assert.match(rust, /managed_data_directory\(&app, "Temp"\)\?\.join\("PDF Print"\)/, "Temporary print files must use an application-owned directory.")
 assert.match(rust, /PDFDocument::initWithData[\s\S]*PageScaleDownToFit[\s\S]*setShowsPrintPanel\(true\)[\s\S]*setCanSpawnSeparateThread\(true\)[\s\S]*runOperationModalForWindow_delegate_didRunSelector_contextInfo/, "macOS must launch the validated PDF through PDFKit's non-blocking system print sheet.")
 assert.doesNotMatch(rust, /operation\.runOperation\(\)/, "macOS printing must never block the Tauri command for the lifetime of the print dialog.")
-assert.match(rust, /struct PdfPrintLifecycleIvars[\s\S]*_document: Retained<PDFDocument>[\s\S]*_print_info: Retained<NSPrintInfo>[\s\S]*operation: Retained<NSPrintOperation>/, "The modeless macOS sheet must retain its full native print graph.")
-assert.match(rust, /printOperationDidRun:success:contextInfo:[\s\S]*objc_setAssociatedObject\([\s\S]*null_mut\(\)/, "The macOS completion selector must release the lifecycle owner after Print or Cancel.")
+assert.match(rust, /struct PdfPrintLifecycleIvars[\s\S]*document: RefCell<Option<Retained<PDFDocument>>>[\s\S]*print_info: RefCell<Option<Retained<NSPrintInfo>>>[\s\S]*operation: RefCell<Option<Retained<NSPrintOperation>>>/, "The modeless macOS session must retain its full native print graph.")
+assert.match(rust, /printOperationDidRun:success:contextInfo:[\s\S]*performSelector: sel!\(finishPrintLifecycle\)[\s\S]*Completion callback exited; cleanup scheduled/, "The AppKit callback must defer cleanup until its callback stack has unwound.")
+assert.match(rust, /finish_print_lifecycle[\s\S]*cleanup_started\.swap\(true[\s\S]*operation\.borrow_mut\(\)\.take\(\)[\s\S]*completion\.send\(terminal\)/, "Deferred cleanup must be idempotent, release native objects, then resolve the invoke.")
 assert.match(rust, /objc_getAssociatedObject[\s\S]*A native print dialog is already open/, "macOS must reject an overlapping stale print operation for the same window.")
 assert.match(rust, /Some\(sel!\(printOperationDidRun:success:contextInfo:\)\)/, "AppKit must receive the lifecycle completion selector.")
-assert.match(rust, /drop\(operation\);[\s\S]*Validated invoice PDF passed to native print UI/, "Native print launch must release the desktop critical-operation guard before follow-up logging.")
+assert.match(rust, /drop\(operation\);[\s\S]*Validated invoice PDF passed to native print UI[\s\S]*completion\.await/, "Native print launch must release the desktop critical-operation guard before awaiting Print or Cancel.")
 assert.match(rust, /ICoreWebView2_16[\s\S]*ShowPrintUI\(COREWEBVIEW2_PRINT_DIALOG_KIND_SYSTEM\)/, "Windows must open its system print dialog for the validated PDF.")
 assert.match(rust, /"invoice-native-print"[\s\S]*visible\(false\)[\s\S]*skip_taskbar\(true\)/, "The Windows PDF print bridge must stay hidden and off the taskbar.")
 assert.doesNotMatch(rust, /fn open_pdf_with_default_application/, "Invoice printing must not use the registered external PDF application.")

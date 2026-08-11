@@ -2,6 +2,8 @@
 
 import { useEffect, useState } from "react"
 import { isTauriRuntimeAsync, openPlatformAdmin } from "@/lib/desktop/tauri"
+import { getExplicitControlPlaneActionAuth } from "@/lib/offline/local/license"
+import { authorizeThisPlatformAdminDevice } from "@/lib/platform-admin/client"
 
 export default function PlatformAdminLauncher({ className = "" }: { className?: string }) {
   const [desktop, setDesktop] = useState(false)
@@ -15,21 +17,10 @@ export default function PlatformAdminLauncher({ className = "" }: { className?: 
       if (!active) return
       setDesktop(value)
       if (!value || !navigator.onLine) return
-
-      const response = await fetch("/api/admin/session", {
-        cache: "no-store",
-        credentials: "include",
-      }).catch(() => null)
-      if (!active || !response?.ok) return
-      const payload = (await response.json().catch(() => null)) as {
-        success?: boolean
-        admin?: { role?: string | null }
-      } | null
-      if (active) {
-        setAuthorized(
-          Boolean(payload?.success && (payload.admin?.role === "platform_admin" || payload.admin?.role === "admin"))
-        )
-      }
+      const auth = await getExplicitControlPlaneActionAuth().catch(() => null)
+      if (!active || !auth) return
+      const allowed = await authorizeThisPlatformAdminDevice(auth).catch(() => false)
+      if (active) setAuthorized(allowed)
     })
     return () => {
       active = false
@@ -47,13 +38,10 @@ export default function PlatformAdminLauncher({ className = "" }: { className?: 
     setOpening(true)
     setNotice("")
     try {
-      const configured = (process.env.NEXT_PUBLIC_ADMIN_APP_URL || process.env.NEXT_PUBLIC_SITE_URL || "https://www.bezgrow.com").replace(/\/$/, "")
-      const target = new URL("/login", configured)
-      target.searchParams.set("next", "/admin?desktop=1")
-      target.searchParams.set("platform_admin", "1")
-      target.searchParams.set("desktop", "1")
-      await openPlatformAdmin(target.toString())
-      setNotice("Platform Administration opened in a secure online window.")
+      const auth = await getExplicitControlPlaneActionAuth()
+      await authorizeThisPlatformAdminDevice(auth)
+      await openPlatformAdmin()
+      setNotice("Platform Administration opened securely inside Bezgrow.")
     } catch (error) {
       setNotice(error instanceof Error ? error.message : "Platform Administration could not be opened.")
     } finally {

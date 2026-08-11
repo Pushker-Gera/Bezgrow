@@ -22,6 +22,7 @@
     "allow-read-secret",
     "allow-delete-secret",
     "allow-desktop-get-or-create-device-id",
+    "allow-desktop-platform-admin-proof",
     "allow-desktop-prepare-invoice-share",
     "allow-desktop-save-file",
     "allow-desktop-pick-business-logo",

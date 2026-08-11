@@ -6,8 +6,8 @@ import type { ReactNode } from "react"
 import { useEffect, useState } from "react"
 import { AdminOnlineProvider } from "@/components/admin/ControlPlaneUi"
 import { BezgrowLogoMark } from "@/components/brand/BezgrowLogoMark"
-import { clearServerAuthSession } from "@/lib/desktop/session"
 import { supabase } from "@/lib/supabase"
+import { secureAdminFetch } from "@/lib/platform-admin/client"
 
 type AdminSession = {
   success?: boolean
@@ -73,8 +73,7 @@ export default function AdminLayout({ children }: { children: ReactNode }) {
     }
     const controller = new AbortController()
     queueMicrotask(() => setChecking(true))
-    fetch("/api/admin/session", {
-      credentials: "include",
+    secureAdminFetch("/api/admin/session", {
       cache: "no-store",
       signal: controller.signal,
     })
@@ -108,7 +107,13 @@ export default function AdminLayout({ children }: { children: ReactNode }) {
   }
 
   async function handleLogout() {
-    await clearServerAuthSession()
+    await fetch("/api/platform-admin/desktop-session", {
+      method: "DELETE",
+      cache: "no-store",
+      credentials: "same-origin",
+    }).catch((error) => {
+      console.warn("Admin desktop-session cleanup warning:", error)
+    })
     await supabase.auth.signOut().catch((error) => {
       console.warn("Admin cloud sign-out warning:", error)
     })

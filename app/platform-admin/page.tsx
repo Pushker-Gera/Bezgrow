@@ -10,7 +10,7 @@ export default function PlatformAdminDesktopEntryPage() {
         <p className="text-xs font-black uppercase tracking-[0.22em] text-cyan-200">Online-only control plane</p>
         <h1 className="mt-4 text-3xl font-black">Platform Administration</h1>
         <p className="mt-4 text-sm leading-6 text-neutral-300">
-          Open the secure hosted admin application. A valid Supabase session and an admin or platform_admin server-side role are required.
+          Platform Administration runs inside the Bezgrow desktop application and requires both an authorized administrator account and this registered device.
         </p>
         <PlatformAdminLauncher className="mt-7" />
         <Link href="/dashboard" className="mt-3 flex h-11 items-center justify-center rounded-2xl border border-white/10 text-sm font-black text-neutral-300">

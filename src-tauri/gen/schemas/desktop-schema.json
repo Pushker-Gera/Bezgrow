@@ -249,6 +249,12 @@
           "markdownDescription": "Enables the desktop_pick_business_logo command without any pre-configured scope."
         },
         {
+          "description": "Enables the desktop_platform_admin_proof command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-desktop-platform-admin-proof",
+          "markdownDescription": "Enables the desktop_platform_admin_proof command without any pre-configured scope."
+        },
+        {
           "description": "Enables the desktop_prepare_invoice_share command without any pre-configured scope.",
           "type": "string",
           "const": "allow-desktop-prepare-invoice-share",
@@ -409,6 +415,12 @@
           "type": "string",
           "const": "deny-desktop-pick-business-logo",
           "markdownDescription": "Denies the desktop_pick_business_logo command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the desktop_platform_admin_proof command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-desktop-platform-admin-proof",
+          "markdownDescription": "Denies the desktop_platform_admin_proof command without any pre-configured scope."
         },
         {
           "description": "Denies the desktop_prepare_invoice_share command without any pre-configured scope.",

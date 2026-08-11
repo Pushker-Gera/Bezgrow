@@ -1,4 +1,5 @@
 use std::{
+    cell::RefCell,
     collections::HashSet,
     fs::{self, OpenOptions},
     io::{Cursor, Read, Write},
@@ -49,6 +50,7 @@ use windows_sys::Win32::{
 use std::net::{TcpListener, TcpStream};
 
 use image::{GenericImageView, ImageFormat};
+use ed25519_dalek::{Signer, SigningKey};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use sqlx::{
@@ -62,7 +64,7 @@ use objc2::{
     define_class, msg_send,
     rc::{Retained, Weak},
     runtime::{AnyObject, NSObjectProtocol},
-    sel, DefinedClass, MainThreadMarker, MainThreadOnly, Message,
+    sel, DefinedClass, MainThreadMarker, MainThreadOnly,
 };
 #[cfg(target_os = "macos")]
 use objc2_app_kit::{NSApplication, NSPrintInfo, NSPrintOperation, NSWindow};
@@ -84,8 +86,11 @@ const WINDOWS_APP_DATA_DIR: &str = "Bezgrow";
 const INSTALLATION_DIRECTORY: &str = "Installation";
 const DEVICE_ID_FILENAME: &str = "device-id";
 const INSTALLATION_SEED_FILENAME: &str = "installation-seed";
+const PLATFORM_ADMIN_SIGNING_KEY_PREFIX: &str = "platform-admin-device-signing-key";
 #[cfg(target_os = "macos")]
 static PDF_PRINT_LIFECYCLE_ASSOCIATION_KEY: u8 = 0;
+#[cfg(target_os = "macos")]
+static ACTIVE_PDF_PRINT_SESSIONS: AtomicUsize = AtomicUsize::new(0);
 #[cfg(target_os = "windows")]
 const WINDOWS_APP_USER_MODEL_ID: &str = "com.bezgrow.erp";
 const STARTUP_LOG_MAX_BYTES: u64 = 2 * 1024 * 1024;
@@ -93,12 +98,19 @@ const STARTUP_LOG_GENERATIONS: usize = 5;
 
 #[cfg(target_os = "macos")]
 struct PdfPrintLifecycleIvars {
-    // These strong references are deliberately held together until AppKit's
-    // modeless print operation invokes its completion selector.
-    _document: Retained<PDFDocument>,
-    _print_info: Retained<NSPrintInfo>,
-    operation: Retained<NSPrintOperation>,
+    // AppKit may still have the operation on its callback stack when the
+    // completion selector runs. Keep the graph in Options so a next-run-loop
+    // finalizer can release it after the completion selector has returned.
+    document: RefCell<Option<Retained<PDFDocument>>>,
+    print_info: RefCell<Option<Retained<NSPrintInfo>>>,
+    operation: RefCell<Option<Retained<NSPrintOperation>>>,
     window: Weak<NSWindow>,
+    completion: RefCell<Option<futures_channel::oneshot::Sender<&'static str>>>,
+    terminal: RefCell<&'static str>,
+    completion_started: AtomicBool,
+    cleanup_started: AtomicBool,
+    session_id: String,
+    log_path: PathBuf,
 }
 
 #[cfg(target_os = "macos")]
@@ -122,15 +134,65 @@ define_class!(
         fn print_operation_did_run(
             &self,
             operation: &NSPrintOperation,
-            _success: bool,
+            success: bool,
             _context_info: *mut std::ffi::c_void,
         ) {
-            // Removing the window association releases the lifecycle object.
-            // Keep `self` alive through the end of this callback while its
-            // retained document, print info, and operation are dropped.
-            let keep_alive = self.retain();
-            debug_assert!(std::ptr::eq(operation, &*self.ivars().operation));
-            if let Some(window) = self.ivars().window.load() {
+            let ivars = self.ivars();
+            if ivars.completion_started.swap(true, Ordering::SeqCst) {
+                append_pdf_print_lifecycle_log(
+                    &ivars.log_path,
+                    &ivars.session_id,
+                    "Duplicate completion callback ignored",
+                );
+                return;
+            }
+            if let Some(retained_operation) = ivars.operation.borrow().as_ref() {
+                debug_assert!(std::ptr::eq(operation, &**retained_operation));
+            }
+            append_pdf_print_lifecycle_log(
+                &ivars.log_path,
+                &ivars.session_id,
+                if success {
+                    "Completion callback entered; terminal=printed"
+                } else {
+                    "Cancel selected; Completion callback entered; terminal=cancelled"
+                },
+            );
+            *ivars.terminal.borrow_mut() = if success { "printed" } else { "cancelled" };
+
+            // Never release NSPrintOperation from inside its own completion
+            // callback. NSObject schedules and retains this target until the
+            // next main run-loop turn, after AppKit has unwound this stack.
+            unsafe {
+                let _: () = msg_send![
+                    self,
+                    performSelector: sel!(finishPrintLifecycle),
+                    withObject: std::ptr::null::<AnyObject>(),
+                    afterDelay: 0.0_f64
+                ];
+            }
+            append_pdf_print_lifecycle_log(
+                &ivars.log_path,
+                &ivars.session_id,
+                "Completion callback exited; cleanup scheduled",
+            );
+        }
+
+        #[unsafe(method(finishPrintLifecycle))]
+        fn finish_print_lifecycle(&self) {
+            let ivars = self.ivars();
+            if ivars.cleanup_started.swap(true, Ordering::SeqCst) {
+                append_pdf_print_lifecycle_log(
+                    &ivars.log_path,
+                    &ivars.session_id,
+                    "Duplicate cleanup ignored",
+                );
+                return;
+            }
+
+            let terminal = *ivars.terminal.borrow();
+
+            if let Some(window) = ivars.window.load() {
                 unsafe {
                     objc2::ffi::objc_setAssociatedObject(
                         (&*window as *const NSWindow).cast_mut().cast(),
@@ -140,7 +202,32 @@ define_class!(
                     );
                 }
             }
-            drop(keep_alive);
+
+            // Drop in dependency order while the scheduled selector still
+            // retains `self`, but only after the AppKit callback has returned.
+            ivars.operation.borrow_mut().take();
+            ivars.print_info.borrow_mut().take();
+            ivars.document.borrow_mut().take();
+            let active = ACTIVE_PDF_PRINT_SESSIONS
+                .fetch_sub(1, Ordering::SeqCst)
+                .saturating_sub(1);
+            append_pdf_print_lifecycle_log(
+                &ivars.log_path,
+                &ivars.session_id,
+                format!("Objects released; active_sessions={active}"),
+            );
+
+            if let Some(completion) = ivars.completion.borrow_mut().take() {
+                // The callback log records printed versus cancelled. The
+                // terminal delivered to the caller is set there before this
+                // finalizer runs.
+                let _ = completion.send(terminal);
+                append_pdf_print_lifecycle_log(
+                    &ivars.log_path,
+                    &ivars.session_id,
+                    "Promise resolved",
+                );
+            }
         }
     }
 );
@@ -153,16 +240,47 @@ impl PdfPrintLifecycle {
         print_info: Retained<NSPrintInfo>,
         operation: Retained<NSPrintOperation>,
         window: &NSWindow,
+        completion: futures_channel::oneshot::Sender<&'static str>,
+        session_id: String,
+        log_path: PathBuf,
     ) -> Retained<Self> {
         let this = Self::alloc(mtm).set_ivars(PdfPrintLifecycleIvars {
-            _document: document,
-            _print_info: print_info,
-            operation,
+            document: RefCell::new(Some(document)),
+            print_info: RefCell::new(Some(print_info)),
+            operation: RefCell::new(Some(operation)),
             window: Weak::new(window),
+            completion: RefCell::new(Some(completion)),
+            terminal: RefCell::new("failed"),
+            completion_started: AtomicBool::new(false),
+            cleanup_started: AtomicBool::new(false),
+            session_id,
+            log_path,
         });
         // SAFETY: NSObject's initializer has the standard `init` signature.
         unsafe { msg_send![super(this), init] }
     }
+}
+
+#[cfg(target_os = "macos")]
+fn append_pdf_print_lifecycle_log(path: &Path, session_id: &str, event: impl AsRef<str>) {
+    if let Some(parent) = path.parent() {
+        let _ = fs::create_dir_all(parent);
+    }
+    let Ok(mut file) = OpenOptions::new().create(true).append(true).open(path) else {
+        return;
+    };
+    let timestamp_ms = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_millis())
+        .unwrap_or_default();
+    let current_thread = thread::current();
+    let thread_name = current_thread.name().unwrap_or("unnamed");
+    let _ = writeln!(
+        file,
+        "[{timestamp_ms}] native-print session={session_id} thread={:?} thread_name={thread_name} {}",
+        current_thread.id(),
+        event.as_ref()
+    );
 }
 #[cfg(not(debug_assertions))]
 const DESKTOP_SERVER_PORT: u16 = 43124;
@@ -1119,6 +1237,22 @@ struct DesktopOpenedPdf {
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
+struct DesktopPlatformAdminProof {
+    device_id: String,
+    public_key: String,
+    signature: String,
+    timestamp: String,
+    nonce: String,
+}
+
+struct NativePrintLaunch {
+    status: &'static str,
+    #[cfg(target_os = "macos")]
+    completion: Option<futures_channel::oneshot::Receiver<&'static str>>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
 struct DesktopBusinessLogo {
     relative_path: String,
     absolute_path: String,
@@ -1384,6 +1518,107 @@ fn desktop_get_or_create_device_id<R: tauri::Runtime>(
 ) -> Result<String, String> {
     let directory = managed_data_directory(&app, INSTALLATION_DIRECTORY)?;
     get_or_create_device_id_at(&directory, legacy_device_id.as_deref())
+}
+
+fn hex_encode(bytes: &[u8]) -> String {
+    bytes.iter().map(|byte| format!("{byte:02x}")).collect()
+}
+
+fn decode_platform_admin_signing_key(value: &str) -> Result<[u8; 32], String> {
+    let value = value.trim();
+    if value.len() != 64 || !value.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        return Err("The protected Platform Admin device key is invalid.".to_string());
+    }
+    let mut bytes = [0_u8; 32];
+    for (index, slot) in bytes.iter_mut().enumerate() {
+        *slot = u8::from_str_radix(&value[index * 2..index * 2 + 2], 16)
+            .map_err(|_| "The protected Platform Admin device key is invalid.".to_string())?;
+    }
+    Ok(bytes)
+}
+
+fn platform_admin_signing_key(device_id: &str) -> Result<SigningKey, String> {
+    let credential_name = format!("{PLATFORM_ADMIN_SIGNING_KEY_PREFIX}:{device_id}");
+    let entry = keychain_entry(&credential_name)?;
+    match entry.get_password() {
+        Ok(value) => Ok(SigningKey::from_bytes(&decode_platform_admin_signing_key(
+            &value,
+        )?)),
+        Err(keyring::Error::NoEntry) => {
+            let mut private_bytes = [0_u8; 32];
+            getrandom::fill(&mut private_bytes).map_err(|error| {
+                format!("Unable to create the protected Platform Admin device key: {error}")
+            })?;
+            entry
+                .set_password(&hex_encode(&private_bytes))
+                .map_err(|error| {
+                    format!("Unable to protect the Platform Admin device key: {error}")
+                })?;
+            Ok(SigningKey::from_bytes(&private_bytes))
+        }
+        Err(error) => Err(format!(
+            "Unable to read the protected Platform Admin device key: {error}"
+        )),
+    }
+}
+
+fn valid_platform_admin_proof_path(path_and_query: &str) -> bool {
+    !path_and_query.contains('\r')
+        && !path_and_query.contains('\n')
+        && path_and_query.len() <= 2_048
+        && (path_and_query == "/api/admin/session"
+            || path_and_query.starts_with("/api/admin/")
+            || path_and_query == "/api/platform-admin/device/authorize"
+            || path_and_query == "/api/platform-admin/device/status")
+}
+
+#[tauri::command]
+fn desktop_platform_admin_proof<R: tauri::Runtime>(
+    app: tauri::AppHandle<R>,
+    method: String,
+    path_and_query: String,
+    body_sha256: String,
+) -> Result<DesktopPlatformAdminProof, String> {
+    let method = method.trim().to_ascii_uppercase();
+    if !matches!(method.as_str(), "GET" | "HEAD" | "POST" | "PATCH") {
+        return Err("This Platform Admin request method is not allowed.".to_string());
+    }
+    if !valid_platform_admin_proof_path(&path_and_query) {
+        return Err("This Platform Admin request path is not allowed.".to_string());
+    }
+    let body_sha256 = body_sha256.trim().to_ascii_lowercase();
+    if body_sha256.len() != 64 || !body_sha256.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        return Err("The Platform Admin request digest is invalid.".to_string());
+    }
+
+    let installation_directory = managed_data_directory(&app, INSTALLATION_DIRECTORY)?;
+    let device_id = get_or_create_device_id_at(&installation_directory, None)?;
+    let signing_key = platform_admin_signing_key(&device_id)?;
+    let timestamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_err(|_| "The system clock is invalid for Platform Administration.".to_string())?
+        .as_secs()
+        .to_string();
+    let mut nonce_bytes = [0_u8; 24];
+    getrandom::fill(&mut nonce_bytes)
+        .map_err(|error| format!("Unable to create a Platform Admin request nonce: {error}"))?;
+    let nonce = hex_encode(&nonce_bytes);
+    let canonical = format!(
+        "bezgrow-platform-admin-v1\n{method}\n{path_and_query}\n{body_sha256}\n{device_id}\n{timestamp}\n{nonce}"
+    );
+    let signature = signing_key.sign(canonical.as_bytes());
+    append_startup_log_handle(
+        &app,
+        format!("Platform Admin request signed for device={device_id} path={path_and_query}"),
+    );
+
+    Ok(DesktopPlatformAdminProof {
+        device_id,
+        public_key: hex_encode(signing_key.verifying_key().as_bytes()),
+        signature: hex_encode(&signature.to_bytes()),
+        timestamp,
+        nonce,
+    })
 }
 
 fn sanitize_filename(filename: &str, fallback: &str) -> String {
@@ -1824,16 +2059,29 @@ fn open_validated_pdf_with_native_print_dialog<R: tauri::Runtime>(
     app: &tauri::AppHandle<R>,
     path: &Path,
     bytes: Vec<u8>,
-) -> Result<&'static str, String> {
+) -> Result<NativePrintLaunch, String> {
     #[cfg(target_os = "macos")]
     {
         use std::sync::Arc;
 
+        let session_id = format!(
+            "{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .map(|duration| duration.as_nanos())
+                .unwrap_or_default()
+        );
+        let log_path = startup_log_path(app);
+        let (completion_tx, completion_rx) = futures_channel::oneshot::channel();
+        append_pdf_print_lifecycle_log(&log_path, &session_id, "Print entered; session created");
         let main_window = app
             .get_webview_window("main")
             .ok_or_else(|| "The Bezgrow window is unavailable for native printing.".to_string())?;
         let print_result = Arc::new(Mutex::new(None::<Result<(), String>>));
         let callback_result = Arc::clone(&print_result);
+        let callback_session_id = session_id.clone();
+        let callback_log_path = log_path.clone();
         main_window
             .with_webview(move |platform_webview| {
                 let result = (|| unsafe {
@@ -1845,6 +2093,11 @@ fn open_validated_pdf_with_native_print_dialog<R: tauri::Runtime>(
                         .ok_or_else(|| {
                             "PDFKit could not load the validated invoice PDF.".to_string()
                         })?;
+                    append_pdf_print_lifecycle_log(
+                        &callback_log_path,
+                        &callback_session_id,
+                        "PDF created",
+                    );
                     if !document.allowsPrinting() {
                         return Err("The invoice PDF does not permit printing.".to_string());
                     }
@@ -1881,24 +2134,45 @@ fn open_validated_pdf_with_native_print_dialog<R: tauri::Runtime>(
                     // Its completion selector removes this association, releasing the
                     // document, print info, operation, and delegate exactly once.
                     let lifecycle =
-                        PdfPrintLifecycle::new(mtm, document, print_info, operation, window);
+                        PdfPrintLifecycle::new(
+                            mtm,
+                            document,
+                            print_info,
+                            operation,
+                            window,
+                            completion_tx,
+                            callback_session_id.clone(),
+                            callback_log_path.clone(),
+                        );
                     objc2::ffi::objc_setAssociatedObject(
                         (window as *const NSWindow).cast_mut().cast(),
                         (&PDF_PRINT_LIFECYCLE_ASSOCIATION_KEY as *const u8).cast(),
                         (Retained::as_ptr(&lifecycle) as *mut PdfPrintLifecycle).cast(),
                         objc2::ffi::OBJC_ASSOCIATION_RETAIN_NONATOMIC,
                     );
+                    let active = ACTIVE_PDF_PRINT_SESSIONS.fetch_add(1, Ordering::SeqCst) + 1;
+                    append_pdf_print_lifecycle_log(
+                        &callback_log_path,
+                        &callback_session_id,
+                        format!("PDF retained; NSPrintOperation retained; active_sessions={active}"),
+                    );
                     let delegate: &AnyObject =
                         &*(Retained::as_ptr(&lifecycle) as *const PdfPrintLifecycle).cast();
-                    lifecycle
-                        .ivars()
-                        .operation
+                    let operation = lifecycle.ivars().operation.borrow();
+                    operation
+                        .as_ref()
+                        .ok_or_else(|| "The native print operation was released before launch.".to_string())?
                         .runOperationModalForWindow_delegate_didRunSelector_contextInfo(
                             window,
                             Some(delegate),
                             Some(sel!(printOperationDidRun:success:contextInfo:)),
                             std::ptr::null_mut(),
                         );
+                    append_pdf_print_lifecycle_log(
+                        &callback_log_path,
+                        &callback_session_id,
+                        "Dialog opened",
+                    );
                     Ok(())
                 })();
                 if let Ok(mut slot) = callback_result.lock() {
@@ -1912,7 +2186,10 @@ fn open_validated_pdf_with_native_print_dialog<R: tauri::Runtime>(
             .take()
             .ok_or_else(|| "The macOS print operation did not start.".to_string())??;
         let _ = path;
-        return Ok("dialog_opened");
+        return Ok(NativePrintLaunch {
+            status: "dialog_opened",
+            completion: Some(completion_rx),
+        });
     }
 
     #[cfg(target_os = "windows")]
@@ -1923,7 +2200,9 @@ fn open_validated_pdf_with_native_print_dialog<R: tauri::Runtime>(
             window.navigate(url).map_err(|error| {
                 format!("Unable to load the invoice in the native print bridge: {error}")
             })?;
-            return Ok("dialog_opened");
+            return Ok(NativePrintLaunch {
+                status: "dialog_opened",
+            });
         }
 
         let print_app = app.clone();
@@ -1984,7 +2263,9 @@ fn open_validated_pdf_with_native_print_dialog<R: tauri::Runtime>(
             format!("Unable to create the Windows native print bridge: {error}")
         })?;
         let _ = bytes;
-        return Ok("dialog_opened");
+        return Ok(NativePrintLaunch {
+            status: "dialog_opened",
+        });
     }
 
     #[cfg(not(any(target_os = "macos", target_os = "windows")))]
@@ -1998,7 +2279,7 @@ fn open_validated_pdf_with_native_print_dialog<R: tauri::Runtime>(
 }
 
 #[tauri::command]
-fn desktop_open_pdf_for_print<R: tauri::Runtime>(
+async fn desktop_open_pdf_for_print<R: tauri::Runtime>(
     app: tauri::AppHandle<R>,
     filename: String,
     bytes: Vec<u8>,
@@ -2035,13 +2316,27 @@ fn desktop_open_pdf_for_print<R: tauri::Runtime>(
     if written != bytes {
         return Err("The temporary invoice PDF bytes changed after writing.".to_string());
     }
-    let print_status =
+    let mut print_launch =
         open_validated_pdf_with_native_print_dialog(&app, &destination, written.clone())?;
     drop(operation);
     append_startup_log_handle(
         &app,
-        format!("Validated invoice PDF passed to native print UI; status={print_status}"),
+        format!(
+            "Validated invoice PDF passed to native print UI; status={}",
+            print_launch.status
+        ),
     );
+
+    #[cfg(target_os = "macos")]
+    let print_status = match print_launch.completion.take() {
+        Some(completion) => completion.await.map_err(|_| {
+            "The native print session ended without resolving its Print or Cancel result."
+                .to_string()
+        })?,
+        None => print_launch.status,
+    };
+    #[cfg(not(target_os = "macos"))]
+    let print_status = print_launch.status;
 
     Ok(DesktopOpenedPdf {
         path: destination.to_string_lossy().to_string(),
@@ -3513,31 +3808,28 @@ fn open_external_url(url: String) -> Result<(), String> {
 }
 
 fn validate_platform_admin_url(url: &str) -> Result<tauri::Url, String> {
-    let parsed =
+    let mut parsed =
         tauri::Url::parse(url).map_err(|error| format!("Invalid Platform Admin URL: {error}"))?;
     let host = parsed.host_str().unwrap_or_default().to_ascii_lowercase();
-    let trusted_production_host = matches!(host.as_str(), "bezgrow.com" | "www.bezgrow.com");
-    let trusted_local_host =
-        cfg!(debug_assertions) && matches!(host.as_str(), "127.0.0.1" | "localhost");
-    let trusted_scheme =
-        parsed.scheme() == "https" || (trusted_local_host && parsed.scheme() == "http");
-    let trusted_path = parsed.path() == "/admin"
-        || parsed.path().starts_with("/admin/")
-        || parsed.path() == "/login";
-
-    if trusted_scheme && (trusted_production_host || trusted_local_host) && trusted_path {
+    if parsed.scheme() == "http" && matches!(host.as_str(), "127.0.0.1" | "localhost") {
+        parsed.set_path("/login");
+        parsed.set_query(Some("next=%2Fadmin%3Fdesktop%3D1&platform_admin=1&desktop=1"));
+        parsed.set_fragment(None);
         return Ok(parsed);
     }
 
-    Err("Platform Administration must use the trusted Bezgrow admin origin.".to_string())
+    Err("Platform Administration must run inside the local Bezgrow desktop application.".to_string())
 }
 
 #[tauri::command]
-fn open_platform_admin<R: tauri::Runtime>(
-    app: tauri::AppHandle<R>,
-    url: String,
-) -> Result<(), String> {
-    let parsed = validate_platform_admin_url(&url)?;
+fn open_platform_admin<R: tauri::Runtime>(app: tauri::AppHandle<R>) -> Result<(), String> {
+    let main_window = app
+        .get_webview_window("main")
+        .ok_or_else(|| "The Bezgrow desktop window is unavailable.".to_string())?;
+    let main_url = main_window
+        .url()
+        .map_err(|error| format!("Unable to read the Bezgrow desktop URL: {error}"))?;
+    let parsed = validate_platform_admin_url(main_url.as_str())?;
 
     if let Some(window) = app.get_webview_window("platform-admin") {
         window
@@ -3552,16 +3844,22 @@ fn open_platform_admin<R: tauri::Runtime>(
             .inner_size(1440.0, 900.0)
             .min_inner_size(1080.0, 700.0)
             .resizable(true)
-            .fullscreen(false);
+            .fullscreen(false)
+            .initialization_script(
+                "window.__BEZGROW_DESKTOP__ = true; window.__BEZGROW_PLATFORM_ADMIN_WINDOW__ = true; window.isTauri = true;",
+            );
 
     #[cfg(target_os = "windows")]
-    let builder = builder.data_directory(managed_data_directory(&app, "WebViewPlatformAdmin")?);
+    let builder = builder.data_directory(managed_data_directory(&app, "WebView")?);
 
     builder
         .build()
         .map_err(|error| format!("Unable to open Platform Administration: {error}"))?;
 
-    append_startup_log_handle(&app, "Online Platform Administration window opened");
+    append_startup_log_handle(
+        &app,
+        "Device-bound Platform Administration window opened inside Bezgrow",
+    );
     Ok(())
 }
 
@@ -4650,6 +4948,7 @@ pub fn run() {
             read_secret,
             delete_secret,
             desktop_get_or_create_device_id,
+            desktop_platform_admin_proof,
             desktop_save_file,
             desktop_prepare_invoice_share,
             desktop_pick_business_logo,

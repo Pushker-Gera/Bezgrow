@@ -10,6 +10,7 @@ import {
   formatAdminDate,
   useAdminOnline,
 } from "@/components/admin/ControlPlaneUi"
+import { secureAdminFetch } from "@/lib/platform-admin/client"
 
 type DashboardPayload = {
   ok?: boolean
@@ -61,7 +62,7 @@ export default function AdminDashboardPage() {
       setLoading(true)
       setError("")
     })
-    fetch(`/api/admin/dashboard?days=${days}`, {
+    secureAdminFetch(`/api/admin/dashboard?days=${days}`, {
       credentials: "include",
       cache: "no-store",
       signal: controller.signal,

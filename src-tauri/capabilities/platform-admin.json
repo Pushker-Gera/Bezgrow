@@ -1,0 +1,13 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "platform-admin",
+  "description": "Minimal native capability for the device-bound Platform Admin window",
+  "remote": {
+    "urls": ["http://127.0.0.1:*", "http://localhost:*"]
+  },
+  "windows": ["platform-admin"],
+  "permissions": [
+    "core:default",
+    "allow-desktop-platform-admin-proof"
+  ]
+}

@@ -122,12 +122,11 @@ export async function openExternalUrl(url: string) {
   return true
 }
 
-export async function openPlatformAdmin(url: string) {
+export async function openPlatformAdmin() {
   if (!(await isTauriRuntimeAsync())) {
-    window.location.assign(url)
-    return false
+    throw new Error("This device is not authorized for Bezgrow Platform Administration.")
   }
 
-  await invokeTauri<void>("open_platform_admin", { url })
+  await invokeTauri<void>("open_platform_admin")
   return true
 }

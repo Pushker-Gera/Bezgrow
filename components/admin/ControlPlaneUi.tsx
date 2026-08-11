@@ -2,6 +2,7 @@
 
 import type { ReactNode } from "react"
 import { createContext, useCallback, useContext, useEffect, useRef, useState } from "react"
+import { downloadAdminFile, secureAdminFetch } from "@/lib/platform-admin/client"
 
 type OnlineContextValue = {
   online: boolean
@@ -80,7 +81,7 @@ export function useAdminList<T extends Record<string, unknown>>(
       setError("")
     })
 
-    fetch(`${endpoint}?${params}`, {
+    secureAdminFetch(`${endpoint}?${params}`, {
       cache: "no-store",
       credentials: "include",
       signal: controller.signal,
@@ -141,7 +142,7 @@ export async function adminMutation<T = Record<string, unknown>>(
 
   let response: Response
   try {
-    response = await fetch(endpoint, {
+    response = await secureAdminFetch(endpoint, {
       method,
       credentials: "include",
       cache: "no-store",
@@ -339,23 +340,27 @@ export function AdminListControls({
         className="h-11 min-w-0 flex-1 rounded-2xl border border-white/10 bg-black/40 px-4 text-sm outline-none placeholder:text-neutral-600 focus:border-cyan-400/40"
       />
       {filters}
-      {exportHref && (
-        <a href={exportHref} className="flex h-11 items-center justify-center rounded-2xl border border-white/10 px-4 text-sm font-black hover:border-cyan-300/40">
-          Export CSV
-        </a>
-      )}
+      {exportHref && <AdminExportLink href={exportHref} compact />}
     </div>
   )
 }
 
-export function AdminExportLink({ href }: { href: string }) {
+export function AdminExportLink({ href, compact = false }: { href: string; compact?: boolean }) {
+  const [busy, setBusy] = useState(false)
   return (
-    <a
-      href={href}
-      className="flex h-12 items-center rounded-2xl border border-white/10 px-5 text-sm font-black"
+    <button
+      type="button"
+      disabled={busy}
+      onClick={() => {
+        setBusy(true)
+        void downloadAdminFile(href).catch((error) => {
+          window.alert(error instanceof Error ? error.message : "The admin export could not be downloaded.")
+        }).finally(() => setBusy(false))
+      }}
+      className={`flex items-center justify-center rounded-2xl border border-white/10 px-5 text-sm font-black disabled:opacity-50 ${compact ? "h-11" : "h-12"}`}
     >
-      Export CSV
-    </a>
+      {busy ? "Exporting…" : "Export CSV"}
+    </button>
   )
 }
 

@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react"
 import { AdminExportLink, AdminNotice, AdminPageHeader, useAdminOnline } from "@/components/admin/ControlPlaneUi"
+import { secureAdminFetch } from "@/lib/platform-admin/client"
 
 type Point = { label: string; value: number }
 type AnalyticsPayload = {
@@ -35,7 +36,7 @@ export default function AnalyticsPage() {
       setLoading(true)
       setError("")
     })
-    fetch(`/api/admin/analytics?days=${days}`, { cache: "no-store", credentials: "include", signal: controller.signal })
+    secureAdminFetch(`/api/admin/analytics?days=${days}`, { cache: "no-store", signal: controller.signal })
       .then(async (response) => {
         const result = (await response.json().catch(() => ({}))) as AnalyticsPayload
         if (!response.ok || !result.success) throw new Error(result.error || "Analytics failed to load.")

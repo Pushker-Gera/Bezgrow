@@ -306,7 +306,7 @@ export function InvoiceExportModal(props: Props) {
       }
       props.onNotice(opened.status === "cancelled"
         ? "Report printing was cancelled. The exact report PDF remains ready to print again."
-        : opened.status === "completed"
+        : opened.status === "printed"
           ? "The operating system accepted the exact report PDF for printing."
           : "The system print dialog opened with the exact report PDF.")
     } catch (nextError) {
@@ -358,7 +358,7 @@ export function InvoiceExportModal(props: Props) {
       `Period: ${result.period}`,
       `Invoices: ${result.invoiceCount.toLocaleString("en-IN")}`,
       "",
-      link ? `View or download the report:\n${link}` : "The report PDF was prepared locally. Please attach it before sending.",
+      link ? `View or download the report:\n${link}` : "This report was generated securely by Bezgrow.",
       "",
       "Thank you,",
       dataset.businessName,

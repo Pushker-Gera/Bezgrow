@@ -67,7 +67,7 @@ Record the date, Windows version, Bezgrow version, installer filename, and any f
 - Open invoice CSV export, choose date, customer, status, payment, payment method, and GST filters, then save through the Windows dialog.
 - Open the CSV in Excel. Confirm readable headings, correct filters/dates/amounts/GST, intact leading-zero values, and no shifted columns after commas, quotes, or line breaks.
 - Upload a PNG/JPEG/WebP business logo through the native picker. Confirm preview/aspect ratio, replace, restart persistence, invoice/PDF/print display, and removal.
-- Use WhatsApp for an invoice. Confirm the number and message are correct. Confirm Bezgrow tells you to attach the generated PDF when automatic attachment is unavailable.
+- Use WhatsApp for an invoice. Confirm the number and complete professional invoice summary are correct, with no manual file instructions.
 - Use email for an invoice. Confirm recipient, subject, message, and PDF path/handoff. Do not mark it passed if the UI falsely claims an attachment was sent.
 
 ## 7. Backup and restore
