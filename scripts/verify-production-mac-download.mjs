@@ -136,6 +136,15 @@ async function inspectMountedDmg(dmgPath, installer, temporaryRoot) {
     if (expectedCommit && identity.gitCommit !== expectedCommit) {
       throw new Error(`Mounted production app came from ${identity.gitCommit}, not ${expectedCommit}.`)
     }
+    if (identity.gitCommit !== installer.buildCommit) {
+      throw new Error("Mounted production app commit does not match published release metadata.")
+    }
+    if (identity.builtAt !== installer.buildTimestamp) {
+      throw new Error("Mounted production app timestamp does not match published release metadata.")
+    }
+    if (identity.platform !== "macos" || identity.architecture !== installer.architecture) {
+      throw new Error("Mounted production app platform identity does not match published release metadata.")
+    }
     if (Number.isNaN(Date.parse(identity.builtAt))) {
       throw new Error("Mounted production app build identity has no valid timestamp.")
     }
@@ -152,18 +161,39 @@ async function inspectMountedDmg(dmgPath, installer, temporaryRoot) {
 
     const serverRoot = join(app, "Contents", "Resources", "next-server", ".next")
     const packagedJavaScript = jsFilesUnder(serverRoot).map((filename) => readFileSync(filename, "utf8"))
+    for (const forbidden of [
+      "Your invoice PDF has been prepared separately. Please attach it before sending.",
+      "prepared separately",
+      "attach it before sending",
+      "attach PDF",
+      "manual attachment",
+    ]) {
+      if (packagedJavaScript.some((source) => source.includes(forbidden))) {
+        throw new Error(`Mounted production app contains forbidden invoice-sharing copy: ${forbidden}`)
+      }
+    }
     if (packagedJavaScript.some((source) => source.includes("Create secure share link"))) {
       throw new Error("Mounted production app still contains the obsolete secure-share modal.")
     }
-    if (!packagedJavaScript.some((source) => source.includes("Automatic mode sends only this explicitly selected invoice PDF"))) {
-      throw new Error("Mounted production app is missing the explicit WhatsApp Business delivery boundary.")
+    if (!packagedJavaScript.some((source) => source.includes("Please find your invoice summary below."))) {
+      throw new Error("Mounted production app is missing the professional WhatsApp invoice message.")
+    }
+    if (!packagedJavaScript.some((source) => source.includes("Platform Admin Login")) ||
+        !packagedJavaScript.some((source) => source.includes("/api/platform-admin/device/authorize"))) {
+      throw new Error("Mounted production app is missing the device-authorized Platform Admin launcher.")
     }
     if (!packagedJavaScript.some((source) => source.includes("canonical-pdf-preview"))) {
       throw new Error("Mounted production app is missing the canonical PDF preview implementation.")
     }
     const executable = join(app, "Contents", "MacOS", "Bezgrow")
-    if (!readFileSync(executable).includes(Buffer.from("desktop_open_pdf_for_print"))) {
+    const executableBytes = readFileSync(executable)
+    if (!executableBytes.includes(Buffer.from("desktop_open_pdf_for_print"))) {
       throw new Error("Mounted production app is missing the validated native PDF print command.")
+    }
+    for (const command of ["open_platform_admin", "desktop_platform_admin_proof"]) {
+      if (!executableBytes.includes(Buffer.from(command))) {
+        throw new Error(`Mounted production app is missing the native ${command} command.`)
+      }
     }
 
     if (launch) {
@@ -210,6 +240,12 @@ async function verify() {
   if (installer?.version !== expectedVersion) {
     throw new Error(`Production reports Mac ${installer?.version || "unknown"} instead of ${expectedVersion}.`)
   }
+  if (expectedCommit && installer?.buildCommit !== expectedCommit) {
+    throw new Error(`Production metadata came from ${installer?.buildCommit || "unknown"}, not ${expectedCommit}.`)
+  }
+  if (Number.isNaN(Date.parse(installer?.buildTimestamp || ""))) {
+    throw new Error("Production Mac metadata is missing a valid build timestamp.")
+  }
   if (!/^[a-f0-9]{64}$/i.test(installer?.sha256 || "") || !(installer?.size > 5 * 1024 * 1024)) {
     throw new Error("Production Mac metadata is missing a credible size or SHA-256.")
   }
@@ -231,8 +267,14 @@ async function verify() {
       "Production Mac download button endpoint",
       productionPath
     )
+    if (permanent.sha256 !== proxied.sha256 || permanent.size !== proxied.size) {
+      throw new Error("The customer download endpoint is not byte-for-byte identical to the immutable release artifact.")
+    }
     if (!/no-store/i.test(proxied.cacheControl)) {
       throw new Error("Production Mac download endpoint is missing no-store cache protection.")
+    }
+    if (!/no-store/i.test(metadataResponse.headers.get("cache-control") || "")) {
+      throw new Error("Production release metadata is missing no-store cache protection.")
     }
     const legacy = await fetch(`${site}/downloads/Bezgrow-mac.dmg`, {
       redirect: "manual",

@@ -91,6 +91,7 @@ assert.match(rust, /fn start_server_with_retries[\s\S]*for attempt in 1\.\.=3/, 
 assert.match(rust, /fn start_runtime_supervisor[\s\S]*local_runtime_responds\(&ownership\)/, "The bundled runtime must remain authenticated and health-checked after the window opens.");
 assert.match(rust, /RUNTIME_HEALTH_HEADER[\s\S]*local_runtime_responds/, "The native health check must send the per-launch runtime credential.");
 assert.match(desktopHealthRoute, /timingSafeEqual[\s\S]*BEZGROW_RUNTIME_TOKEN[\s\S]*bezgrow-embedded/, "The embedded health route must require the per-launch token and remain hidden on the hosted site.");
+assert.match(desktopHealthRoute, /desktop-build\.json[\s\S]*gitCommit[\s\S]*buildTimestamp[\s\S]*platform[\s\S]*architecture/, "The embedded health route must report the packaged build identity.");
 assert.match(rust, /RuntimeOwnership[\s\S]*shell_pid[\s\S]*server_pid[\s\S]*app_version[\s\S]*token[\s\S]*started_at/, "Runtime ownership must persist shell, server, version, token, and timestamp identity.");
 assert.match(rust, /tauri_plugin_single_instance[\s\S]*focus_running_bezgrow/, "A second launch must focus the existing Bezgrow window.");
 assert.match(rust, /main\.hide\(\)[\s\S]*create_startup_error_window/, "A failed bundled runtime must hide the ERP webview before showing recovery.");

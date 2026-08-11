@@ -57,6 +57,10 @@ assert.match(authorization, /verifyPlatformAdminDeviceRequest/, "Server APIs mus
 assert.match(authorization, /platform_admin_request_nonces/, "Every native proof must be single-use server-side.")
 assert.match(authorization, /allowed_admin_user_id !== options\.adminUserId/, "The device must be assigned to the exact authenticated admin.")
 assert.match(authorization, /platform_admin_revoked_at/, "Revoked admin devices must fail closed.")
+assert.match(authorization, /result\.error\?\.code === "42703"/, "Production schema compatibility must activate only when the additive device columns are absent.")
+assert.match(authorization, /OWNER_DEVICE_ID = "BZG-23D76F50F880422489AF152B"/, "The pre-migration compatibility path must remain bound to the owner's exact Device ID.")
+assert.match(authorization, /FALLBACK_KEY_ACTION[\s\S]*admin_audit_logs[\s\S]*public_key/, "The compatibility path must enroll the Tauri public key in append-only server audit storage.")
+assert.match(authorization, /FALLBACK_NONCE_ACTION[\s\S]*confirmed\.data\.length === 1/, "The compatibility path must fail closed when a signed nonce is replayed or races.")
 
 assert.match(migration, /platform_admin_allowed/, "Registered devices must carry an explicit admin authorization flag.")
 assert.match(migration, /allowed_admin_user_id/, "Registered devices must bind the allowed admin user.")

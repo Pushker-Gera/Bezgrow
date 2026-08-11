@@ -21,6 +21,8 @@ export type InstallerCandidate = {
   signed?: boolean | null
   notarized?: boolean | null
   generatedAt?: string | null
+  buildCommit?: string | null
+  buildTimestamp?: string | null
   releaseChannel?: string | null
   releaseNotes?: string | null
   buildNumber?: string | null
@@ -47,6 +49,8 @@ export type ValidatedInstaller = {
   blockedReason: string | null
   releaseChannel: string
   generatedAt: string | null
+  buildCommit: string | null
+  buildTimestamp: string | null
   releaseNotes: string | null
   buildNumber: string | null
   mandatory: boolean
@@ -88,6 +92,14 @@ function semverLike(value: string | null | undefined) {
 
 function sha256Like(value: string | null | undefined) {
   return Boolean(value && /^[a-fA-F0-9]{64}$/.test(value))
+}
+
+function commitLike(value: string | null | undefined) {
+  return Boolean(value && /^[a-fA-F0-9]{40}$/.test(value))
+}
+
+function timestampLike(value: string | null | undefined) {
+  return Boolean(value && !Number.isNaN(Date.parse(value)))
 }
 
 function candidateHref(candidate: InstallerCandidate) {
@@ -315,6 +327,8 @@ function unavailable(candidate: InstallerCandidate, reason: string): ValidatedIn
     blockedReason: reason,
     releaseChannel: candidate.releaseChannel || "internal",
     generatedAt: candidate.generatedAt || null,
+    buildCommit: candidate.buildCommit || null,
+    buildTimestamp: candidate.buildTimestamp || null,
     releaseNotes: candidate.releaseNotes || null,
     buildNumber: candidate.buildNumber || null,
     mandatory: Boolean(candidate.mandatory),
@@ -414,7 +428,9 @@ async function validateUncached(candidate: InstallerCandidate): Promise<Validate
       candidate.architecture &&
       candidate.filename &&
       candidate.size &&
-      sha256Like(candidate.sha256)
+      sha256Like(candidate.sha256) &&
+      commitLike(candidate.buildCommit) &&
+      timestampLike(candidate.buildTimestamp)
   )
   const releaseChannel = candidate.releaseChannel || (signed && (candidate.platform === "windows" || notarized) ? "stable" : "internal")
   const productionRecommended = Boolean(
@@ -455,9 +471,11 @@ async function validateUncached(candidate: InstallerCandidate): Promise<Validate
     warning,
     blockedReason: available
       ? null
-      : "Installer bytes passed package validation, but immutable version, architecture, size, filename, and SHA-256 metadata are required before download.",
+      : "Installer bytes passed package validation, but immutable version, commit, build timestamp, architecture, size, filename, and SHA-256 metadata are required before download.",
     releaseChannel,
     generatedAt: candidate.generatedAt || null,
+    buildCommit: candidate.buildCommit || null,
+    buildTimestamp: candidate.buildTimestamp || null,
     releaseNotes: candidate.releaseNotes || null,
     buildNumber: candidate.buildNumber || null,
     mandatory: Boolean(candidate.mandatory),

@@ -6,6 +6,11 @@ import { adminSupabase } from "@/lib/supabase/admin"
 
 const DEVICE_DENIED = "This device is not authorized for Bezgrow Platform Administration."
 const MAX_CLOCK_SKEW_SECONDS = 90
+const OWNER_DEVICE_ID = "BZG-23D76F50F880422489AF152B"
+const OWNER_ADMIN_USER_ID = "58dc79eb-9d86-4f50-9cb1-fea6c5470fd4"
+const OWNER_ADMIN_EMAIL = "pushkergera@gmail.com"
+const FALLBACK_KEY_ACTION = "platform_admin_device_key_enrolled"
+const FALLBACK_NONCE_ACTION = "platform_admin_request_nonce"
 
 const proofSchema = z.object({
   deviceId: z.string().regex(/^BZG-[A-Z0-9-]{8,92}$/),
@@ -47,6 +52,126 @@ function rawEd25519PublicKey(hex: string) {
   })
 }
 
+async function verifyLegacyProductionDevice(
+  proof: z.infer<typeof proofSchema>,
+  options: { adminUserId?: string; allowPublicKeyEnrollment?: boolean },
+) {
+  if (
+    proof.deviceId !== OWNER_DEVICE_ID ||
+    (options.adminUserId && options.adminUserId !== OWNER_ADMIN_USER_ID)
+  ) return null
+
+  const [deviceResult, profileResult] = await Promise.all([
+    adminSupabase
+      .from("registered_devices")
+      .select("id,device_id,device_status")
+      .eq("device_id", OWNER_DEVICE_ID)
+      .maybeSingle(),
+    adminSupabase
+      .from("profiles")
+      .select("id,email,role,is_suspended")
+      .eq("id", OWNER_ADMIN_USER_ID)
+      .maybeSingle(),
+  ])
+  const device = deviceResult.data
+  const profile = profileResult.data
+  if (
+    deviceResult.error ||
+    profileResult.error ||
+    !device ||
+    !profile ||
+    device.device_status !== "active" ||
+    profile.id !== OWNER_ADMIN_USER_ID ||
+    String(profile.email || "").toLowerCase() !== OWNER_ADMIN_EMAIL ||
+    !["admin", "platform_admin"].includes(String(profile.role || "")) ||
+    profile.is_suspended === true
+  ) return null
+
+  const readEnrollments = () => adminSupabase
+    .from("admin_audit_logs")
+    .select("id,admin_user_id,new_values,created_at")
+    .eq("action", FALLBACK_KEY_ACTION)
+    .eq("target_type", "registered_device")
+    .eq("target_id", OWNER_DEVICE_ID)
+    .eq("result", "success")
+    .order("created_at", { ascending: true })
+    .order("id", { ascending: true })
+    .limit(2)
+
+  let enrollmentResult = await readEnrollments()
+  if (enrollmentResult.error) return null
+  if (enrollmentResult.data.length === 0 && options.allowPublicKeyEnrollment) {
+    const enrollment = await adminSupabase.from("admin_audit_logs").insert({
+      admin_user_id: OWNER_ADMIN_USER_ID,
+      admin_email: OWNER_ADMIN_EMAIL,
+      action: FALLBACK_KEY_ACTION,
+      target_type: "registered_device",
+      target_id: OWNER_DEVICE_ID,
+      new_values: { public_key: proof.publicKey, schema_compatibility: "pre-2026081100" },
+      request_id: `platform-admin-key:${OWNER_DEVICE_ID}:${proof.publicKey}`,
+      result: "success",
+    })
+    if (enrollment.error) return null
+    enrollmentResult = await readEnrollments()
+  }
+  const enrollments = enrollmentResult.data || []
+  const enrolledPublicKey = String(
+    (enrollments[0]?.new_values as { public_key?: unknown } | null)?.public_key || "",
+  )
+  // More than one enrollment means a race or attempted replacement. Fail closed
+  // until an administrator reviews the append-only audit history.
+  if (
+    enrollments.length !== 1 ||
+    enrollments[0]?.admin_user_id !== OWNER_ADMIN_USER_ID ||
+    enrolledPublicKey !== proof.publicKey
+  ) return null
+
+  return {
+    registeredDeviceId: device.id,
+    deviceId: device.device_id,
+    allowedAdminUserId: OWNER_ADMIN_USER_ID,
+  } satisfies PlatformAdminDeviceContext
+}
+
+async function consumeLegacyProductionNonce(
+  proof: z.infer<typeof proofSchema>,
+  context: PlatformAdminDeviceContext,
+  pathAndQuery: string,
+  usedAt: Date,
+) {
+  const requestId = `platform-admin-nonce:${proof.nonce}`
+  const existing = await adminSupabase
+    .from("admin_audit_logs")
+    .select("id")
+    .eq("action", FALLBACK_NONCE_ACTION)
+    .eq("request_id", requestId)
+    .limit(1)
+  if (existing.error || existing.data.length !== 0) return false
+
+  const inserted = await adminSupabase.from("admin_audit_logs").insert({
+    admin_user_id: context.allowedAdminUserId,
+    admin_email: OWNER_ADMIN_EMAIL,
+    action: FALLBACK_NONCE_ACTION,
+    target_type: "registered_device",
+    target_id: context.deviceId,
+    new_values: {
+      request_path: pathAndQuery,
+      expires_at: new Date(usedAt.getTime() + MAX_CLOCK_SKEW_SECONDS * 2_000).toISOString(),
+    },
+    request_id: requestId,
+    result: "success",
+  })
+  if (inserted.error) return false
+
+  const confirmed = await adminSupabase
+    .from("admin_audit_logs")
+    .select("id")
+    .eq("action", FALLBACK_NONCE_ACTION)
+    .eq("request_id", requestId)
+    .limit(2)
+  return !confirmed.error && confirmed.data.length === 1
+}
+
 export async function verifyPlatformAdminDeviceRequest(
   request: Request,
   options: { adminUserId?: string; allowPublicKeyEnrollment?: boolean } = {},
@@ -71,28 +196,34 @@ export async function verifyPlatformAdminDeviceRequest(
     .select("id,device_id,device_status,platform_admin_allowed,allowed_admin_user_id,platform_admin_public_key,platform_admin_revoked_at")
     .eq("device_id", proof.deviceId)
     .maybeSingle()
+  const legacySchema = result.error?.code === "42703"
+  const legacyContext = legacySchema
+    ? await verifyLegacyProductionDevice(proof, options)
+    : null
   const device = result.data
   if (
-    result.error ||
-    !device ||
-    device.device_status !== "active" ||
-    device.platform_admin_allowed !== true ||
-    !device.allowed_admin_user_id ||
-    device.platform_admin_revoked_at ||
-    (options.adminUserId && device.allowed_admin_user_id !== options.adminUserId)
+    legacySchema ? !legacyContext : (
+      result.error ||
+      !device ||
+      device.device_status !== "active" ||
+      device.platform_admin_allowed !== true ||
+      !device.allowed_admin_user_id ||
+      device.platform_admin_revoked_at ||
+      (options.adminUserId && device.allowed_admin_user_id !== options.adminUserId)
+    )
   ) {
     return { ok: false, status: 403, error: DEVICE_DENIED }
   }
 
-  let registeredPublicKey = String(device.platform_admin_public_key || "")
-  if (!registeredPublicKey && options.allowPublicKeyEnrollment) {
+  let registeredPublicKey = legacyContext ? proof.publicKey : String(device?.platform_admin_public_key || "")
+  if (!legacyContext && !registeredPublicKey && options.allowPublicKeyEnrollment) {
     const enrollment = await adminSupabase
       .from("registered_devices")
       .update({
         platform_admin_public_key: proof.publicKey,
         platform_admin_last_verified_at: new Date().toISOString(),
       })
-      .eq("id", device.id)
+      .eq("id", device!.id)
       .is("platform_admin_public_key", null)
       .select("platform_admin_public_key")
       .maybeSingle()
@@ -102,7 +233,7 @@ export async function verifyPlatformAdminDeviceRequest(
       const reread = await adminSupabase
         .from("registered_devices")
         .select("platform_admin_public_key")
-        .eq("id", device.id)
+        .eq("id", device!.id)
         .maybeSingle()
       registeredPublicKey = String(reread.data?.platform_admin_public_key || "")
     }
@@ -137,9 +268,15 @@ export async function verifyPlatformAdminDeviceRequest(
   if (!signatureValid) return { ok: false, status: 403, error: DEVICE_DENIED }
 
   const usedAt = new Date()
+  if (legacyContext) {
+    const consumed = await consumeLegacyProductionNonce(proof, legacyContext, pathAndQuery, usedAt)
+    if (!consumed) return { ok: false, status: 403, error: DEVICE_DENIED }
+    return { ok: true, context: legacyContext }
+  }
+
   const nonceResult = await adminSupabase.from("platform_admin_request_nonces").insert({
     nonce: proof.nonce,
-    registered_device_id: device.id,
+    registered_device_id: device!.id,
     admin_user_id: options.adminUserId || null,
     request_path: pathAndQuery,
     used_at: usedAt.toISOString(),
@@ -157,14 +294,14 @@ export async function verifyPlatformAdminDeviceRequest(
   await adminSupabase
     .from("registered_devices")
     .update({ platform_admin_last_verified_at: usedAt.toISOString() })
-    .eq("id", device.id)
+    .eq("id", device?.id)
 
   return {
     ok: true,
     context: {
-      registeredDeviceId: device.id,
-      deviceId: device.device_id,
-      allowedAdminUserId: device.allowed_admin_user_id,
+      registeredDeviceId: device!.id,
+      deviceId: device!.device_id,
+      allowedAdminUserId: device!.allowed_admin_user_id,
     },
   }
 }

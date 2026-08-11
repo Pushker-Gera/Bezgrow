@@ -22,10 +22,12 @@ assert.match(publisher, /No checksum was recorded/, "Every release file must be 
 assert.match(publisher, /verify-release-artifact\.mjs/, "Publication must revalidate genuine installer bytes.")
 assert.match(publisher, /immutable versioned name/, "Mac publication must require a versioned immutable DMG filename.")
 assert.match(publisher, /sourceCommit/, "Mac publication must verify source-commit provenance.")
+assert.match(publisher, /expectedCommit[\s\S]*Windows build commit/, "Publication must require Mac and Windows artifacts from the requested commit.")
 assert.match(writer, /Published release metadata requires a local verified installer file/, "Published metadata must fail closed without a local installer.")
 assert.match(writer, /Bezgrow-mac\.dmg\.release\.json/, "Publication must write the Mac sidecar manifest.")
 assert.match(writer, /buildTimestamp/, "Published artifacts must record their build timestamp.")
 assert.match(workflow, /mac-build\.json/, "The Mac release must carry a checked build-provenance record.")
+assert.match(workflow, /desktop-runtime\\next-server\\public\\desktop-build\.json/, "The Windows release must verify its embedded build identity.")
 assert.match(workflow, /verify-packaged-invoice-delivery\.mjs/, "Mac artifact staging must verify the packaged professional invoice-delivery implementation.")
 assert.doesNotMatch(workflow, /The exact previewed invoice PDF remains on this device/, "Mac artifact staging must not require obsolete invoice-share copy.")
 

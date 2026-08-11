@@ -10,8 +10,11 @@ import { getLocalDatabaseService } from "@/lib/offline/local/service"
 const buildCommit = process.env.NEXT_PUBLIC_BEZGROW_BUILD_COMMIT || "unavailable"
 const buildTimestamp = process.env.NEXT_PUBLIC_BEZGROW_BUILD_TIMESTAMP || "unavailable"
 const buildVersion = process.env.NEXT_PUBLIC_BEZGROW_BUILD_VERSION || packageJson.version
+const buildPlatform = process.env.NEXT_PUBLIC_BEZGROW_BUILD_PLATFORM || "unavailable"
+const embeddedArchitecture = process.env.NEXT_PUBLIC_BEZGROW_BUILD_ARCHITECTURE || ""
 const buildChannel = process.env.NEXT_PUBLIC_BEZGROW_BUILD_CHANNEL || "development"
 const shortBuildCommit = /^[a-f0-9]{7,40}$/i.test(buildCommit) ? buildCommit.slice(0, 7) : buildCommit
+const displayBuildPlatform = buildPlatform === "macos" ? "macOS" : buildPlatform === "windows" ? "Windows" : buildPlatform
 
 function localServerSummary() {
   if (typeof window === "undefined") return null
@@ -41,7 +44,8 @@ async function buildSafeDiagnostics() {
       version: buildVersion,
       gitCommit: buildCommit,
       buildTimestamp,
-      architecture: desktopArchitecture(),
+      platform: buildPlatform,
+      architecture: embeddedArchitecture || desktopArchitecture(),
       releaseChannel: buildChannel,
     },
     operatingSystem: {
@@ -116,18 +120,22 @@ export default function DesktopDiagnosticsPanel() {
         Save a technical report for support. It never includes passwords, tokens, license keys,
         customers, products, invoices, or other business records.
       </p>
-      <div className="mt-5 grid gap-3 text-sm sm:grid-cols-3" aria-label="Application build identity">
+      <div className="mt-5 grid gap-3 text-sm sm:grid-cols-2 lg:grid-cols-4" aria-label="Application build identity">
         <div className="rounded-2xl border border-white/10 bg-black/35 p-4">
           <p className="text-xs font-black uppercase tracking-[0.16em] text-neutral-500">Application</p>
           <p className="mt-2 font-black text-white">Bezgrow {buildVersion}</p>
         </div>
         <div className="rounded-2xl border border-white/10 bg-black/35 p-4">
-          <p className="text-xs font-black uppercase tracking-[0.16em] text-neutral-500">Build</p>
+          <p className="text-xs font-black uppercase tracking-[0.16em] text-neutral-500">Commit</p>
           <code className="mt-2 block font-black text-cyan-100">{shortBuildCommit}</code>
         </div>
         <div className="rounded-2xl border border-white/10 bg-black/35 p-4">
           <p className="text-xs font-black uppercase tracking-[0.16em] text-neutral-500">Built</p>
           <p className="mt-2 font-semibold text-white">{buildTimestamp}</p>
+        </div>
+        <div className="rounded-2xl border border-white/10 bg-black/35 p-4">
+          <p className="text-xs font-black uppercase tracking-[0.16em] text-neutral-500">Platform</p>
+          <p className="mt-2 font-semibold text-white">{displayBuildPlatform} {embeddedArchitecture || desktopArchitecture()}</p>
         </div>
       </div>
       <button

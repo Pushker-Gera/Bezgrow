@@ -252,6 +252,7 @@ jobs:
             const [identityPath, outputPath, artifactFilename, artifactSha, artifactBytes, architecture, sourceCommit] = process.argv.slice(1);
             const identity = JSON.parse(fs.readFileSync(identityPath, "utf8"));
             if (identity.gitCommit !== sourceCommit) throw new Error(`Embedded commit ${identity.gitCommit} does not match ${sourceCommit}.`);
+            if (identity.platform !== "macos" || identity.architecture !== architecture) throw new Error("Embedded Mac platform identity is incorrect.");
             if (identity.sourceTreeDirty !== false) throw new Error("Release builds must come from a clean source tree.");
             fs.writeFileSync(outputPath, JSON.stringify({
               version: identity.applicationVersion,
@@ -277,7 +278,7 @@ jobs:
             const fs = require("fs");
             const [identityPath, expectedVersion, expectedCommit] = process.argv.slice(1);
             const identity = JSON.parse(fs.readFileSync(identityPath, "utf8"));
-            if (identity.applicationVersion !== expectedVersion || identity.gitCommit !== expectedCommit || Number.isNaN(Date.parse(identity.builtAt)) || identity.sourceTreeDirty !== false) {
+            if (identity.applicationVersion !== expectedVersion || identity.gitCommit !== expectedCommit || identity.platform !== "macos" || identity.architecture !== process.arch || Number.isNaN(Date.parse(identity.builtAt)) || identity.sourceTreeDirty !== false) {
               throw new Error("Mounted app build identity does not match the release source.");
             }
           ' "$BUNDLED_APP/Contents/Resources/next-server/public/desktop-build.json" "$VERSION" "$GITHUB_SHA"
@@ -551,6 +552,19 @@ jobs:
           foreach ($artifact in @($nsis, $msi, $portableExe, $portableZip, $nativeExe)) {
             if (-not $artifact) { throw "A required Windows artifact is missing." }
           }
+          $buildIdentityPath = "desktop-runtime\next-server\public\desktop-build.json"
+          if (-not (Test-Path -LiteralPath $buildIdentityPath)) {
+            throw "The embedded Windows build identity is missing."
+          }
+          $buildIdentity = Get-Content -Raw -LiteralPath $buildIdentityPath | ConvertFrom-Json
+          if ($buildIdentity.applicationVersion -ne $version -or
+              $buildIdentity.gitCommit -ne "${{ github.sha }}" -or
+              $buildIdentity.platform -ne "windows" -or
+              $buildIdentity.architecture -ne "x64" -or
+              $buildIdentity.sourceTreeDirty -ne $false -or
+              [string]::IsNullOrWhiteSpace($buildIdentity.builtAt)) {
+            throw "Embedded Windows build identity does not match the release source."
+          }
           $peHeaders = (& dumpbin.exe /headers $nativeExe.FullName | Out-String)
           if ($peHeaders -notmatch "subsystem \(Windows GUI\)") {
             throw "Bezgrow.exe was not linked with the Windows GUI subsystem."
@@ -619,7 +633,9 @@ jobs:
             version = $version
             platform = "windows"
             architecture = "x86_64"
-            buildCommit = "${{ github.sha }}"
+            buildCommit = $buildIdentity.gitCommit
+            builtAt = $buildIdentity.builtAt
+            sourceTreeDirty = $buildIdentity.sourceTreeDirty
             workflowRunId = "${{ github.run_id }}"
             workflowRunNumber = "${{ github.run_number }}"
             updaterSignatureVerified = $updaterVerified
@@ -693,7 +709,8 @@ jobs:
           node scripts/verify-release-publication-inputs.mjs \
             --root release-artifacts \
             --checksums release-artifacts/SHA256SUMS.txt \
-            --version "$(node -p "require('./package.json').version")"
+            --version "$(node -p "require('./package.json').version")" \
+            --commit "${{ github.sha }}"
 
       - name: Resolve release identity and policy
         id: release
@@ -954,6 +971,7 @@ jobs:
             --manifest public/downloads/desktop-release.json \
             --version "${{ steps.release.outputs.version }}" \
             --build-number "${{ github.run_number }}" \
+            --commit "${{ github.sha }}" \
             --channel "${{ steps.release.outputs.channel }}" \
             --platform "$PUBLISH_PLATFORM"
 

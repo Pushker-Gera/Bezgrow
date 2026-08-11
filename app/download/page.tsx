@@ -12,6 +12,7 @@ const windowsInstallerPath = "/api/downloads/desktop?platform=windows"
 const webAppUrl = "https://www.bezgrow.com"
 
 export const dynamic = "force-dynamic"
+export const revalidate = 0
 
 export const metadata: Metadata = {
   title: "Download Bezgrow Desktop App",

@@ -35,17 +35,37 @@ if (!existsSync(executable) || !statSync(executable).isFile()) {
 const packagedJavaScript = javascriptFilesUnder(serverRoot).map((filename) => readFileSync(filename, "utf8"))
 const includes = (marker) => packagedJavaScript.some((source) => source.includes(marker))
 
+for (const forbidden of [
+  "Your invoice PDF has been prepared separately. Please attach it before sending.",
+  "prepared separately",
+  "attach it before sending",
+  "attach PDF",
+  "manual attachment",
+]) {
+  if (includes(forbidden)) {
+    throw new Error(`Packaged app still contains forbidden invoice-sharing copy: ${forbidden}`)
+  }
+}
 if (includes("Create secure share link")) {
   throw new Error("Packaged app still contains the obsolete secure-share modal.")
 }
-if (!includes("Automatic mode sends only this explicitly selected invoice PDF")) {
-  throw new Error("Packaged app is missing the explicit WhatsApp Business delivery boundary.")
+if (!includes("Please find your invoice summary below.")) {
+  throw new Error("Packaged app is missing the professional WhatsApp invoice message.")
+}
+if (!includes("Platform Admin Login") || !includes("/api/platform-admin/device/authorize")) {
+  throw new Error("Packaged app is missing the device-authorized Platform Admin launcher.")
 }
 if (!includes("canonical-pdf-preview")) {
   throw new Error("Packaged app is missing the canonical PDF preview implementation.")
 }
-if (!readFileSync(executable).includes(Buffer.from("desktop_open_pdf_for_print"))) {
+const executableBytes = readFileSync(executable)
+if (!executableBytes.includes(Buffer.from("desktop_open_pdf_for_print"))) {
   throw new Error("Packaged app is missing the validated native PDF print command.")
+}
+for (const command of ["open_platform_admin", "desktop_platform_admin_proof"]) {
+  if (!executableBytes.includes(Buffer.from(command))) {
+    throw new Error(`Packaged app is missing the native ${command} command.`)
+  }
 }
 
 console.log(`packaged-invoice-delivery-ok jsFiles=${packagedJavaScript.length}`)

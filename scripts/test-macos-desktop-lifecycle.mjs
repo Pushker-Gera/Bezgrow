@@ -16,6 +16,7 @@ const valueAfter = (name, fallback = "") => {
 }
 const appPath = resolve(valueAfter("app", join(root, "src-tauri", "target", "release", "bundle", "macos", "Bezgrow.app")))
 const binaryPath = join(appPath, "Contents", "MacOS", "Bezgrow")
+const buildIdentityPath = join(appPath, "Contents", "Resources", "next-server", "public", "desktop-build.json")
 const cycles = Number(valueAfter("cycles", "20"))
 const expectedStalePid = Number(valueAfter("expect-stale-pid", "0"))
 const dataRoot = join(homedir(), "Library", "Application Support", "com.bezgrow.erp")
@@ -26,6 +27,8 @@ const startupLogPath = join(dataRoot, "Logs", "bezgrow-startup.log")
 const preferredPort = 43124
 
 if (!existsSync(binaryPath)) throw new Error(`Packaged Bezgrow binary is missing: ${binaryPath}`)
+if (!existsSync(buildIdentityPath)) throw new Error(`Packaged build identity is missing: ${buildIdentityPath}`)
+const buildIdentity = JSON.parse(readFileSync(buildIdentityPath, "utf8"))
 if (!Number.isSafeInteger(cycles) || cycles < 1 || cycles > 100) throw new Error("--cycles must be between 1 and 100.")
 
 const delay = (milliseconds) => new Promise((resolveDelay) => setTimeout(resolveDelay, milliseconds))
@@ -72,6 +75,10 @@ const runtimeHealth = async (runtime) => {
   const health = await response.json()
   return health.runtime === "bezgrow-embedded" &&
     health.appVersion === runtime.appVersion &&
+    health.gitCommit === buildIdentity.gitCommit &&
+    health.buildTimestamp === buildIdentity.builtAt &&
+    health.platform === buildIdentity.platform &&
+    health.architecture === buildIdentity.architecture &&
     health.shellPid === runtime.shellPid &&
     health.serverPid === runtime.serverPid
 }

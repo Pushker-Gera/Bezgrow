@@ -47,8 +47,10 @@ function readStatus(filename, allowed) {
 
 const root = path.resolve(arg("--root", "release-artifacts"))
 const version = arg("--version")
+const expectedCommit = arg("--commit")
 const checksumFile = path.resolve(arg("--checksums", path.join(root, "SHA256SUMS.txt")))
 assert(version, "--version is required.")
+assert(/^[a-f0-9]{40}$/i.test(expectedCommit), "--commit must be the exact 40-character source commit.")
 assert(existsSync(root), `Release artifact root is missing: ${root}`)
 assert(existsSync(checksumFile), `Release checksum file is missing: ${checksumFile}`)
 
@@ -88,6 +90,7 @@ if (existsSync(macDirectory)) {
   assert(build.platform === "macos", "Mac build provenance has the wrong platform.")
   assert(build.architecture === architecture, "Mac build provenance has the wrong architecture.")
   assert(/^[a-f0-9]{40}$/i.test(build.sourceCommit || ""), "Mac build provenance is missing the full source commit.")
+  assert(build.sourceCommit === expectedCommit, `Mac build commit ${build.sourceCommit} does not match ${expectedCommit}.`)
   assert(!Number.isNaN(Date.parse(build.builtAt)), "Mac build provenance is missing a valid build timestamp.")
   assert(build.sourceTreeDirty === false, "Mac release provenance reports a dirty source tree.")
   assert(build.artifact?.filename === expectedDmgName, "Mac build provenance has the wrong artifact filename.")
@@ -108,6 +111,9 @@ if (existsSync(windowsDirectory)) {
   assert(build.version === version, `Windows build version ${build.version} does not match ${version}.`)
   assert(build.platform === "windows", "Windows build manifest has the wrong platform.")
   assert(build.architecture === "x86_64", "Windows publication must contain a genuine x64 build.")
+  assert(build.buildCommit === expectedCommit, `Windows build commit ${build.buildCommit} does not match ${expectedCommit}.`)
+  assert(!Number.isNaN(Date.parse(build.builtAt)), "Windows build provenance is missing a valid build timestamp.")
+  assert(build.sourceTreeDirty === false, "Windows release provenance reports a dirty source tree.")
   assert(Array.isArray(build.artifacts), "Windows build manifest has no artifact records.")
   readStatus(path.join(windowsDirectory, "windows-signing-status.txt"), ["valid", "unsigned"])
   readStatus(path.join(windowsDirectory, "windows-updater-status.txt"), ["true", "false"])

@@ -71,6 +71,8 @@ type RawInstaller = {
   signed?: boolean
   notarized?: boolean
   generatedAt?: string
+  buildCommit?: string
+  buildTimestamp?: string
   releaseChannel?: string
 }
 
@@ -158,6 +160,8 @@ function candidateFromManifest(
     signed: installer.signed === true,
     notarized: installer.notarized === true,
     generatedAt: installer.generatedAt || null,
+    buildCommit: installer.buildCommit || null,
+    buildTimestamp: installer.buildTimestamp || null,
     releaseChannel:
       installer.releaseChannel ||
       (installer.signed === true && (platform === "windows" || installer.notarized === true)
@@ -251,6 +255,8 @@ function configuredCandidates(platform: InstallerPlatform) {
         /^(1|true|yes)$/i.test(process.env.BEZGROW_MAC_INSTALLER_NOTARIZED || ""),
       releaseChannel: process.env[`BEZGROW_${prefix}_INSTALLER_CHANNEL`]?.trim() || "internal",
       generatedAt: new Date().toISOString(),
+      buildCommit: process.env[`BEZGROW_${prefix}_INSTALLER_COMMIT`]?.trim() || null,
+      buildTimestamp: process.env[`BEZGROW_${prefix}_INSTALLER_BUILT_AT`]?.trim() || null,
     } satisfies InstallerCandidate,
   ]
 }
@@ -334,6 +340,8 @@ function missingAvailability(
     blockedReason: reason,
     releaseChannel: "internal",
     generatedAt: null,
+    buildCommit: null,
+    buildTimestamp: null,
     releaseNotes: null,
     buildNumber: null,
     mandatory: false,
@@ -354,9 +362,10 @@ async function availabilityForPlatform(
   const controlCandidates = publishedRows(platformRows, platform)
     .map(controlPlaneCandidate)
     .filter((candidate): candidate is InstallerCandidate => Boolean(candidate))
+  const checkedCandidates = checkedInCandidates(platform)
   const candidates = deduplicateCandidates([
+    ...checkedCandidates,
     ...controlCandidates,
-    ...checkedInCandidates(platform),
     ...configuredCandidates(platform),
   ]).filter((candidate) => !currentVersion || candidate.version === currentVersion)
 

@@ -25,6 +25,8 @@ async function binaryInstallerResponse(
   expectedSize: number | null,
   expectedSha256: string,
   version: string,
+  buildCommit: string,
+  buildTimestamp: string,
   signed: boolean,
   notarized: boolean
 ) {
@@ -55,7 +57,8 @@ async function binaryInstallerResponse(
   }
 
   const headers = new Headers({
-    "Cache-Control": "private, no-store",
+    "Cache-Control": "private, no-store, max-age=0, must-revalidate",
+    "CDN-Cache-Control": "no-store",
     "Content-Disposition": `attachment; filename="${filename}"`,
     "Content-Type": contentType || "application/octet-stream",
     "X-Content-Type-Options": "nosniff",
@@ -73,6 +76,8 @@ async function binaryInstallerResponse(
   headers.set("ETag", `"sha256-${expectedSha256}"`)
   headers.set("X-Bezgrow-Artifact-Sha256", expectedSha256)
   headers.set("X-Bezgrow-Artifact-Version", version)
+  headers.set("X-Bezgrow-Artifact-Commit", buildCommit)
+  headers.set("X-Bezgrow-Artifact-Built-At", buildTimestamp)
   headers.set("X-Bezgrow-Code-Signed", String(signed))
   headers.set("X-Bezgrow-Apple-Notarized", String(notarized))
 
@@ -111,6 +116,8 @@ export async function GET(request: Request) {
     installer.size,
     installer.sha256 || "",
     installer.version || "",
+    installer.buildCommit || "",
+    installer.buildTimestamp || "",
     installer.signed,
     installer.notarized
   )

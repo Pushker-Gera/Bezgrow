@@ -8,6 +8,20 @@ const standaloneDir = join(root, ".next", "standalone");
 const desktopServerDir = join(root, "desktop-runtime", "next-server");
 const desktopNodeDir = join(root, "desktop-runtime", "node");
 const packageVersion = JSON.parse(readFileSync(join(root, "package.json"), "utf8")).version;
+const targetTriple = process.env.BEZGROW_DESKTOP_TARGET || "";
+const targetsWindows = targetTriple.includes("windows") || (!targetTriple && process.platform === "win32");
+const buildPlatform = targetsWindows
+  ? "windows"
+  : targetTriple.includes("apple-darwin") || (!targetTriple && process.platform === "darwin")
+    ? "macos"
+    : "linux";
+const targetArchitecture = targetTriple.startsWith("aarch64")
+  ? "arm64"
+  : targetTriple.startsWith("x86_64")
+    ? "x64"
+    : process.arch === "arm64"
+      ? "arm64"
+      : "x64";
 
 function commandOutput(command, args) {
   const result = spawnSync(command, args, { cwd: root, encoding: "utf8" });
@@ -33,6 +47,8 @@ const buildIdentity = {
   gitCommit,
   shortGitCommit: gitCommit.slice(0, 7),
   builtAt: buildTimestamp,
+  platform: buildPlatform,
+  architecture: targetArchitecture,
   releaseChannel,
   sourceTreeDirty,
 };
@@ -50,6 +66,8 @@ const build = spawnSync(process.execPath, [join(root, "scripts", "build-next.mjs
     NEXT_PUBLIC_BEZGROW_BUILD_VERSION: packageVersion,
     NEXT_PUBLIC_BEZGROW_BUILD_COMMIT: gitCommit,
     NEXT_PUBLIC_BEZGROW_BUILD_TIMESTAMP: buildTimestamp,
+    NEXT_PUBLIC_BEZGROW_BUILD_PLATFORM: buildPlatform,
+    NEXT_PUBLIC_BEZGROW_BUILD_ARCHITECTURE: targetArchitecture,
     NEXT_PUBLIC_BEZGROW_BUILD_CHANNEL: releaseChannel,
     SUPABASE_SERVICE_ROLE_KEY: "",
     BEZGROW_LICENSE_PRIVATE_KEY: "",
@@ -114,13 +132,6 @@ writeFileSync(join(desktopServerDir, ".gitkeep"), "");
 rmSync(desktopNodeDir, { recursive: true, force: true });
 mkdirSync(desktopNodeDir, { recursive: true });
 
-const targetTriple = process.env.BEZGROW_DESKTOP_TARGET || "";
-const targetsWindows = targetTriple.includes("windows") || (!targetTriple && process.platform === "win32");
-const targetArchitecture = targetTriple.startsWith("aarch64")
-  ? "arm64"
-  : targetTriple.startsWith("x86_64")
-    ? "x64"
-    : process.arch;
 const crossArchitectureWindowsBuild =
   targetsWindows && ((targetArchitecture === "arm64" && process.arch !== "arm64") || (targetArchitecture === "x64" && process.arch !== "x64"));
 const requestedNodeBinary = process.env.BEZGROW_DESKTOP_NODE_BINARY;

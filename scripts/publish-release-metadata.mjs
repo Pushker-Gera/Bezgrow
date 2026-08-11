@@ -13,6 +13,7 @@ const manifestPath = resolve(arg("--manifest", "public/downloads/desktop-release
 const manifest = JSON.parse(readFileSync(manifestPath, "utf8"))
 const version = arg("--version", manifest.version)
 const buildNumber = arg("--build-number", process.env.GITHUB_RUN_NUMBER || "")
+const expectedCommit = arg("--commit", process.env.GITHUB_SHA || "")
 const releaseChannel = arg("--channel", "stable")
 const platformFilter = arg("--platform", "all")
 const supabaseUrl = process.env.SUPABASE_URL || process.env.NEXT_PUBLIC_SUPABASE_URL
@@ -26,6 +27,9 @@ if (!supabaseUrl || !serviceRoleKey) {
 }
 if (!version || !buildNumber) {
   throw new Error("Release metadata publication requires a version and build number.")
+}
+if (!/^[a-f0-9]{40}$/i.test(expectedCommit)) {
+  throw new Error("Release metadata publication requires the exact 40-character source commit.")
 }
 
 const supabase = createClient(supabaseUrl, serviceRoleKey, {
@@ -72,6 +76,12 @@ for (const entry of artifacts) {
   }
   if (!installer.size || !/^[a-f0-9]{64}$/i.test(installer.sha256 || "")) {
     throw new Error(`Verified size and SHA-256 are required for ${entry.key}.`)
+  }
+  if (installer.buildCommit !== expectedCommit) {
+    throw new Error(`${entry.key} embedded build commit does not match ${expectedCommit}.`)
+  }
+  if (Number.isNaN(Date.parse(installer.buildTimestamp || ""))) {
+    throw new Error(`${entry.key} is missing a valid embedded build timestamp.`)
   }
   const productionTrusted =
     installer.signed === true &&

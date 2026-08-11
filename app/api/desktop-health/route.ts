@@ -1,8 +1,29 @@
 import { timingSafeEqual } from "node:crypto"
+import { readFileSync } from "node:fs"
+import { join } from "node:path"
 import { NextResponse } from "next/server"
 
 export const dynamic = "force-dynamic"
 export const runtime = "nodejs"
+
+type DesktopBuildIdentity = {
+  applicationVersion?: string
+  gitCommit?: string
+  builtAt?: string
+  platform?: string
+  architecture?: string
+  sourceTreeDirty?: boolean
+}
+
+function desktopBuildIdentity() {
+  try {
+    return JSON.parse(
+      readFileSync(join(process.cwd(), "public", "desktop-build.json"), "utf8")
+    ) as DesktopBuildIdentity
+  } catch {
+    return null
+  }
+}
 
 function sameRuntimeToken(supplied: string | null, expected: string | undefined) {
   if (!supplied || !expected) return false
@@ -29,12 +50,28 @@ export function GET(request: Request) {
   if (!appVersion || !Number.isSafeInteger(shellPid) || shellPid <= 0) {
     return NextResponse.json({ status: "runtime_invalid" }, { status: 503 })
   }
+  const build = desktopBuildIdentity()
+  if (
+    !build ||
+    build.applicationVersion !== appVersion ||
+    !/^[a-f0-9]{40}$/i.test(build.gitCommit || "") ||
+    Number.isNaN(Date.parse(build.builtAt || "")) ||
+    !["macos", "windows", "linux"].includes(build.platform || "") ||
+    !["arm64", "x64"].includes(build.architecture || "")
+  ) {
+    return NextResponse.json({ status: "build_identity_invalid" }, { status: 503 })
+  }
 
   return NextResponse.json(
     {
       status: "ok",
       runtime: "bezgrow-embedded",
       appVersion,
+      gitCommit: build.gitCommit,
+      buildTimestamp: build.builtAt,
+      platform: build.platform,
+      architecture: build.architecture,
+      sourceTreeDirty: build.sourceTreeDirty === true,
       shellPid,
       serverPid: process.pid,
     },
