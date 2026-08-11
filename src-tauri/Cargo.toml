@@ -29,7 +29,7 @@ zip = { version = "2.4", default-features = false, features = ["deflate"] }
 [target.'cfg(target_os = "macos")'.dependencies]
 libc = "0.2"
 objc2 = "0.6.4"
-objc2-app-kit = { version = "0.3.2", default-features = false, features = ["NSApplication", "NSResponder", "NSPrintInfo", "NSPrintOperation"] }
+objc2-app-kit = { version = "0.3.2", default-features = false, features = ["NSApplication", "NSResponder", "NSPrintInfo", "NSPrintOperation", "NSWindow"] }
 objc2-foundation = { version = "0.3.2", default-features = false, features = ["NSData"] }
 objc2-pdf-kit = { version = "0.3.2", default-features = false, features = ["PDFDocument", "objc2-app-kit"] }
 

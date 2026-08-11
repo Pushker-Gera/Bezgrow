@@ -161,13 +161,20 @@ export function PrintEngine({
     return result.path ? `${action}: ${result.path}` : `${action}: ${result.filename}`
   }
 
-  async function runAction(label: string, action: () => Promise<void>) {
+  async function runAction(label: string, action: (release: () => void) => Promise<void>) {
     if (actionInFlight.current) return
     actionInFlight.current = true
     setPendingAction(label)
     setNotice("")
+    let released = false
+    const release = () => {
+      if (released) return
+      released = true
+      actionInFlight.current = false
+      setPendingAction("")
+    }
     try {
-      await action()
+      await action(release)
     } catch (error) {
       if (error instanceof DOMException && error.name === "AbortError") {
         setNotice("")
@@ -175,32 +182,26 @@ export function PrintEngine({
         setNotice(error instanceof Error ? error.message : `${label} could not be completed.`)
       }
     } finally {
-      actionInFlight.current = false
-      setPendingAction("")
+      release()
     }
   }
 
   function printInvoice() {
-    void runAction("Opening print dialog", async () => {
+    void runAction("Preparing PDF", async (release) => {
       const document = await currentDocument()
       const opened = await openPdfForNativePrinting(document.filename, document.bytes, document.pageCount)
+      release()
       if (opened.bytes !== document.bytes.byteLength || opened.pageCount !== document.pageCount) {
         throw new Error("The operating system received a different PDF than the validated preview.")
       }
-      if (opened.status !== "cancelled") {
-        rememberPdfOpenedForPrint(effectiveInvoice, format)
-        setHistory(getReprintHistory().filter((entry) => entry.invoiceId === invoice.id))
-      }
-      setNotice(opened.status === "cancelled"
-        ? "Printing was cancelled. The validated invoice remains ready, and you can print again immediately."
-        : opened.status === "completed"
-          ? "The operating system accepted the exact validated invoice PDF for printing."
-          : "The system print dialog opened with the exact validated invoice PDF. Closing or cancelling it leaves Bezgrow ready to print again.")
+      rememberPdfOpenedForPrint(effectiveInvoice, format)
+      setHistory(getReprintHistory().filter((entry) => entry.invoiceId === invoice.id))
+      setNotice("The system print dialog opened with the exact validated invoice PDF. Bezgrow is ready immediately whether you print or cancel.")
     })
   }
 
   function savePdf() {
-    void runAction("Saving PDF", async () => {
+    void runAction("Saving PDF", async (release) => {
       const document = await currentDocument()
       const result = await saveInvoicePdf(document)
       if (!result) return
@@ -211,16 +212,13 @@ export function PrintEngine({
       }
 
       const opened = await openPdfForNativePrinting(document.filename, document.bytes, document.pageCount)
+      release()
       if (opened.bytes !== document.bytes.byteLength || opened.pageCount !== document.pageCount) {
         throw new Error("The operating system received a different PDF than the validated preview.")
       }
-      if (opened.status !== "cancelled") {
-        rememberPdfOpenedForPrint(effectiveInvoice, format)
-        setHistory(getReprintHistory().filter((entry) => entry.invoiceId === invoice.id))
-      }
-      setNotice(opened.status === "cancelled"
-        ? `${resultNotice("PDF saved", result)}. Automatic printing was cancelled; you can print again immediately.`
-        : `${resultNotice("PDF saved", result)}. Auto Print After Save passed that exact PDF to the system print dialog.`)
+      rememberPdfOpenedForPrint(effectiveInvoice, format)
+      setHistory(getReprintHistory().filter((entry) => entry.invoiceId === invoice.id))
+      setNotice(`${resultNotice("PDF saved", result)}. Auto Print After Save opened the system print dialog and Bezgrow is ready immediately.`)
     })
   }
 
@@ -564,7 +562,7 @@ export function PrintEngine({
           {notice && <p className="print-notice">{notice}</p>}
 
           <section className="action-grid">
-            <button onClick={printInvoice} disabled={Boolean(pendingAction)}>{pendingAction === "Opening print dialog" ? "Opening..." : "Print"}</button>
+            <button onClick={printInvoice} disabled={Boolean(pendingAction)}>{pendingAction === "Preparing PDF" ? "Preparing PDF…" : "Print"}</button>
             <button onClick={savePdf} disabled={Boolean(pendingAction)}>{pendingAction === "Saving PDF" ? "Saving..." : "Save PDF"}</button>
             <button onClick={downloadPdf} disabled={Boolean(pendingAction)}>{pendingAction === "Downloading PDF" ? "Downloading..." : "Download PDF"}</button>
             <button onClick={sharePdf} disabled={Boolean(pendingAction)}>{pendingAction === "Sharing PDF" ? "Sharing..." : "Share PDF"}</button>

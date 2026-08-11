@@ -60,7 +60,7 @@ use tauri::{Manager, WebviewUrl};
 #[cfg(target_os = "macos")]
 use objc2::MainThreadMarker;
 #[cfg(target_os = "macos")]
-use objc2_app_kit::{NSApplication, NSPrintInfo};
+use objc2_app_kit::{NSApplication, NSPrintInfo, NSWindow};
 #[cfg(target_os = "macos")]
 use objc2_foundation::NSData;
 #[cfg(target_os = "macos")]
@@ -1751,10 +1751,10 @@ fn open_validated_pdf_with_native_print_dialog<R: tauri::Runtime>(
         let main_window = app
             .get_webview_window("main")
             .ok_or_else(|| "The Bezgrow window is unavailable for native printing.".to_string())?;
-        let print_result = Arc::new(Mutex::new(None::<Result<bool, String>>));
+        let print_result = Arc::new(Mutex::new(None::<Result<(), String>>));
         let callback_result = Arc::clone(&print_result);
         main_window
-            .with_webview(move |_platform_webview| {
+            .with_webview(move |platform_webview| {
                 let result = (|| unsafe {
                     let mtm = MainThreadMarker::new().ok_or_else(|| {
                         "The macOS print panel must be opened on the main thread.".to_string()
@@ -1781,20 +1781,28 @@ fn open_validated_pdf_with_native_print_dialog<R: tauri::Runtime>(
                         })?;
                     operation.setShowsPrintPanel(true);
                     operation.setShowsProgressPanel(true);
-                    Ok(operation.runOperation())
+                    operation.setCanSpawnSeparateThread(true);
+                    let window: &NSWindow = &*platform_webview.ns_window().cast();
+                    operation.runOperationModalForWindow_delegate_didRunSelector_contextInfo(
+                        window,
+                        None,
+                        None,
+                        std::ptr::null_mut(),
+                    );
+                    Ok(())
                 })();
                 if let Ok(mut slot) = callback_result.lock() {
                     *slot = Some(result);
                 }
             })
             .map_err(|error| format!("Unable to open the macOS system print dialog: {error}"))?;
-        let completed = print_result
+        print_result
             .lock()
             .map_err(|_| "The macOS print result could not be read.".to_string())?
             .take()
             .ok_or_else(|| "The macOS print operation did not start.".to_string())??;
         let _ = path;
-        return Ok(if completed { "completed" } else { "cancelled" });
+        return Ok("dialog_opened");
     }
 
     #[cfg(target_os = "windows")]
@@ -1886,7 +1894,7 @@ fn desktop_open_pdf_for_print<R: tauri::Runtime>(
     bytes: Vec<u8>,
     expected_page_count: usize,
 ) -> Result<DesktopOpenedPdf, String> {
-    let _operation = begin_critical_operation(&app)?;
+    let operation = begin_critical_operation(&app)?;
     validate_pdf_for_native_open(&bytes, expected_page_count)?;
     let directory = managed_data_directory(&app, "Temp")?.join("PDF Print");
     fs::create_dir_all(&directory).map_err(|error| {
@@ -1919,6 +1927,7 @@ fn desktop_open_pdf_for_print<R: tauri::Runtime>(
     }
     let print_status =
         open_validated_pdf_with_native_print_dialog(&app, &destination, written.clone())?;
+    drop(operation);
     append_startup_log_handle(
         &app,
         format!("Validated invoice PDF passed to native print UI; status={print_status}"),
