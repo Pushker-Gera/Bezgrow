@@ -301,10 +301,12 @@ checksum = "2af50177e190e07a26ab74f8b1efbfe2ef87da2116221318cb1c2e82baf7de06"
 
 [[package]]
 name = "bezgrow-erp"
-version = "0.1.9"
+version = "0.1.10"
 dependencies = [
+ "getrandom 0.3.4",
  "image",
  "keyring",
+ "libc",
  "objc2",
  "objc2-app-kit",
  "objc2-foundation",

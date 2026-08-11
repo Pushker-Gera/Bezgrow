@@ -34,9 +34,10 @@ assert.doesNotMatch(bootstrap, /onCloseRequested|closeForAppShutdown|desktop_exi
 assert.doesNotMatch(service, /closeForAppShutdown|pluginConnection\.close/, "The frontend must never leave a closed plugin pool inside a live desktop process.")
 assert.match(recovery, /retryInitialization\(\)/, "Recovery UI must retry the retained database startup failure.")
 assert.match(recovery, />\s*Retry Database\s*</, "Recovery UI must expose a deterministic Retry Database action.")
-assert.match(rust, /WindowEvent::CloseRequested[\s\S]*Native close requested[\s\S]*stop_next_server\(&app\)[\s\S]*app\.exit\(0\)/, "Every native red-button close must stop the bundled server and exit the process.")
+assert.match(rust, /WindowEvent::CloseRequested[\s\S]*Native close requested[\s\S]*orderly_shutdown\(&app, "main window close"\)[\s\S]*app\.exit\(0\)/, "Every native red-button close must flush operations, stop the bundled server, and exit the process.")
 assert.match(rust, /start_runtime_supervisor[\s\S]*main\.hide\(\)[\s\S]*launch_desktop_ui/, "Runtime failure must hide the dead webview and recover through the native supervisor.")
 assert.match(rust, /fn desktop_retry_startup[\s\S]*launch_desktop_ui/, "The native recovery action must restart the bundled server before reopening the ERP.")
+assert.match(rust, /wait_for_critical_operations[\s\S]*active_critical_operations[\s\S]*stop_next_server/, "Native shutdown must drain active SQLite commands before stopping the runtime.")
 
 // Rollback and diagnostic guarantees use one native connection instead of a
 // pooled sequence of unrelated BEGIN/write/COMMIT calls.

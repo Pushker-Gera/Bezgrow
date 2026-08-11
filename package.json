@@ -1,6 +1,6 @@
 {
   "name": "saas-project",
-  "version": "0.1.9",
+  "version": "0.1.10",
   "private": true,
   "engines": {
     "node": ">=22 <23"
@@ -30,6 +30,7 @@
     "test:windows": "node scripts/test-windows-contract.mjs",
     "test:desktop-sqlite": "node scripts/test-desktop-sqlite-bootstrap.mjs",
     "test:desktop-startup": "node scripts/test-desktop-startup.mjs",
+    "test:desktop-lifecycle:mac": "node scripts/test-macos-desktop-lifecycle.mjs",
     "test:desktop-sqlite-regression": "node --disable-warning=ExperimentalWarning scripts/test-desktop-sqlite-regression.mjs",
     "test:desktop-hardening": "node scripts/test-desktop-hardening-contract.mjs",
     "test:release-artifacts": "node scripts/test-release-artifacts.mjs",

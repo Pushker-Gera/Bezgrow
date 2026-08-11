@@ -13,6 +13,7 @@ $startMenuShortcut = Join-Path ([Environment]::GetFolderPath("CommonPrograms")) 
 $dataRoot = Join-Path $env:LOCALAPPDATA "Bezgrow"
 $database = Join-Path $dataRoot "Database\bezgrow-offline.db"
 $startupLog = Join-Path $dataRoot "Logs\bezgrow-startup.log"
+$runtimeState = Join-Path $dataRoot "Runtime\runtime.json"
 $sentinel = Join-Path $dataRoot "update-preservation-test.txt"
 $diagnosticsRoot = if ([string]::IsNullOrWhiteSpace($env:RUNNER_TEMP)) {
   Join-Path $env:TEMP "bezgrow-installer-smoke"
@@ -298,7 +299,7 @@ function Invoke-AppLaunchCycle(
       if ($cycleLog -match "Startup failed before main window opened") {
         throw "Launch cycle $Cycle logged a fatal native startup error."
       }
-      $cycleLog -match "Bundled Next server is ready on port"
+      $cycleLog -match "Bundled Next server authenticated and ready"
     } 60 "Launch cycle $Cycle did not report a new ready bundled server."
   } catch {
     Write-SmokeDiagnostics "Launch cycle $Cycle failed readiness: $($_.Exception.Message)" $appProcess
@@ -313,22 +314,32 @@ function Invoke-AppLaunchCycle(
   if ($logText -match "Startup failed before main window opened") {
     throw "Launch cycle $Cycle logged a fatal native startup error."
   }
-  $portMatches = [regex]::Matches($logText, "Bundled Next server is ready on port (\d+)")
-  if ($portMatches.Count -eq 0) {
-    throw "Launch cycle $Cycle did not record its loopback port."
-  }
-  $port = [int]$portMatches[$portMatches.Count - 1].Groups[1].Value
+  Assert-Path $runtimeState "Launch cycle $Cycle did not persist authoritative runtime ownership."
+  $runtime = Get-Content -LiteralPath $runtimeState -Raw | ConvertFrom-Json
+  $port = [int]$runtime.port
   if ($port -ne 43124) {
     throw "Launch cycle $Cycle used unexpected fallback port $port instead of the fixed packaged port 43124."
+  }
+  if ([int]$runtime.shellPid -ne $appProcess.Id -or [string]::IsNullOrWhiteSpace($runtime.token)) {
+    throw "Launch cycle $Cycle runtime ownership did not match the active Bezgrow shell."
   }
   Assert-NoVisibleConsoleProcess $appProcess $Cycle
   $health = Invoke-WebRequest `
     -Uri "http://127.0.0.1:$port/api/desktop-health" `
+    -Headers @{ "X-Bezgrow-Runtime-Token" = $runtime.token } `
     -UseBasicParsing `
     -MaximumRedirection 0 `
     -SkipHttpErrorCheck
   if ($health.StatusCode -ne 200 -or $health.Content -notmatch '"runtime":"bezgrow-embedded"') {
     throw "Launch cycle $Cycle embedded health route did not return the expected Bezgrow runtime identity."
+  }
+  $unauthenticatedHealth = Invoke-WebRequest `
+    -Uri "http://127.0.0.1:$port/api/desktop-health" `
+    -UseBasicParsing `
+    -MaximumRedirection 0 `
+    -SkipHttpErrorCheck
+  if ($unauthenticatedHealth.StatusCode -ne 404) {
+    throw "Launch cycle $Cycle exposed an unauthenticated desktop health endpoint."
   }
   $response = Invoke-WebRequest `
     -Uri "http://127.0.0.1:$port/login" `

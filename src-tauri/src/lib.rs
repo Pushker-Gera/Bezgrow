@@ -3,13 +3,20 @@ use std::{
     fs::{self, OpenOptions},
     io::{Cursor, Read, Write},
     path::{Component, Path, PathBuf},
-    process::{Child, Command},
+    process::{Child, Command, ExitStatus},
     sync::{
         atomic::{AtomicBool, AtomicUsize, Ordering},
         Mutex,
     },
-    time::{SystemTime, UNIX_EPOCH},
+    thread,
+    time::{Duration, SystemTime, UNIX_EPOCH},
 };
+
+#[cfg(all(target_os = "macos", not(debug_assertions)))]
+use std::os::unix::{fs::OpenOptionsExt, process::CommandExt};
+
+#[cfg(all(target_os = "windows", not(debug_assertions)))]
+use std::ffi::OsString;
 
 #[cfg(any(target_os = "windows", not(debug_assertions)))]
 use std::process::Stdio;
@@ -20,23 +27,26 @@ use std::{os::windows::io::AsRawHandle, os::windows::process::CommandExt};
 #[cfg(target_os = "windows")]
 use windows_sys::Win32::{
     Foundation::{CloseHandle, HANDLE},
+    NetworkManagement::IpHelper::{
+        GetExtendedTcpTable, MIB_TCPROW_OWNER_PID, TCP_TABLE_OWNER_PID_LISTENER,
+    },
+    Networking::WinSock::AF_INET,
     System::{
         JobObjects::{
             AssignProcessToJobObject, CreateJobObjectW, JobObjectExtendedLimitInformation,
             SetInformationJobObject, JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
             JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
         },
-        Threading::CREATE_NO_WINDOW,
+        Threading::{
+            OpenProcess, QueryFullProcessImageNameW, CREATE_NO_WINDOW,
+            PROCESS_QUERY_LIMITED_INFORMATION,
+        },
     },
     UI::Shell::SetCurrentProcessExplicitAppUserModelID,
 };
 
 #[cfg(not(debug_assertions))]
-use std::{
-    net::{TcpListener, TcpStream},
-    thread,
-    time::Duration,
-};
+use std::net::{TcpListener, TcpStream};
 
 use image::{GenericImageView, ImageFormat};
 use serde::{Deserialize, Serialize};
@@ -50,7 +60,7 @@ use tauri::{Manager, WebviewUrl};
 #[cfg(target_os = "macos")]
 use objc2::MainThreadMarker;
 #[cfg(target_os = "macos")]
-use objc2_app_kit::NSPrintInfo;
+use objc2_app_kit::{NSApplication, NSPrintInfo};
 #[cfg(target_os = "macos")]
 use objc2_foundation::NSData;
 #[cfg(target_os = "macos")]
@@ -75,6 +85,18 @@ const STARTUP_LOG_MAX_BYTES: u64 = 2 * 1024 * 1024;
 const STARTUP_LOG_GENERATIONS: usize = 5;
 #[cfg(not(debug_assertions))]
 const DESKTOP_SERVER_PORT: u16 = 43124;
+#[cfg(not(debug_assertions))]
+const RUNTIME_DIRECTORY: &str = "Runtime";
+#[cfg(not(debug_assertions))]
+const RUNTIME_STATE_FILENAME: &str = "runtime.json";
+#[cfg(not(debug_assertions))]
+const RUNTIME_STATE_SCHEMA: u8 = 1;
+#[cfg(not(debug_assertions))]
+const LEGACY_CLEANUP_MARKER_FILENAME: &str = "legacy-runtime-cleanup-v1";
+#[cfg(not(debug_assertions))]
+const RUNTIME_HEALTH_PATH: &str = "/api/desktop-health";
+#[cfg(not(debug_assertions))]
+const RUNTIME_HEALTH_HEADER: &str = "X-Bezgrow-Runtime-Token";
 
 #[cfg(target_os = "windows")]
 struct WindowsProcessJob(HANDLE);
@@ -99,6 +121,39 @@ struct NextServerProcess {
     _job: WindowsProcessJob,
     #[cfg(not(debug_assertions))]
     port: u16,
+    #[cfg(not(debug_assertions))]
+    ownership: RuntimeOwnership,
+}
+
+#[cfg(not(debug_assertions))]
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct RuntimeOwnership {
+    schema_version: u8,
+    shell_pid: u32,
+    shell_executable: String,
+    server_pid: u32,
+    server_process_group: Option<u32>,
+    server_executable: String,
+    server_entry: String,
+    app_version: String,
+    port: u16,
+    token: String,
+    started_at: String,
+}
+
+#[cfg(not(debug_assertions))]
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct RuntimeHealth {
+    status: String,
+    runtime: String,
+    #[serde(default)]
+    app_version: Option<String>,
+    #[serde(default)]
+    shell_pid: Option<u32>,
+    #[serde(default)]
+    server_pid: Option<u32>,
 }
 
 struct NextServerState {
@@ -224,7 +279,28 @@ impl NextServerState {
     }
 }
 
-fn terminate_child_process(child: &mut Child) {
+#[cfg(all(target_os = "macos", not(debug_assertions)))]
+fn wait_for_child_exit(child: &mut Child, timeout: Duration) -> Option<ExitStatus> {
+    let started = std::time::Instant::now();
+    while started.elapsed() < timeout {
+        if let Ok(Some(status)) = child.try_wait() {
+            return Some(status);
+        }
+        thread::sleep(Duration::from_millis(25));
+    }
+    None
+}
+
+#[cfg(all(target_os = "macos", not(debug_assertions)))]
+fn process_group_exists(process_group: u32) -> bool {
+    let result = unsafe { libc::kill(-(process_group as i32), 0) };
+    result == 0 || std::io::Error::last_os_error().kind() == std::io::ErrorKind::PermissionDenied
+}
+
+fn terminate_child_process(
+    child: &mut Child,
+    #[cfg(not(debug_assertions))] process_group: Option<u32>,
+) -> Option<ExitStatus> {
     #[cfg(target_os = "windows")]
     {
         let pid = child.id().to_string();
@@ -236,13 +312,35 @@ fn terminate_child_process(child: &mut Child) {
             .status();
     }
 
+    #[cfg(all(target_os = "macos", not(debug_assertions)))]
+    if let Some(process_group) = process_group.filter(|group| *group == child.id()) {
+        if process_group_exists(process_group) {
+            unsafe {
+                libc::kill(-(process_group as i32), libc::SIGTERM);
+            }
+            let status = child
+                .try_wait()
+                .ok()
+                .flatten()
+                .or_else(|| wait_for_child_exit(child, Duration::from_millis(1200)));
+            if process_group_exists(process_group) {
+                unsafe {
+                    libc::kill(-(process_group as i32), libc::SIGKILL);
+                }
+            }
+            if let Some(status) = status {
+                return Some(status);
+            }
+        }
+    }
+
     if child.try_wait().ok().flatten().is_none() {
         let _ = child.kill();
     }
-    let _ = child.wait();
+    child.wait().ok()
 }
 
-fn stop_next_server<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
+fn stop_next_server<R: tauri::Runtime>(app: &tauri::AppHandle<R>, cause: &str) {
     let Some(state) = app.try_state::<NextServerState>() else {
         return;
     };
@@ -257,13 +355,64 @@ fn stop_next_server<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
         return;
     };
 
-    terminate_child_process(&mut process.child);
+    let server_pid = process.child.id();
+    let status = terminate_child_process(
+        &mut process.child,
+        #[cfg(not(debug_assertions))]
+        process.ownership.server_process_group,
+    );
+    #[cfg(not(debug_assertions))]
+    remove_runtime_state_if_owned(app, &process.ownership);
+    append_startup_log_handle(
+        app,
+        format!(
+            "Bundled runtime stopped. shell_pid={}, server_pid={server_pid}, cause={}, child_exit={}",
+            std::process::id(),
+            cause.replace(['\r', '\n'], " "),
+            status
+                .map(|value| value.to_string())
+                .unwrap_or_else(|| "unknown".to_string())
+        ),
+    );
+}
+
+fn wait_for_critical_operations<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
+    let Some(state) = app.try_state::<DesktopOperationState>() else {
+        return;
+    };
+    state.update_preparing.store(true, Ordering::SeqCst);
+    let started = std::time::Instant::now();
+    while state.active_critical_operations.load(Ordering::SeqCst) != 0
+        && started.elapsed() < Duration::from_secs(3)
+    {
+        thread::sleep(Duration::from_millis(25));
+    }
+    append_startup_log_handle(
+        app,
+        format!(
+            "SQLite shutdown barrier completed. active_operations={}, duration_ms={}",
+            state.active_critical_operations.load(Ordering::SeqCst),
+            started.elapsed().as_millis()
+        ),
+    );
+}
+
+fn orderly_shutdown<R: tauri::Runtime>(app: &tauri::AppHandle<R>, cause: &str) {
+    if app
+        .try_state::<NextServerState>()
+        .map(|state| state.shutting_down.swap(true, Ordering::SeqCst))
+        .unwrap_or(false)
+    {
+        return;
+    }
+    wait_for_critical_operations(app);
+    stop_next_server(app, cause);
 }
 
 #[tauri::command]
 fn desktop_exit<R: tauri::Runtime>(app: tauri::AppHandle<R>) {
     append_startup_log_handle(&app, "Orderly desktop shutdown requested");
-    stop_next_server(&app);
+    orderly_shutdown(&app, "desktop_exit command");
     app.exit(0);
 }
 
@@ -289,6 +438,394 @@ fn managed_data_directory<R: tauri::Runtime>(
     name: &str,
 ) -> Result<PathBuf, String> {
     managed_app_data_root(manager).map(|root| root.join(name))
+}
+
+#[cfg(not(debug_assertions))]
+fn runtime_state_path<R: tauri::Runtime>(manager: &impl Manager<R>) -> Result<PathBuf, String> {
+    managed_data_directory(manager, RUNTIME_DIRECTORY).map(|path| path.join(RUNTIME_STATE_FILENAME))
+}
+
+#[cfg(not(debug_assertions))]
+fn create_runtime_directory<R: tauri::Runtime>(
+    manager: &impl Manager<R>,
+) -> Result<PathBuf, String> {
+    let directory = managed_data_directory(manager, RUNTIME_DIRECTORY)?;
+    fs::create_dir_all(&directory)
+        .map_err(|error| format!("Unable to create Bezgrow's runtime folder: {error}"))?;
+    #[cfg(target_os = "macos")]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&directory, fs::Permissions::from_mode(0o700))
+            .map_err(|error| format!("Unable to secure Bezgrow's runtime folder: {error}"))?;
+    }
+    Ok(directory)
+}
+
+#[cfg(not(debug_assertions))]
+fn generate_runtime_token() -> Result<String, String> {
+    let mut bytes = [0_u8; 32];
+    getrandom::fill(&mut bytes)
+        .map_err(|error| format!("Unable to create the local runtime identity: {error}"))?;
+    Ok(bytes.iter().map(|byte| format!("{byte:02x}")).collect())
+}
+
+#[cfg(not(debug_assertions))]
+fn write_runtime_state<R: tauri::Runtime>(
+    app: &tauri::AppHandle<R>,
+    ownership: &RuntimeOwnership,
+) -> Result<(), String> {
+    let directory = create_runtime_directory(app)?;
+    let destination = directory.join(RUNTIME_STATE_FILENAME);
+    let temporary = directory.join(format!(".runtime-{}.tmp", std::process::id()));
+    let serialized = serde_json::to_vec_pretty(ownership)
+        .map_err(|error| format!("Unable to encode Bezgrow's runtime ownership: {error}"))?;
+    let mut options = OpenOptions::new();
+    options.create(true).truncate(true).write(true);
+    #[cfg(target_os = "macos")]
+    options.mode(0o600);
+    let mut file = options
+        .open(&temporary)
+        .map_err(|error| format!("Unable to create Bezgrow's runtime ownership file: {error}"))?;
+    file.write_all(&serialized)
+        .and_then(|_| file.sync_all())
+        .map_err(|error| format!("Unable to persist Bezgrow's runtime ownership: {error}"))?;
+    #[cfg(target_os = "windows")]
+    if destination.exists() {
+        fs::remove_file(&destination)
+            .map_err(|error| format!("Unable to replace stale runtime ownership: {error}"))?;
+    }
+    fs::rename(&temporary, &destination)
+        .map_err(|error| format!("Unable to activate Bezgrow's runtime ownership: {error}"))?;
+    Ok(())
+}
+
+#[cfg(not(debug_assertions))]
+fn read_runtime_state<R: tauri::Runtime>(
+    app: &tauri::AppHandle<R>,
+) -> Result<Option<RuntimeOwnership>, String> {
+    let path = runtime_state_path(app)?;
+    if !path.is_file() {
+        return Ok(None);
+    }
+    let metadata = fs::metadata(&path)
+        .map_err(|error| format!("Unable to inspect Bezgrow's runtime ownership: {error}"))?;
+    if metadata.len() > 64 * 1024 {
+        return Err("Bezgrow's runtime ownership file is invalid.".to_string());
+    }
+    let bytes = fs::read(&path)
+        .map_err(|error| format!("Unable to read Bezgrow's runtime ownership: {error}"))?;
+    serde_json::from_slice(&bytes)
+        .map(Some)
+        .map_err(|error| format!("Bezgrow's runtime ownership file is invalid: {error}"))
+}
+
+#[cfg(not(debug_assertions))]
+fn remove_runtime_state<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
+    if let Ok(path) = runtime_state_path(app) {
+        if let Err(error) = fs::remove_file(&path) {
+            if error.kind() != std::io::ErrorKind::NotFound {
+                append_startup_log_handle(
+                    app,
+                    format!("Unable to remove transient runtime ownership: {error}"),
+                );
+            }
+        }
+    }
+}
+
+#[cfg(not(debug_assertions))]
+fn remove_runtime_state_if_owned<R: tauri::Runtime>(
+    app: &tauri::AppHandle<R>,
+    ownership: &RuntimeOwnership,
+) {
+    match read_runtime_state(app) {
+        Ok(Some(recorded))
+            if recorded.server_pid == ownership.server_pid && recorded.token == ownership.token =>
+        {
+            remove_runtime_state(app);
+        }
+        Ok(_) => {}
+        Err(error) => append_startup_log_handle(
+            app,
+            format!("Unable to verify transient runtime ownership during cleanup: {error}"),
+        ),
+    }
+}
+
+#[cfg(all(target_os = "macos", not(debug_assertions)))]
+fn process_executable_path(pid: u32) -> Option<PathBuf> {
+    let output = Command::new("/usr/sbin/lsof")
+        .args(["-a", "-p", &pid.to_string(), "-d", "txt", "-Fn"])
+        .stdin(Stdio::null())
+        .stderr(Stdio::null())
+        .output()
+        .ok()?;
+    String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .find_map(|line| line.strip_prefix('n'))
+        .filter(|path| path.starts_with('/'))
+        .map(PathBuf::from)
+}
+
+#[cfg(all(target_os = "macos", not(debug_assertions)))]
+fn process_current_directory(pid: u32) -> Option<PathBuf> {
+    let output = Command::new("/usr/sbin/lsof")
+        .args(["-a", "-p", &pid.to_string(), "-d", "cwd", "-Fn"])
+        .stdin(Stdio::null())
+        .stderr(Stdio::null())
+        .output()
+        .ok()?;
+    String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .find_map(|line| line.strip_prefix('n'))
+        .filter(|path| path.starts_with('/'))
+        .map(PathBuf::from)
+}
+
+#[cfg(all(target_os = "macos", not(debug_assertions)))]
+fn process_parent_pid(pid: u32) -> Option<u32> {
+    let output = Command::new("/bin/ps")
+        .args(["-o", "ppid=", "-p", &pid.to_string()])
+        .stdin(Stdio::null())
+        .stderr(Stdio::null())
+        .output()
+        .ok()?;
+    String::from_utf8_lossy(&output.stdout).trim().parse().ok()
+}
+
+#[cfg(all(target_os = "macos", not(debug_assertions)))]
+fn all_process_ids() -> Vec<u32> {
+    let output = Command::new("/usr/sbin/lsof")
+        .args(["-nP", "-c", "node", "-d", "cwd,txt", "-Fp"])
+        .stdin(Stdio::null())
+        .stderr(Stdio::null())
+        .output();
+    let Ok(output) = output else {
+        return Vec::new();
+    };
+    String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .filter_map(|line| line.strip_prefix('p'))
+        .filter_map(|line| line.parse().ok())
+        .collect()
+}
+
+#[cfg(all(target_os = "macos", not(debug_assertions)))]
+fn process_listening_ports(pid: u32) -> Vec<u16> {
+    let output = Command::new("/usr/sbin/lsof")
+        .args([
+            "-nP",
+            "-a",
+            "-p",
+            &pid.to_string(),
+            "-iTCP",
+            "-sTCP:LISTEN",
+            "-Fn",
+        ])
+        .stdin(Stdio::null())
+        .stderr(Stdio::null())
+        .output();
+    let Ok(output) = output else {
+        return Vec::new();
+    };
+    String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .filter_map(|line| line.strip_prefix('n'))
+        .filter_map(|address| address.rsplit(':').next())
+        .filter_map(|port| port.parse().ok())
+        .collect()
+}
+
+#[cfg(all(target_os = "windows", not(debug_assertions)))]
+fn process_executable_path(pid: u32) -> Option<PathBuf> {
+    let handle = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid) };
+    if handle.is_null() {
+        return None;
+    }
+    let mut buffer = vec![0_u16; 32_768];
+    let mut length = buffer.len() as u32;
+    let result = unsafe { QueryFullProcessImageNameW(handle, 0, buffer.as_mut_ptr(), &mut length) };
+    unsafe {
+        CloseHandle(handle);
+    }
+    if result == 0 || length == 0 {
+        return None;
+    }
+    buffer.truncate(length as usize);
+    Some(PathBuf::from(OsString::from_wide(&buffer)))
+}
+
+#[cfg(all(target_os = "windows", not(debug_assertions)))]
+use std::os::windows::ffi::OsStringExt;
+
+#[cfg(all(
+    not(debug_assertions),
+    not(target_os = "macos"),
+    not(target_os = "windows")
+))]
+fn process_executable_path(pid: u32) -> Option<PathBuf> {
+    fs::read_link(format!("/proc/{pid}/exe")).ok()
+}
+
+#[cfg(not(debug_assertions))]
+fn same_process_path(left: &Path, right: &Path) -> bool {
+    #[cfg(target_os = "windows")]
+    {
+        return left
+            .to_string_lossy()
+            .trim_start_matches(r"\\?\")
+            .eq_ignore_ascii_case(right.to_string_lossy().trim_start_matches(r"\\?\"));
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        left == right
+    }
+}
+
+#[cfg(not(debug_assertions))]
+fn process_matches_recorded_path(pid: u32, recorded: &str) -> bool {
+    process_executable_path(pid)
+        .map(|actual| same_process_path(&actual, Path::new(recorded)))
+        .unwrap_or(false)
+}
+
+#[cfg(not(debug_assertions))]
+fn looks_like_bundled_node(executable: &Path, server_entry: &Path) -> bool {
+    let executable_name = executable.file_name().and_then(|name| name.to_str());
+    let executable_parent = executable
+        .parent()
+        .and_then(Path::file_name)
+        .and_then(|name| name.to_str());
+    let entry_name = server_entry.file_name().and_then(|name| name.to_str());
+    let entry_parent = server_entry
+        .parent()
+        .and_then(Path::file_name)
+        .and_then(|name| name.to_str());
+    let executable_ok = if cfg!(target_os = "windows") {
+        executable_name
+            .map(|name| name.eq_ignore_ascii_case("node.exe"))
+            .unwrap_or(false)
+    } else {
+        executable_name == Some("node")
+    };
+    executable_ok
+        && executable_parent == Some("node")
+        && entry_name == Some("server.js")
+        && entry_parent == Some("next-server")
+}
+
+#[cfg(not(debug_assertions))]
+fn runtime_process_identity_matches(ownership: &RuntimeOwnership) -> bool {
+    let executable = Path::new(&ownership.server_executable);
+    let entry = Path::new(&ownership.server_entry);
+    ownership.schema_version == RUNTIME_STATE_SCHEMA
+        && ownership.token.len() == 64
+        && ownership.token.bytes().all(|byte| byte.is_ascii_hexdigit())
+        && looks_like_bundled_node(executable, entry)
+        && process_matches_recorded_path(ownership.server_pid, &ownership.server_executable)
+}
+
+#[cfg(not(debug_assertions))]
+fn looks_like_bezgrow_shell(executable: &Path) -> bool {
+    executable
+        .file_name()
+        .and_then(|name| name.to_str())
+        .map(|name| {
+            name.eq_ignore_ascii_case(if cfg!(target_os = "windows") {
+                "Bezgrow.exe"
+            } else {
+                "Bezgrow"
+            })
+        })
+        .unwrap_or(false)
+}
+
+#[cfg(all(target_os = "macos", not(debug_assertions)))]
+fn listening_process_ids(port: u16) -> Vec<u32> {
+    let output = Command::new("/usr/sbin/lsof")
+        .args(["-nP", "-t", &format!("-iTCP:{port}"), "-sTCP:LISTEN"])
+        .stdin(Stdio::null())
+        .stderr(Stdio::null())
+        .output();
+    let Ok(output) = output else {
+        return Vec::new();
+    };
+    String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .filter_map(|line| line.trim().parse().ok())
+        .collect()
+}
+
+#[cfg(all(target_os = "windows", not(debug_assertions)))]
+fn listening_process_ids(port: u16) -> Vec<u32> {
+    let mut size = 0_u32;
+    unsafe {
+        GetExtendedTcpTable(
+            std::ptr::null_mut(),
+            &mut size,
+            0,
+            AF_INET as u32,
+            TCP_TABLE_OWNER_PID_LISTENER,
+            0,
+        );
+    }
+    if size < std::mem::size_of::<u32>() as u32 {
+        return Vec::new();
+    }
+    let mut buffer = vec![0_u8; size as usize];
+    let result = unsafe {
+        GetExtendedTcpTable(
+            buffer.as_mut_ptr().cast(),
+            &mut size,
+            0,
+            AF_INET as u32,
+            TCP_TABLE_OWNER_PID_LISTENER,
+            0,
+        )
+    };
+    if result != 0 {
+        return Vec::new();
+    }
+    let count = unsafe { *(buffer.as_ptr().cast::<u32>()) as usize };
+    let rows = unsafe {
+        std::slice::from_raw_parts(
+            buffer
+                .as_ptr()
+                .add(std::mem::size_of::<u32>())
+                .cast::<MIB_TCPROW_OWNER_PID>(),
+            count,
+        )
+    };
+    rows.iter()
+        .filter(|row| u16::from_be(row.dwLocalPort as u16) == port)
+        .map(|row| row.dwOwningPid)
+        .collect()
+}
+
+#[cfg(all(
+    not(debug_assertions),
+    not(target_os = "macos"),
+    not(target_os = "windows")
+))]
+fn listening_process_ids(_port: u16) -> Vec<u32> {
+    Vec::new()
+}
+
+#[cfg(not(debug_assertions))]
+fn port_is_available(port: u16) -> bool {
+    TcpListener::bind(("127.0.0.1", port)).is_ok()
+}
+
+#[cfg(not(debug_assertions))]
+fn wait_for_port_release(port: u16, timeout: Duration) -> bool {
+    let started = std::time::Instant::now();
+    while started.elapsed() < timeout {
+        if port_is_available(port) {
+            return true;
+        }
+        thread::sleep(Duration::from_millis(40));
+    }
+    port_is_available(port)
 }
 
 fn startup_log_path<R: tauri::Runtime>(manager: &impl Manager<R>) -> PathBuf {
@@ -582,6 +1119,7 @@ fn prepare_managed_data<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> Result<
         "Temporary",
         "Backups",
         "Logs",
+        "Runtime",
         "WebView",
     ] {
         fs::create_dir_all(root.join(directory))
@@ -2162,7 +2700,7 @@ fn desktop_restart_after_update<R: tauri::Runtime>(app: tauri::AppHandle<R>) -> 
         return Err("A verified update has not been prepared.".to_string());
     }
     append_startup_log_handle(&app, "Verified update installed; restarting Bezgrow");
-    stop_next_server(&app);
+    orderly_shutdown(&app, "verified update restart");
     app.restart();
 }
 
@@ -2999,35 +3537,113 @@ fn desktop_open_file(path: String) -> Result<(), String> {
     }
 }
 
-#[cfg(not(debug_assertions))]
-fn local_server_responds(port: u16) -> bool {
-    let Ok(mut stream) = TcpStream::connect(("127.0.0.1", port)) else {
-        return false;
-    };
-    let timeout = Some(Duration::from_millis(500));
-    let _ = stream.set_read_timeout(timeout);
-    let _ = stream.set_write_timeout(timeout);
-    if stream
-        .write_all(
-            b"GET /api/desktop-health HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n",
-        )
-        .is_err()
-    {
-        return false;
+#[cfg(any(test, not(debug_assertions)))]
+fn decode_chunked_http_body(mut body: &[u8]) -> Option<Vec<u8>> {
+    let mut decoded = Vec::new();
+    loop {
+        let line_end = body.windows(2).position(|window| window == b"\r\n")?;
+        let size_text = std::str::from_utf8(&body[..line_end]).ok()?;
+        let size = usize::from_str_radix(size_text.split(';').next()?.trim(), 16).ok()?;
+        body = &body[line_end + 2..];
+        if size == 0 {
+            return Some(decoded);
+        }
+        if body.len() < size + 2 || &body[size..size + 2] != b"\r\n" {
+            return None;
+        }
+        decoded.extend_from_slice(&body[..size]);
+        body = &body[size + 2..];
+        if decoded.len() > 16 * 1024 {
+            return None;
+        }
+    }
+}
+
+#[cfg(test)]
+mod runtime_lifecycle_tests {
+    use super::decode_chunked_http_body;
+
+    #[test]
+    fn authenticated_health_chunked_body_is_decoded() {
+        let encoded = b"a\r\n{\"status\":\r\n5\r\n\"ok\"}\r\n0\r\n\r\n";
+        assert_eq!(
+            decode_chunked_http_body(encoded).as_deref(),
+            Some(b"{\"status\":\"ok\"}".as_slice())
+        );
     }
 
-    let mut response = [0_u8; 64];
-    let Ok(bytes) = stream.read(&mut response) else {
-        return false;
-    };
-    let status = String::from_utf8_lossy(&response[..bytes]);
-    status.starts_with("HTTP/1.1 200")
+    #[test]
+    fn malformed_health_chunk_is_rejected() {
+        assert!(decode_chunked_http_body(b"20\r\nshort\r\n0\r\n\r\n").is_none());
+    }
 }
 
 #[cfg(not(debug_assertions))]
-fn wait_for_local_server(child: &mut Child, port: u16) -> Result<(), String> {
-    for _ in 0..240 {
-        if local_server_responds(port) {
+fn request_runtime_health(port: u16, token: Option<&str>) -> Option<RuntimeHealth> {
+    let Ok(mut stream) = TcpStream::connect(("127.0.0.1", port)) else {
+        return None;
+    };
+    let timeout = Some(Duration::from_millis(350));
+    let _ = stream.set_read_timeout(timeout);
+    let _ = stream.set_write_timeout(timeout);
+    let authentication = token
+        .map(|value| format!("{RUNTIME_HEALTH_HEADER}: {value}\r\n"))
+        .unwrap_or_default();
+    let request = format!(
+        "GET {RUNTIME_HEALTH_PATH} HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\n{authentication}Connection: close\r\n\r\n"
+    );
+    if stream.write_all(request.as_bytes()).is_err() {
+        return None;
+    }
+
+    let mut response = Vec::with_capacity(2048);
+    if stream.take(16 * 1024).read_to_end(&mut response).is_err() {
+        return None;
+    }
+    let header_end = response
+        .windows(4)
+        .position(|window| window == b"\r\n\r\n")?;
+    let headers = String::from_utf8_lossy(&response[..header_end]);
+    if !headers.starts_with("HTTP/1.1 200") {
+        return None;
+    }
+    let body = &response[header_end + 4..];
+    let decoded;
+    let body = if headers
+        .lines()
+        .any(|line| line.eq_ignore_ascii_case("transfer-encoding: chunked"))
+    {
+        decoded = decode_chunked_http_body(body)?;
+        decoded.as_slice()
+    } else {
+        body
+    };
+    serde_json::from_slice(body).ok()
+}
+
+#[cfg(not(debug_assertions))]
+fn local_runtime_responds(ownership: &RuntimeOwnership) -> bool {
+    let Some(health) = request_runtime_health(ownership.port, Some(&ownership.token)) else {
+        return false;
+    };
+    health.status == "ok"
+        && health.runtime == "bezgrow-embedded"
+        && health.app_version.as_deref() == Some(ownership.app_version.as_str())
+        && health.shell_pid == Some(ownership.shell_pid)
+        && health.server_pid == Some(ownership.server_pid)
+}
+
+#[cfg(not(debug_assertions))]
+fn legacy_runtime_responds(port: u16) -> bool {
+    request_runtime_health(port, None)
+        .map(|health| health.status == "ok" && health.runtime == "bezgrow-embedded")
+        .unwrap_or(false)
+}
+
+#[cfg(not(debug_assertions))]
+fn wait_for_local_server(child: &mut Child, ownership: &RuntimeOwnership) -> Result<(), String> {
+    for _ in 0..160 {
+        if local_runtime_responds(ownership) {
             return Ok(());
         }
 
@@ -3043,24 +3659,318 @@ fn wait_for_local_server(child: &mut Child, port: u16) -> Result<(), String> {
         thread::sleep(Duration::from_millis(100));
     }
 
-    Err("Bundled Bezgrow server did not become ready in time".to_string())
+    Err(
+        "Bundled Bezgrow server did not return its authenticated runtime identity in time"
+            .to_string(),
+    )
 }
 
 #[cfg(not(debug_assertions))]
-fn reserve_local_port<R: tauri::Runtime>(
-    app: &tauri::AppHandle<R>,
-) -> Result<u16, Box<dyn std::error::Error>> {
-    let listener = TcpListener::bind(("127.0.0.1", DESKTOP_SERVER_PORT)).map_err(|error| {
-        append_startup_log(
+fn terminate_verified_runtime_pid(pid: u32, process_group: Option<u32>) -> bool {
+    #[cfg(target_os = "windows")]
+    {
+        let _ = windows_hidden_command("taskkill.exe")
+            .args(["/PID", &pid.to_string(), "/T", "/F"])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status();
+    }
+
+    #[cfg(target_os = "macos")]
+    unsafe {
+        let signal_target = match process_group {
+            Some(group) if group == pid && libc::getpgid(pid as i32) == group as i32 => {
+                -(group as i32)
+            }
+            _ => pid as i32,
+        };
+        libc::kill(signal_target, libc::SIGTERM);
+    }
+
+    #[cfg(all(not(target_os = "macos"), not(target_os = "windows")))]
+    {
+        let _ = Command::new("kill")
+            .args(["-TERM", &pid.to_string()])
+            .status();
+    }
+
+    let started = std::time::Instant::now();
+    while started.elapsed() < Duration::from_millis(1500) {
+        let group_exited = {
+            #[cfg(target_os = "macos")]
+            {
+                process_group
+                    .map(|group| !process_group_exists(group))
+                    .unwrap_or(true)
+            }
+            #[cfg(not(target_os = "macos"))]
+            {
+                true
+            }
+        };
+        if process_executable_path(pid).is_none() && group_exited {
+            return true;
+        }
+        thread::sleep(Duration::from_millis(40));
+    }
+
+    #[cfg(target_os = "macos")]
+    unsafe {
+        let signal_target = match process_group {
+            Some(group) if group == pid && libc::getpgid(pid as i32) == group as i32 => {
+                -(group as i32)
+            }
+            _ => pid as i32,
+        };
+        libc::kill(signal_target, libc::SIGKILL);
+    }
+    #[cfg(all(not(target_os = "macos"), not(target_os = "windows")))]
+    {
+        let _ = Command::new("kill")
+            .args(["-KILL", &pid.to_string()])
+            .status();
+    }
+
+    let started = std::time::Instant::now();
+    while started.elapsed() < Duration::from_millis(800) {
+        let group_exited = {
+            #[cfg(target_os = "macos")]
+            {
+                process_group
+                    .map(|group| !process_group_exists(group))
+                    .unwrap_or(true)
+            }
+            #[cfg(not(target_os = "macos"))]
+            {
+                true
+            }
+        };
+        if process_executable_path(pid).is_none() && group_exited {
+            return true;
+        }
+        thread::sleep(Duration::from_millis(40));
+    }
+    process_executable_path(pid).is_none() && {
+        #[cfg(target_os = "macos")]
+        {
+            process_group
+                .map(|group| !process_group_exists(group))
+                .unwrap_or(true)
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            true
+        }
+    }
+}
+
+#[cfg(not(debug_assertions))]
+fn recover_recorded_runtime<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> Result<(), String> {
+    let ownership = match read_runtime_state(app) {
+        Ok(Some(ownership)) => ownership,
+        Ok(None) => return Ok(()),
+        Err(error) => {
+            append_startup_log_handle(
+                app,
+                format!("Discarding invalid transient runtime metadata: {error}"),
+            );
+            remove_runtime_state(app);
+            return Ok(());
+        }
+    };
+
+    let authenticated = local_runtime_responds(&ownership);
+    if !runtime_process_identity_matches(&ownership) && !authenticated {
+        append_startup_log_handle(
             app,
-            format!("Managed desktop port {DESKTOP_SERVER_PORT} is unavailable: {error}"),
+            format!(
+                "Runtime metadata did not match a live Bezgrow child; no process was terminated. recorded_shell_pid={}, recorded_server_pid={}, recorded_port={}",
+                ownership.shell_pid, ownership.server_pid, ownership.port
+            ),
         );
+        remove_runtime_state(app);
+        return Ok(());
+    }
+
+    let parent_is_alive =
+        process_matches_recorded_path(ownership.shell_pid, &ownership.shell_executable)
+            || (authenticated
+                && process_executable_path(ownership.shell_pid)
+                    .map(|path| looks_like_bezgrow_shell(&path))
+                    .unwrap_or(false));
+    if parent_is_alive && ownership.shell_pid != std::process::id() {
+        return Err(format!(
+            "Another active Bezgrow shell (PID {}) owns the authenticated local runtime. The single-instance handoff could not be completed.",
+            ownership.shell_pid
+        ));
+    }
+
+    append_startup_log_handle(
+        app,
         format!(
-            "Bezgrow's managed local server port {DESKTOP_SERVER_PORT} is already in use. Close any remaining Bezgrow process and reopen the app. The desktop app will not switch to an untrusted fallback origin."
+            "Recovering verified stale Bezgrow runtime. recorded_shell_pid={}, server_pid={}, port={}, recorded_version={}, current_version={}, authenticated={authenticated}",
+            ownership.shell_pid,
+            ownership.server_pid,
+            ownership.port,
+            ownership.app_version,
+            app.package_info().version
+        ),
+    );
+    if !terminate_verified_runtime_pid(ownership.server_pid, ownership.server_process_group) {
+        return Err(format!(
+            "A verified stale Bezgrow runtime (PID {}) could not be stopped safely.",
+            ownership.server_pid
+        ));
+    }
+    if !wait_for_port_release(ownership.port, Duration::from_secs(2)) {
+        return Err(format!(
+            "The verified stale Bezgrow runtime exited, but port {} was not released.",
+            ownership.port
+        ));
+    }
+    remove_runtime_state_if_owned(app, &ownership);
+    append_startup_log_handle(
+        app,
+        format!(
+            "Verified stale Bezgrow runtime recovery completed. server_pid={}, released_port={}",
+            ownership.server_pid, ownership.port
+        ),
+    );
+    Ok(())
+}
+
+#[cfg(all(not(debug_assertions), target_os = "macos"))]
+fn legacy_runtime_identity_matches(pid: u32) -> bool {
+    if process_parent_pid(pid) != Some(1) {
+        return false;
+    }
+    let Some(executable) = process_executable_path(pid) else {
+        return false;
+    };
+    let Some(current_directory) = process_current_directory(pid) else {
+        return false;
+    };
+    let server_entry = current_directory.join("server.js");
+    let same_resources_root = executable
+        .parent()
+        .and_then(Path::parent)
+        .zip(current_directory.parent())
+        .map(|(executable_resources, server_resources)| executable_resources == server_resources)
+        .unwrap_or(false);
+    same_resources_root
+        && looks_like_bundled_node(&executable, &server_entry)
+        && process_listening_ports(pid)
+            .into_iter()
+            .any(legacy_runtime_responds)
+}
+
+#[cfg(all(not(debug_assertions), not(target_os = "macos")))]
+fn legacy_runtime_identity_matches(_pid: u32) -> bool {
+    false
+}
+
+#[cfg(not(debug_assertions))]
+fn recover_legacy_orphaned_runtimes<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
+    let marker = match create_runtime_directory(app) {
+        Ok(directory) => directory.join(LEGACY_CLEANUP_MARKER_FILENAME),
+        Err(error) => {
+            append_startup_log_handle(
+                app,
+                format!("Legacy runtime recovery could not prepare its marker: {error}"),
+            );
+            return;
+        }
+    };
+    if marker.is_file() {
+        return;
+    }
+    let started = std::time::Instant::now();
+    #[cfg(target_os = "macos")]
+    let candidates = all_process_ids();
+    #[cfg(not(target_os = "macos"))]
+    let candidates = listening_process_ids(DESKTOP_SERVER_PORT);
+    let verified = candidates
+        .into_iter()
+        .filter(|pid| legacy_runtime_identity_matches(*pid))
+        .collect::<Vec<_>>();
+    let recovered_count = verified.len();
+    for pid in verified {
+        let ports = {
+            #[cfg(target_os = "macos")]
+            {
+                process_listening_ports(pid)
+            }
+            #[cfg(not(target_os = "macos"))]
+            {
+                vec![DESKTOP_SERVER_PORT]
+            }
+        };
+        append_startup_log_handle(
+            app,
+            format!(
+                "Recovering verified legacy Bezgrow runtime without ownership metadata. server_pid={pid}, ports={ports:?}"
+            ),
+        );
+        if terminate_verified_runtime_pid(pid, None)
+            && ports
+                .iter()
+                .all(|port| wait_for_port_release(*port, Duration::from_secs(2)))
+        {
+            append_startup_log_handle(
+                app,
+                format!(
+                    "Verified legacy Bezgrow runtime recovery completed. server_pid={pid}, released_ports={ports:?}"
+                ),
+            );
+        } else {
+            append_startup_log_handle(
+                app,
+                format!(
+                    "Verified legacy Bezgrow runtime did not stop cleanly. server_pid={pid}, ports={ports:?}"
+                ),
+            );
+        }
+    }
+    if let Err(error) = fs::write(&marker, format!("{}\n", unix_timestamp())) {
+        append_startup_log_handle(
+            app,
+            format!("Legacy runtime recovery marker could not be persisted: {error}"),
+        );
+    }
+    append_startup_log_handle(
+        app,
+        format!(
+            "Legacy runtime migration scan completed. recovered_processes={recovered_count}, duration_ms={}",
+            started.elapsed().as_millis()
+        ),
+    );
+}
+
+#[cfg(not(debug_assertions))]
+fn select_local_port<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> Result<u16, String> {
+    if port_is_available(DESKTOP_SERVER_PORT) {
+        return Ok(DESKTOP_SERVER_PORT);
+    }
+
+    let owners = listening_process_ids(DESKTOP_SERVER_PORT);
+    let listener = TcpListener::bind(("127.0.0.1", 0)).map_err(|error| {
+        format!(
+            "Bezgrow could not reserve an authenticated fallback port while {DESKTOP_SERVER_PORT} was occupied: {error}"
         )
     })?;
+    let fallback = listener
+        .local_addr()
+        .map_err(|error| format!("Bezgrow could not inspect its fallback port: {error}"))?
+        .port();
     drop(listener);
-    Ok(DESKTOP_SERVER_PORT)
+    append_startup_log_handle(
+        app,
+        format!(
+            "Preferred port {DESKTOP_SERVER_PORT} belongs to an unrelated or unverifiable process; leaving it untouched and selecting authenticated fallback port {fallback}. listener_pids={owners:?}"
+        ),
+    );
+    Ok(fallback)
 }
 
 #[cfg(all(not(debug_assertions), target_os = "windows"))]
@@ -3114,18 +4024,25 @@ fn start_next_server<R: tauri::Runtime>(
 fn start_next_server<R: tauri::Runtime>(
     app: &tauri::AppHandle<R>,
 ) -> Result<u16, Box<dyn std::error::Error>> {
-    let port = reserve_local_port(app)?;
+    recover_recorded_runtime(app)?;
+    recover_legacy_orphaned_runtimes(app);
+    let port = select_local_port(app)?;
     let resource_dir = external_process_path(app.path().resource_dir()?);
     let server_dir = resource_dir.join("next-server");
     let server_entry = server_dir.join("server.js");
     let node_path = external_process_path(bundled_node_path(app)?);
     let log_path = startup_log_path(app);
     let temporary_directory = managed_data_directory(app, "Temporary")?;
+    let token = generate_runtime_token()?;
+    let shell_pid = std::process::id();
+    let shell_executable = std::env::current_exe()?;
+    let app_version = app.package_info().version.to_string();
+    let started = std::time::Instant::now();
 
     append_startup_log(
         app,
         format!(
-            "Starting bundled Next server. resources={}, node={}, server={}, port={port}",
+            "Starting bundled Next server. shell_pid={shell_pid}, version={app_version}, resources={}, node={}, server={}, port={port}",
             resource_dir.display(),
             node_path.display(),
             server_entry.display()
@@ -3152,6 +4069,15 @@ fn start_next_server<R: tauri::Runtime>(
     let mut command = Command::new(&node_path);
     #[cfg(target_os = "windows")]
     command.creation_flags(CREATE_NO_WINDOW);
+    #[cfg(target_os = "macos")]
+    unsafe {
+        command.pre_exec(|| {
+            if libc::setpgid(0, 0) == -1 {
+                return Err(std::io::Error::last_os_error());
+            }
+            Ok(())
+        });
+    }
 
     let mut child = command
         .arg(&server_entry)
@@ -3160,6 +4086,9 @@ fn start_next_server<R: tauri::Runtime>(
         .env("PORT", port.to_string())
         .env("NODE_ENV", "production")
         .env("BEZGROW_DESKTOP_BUILD", "1")
+        .env("BEZGROW_RUNTIME_TOKEN", &token)
+        .env("BEZGROW_RUNTIME_VERSION", &app_version)
+        .env("BEZGROW_RUNTIME_SHELL_PID", shell_pid.to_string())
         .env("NEXT_TELEMETRY_DISABLED", "1")
         .env("TEMP", &temporary_directory)
         .env("TMP", &temporary_directory)
@@ -3175,17 +4104,42 @@ fn start_next_server<R: tauri::Runtime>(
             )
         })?;
 
+    let server_pid = child.id();
+    let ownership = RuntimeOwnership {
+        schema_version: RUNTIME_STATE_SCHEMA,
+        shell_pid,
+        shell_executable: shell_executable.to_string_lossy().to_string(),
+        server_pid,
+        server_process_group: if cfg!(target_os = "macos") {
+            Some(server_pid)
+        } else {
+            None
+        },
+        server_executable: node_path.to_string_lossy().to_string(),
+        server_entry: server_entry.to_string_lossy().to_string(),
+        app_version,
+        port,
+        token,
+        started_at: unix_timestamp(),
+    };
+
     #[cfg(target_os = "windows")]
     let process_job = match assign_child_to_kill_on_close_job(&child) {
         Ok(job) => job,
         Err(error) => {
-            terminate_child_process(&mut child);
+            terminate_child_process(&mut child, ownership.server_process_group);
             return Err(error.into());
         }
     };
 
-    if let Err(error) = wait_for_local_server(&mut child, port) {
-        terminate_child_process(&mut child);
+    if let Err(error) = write_runtime_state(app, &ownership) {
+        terminate_child_process(&mut child, ownership.server_process_group);
+        return Err(error.into());
+    }
+
+    if let Err(error) = wait_for_local_server(&mut child, &ownership) {
+        terminate_child_process(&mut child, ownership.server_process_group);
+        remove_runtime_state_if_owned(app, &ownership);
         return Err(error.into());
     }
 
@@ -3195,8 +4149,15 @@ fn start_next_server<R: tauri::Runtime>(
         #[cfg(target_os = "windows")]
         _job: process_job,
         port,
+        ownership,
     });
-    append_startup_log(app, format!("Bundled Next server is ready on port {port}"));
+    append_startup_log(
+        app,
+        format!(
+            "Bundled Next server authenticated and ready. shell_pid={shell_pid}, server_pid={server_pid}, port={port}, startup_duration_ms={}",
+            started.elapsed().as_millis()
+        ),
+    );
 
     Ok(port)
 }
@@ -3259,8 +4220,43 @@ fn start_server_with_retries<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> Re
 
     #[cfg(not(debug_assertions))]
     {
+        let existing = state
+            .process
+            .lock()
+            .map_err(|_| "The Bezgrow runtime process lock is unavailable.".to_string())?
+            .take();
+        if let Some(mut existing) = existing {
+            let exited = existing.child.try_wait().ok().flatten();
+            if exited.is_none() && local_runtime_responds(&existing.ownership) {
+                let port = existing.port;
+                *state.process.lock().map_err(|_| {
+                    "The Bezgrow runtime process lock is unavailable.".to_string()
+                })? = Some(existing);
+                append_startup_log_handle(
+                    app,
+                    format!("Reusing authenticated Bezgrow runtime on port {port}"),
+                );
+                return Ok(port);
+            }
+            let server_pid = existing.child.id();
+            let status = terminate_child_process(
+                &mut existing.child,
+                existing.ownership.server_process_group,
+            );
+            remove_runtime_state_if_owned(app, &existing.ownership);
+            append_startup_log_handle(
+                app,
+                format!(
+                    "Removed unhealthy in-memory runtime before recovery. server_pid={server_pid}, child_exit={}",
+                    status
+                        .map(|value| value.to_string())
+                        .unwrap_or_else(|| "unknown".to_string())
+                ),
+            );
+        }
+
         const RETRY_DELAYS: [Duration; 2] =
-            [Duration::from_millis(350), Duration::from_millis(900)];
+            [Duration::from_millis(200), Duration::from_millis(500)];
         let mut errors = Vec::new();
 
         for attempt in 1..=3 {
@@ -3336,16 +4332,17 @@ fn start_runtime_supervisor<R: tauri::Runtime>(app: tauri::AppHandle<R>) {
                 return;
             }
 
-            let (port, exited) = {
+            let (ownership, exited) = {
                 let mut process_guard = state.process.lock().expect("next server state poisoned");
                 let Some(process) = process_guard.as_mut() else {
                     continue;
                 };
                 let exited = process.child.try_wait().ok().flatten();
-                (process.port, exited)
+                (process.ownership.clone(), exited)
             };
+            let port = ownership.port;
 
-            if exited.is_none() && local_server_responds(port) {
+            if exited.is_none() && local_runtime_responds(&ownership) {
                 failed_health_checks = 0;
                 continue;
             }
@@ -3361,7 +4358,21 @@ fn start_runtime_supervisor<R: tauri::Runtime>(app: tauri::AppHandle<R>) {
                 .expect("next server state poisoned")
                 .take();
             if let Some(mut failed_process) = failed_process {
-                terminate_child_process(&mut failed_process.child);
+                let status = terminate_child_process(
+                    &mut failed_process.child,
+                    failed_process.ownership.server_process_group,
+                );
+                remove_runtime_state_if_owned(&app, &failed_process.ownership);
+                append_startup_log_handle(
+                    &app,
+                    format!(
+                        "Failed bundled child was reaped. server_pid={}, child_exit={}",
+                        failed_process.ownership.server_pid,
+                        status
+                            .map(|value| value.to_string())
+                            .unwrap_or_else(|| "unknown".to_string())
+                    ),
+                );
             }
 
             append_startup_log_handle(
@@ -3402,6 +4413,26 @@ fn start_runtime_supervisor<R: tauri::Runtime>(app: tauri::AppHandle<R>) {
 #[cfg(debug_assertions)]
 fn start_runtime_supervisor<R: tauri::Runtime>(_app: tauri::AppHandle<R>) {}
 
+fn focus_running_bezgrow<R: tauri::Runtime>(app: &tauri::AppHandle<R>, reason: &str) {
+    let window = app
+        .get_webview_window("main")
+        .or_else(|| app.get_webview_window("startup-error"));
+    if let Some(window) = window {
+        let _ = window.show();
+        let _ = window.unminimize();
+        let _ = window.set_focus();
+    }
+    #[cfg(target_os = "macos")]
+    if let Some(marker) = MainThreadMarker::new() {
+        #[allow(deprecated)]
+        NSApplication::sharedApplication(marker).activateIgnoringOtherApps(true);
+    }
+    append_startup_log_handle(
+        app,
+        format!("Existing Bezgrow window restored and focused. reason={reason}"),
+    );
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     #[cfg(target_os = "windows")]
@@ -3418,11 +4449,7 @@ pub fn run() {
 
     builder
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
-            if let Some(window) = app.get_webview_window("main") {
-                let _ = window.show();
-                let _ = window.unminimize();
-                let _ = window.set_focus();
-            }
+            focus_running_bezgrow(app, "second launch");
         }))
         .setup(|app| {
             rotate_startup_log(app);
@@ -3474,7 +4501,7 @@ pub fn run() {
                 }
                 api.prevent_close();
                 if window.label() == "startup-error" {
-                    stop_next_server(&app);
+                    orderly_shutdown(&app, "startup recovery window close");
                     app.exit(1);
                     return;
                 }
@@ -3485,7 +4512,7 @@ pub fn run() {
                         window.label()
                     ),
                 );
-                stop_next_server(&app);
+                orderly_shutdown(&app, "main window close");
                 app.exit(0);
             }
             _ => {}
@@ -3521,12 +4548,22 @@ pub fn run() {
         ])
         .build(tauri::generate_context!())
         .expect("error while building Bezgrow ERP")
-        .run(|app, event| {
-            if matches!(
-                event,
-                tauri::RunEvent::Exit | tauri::RunEvent::ExitRequested { .. }
-            ) {
-                stop_next_server(app);
+        .run(|app, event| match event {
+            tauri::RunEvent::ExitRequested { code, .. } => {
+                let cause = if code.is_some() {
+                    "programmatic exit or restart"
+                } else {
+                    "menu Quit, Cmd+Q, logout, or operating-system quit"
+                };
+                orderly_shutdown(app, cause);
             }
+            tauri::RunEvent::Exit => {
+                orderly_shutdown(app, "event loop exit");
+            }
+            #[cfg(target_os = "macos")]
+            tauri::RunEvent::Reopen { .. } => {
+                focus_running_bezgrow(app, "macOS dock reopen");
+            }
+            _ => {}
         });
 }

@@ -40,7 +40,7 @@ assert.match(
   /fn external_process_path[\s\S]*strip_prefix[\s\S]*fn start_next_server[\s\S]*external_process_path\(app\.path\(\)\.resource_dir/,
   "Windows must normalize verbatim resource paths before passing the bundled server path to Node."
 )
-for (const directory of ["Database", "business-assets/logos", "Settings", "PDFs", "Exports", "Temporary", "Backups", "Logs", "WebView"]) {
+for (const directory of ["Database", "business-assets/logos", "Settings", "PDFs", "Exports", "Temporary", "Backups", "Logs", "Runtime", "WebView"]) {
   assert.ok(rust.includes(`"${directory}"`), `Managed Windows data folder missing: ${directory}`)
 }
 assert.match(rust, /legacy_database[\s\S]*destination_database/, "Existing Windows databases must migrate without deletion.")
@@ -73,6 +73,8 @@ assert.match(
 assert.match(workflow, /x86_64-pc-windows-msvc/, "Windows x64 release target is missing.")
 assert.doesNotMatch(workflow, /matrix:/, "The production Windows workflow must build one explicit x64 target.")
 assert.match(rust, /__BEZGROW_ARCH__[\s\S]*runtime_architecture/, "The native runtime must expose its architecture.")
+assert.match(rust, /JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE[\s\S]*AssignProcessToJobObject/, "Windows must own the complete bundled process tree in a kill-on-close job object.")
+assert.match(rust, /CREATE_NO_WINDOW/, "Windows bundled runtime and cleanup commands must never open a console window.")
 assert.match(updates, /desktopArchitecture\(\) === "arm64"[\s\S]*windowsArm64/, "ARM64 update checks must select native ARM64 installers.")
 assert.match(updates, /verifiedInstallerRouteForCurrentPlatform/, "Manual updates must use the integrity-validating download route.")
 assert.match(updatesPanel, /Code signing:[\s\S]*SHA-256:/, "The update card must show signing and checksum status.")

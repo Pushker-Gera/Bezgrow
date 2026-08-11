@@ -82,14 +82,17 @@ assert.match(authCallback, /trustedDesktopCallbackOrigin/, "Web auth callback mu
 assert.match(authCallback, /\/api\/desktop-auth\/callback/, "Web auth callback must hand desktop OAuth sessions back to the local app.");
 assert.match(desktopAuthCallbackRoute, /isLocalDesktopRequest/, "Desktop OAuth callback receiver must be localhost-only.");
 assert.match(desktopAuthCallbackRoute, /storeDesktopOAuthExchange/, "Desktop OAuth callback receiver must store the session in the local app process.");
-assert.match(rust, /TcpListener::bind\(\("127\.0\.0\.1", DESKTOP_SERVER_PORT\)\)/, "Desktop startup must prefer the stable local origin.");
-assert.doesNotMatch(rust, /TcpListener::bind\(\("127\.0\.0\.1", 0\)\)/, "Packaged startup must not silently move to a changing fallback port.");
-assert.match(rust, /reserve_local_port\(app\)/, "Fixed-port reservation failures must be written to the packaged startup log.");
-assert.match(rust, /Close any remaining Bezgrow process and reopen the app/, "A genuine fixed-port conflict must produce a useful startup error.");
+assert.match(rust, /port_is_available\(DESKTOP_SERVER_PORT\)/, "Desktop startup must prefer the stable local origin.");
+assert.match(rust, /TcpListener::bind\(\("127\.0\.0\.1", 0\)\)/, "An unrelated fixed-port owner must use an OS-selected controlled fallback.");
+assert.match(rust, /unrelated or unverifiable process[\s\S]*leaving it untouched[\s\S]*authenticated fallback port/, "Fallback diagnostics must prove unrelated processes are preserved.");
+assert.match(rust, /recover_recorded_runtime[\s\S]*runtime_process_identity_matches[\s\S]*terminate_verified_runtime_pid/, "Recorded stale runtimes must be identity-verified before termination.");
+assert.match(rust, /recover_legacy_orphaned_runtimes[\s\S]*legacy_runtime_identity_matches/, "The broken pre-metadata runtime must have a safe orphan recovery path.");
 assert.match(rust, /fn start_server_with_retries[\s\S]*for attempt in 1\.\.=3/, "Packaged runtime startup must use bounded automatic retries.");
-assert.match(rust, /fn start_runtime_supervisor[\s\S]*local_server_responds\(port\)/, "The bundled runtime must remain health-checked after the window opens.");
-assert.match(rust, /GET \/api\/desktop-health[\s\S]*HTTP\/1\.1 200/, "The native health check must require the embedded server's dedicated HTTP 200 route.");
-assert.match(desktopHealthRoute, /BEZGROW_DESKTOP_BUILD[\s\S]*bezgrow-embedded/, "The embedded health route must not be exposed as a normal hosted-site endpoint.");
+assert.match(rust, /fn start_runtime_supervisor[\s\S]*local_runtime_responds\(&ownership\)/, "The bundled runtime must remain authenticated and health-checked after the window opens.");
+assert.match(rust, /RUNTIME_HEALTH_HEADER[\s\S]*local_runtime_responds/, "The native health check must send the per-launch runtime credential.");
+assert.match(desktopHealthRoute, /timingSafeEqual[\s\S]*BEZGROW_RUNTIME_TOKEN[\s\S]*bezgrow-embedded/, "The embedded health route must require the per-launch token and remain hidden on the hosted site.");
+assert.match(rust, /RuntimeOwnership[\s\S]*shell_pid[\s\S]*server_pid[\s\S]*app_version[\s\S]*token[\s\S]*started_at/, "Runtime ownership must persist shell, server, version, token, and timestamp identity.");
+assert.match(rust, /tauri_plugin_single_instance[\s\S]*focus_running_bezgrow/, "A second launch must focus the existing Bezgrow window.");
 assert.match(rust, /main\.hide\(\)[\s\S]*create_startup_error_window/, "A failed bundled runtime must hide the ERP webview before showing recovery.");
 assert.match(rust, /desktop_retry_startup/, "The customer recovery screen must be able to restart the bundled runtime.");
 assert.match(

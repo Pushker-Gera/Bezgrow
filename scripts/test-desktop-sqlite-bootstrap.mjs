@@ -70,9 +70,9 @@ assert.match(rust, /BEGIN IMMEDIATE[\s\S]*ROLLBACK[\s\S]*COMMIT/s, "Native write
 assert.match(rust, /sha256_file/, "Native migration backups must include a checksum.");
 assert.match(rust, /desktop_database_diagnostics,[\s\S]*desktop_database_backup,[\s\S]*desktop_execute,[\s\S]*desktop_select,[\s\S]*desktop_execute_transaction,/, "Native database commands must be registered with Tauri.");
 assert.match(rust, /fn stop_next_server/, "Desktop shutdown must have a single bundled-server cleanup path.");
-assert.match(rust, /child\.kill\(\);[\s\S]*child\.wait\(\);/, "Desktop shutdown must terminate and reap the bundled server process.");
-assert.match(rust, /WindowEvent::CloseRequested[\s\S]*stop_next_server\(&app\)[\s\S]*app\.exit\(0\)/, "The native red close button must terminate the full application process.");
-assert.match(rust, /RunEvent::Exit[\s\S]*RunEvent::ExitRequested/, "Desktop app exit must clean up the bundled server even when window destruction is skipped.");
+assert.match(rust, /fn terminate_child_process[\s\S]*child\.kill\(\)[\s\S]*child\.wait\(\)\.ok\(\)/, "Desktop shutdown must terminate and reap the bundled server process.");
+assert.match(rust, /WindowEvent::CloseRequested[\s\S]*orderly_shutdown\(&app, "main window close"\)[\s\S]*app\.exit\(0\)/, "The native red close button must terminate the full application process.");
+assert.match(rust, /RunEvent::ExitRequested[\s\S]*orderly_shutdown[\s\S]*RunEvent::Exit[\s\S]*orderly_shutdown/, "Desktop app exit must clean up the bundled server even when window destruction is skipped.");
 assert.match(buildDesktop, /function tauriBuildEnv\(\)/, "Desktop build wrapper must control the Tauri bundler environment.");
 assert.match(buildDesktop, /process\.platform === "darwin"[\s\S]*env\.CI = "true"/, "macOS DMG packaging must run in CI mode to skip fragile Finder automation.");
 
