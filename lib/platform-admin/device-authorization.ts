@@ -10,6 +10,7 @@ const OWNER_DEVICE_ID = "BZG-23D76F50F880422489AF152B"
 const OWNER_ADMIN_USER_ID = "58dc79eb-9d86-4f50-9cb1-fea6c5470fd4"
 const OWNER_ADMIN_EMAIL = "pushkergera@gmail.com"
 const FALLBACK_KEY_ACTION = "platform_admin_device_key_enrolled"
+const FALLBACK_KEY_RECOVERY_ACTION = "platform_admin_device_key_recovered"
 const FALLBACK_NONCE_ACTION = "platform_admin_request_nonce"
 
 const proofSchema = z.object({
@@ -87,20 +88,20 @@ async function verifyLegacyProductionDevice(
     profile.is_suspended === true
   ) return null
 
-  const readEnrollments = () => adminSupabase
+  const readKeyRecords = () => adminSupabase
     .from("admin_audit_logs")
-    .select("id,admin_user_id,new_values,created_at")
-    .eq("action", FALLBACK_KEY_ACTION)
+    .select("id,action,admin_user_id,new_values,created_at")
+    .in("action", [FALLBACK_KEY_ACTION, FALLBACK_KEY_RECOVERY_ACTION])
     .eq("target_type", "registered_device")
     .eq("target_id", OWNER_DEVICE_ID)
     .eq("result", "success")
     .order("created_at", { ascending: true })
     .order("id", { ascending: true })
-    .limit(2)
+    .limit(3)
 
-  let enrollmentResult = await readEnrollments()
-  if (enrollmentResult.error) return null
-  if (enrollmentResult.data.length === 0 && options.allowPublicKeyEnrollment) {
+  let keyRecordsResult = await readKeyRecords()
+  if (keyRecordsResult.error) return null
+  if (keyRecordsResult.data.length === 0 && options.allowPublicKeyEnrollment) {
     const enrollment = await adminSupabase.from("admin_audit_logs").insert({
       admin_user_id: OWNER_ADMIN_USER_ID,
       admin_email: OWNER_ADMIN_EMAIL,
@@ -112,18 +113,57 @@ async function verifyLegacyProductionDevice(
       result: "success",
     })
     if (enrollment.error) return null
-    enrollmentResult = await readEnrollments()
+    keyRecordsResult = await readKeyRecords()
   }
-  const enrollments = enrollmentResult.data || []
-  const enrolledPublicKey = String(
-    (enrollments[0]?.new_values as { public_key?: unknown } | null)?.public_key || "",
+  let keyRecords = keyRecordsResult.data || []
+  let enrollments = keyRecords.filter((record) => record.action === FALLBACK_KEY_ACTION)
+  let recoveries = keyRecords.filter((record) => record.action === FALLBACK_KEY_RECOVERY_ACTION)
+  let activeRecord = recoveries[0] || enrollments[0]
+  let activePublicKey = String(
+    (activeRecord?.new_values as { public_key?: unknown } | null)?.public_key || "",
   )
-  // More than one enrollment means a race or attempted replacement. Fail closed
-  // until an administrator reviews the append-only audit history.
+
+  // A first internal/ad-hoc macOS build could enroll an ephemeral Keychain item
+  // that the same bundle cannot read after relaunch. Permit exactly one audited
+  // recovery to the new permission-restricted installation key. Any subsequent
+  // replacement attempt fails closed.
+  if (
+    enrollments.length === 1 &&
+    recoveries.length === 0 &&
+    activePublicKey &&
+    activePublicKey !== proof.publicKey &&
+    options.allowPublicKeyEnrollment
+  ) {
+    const recovery = await adminSupabase.from("admin_audit_logs").insert({
+      admin_user_id: OWNER_ADMIN_USER_ID,
+      admin_email: OWNER_ADMIN_EMAIL,
+      action: FALLBACK_KEY_RECOVERY_ACTION,
+      target_type: "registered_device",
+      target_id: OWNER_DEVICE_ID,
+      previous_values: { public_key_sha256: createHash("sha256").update(activePublicKey).digest("hex") },
+      new_values: { public_key: proof.publicKey, reason: "internal_macos_keychain_code_requirement" },
+      request_id: `platform-admin-key-recovery:${OWNER_DEVICE_ID}:${proof.publicKey}`,
+      result: "success",
+    })
+    if (recovery.error) return null
+    keyRecordsResult = await readKeyRecords()
+    if (keyRecordsResult.error) return null
+    keyRecords = keyRecordsResult.data || []
+    enrollments = keyRecords.filter((record) => record.action === FALLBACK_KEY_ACTION)
+    recoveries = keyRecords.filter((record) => record.action === FALLBACK_KEY_RECOVERY_ACTION)
+    activeRecord = recoveries[0] || enrollments[0]
+    activePublicKey = String(
+      (activeRecord?.new_values as { public_key?: unknown } | null)?.public_key || "",
+    )
+  }
+
+  // Duplicate enrollment/recovery rows mean a race or attempted replacement.
+  // Fail closed until an administrator reviews the append-only audit history.
   if (
     enrollments.length !== 1 ||
-    enrollments[0]?.admin_user_id !== OWNER_ADMIN_USER_ID ||
-    enrolledPublicKey !== proof.publicKey
+    recoveries.length > 1 ||
+    activeRecord?.admin_user_id !== OWNER_ADMIN_USER_ID ||
+    activePublicKey !== proof.publicKey
   ) return null
 
   return {

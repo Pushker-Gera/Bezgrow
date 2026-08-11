@@ -49,8 +49,8 @@ use windows_sys::Win32::{
 #[cfg(not(debug_assertions))]
 use std::net::{TcpListener, TcpStream};
 
-use image::{GenericImageView, ImageFormat};
 use ed25519_dalek::{Signer, SigningKey};
+use image::{GenericImageView, ImageFormat};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use sqlx::{
@@ -87,6 +87,7 @@ const INSTALLATION_DIRECTORY: &str = "Installation";
 const DEVICE_ID_FILENAME: &str = "device-id";
 const INSTALLATION_SEED_FILENAME: &str = "installation-seed";
 const PLATFORM_ADMIN_SIGNING_KEY_PREFIX: &str = "platform-admin-device-signing-key";
+const PLATFORM_ADMIN_SIGNING_KEY_FILENAME: &str = "platform-admin-device-signing-key";
 #[cfg(target_os = "macos")]
 static PDF_PRINT_LIFECYCLE_ASSOCIATION_KEY: u8 = 0;
 #[cfg(target_os = "macos")]
@@ -1537,29 +1538,90 @@ fn decode_platform_admin_signing_key(value: &str) -> Result<[u8; 32], String> {
     Ok(bytes)
 }
 
-fn platform_admin_signing_key(device_id: &str) -> Result<SigningKey, String> {
+fn read_platform_admin_signing_key_file(path: &Path) -> Result<Option<[u8; 32]>, String> {
+    if !path.exists() {
+        return Ok(None);
+    }
+    let metadata = fs::metadata(path).map_err(|error| {
+        format!("Unable to inspect the protected Platform Admin device key: {error}")
+    })?;
+    if !metadata.is_file() {
+        return Err("The protected Platform Admin device key path is invalid.".to_string());
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        if metadata.permissions().mode() & 0o077 != 0 {
+            return Err(
+                "The protected Platform Admin device key permissions are unsafe.".to_string(),
+            );
+        }
+    }
+    let value = fs::read_to_string(path).map_err(|error| {
+        format!("Unable to read the protected Platform Admin device key: {error}")
+    })?;
+    decode_platform_admin_signing_key(&value).map(Some)
+}
+
+fn write_platform_admin_signing_key_file(path: &Path, bytes: &[u8; 32]) -> Result<(), String> {
+    let mut options = OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    let mut file = match options.open(path) {
+        Ok(file) => file,
+        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => return Ok(()),
+        Err(error) => {
+            return Err(format!(
+                "Unable to persist the protected Platform Admin device key: {error}"
+            ))
+        }
+    };
+    file.write_all(hex_encode(bytes).as_bytes())
+        .and_then(|()| file.sync_all())
+        .map_err(|error| {
+            format!("Unable to finish protecting the Platform Admin device key: {error}")
+        })
+}
+
+fn platform_admin_signing_key(
+    installation_directory: &Path,
+    device_id: &str,
+) -> Result<SigningKey, String> {
+    let file_path = installation_directory.join(PLATFORM_ADMIN_SIGNING_KEY_FILENAME);
+    if let Some(bytes) = read_platform_admin_signing_key_file(&file_path)? {
+        return Ok(SigningKey::from_bytes(&bytes));
+    }
+
     let credential_name = format!("{PLATFORM_ADMIN_SIGNING_KEY_PREFIX}:{device_id}");
     let entry = keychain_entry(&credential_name)?;
-    match entry.get_password() {
-        Ok(value) => Ok(SigningKey::from_bytes(&decode_platform_admin_signing_key(
-            &value,
-        )?)),
+    let private_bytes = match entry.get_password() {
+        Ok(value) => decode_platform_admin_signing_key(&value)?,
         Err(keyring::Error::NoEntry) => {
             let mut private_bytes = [0_u8; 32];
             getrandom::fill(&mut private_bytes).map_err(|error| {
                 format!("Unable to create the protected Platform Admin device key: {error}")
             })?;
-            entry
-                .set_password(&hex_encode(&private_bytes))
-                .map_err(|error| {
-                    format!("Unable to protect the Platform Admin device key: {error}")
-                })?;
-            Ok(SigningKey::from_bytes(&private_bytes))
+            // Keychain remains the preferred native copy. Internal/ad-hoc macOS
+            // builds can lose access to an item when their code requirement
+            // changes, so the permission-restricted installation copy below is
+            // the stable device-bound fallback.
+            let _ = entry.set_password(&hex_encode(&private_bytes));
+            private_bytes
         }
-        Err(error) => Err(format!(
-            "Unable to read the protected Platform Admin device key: {error}"
-        )),
-    }
+        Err(error) => {
+            return Err(format!(
+                "Unable to read the protected Platform Admin device key: {error}"
+            ))
+        }
+    };
+    write_platform_admin_signing_key_file(&file_path, &private_bytes)?;
+    let persisted = read_platform_admin_signing_key_file(&file_path)?
+        .ok_or_else(|| "The protected Platform Admin device key was not persisted.".to_string())?;
+    Ok(SigningKey::from_bytes(&persisted))
 }
 
 fn valid_platform_admin_proof_path(path_and_query: &str) -> bool {
@@ -1593,7 +1655,7 @@ fn desktop_platform_admin_proof<R: tauri::Runtime>(
 
     let installation_directory = managed_data_directory(&app, INSTALLATION_DIRECTORY)?;
     let device_id = get_or_create_device_id_at(&installation_directory, None)?;
-    let signing_key = platform_admin_signing_key(&device_id)?;
+    let signing_key = platform_admin_signing_key(&installation_directory, &device_id)?;
     let timestamp = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_err(|_| "The system clock is invalid for Platform Administration.".to_string())?
@@ -2133,17 +2195,16 @@ fn open_validated_pdf_with_native_print_dialog<R: tauri::Runtime>(
                     // that owner strongly retains the complete PDFKit/AppKit print graph.
                     // Its completion selector removes this association, releasing the
                     // document, print info, operation, and delegate exactly once.
-                    let lifecycle =
-                        PdfPrintLifecycle::new(
-                            mtm,
-                            document,
-                            print_info,
-                            operation,
-                            window,
-                            completion_tx,
-                            callback_session_id.clone(),
-                            callback_log_path.clone(),
-                        );
+                    let lifecycle = PdfPrintLifecycle::new(
+                        mtm,
+                        document,
+                        print_info,
+                        operation,
+                        window,
+                        completion_tx,
+                        callback_session_id.clone(),
+                        callback_log_path.clone(),
+                    );
                     objc2::ffi::objc_setAssociatedObject(
                         (window as *const NSWindow).cast_mut().cast(),
                         (&PDF_PRINT_LIFECYCLE_ASSOCIATION_KEY as *const u8).cast(),
@@ -2154,14 +2215,18 @@ fn open_validated_pdf_with_native_print_dialog<R: tauri::Runtime>(
                     append_pdf_print_lifecycle_log(
                         &callback_log_path,
                         &callback_session_id,
-                        format!("PDF retained; NSPrintOperation retained; active_sessions={active}"),
+                        format!(
+                            "PDF retained; NSPrintOperation retained; active_sessions={active}"
+                        ),
                     );
                     let delegate: &AnyObject =
                         &*(Retained::as_ptr(&lifecycle) as *const PdfPrintLifecycle).cast();
                     let operation = lifecycle.ivars().operation.borrow();
                     operation
                         .as_ref()
-                        .ok_or_else(|| "The native print operation was released before launch.".to_string())?
+                        .ok_or_else(|| {
+                            "The native print operation was released before launch.".to_string()
+                        })?
                         .runOperationModalForWindow_delegate_didRunSelector_contextInfo(
                             window,
                             Some(delegate),
@@ -3813,12 +3878,17 @@ fn validate_platform_admin_url(url: &str) -> Result<tauri::Url, String> {
     let host = parsed.host_str().unwrap_or_default().to_ascii_lowercase();
     if parsed.scheme() == "http" && matches!(host.as_str(), "127.0.0.1" | "localhost") {
         parsed.set_path("/login");
-        parsed.set_query(Some("next=%2Fadmin%3Fdesktop%3D1&platform_admin=1&desktop=1"));
+        parsed.set_query(Some(
+            "next=%2Fadmin%3Fdesktop%3D1&platform_admin=1&desktop=1",
+        ));
         parsed.set_fragment(None);
         return Ok(parsed);
     }
 
-    Err("Platform Administration must run inside the local Bezgrow desktop application.".to_string())
+    Err(
+        "Platform Administration must run inside the local Bezgrow desktop application."
+            .to_string(),
+    )
 }
 
 #[tauri::command]

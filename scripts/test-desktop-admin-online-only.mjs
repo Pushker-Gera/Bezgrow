@@ -22,7 +22,8 @@ assert.match(rust, /validate_platform_admin_url[\s\S]*127\.0\.0\.1[\s\S]*\/login
 assert.doesNotMatch(rust.match(/fn validate_platform_admin_url[\s\S]*?\n\}/)?.[0] || "", /bezgrow\.com/, "The native admin window must never navigate to a hosted browser surface.")
 assert.match(rust, /WebviewUrl::External\(parsed\)[\s\S]*__BEZGROW_PLATFORM_ADMIN_WINDOW__/, "Desktop administration must be visibly marked inside its native Bezgrow window.")
 assert.match(rust, /platform-admin[\s\S]*data_directory\(managed_data_directory\(&app, "WebView"\)\?\)/, "The Windows admin window must share the authenticated in-app WebView cookie store.")
-assert.match(rust, /platform_admin_signing_key[\s\S]*keychain_entry[\s\S]*SigningKey/, "The device private key must live in the native credential store.")
+assert.match(rust, /platform_admin_signing_key[\s\S]*keychain_entry[\s\S]*write_platform_admin_signing_key_file[\s\S]*SigningKey/, "The device private key must use the native credential store plus a permission-restricted installation fallback.")
+assert.match(rust, /permissions\(\)\.mode\(\) & 0o077[\s\S]*permissions are unsafe/, "The file fallback must fail closed if another user can read the private key.")
 assert.match(rust, /desktop_platform_admin_proof[\s\S]*bezgrow-platform-admin-v1[\s\S]*sign\(canonical\.as_bytes\(\)\)/, "Every admin request must receive a native device signature.")
 assert.match(rust, /window\.label\(\) == "platform-admin"[\s\S]*return;/, "Closing admin must leave the local ERP running.")
 assert.match(mainCapability, /allow-open-platform-admin/, "Only the main ERP window may launch Platform Admin.")
@@ -60,6 +61,7 @@ assert.match(authorization, /platform_admin_revoked_at/, "Revoked admin devices 
 assert.match(authorization, /result\.error\?\.code === "42703"/, "Production schema compatibility must activate only when the additive device columns are absent.")
 assert.match(authorization, /OWNER_DEVICE_ID = "BZG-23D76F50F880422489AF152B"/, "The pre-migration compatibility path must remain bound to the owner's exact Device ID.")
 assert.match(authorization, /FALLBACK_KEY_ACTION[\s\S]*admin_audit_logs[\s\S]*public_key/, "The compatibility path must enroll the Tauri public key in append-only server audit storage.")
+assert.match(authorization, /FALLBACK_KEY_RECOVERY_ACTION[\s\S]*recoveries\.length > 1/, "The internal macOS key recovery must be single-use and fail closed on duplicates.")
 assert.match(authorization, /FALLBACK_NONCE_ACTION[\s\S]*confirmed\.data\.length === 1/, "The compatibility path must fail closed when a signed nonce is replayed or races.")
 
 assert.match(migration, /platform_admin_allowed/, "Registered devices must carry an explicit admin authorization flag.")
