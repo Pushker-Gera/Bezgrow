@@ -1,3 +1,5 @@
+import type { PrintInvoice } from "@/components/print/types"
+
 export type InvoiceShareInput = {
   customerName: string
   customerPhone?: string | null
@@ -12,32 +14,56 @@ export type InvoiceShareInput = {
   secureInvoiceUrl?: string
 }
 
-type InvoiceAttachmentStatus = "attached" | "manual"
-
 function money(value: number | undefined) {
   return `₹${Number(value || 0).toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
 }
 
 function formattedDate(value: string | undefined) {
   if (!value) return "-"
+  const isoDate = /^(\d{4})-(\d{2})-(\d{2})/.exec(value)
+  if (isoDate) return `${isoDate[3]}/${isoDate[2]}/${isoDate[1]}`
   const date = new Date(value)
-  return Number.isNaN(date.getTime()) ? value : date.toLocaleDateString("en-IN")
+  if (Number.isNaN(date.getTime())) return value
+  return new Intl.DateTimeFormat("en-GB", {
+    day: "2-digit",
+    month: "2-digit",
+    year: "numeric",
+  }).format(date)
 }
 
+function present(value: string | null | undefined, fallback = "N/A") {
+  const normalized = String(value || "").trim()
+  return normalized && normalized !== "-" ? normalized.replace(/[\r\n\t]+/g, " ") : fallback
+}
+
+function quantity(value: number) {
+  return Number(value || 0).toLocaleString("en-IN", { maximumFractionDigits: 3 })
+}
+
+/**
+ * Normalize only numbers whose destination is unambiguous.
+ *
+ * - Indian 10-digit mobile numbers may omit +91.
+ * - A single domestic trunk zero is accepted for Indian mobile numbers.
+ * - 91 followed by a valid Indian mobile is already international and is preserved.
+ * - Other international numbers must explicitly use + or 00 so an arbitrary local
+ *   number is never mistaken for a country-coded destination.
+ */
 export function normalizeWhatsAppPhone(phone: string | null | undefined) {
   const raw = String(phone || "").trim()
-  if (!raw) return ""
+  if (!raw || !/^[+\d\s().-]+$/.test(raw)) return ""
+  const plusCount = raw.match(/\+/g)?.length || 0
+  if (plusCount > 1 || (plusCount === 1 && !raw.startsWith("+"))) return ""
+  const explicitInternational = raw.startsWith("+") || raw.startsWith("00")
   let digits = raw.replace(/\D/g, "")
-  if (digits.startsWith("00")) digits = digits.slice(2)
-  if (digits.length === 11 && digits.startsWith("0")) digits = digits.slice(1)
+  if (raw.startsWith("00")) digits = digits.slice(2)
 
-  if (digits.length === 10) {
-    return /^[6-9]\d{9}$/.test(digits) ? `91${digits}` : ""
+  if (explicitInternational) {
+    return /^[1-9]\d{7,14}$/.test(digits) ? digits : ""
   }
-  if (digits.startsWith("91") && digits.length === 12) {
-    return /^91[6-9]\d{9}$/.test(digits) ? digits : ""
-  }
-  if (/^[1-9]\d{7,14}$/.test(digits)) return digits
+  if (/^[6-9]\d{9}$/.test(digits)) return `91${digits}`
+  if (/^0[6-9]\d{9}$/.test(digits)) return `91${digits.slice(1)}`
+  if (/^91[6-9]\d{9}$/.test(digits)) return digits
   return ""
 }
 
@@ -47,20 +73,9 @@ export function validateCustomerEmail(email: string | null | undefined) {
 }
 
 export function createInvoiceShareText(input: InvoiceShareInput) {
-  return createProfessionalInvoiceMessage(input, "attached")
-}
-
-export function createProfessionalInvoiceMessage(
-  input: InvoiceShareInput,
-  attachmentStatus: InvoiceAttachmentStatus,
-) {
   const paidAmount = Number(input.paidAmount || 0)
   const dueAmount = Number(input.dueAmount || 0)
-  const paymentStatus = dueAmount <= 0 && paidAmount > 0
-    ? "Paid"
-    : paidAmount > 0
-      ? "Partial"
-      : "Unpaid"
+  const paymentStatus = dueAmount <= 0 && paidAmount > 0 ? "Paid" : paidAmount > 0 ? "Partial" : "Unpaid"
   const lines = [
     `Hello ${input.customerName || "Customer"},`,
     "",
@@ -70,31 +85,90 @@ export function createProfessionalInvoiceMessage(
     `Date: ${formattedDate(input.invoiceDate)}`,
     `Amount: ${money(input.amount)}`,
     `Payment status: ${paymentStatus}`,
+    ...(paidAmount > 0 ? [`Paid: ${money(paidAmount)}`] : []),
+    ...(dueAmount > 0 ? [`Balance: ${money(dueAmount)}`] : []),
+    "",
+    "Your invoice PDF is attached with this message.",
+    "",
   ]
-  if (paidAmount > 0) lines.push(`Paid: ${money(paidAmount)}`)
-  if (dueAmount > 0) lines.push(`Balance: ${money(dueAmount)}`)
-  lines.push(
-    "",
-    attachmentStatus === "attached"
-      ? "Your invoice PDF is attached with this message."
-      : "Your invoice PDF has been prepared separately. Please attach it before sending.",
-    "",
-  )
-  const businessPhone = String(input.enterprisePhone || "").trim()
-  if (businessPhone && businessPhone !== "-") {
-    lines.push("For any billing-related query, please contact us at:", businessPhone, "")
-  }
-  if (input.secureInvoiceUrl) {
-    lines.push(`View or download the invoice: ${input.secureInvoiceUrl}`, "")
-  }
+  const businessPhone = present(input.enterprisePhone, "")
+  if (businessPhone) lines.push("For any billing-related query, please contact us at:", businessPhone, "")
+  if (input.secureInvoiceUrl) lines.push(`View or download the invoice: ${input.secureInvoiceUrl}`, "")
   lines.push("Thank you,", input.enterpriseName || "our business", "", "Generated by Bezgrow")
   return lines.join("\n")
 }
 
-export function createWhatsAppInvoiceUrl(input: InvoiceShareInput) {
-  const phone = normalizeWhatsAppPhone(input.customerPhone)
-  if (!phone) return ""
-  return `https://wa.me/${phone}?text=${encodeURIComponent(createProfessionalInvoiceMessage(input, "manual"))}`
+export function createProfessionalInvoiceMessage(invoice: PrintInvoice) {
+  const paidAmount = Number(invoice.payment.paidAmount || 0)
+  const dueAmount = Number(invoice.payment.dueAmount || 0)
+  const paymentStatus = dueAmount <= 0 && paidAmount > 0 ? "Paid" : paidAmount > 0 ? "Partially paid" : "Unpaid"
+  const lines = [
+    `Hello ${present(invoice.customer.name, "Customer")},`,
+    "",
+    `Thank you for choosing ${present(invoice.enterprise.name, "our business")}.`,
+    "",
+    `*Invoice ${present(invoice.invoiceNumber, "Invoice")}*`,
+    `Date: ${formattedDate(invoice.invoiceDate)}`,
+    `Payment Mode: ${present(invoice.payment.mode)}`,
+    `Status: ${paymentStatus}`,
+    "",
+    "*Customer*",
+    `Name: ${present(invoice.customer.name)}`,
+    `Phone: ${present(invoice.customer.phone)}`,
+    `GSTIN: ${present(invoice.customer.gstin)}`,
+  ]
+
+  const customerAddress = present(invoice.customer.address, "")
+  if (customerAddress) lines.push(`Address: ${customerAddress}`)
+  lines.push("", "*Items*")
+
+  invoice.items.forEach((item, index) => {
+    const gstPercent = item.cgstPercent + item.sgstPercent + item.igstPercent
+    lines.push(
+      `${index + 1}. ${present(item.name, "Product")}`,
+      `Qty: ${quantity(item.quantity)} ${present(item.unit, "unit")}`,
+      `Rate: ${money(item.rate)}`,
+    )
+    if (present(item.hsnCode, "")) lines.push(`HSN: ${present(item.hsnCode)}`)
+    if (item.discountAmount > 0 || item.discountPercent > 0) {
+      lines.push(`Discount: ${item.discountPercent.toLocaleString("en-IN", { maximumFractionDigits: 2 })}% (${money(item.discountAmount)})`)
+    }
+    lines.push(`GST: ${gstPercent.toLocaleString("en-IN", { maximumFractionDigits: 2 })}%`)
+    lines.push(`Amount: ${money(item.finalAmount)}`, "")
+  })
+
+  lines.push(
+    "*Invoice Summary*",
+    `Subtotal: ${money(invoice.totals.subtotal)}`,
+    `Discount: ${money(invoice.totals.discount)}`,
+    `Taxable Amount: ${money(invoice.totals.taxableAmount)}`,
+    `CGST: ${money(invoice.totals.cgst)}`,
+    `SGST: ${money(invoice.totals.sgst)}`,
+    `IGST: ${money(invoice.totals.igst)}`,
+  )
+  if (invoice.totals.roundOff) lines.push(`Round Off: ${money(invoice.totals.roundOff)}`)
+  lines.push(
+    `*Grand Total: ${money(invoice.totals.grandTotal)}*`,
+    `Paid: ${money(paidAmount)}`,
+    `Balance Due: ${money(dueAmount)}`,
+    "",
+    "Amount in words:",
+    present(invoice.totals.amountInWords),
+    "",
+  )
+  const businessPhone = present(invoice.enterprise.phone, "")
+  const businessAddress = present(invoice.enterprise.address, "")
+  if (businessPhone) lines.push(`Phone: ${businessPhone}`)
+  if (businessAddress) lines.push(`Address: ${businessAddress}`)
+  if (businessPhone || businessAddress) lines.push("")
+  lines.push("Thank you.", present(invoice.enterprise.name, "Business"), "", "Generated by Bezgrow")
+  return lines.join("\n")
+}
+
+export function createWhatsAppInvoiceUrl(invoice: PrintInvoice, phone = invoice.customer.phone) {
+  const normalizedPhone = normalizeWhatsAppPhone(phone)
+  if (!normalizedPhone) return ""
+  return `https://wa.me/${normalizedPhone}?text=${encodeURIComponent(createProfessionalInvoiceMessage(invoice))}`
 }
 
 export function createInvoiceEmailDraft(input: InvoiceShareInput) {

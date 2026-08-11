@@ -58,11 +58,16 @@ use sqlx::{
 use tauri::{Manager, WebviewUrl};
 
 #[cfg(target_os = "macos")]
-use objc2::MainThreadMarker;
+use objc2::{
+    define_class, msg_send,
+    rc::{Retained, Weak},
+    runtime::{AnyObject, NSObjectProtocol},
+    sel, DefinedClass, MainThreadMarker, MainThreadOnly, Message,
+};
 #[cfg(target_os = "macos")]
-use objc2_app_kit::{NSApplication, NSPrintInfo, NSWindow};
+use objc2_app_kit::{NSApplication, NSPrintInfo, NSPrintOperation, NSWindow};
 #[cfg(target_os = "macos")]
-use objc2_foundation::NSData;
+use objc2_foundation::{NSData, NSObject};
 #[cfg(target_os = "macos")]
 use objc2_pdf_kit::{PDFDocument, PDFPrintScalingMode};
 
@@ -79,10 +84,86 @@ const WINDOWS_APP_DATA_DIR: &str = "Bezgrow";
 const INSTALLATION_DIRECTORY: &str = "Installation";
 const DEVICE_ID_FILENAME: &str = "device-id";
 const INSTALLATION_SEED_FILENAME: &str = "installation-seed";
+#[cfg(target_os = "macos")]
+static PDF_PRINT_LIFECYCLE_ASSOCIATION_KEY: u8 = 0;
 #[cfg(target_os = "windows")]
 const WINDOWS_APP_USER_MODEL_ID: &str = "com.bezgrow.erp";
 const STARTUP_LOG_MAX_BYTES: u64 = 2 * 1024 * 1024;
 const STARTUP_LOG_GENERATIONS: usize = 5;
+
+#[cfg(target_os = "macos")]
+struct PdfPrintLifecycleIvars {
+    // These strong references are deliberately held together until AppKit's
+    // modeless print operation invokes its completion selector.
+    _document: Retained<PDFDocument>,
+    _print_info: Retained<NSPrintInfo>,
+    operation: Retained<NSPrintOperation>,
+    window: Weak<NSWindow>,
+}
+
+#[cfg(target_os = "macos")]
+define_class!(
+    // SAFETY:
+    // - NSObject has no subclassing requirements.
+    // - All retained AppKit/PDFKit objects and callbacks stay on the main thread.
+    // - The generated ivar drop implementation releases the native print graph.
+    #[unsafe(super(NSObject))]
+    #[name = "BezgrowPDFPrintLifecycle"]
+    #[thread_kind = MainThreadOnly]
+    #[ivars = PdfPrintLifecycleIvars]
+    struct PdfPrintLifecycle;
+
+    unsafe impl NSObjectProtocol for PdfPrintLifecycle {}
+
+    impl PdfPrintLifecycle {
+        // SAFETY: This is the documented completion-selector signature for
+        // NSPrintOperation::runOperationModalForWindow(...).
+        #[unsafe(method(printOperationDidRun:success:contextInfo:))]
+        fn print_operation_did_run(
+            &self,
+            operation: &NSPrintOperation,
+            _success: bool,
+            _context_info: *mut std::ffi::c_void,
+        ) {
+            // Removing the window association releases the lifecycle object.
+            // Keep `self` alive through the end of this callback while its
+            // retained document, print info, and operation are dropped.
+            let keep_alive = self.retain();
+            debug_assert!(std::ptr::eq(operation, &*self.ivars().operation));
+            if let Some(window) = self.ivars().window.load() {
+                unsafe {
+                    objc2::ffi::objc_setAssociatedObject(
+                        (&*window as *const NSWindow).cast_mut().cast(),
+                        (&PDF_PRINT_LIFECYCLE_ASSOCIATION_KEY as *const u8).cast(),
+                        std::ptr::null_mut(),
+                        objc2::ffi::OBJC_ASSOCIATION_ASSIGN,
+                    );
+                }
+            }
+            drop(keep_alive);
+        }
+    }
+);
+
+#[cfg(target_os = "macos")]
+impl PdfPrintLifecycle {
+    fn new(
+        mtm: MainThreadMarker,
+        document: Retained<PDFDocument>,
+        print_info: Retained<NSPrintInfo>,
+        operation: Retained<NSPrintOperation>,
+        window: &NSWindow,
+    ) -> Retained<Self> {
+        let this = Self::alloc(mtm).set_ivars(PdfPrintLifecycleIvars {
+            _document: document,
+            _print_info: print_info,
+            operation,
+            window: Weak::new(window),
+        });
+        // SAFETY: NSObject's initializer has the standard `init` signature.
+        unsafe { msg_send![super(this), init] }
+    }
+}
 #[cfg(not(debug_assertions))]
 const DESKTOP_SERVER_PORT: u16 = 43124;
 #[cfg(not(debug_assertions))]
@@ -1783,12 +1864,41 @@ fn open_validated_pdf_with_native_print_dialog<R: tauri::Runtime>(
                     operation.setShowsProgressPanel(true);
                     operation.setCanSpawnSeparateThread(true);
                     let window: &NSWindow = &*platform_webview.ns_window().cast();
-                    operation.runOperationModalForWindow_delegate_didRunSelector_contextInfo(
-                        window,
-                        None,
-                        None,
-                        std::ptr::null_mut(),
+                    if !objc2::ffi::objc_getAssociatedObject(
+                        (window as *const NSWindow).cast(),
+                        (&PDF_PRINT_LIFECYCLE_ASSOCIATION_KEY as *const u8).cast(),
+                    )
+                    .is_null()
+                    {
+                        return Err(
+                            "A native print dialog is already open for this window.".to_string()
+                        );
+                    }
+
+                    // `runOperationModalForWindow` is modeless and returns immediately.
+                    // Root one lifecycle owner on the parent window before launching it;
+                    // that owner strongly retains the complete PDFKit/AppKit print graph.
+                    // Its completion selector removes this association, releasing the
+                    // document, print info, operation, and delegate exactly once.
+                    let lifecycle =
+                        PdfPrintLifecycle::new(mtm, document, print_info, operation, window);
+                    objc2::ffi::objc_setAssociatedObject(
+                        (window as *const NSWindow).cast_mut().cast(),
+                        (&PDF_PRINT_LIFECYCLE_ASSOCIATION_KEY as *const u8).cast(),
+                        (Retained::as_ptr(&lifecycle) as *mut PdfPrintLifecycle).cast(),
+                        objc2::ffi::OBJC_ASSOCIATION_RETAIN_NONATOMIC,
                     );
+                    let delegate: &AnyObject =
+                        &*(Retained::as_ptr(&lifecycle) as *const PdfPrintLifecycle).cast();
+                    lifecycle
+                        .ivars()
+                        .operation
+                        .runOperationModalForWindow_delegate_didRunSelector_contextInfo(
+                            window,
+                            Some(delegate),
+                            Some(sel!(printOperationDidRun:success:contextInfo:)),
+                            std::ptr::null_mut(),
+                        );
                     Ok(())
                 })();
                 if let Ok(mut slot) = callback_result.lock() {

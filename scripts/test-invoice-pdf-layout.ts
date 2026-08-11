@@ -140,8 +140,12 @@ async function run() {
         assert.equal(box.y, 0)
         closeTo(box.width, page.getWidth())
         closeTo(box.height, page.getHeight())
-        if (keepFixtures && itemCount === 20 && gst) {
-          writeFileSync(`${fixtureDirectory}/${expected.label}-20-items-gst-bw-watermark.pdf`, await createInvoicePdf(
+        const keepRepresentativeFixture = keepFixtures && (
+          (itemCount === 20 && gst) ||
+          ((expected.format === "half-compact" || expected.format === "half-top") && [1, 5].includes(itemCount))
+        )
+        if (keepRepresentativeFixture) {
+          writeFileSync(`${fixtureDirectory}/${expected.label}-${itemCount}-items-${gst ? "gst" : "non-gst"}-bw-watermark.pdf`, await createInvoicePdf(
             invoice(itemCount, gst),
             { ...defaultPrintSettings, thermalWidth: expected.thermalWidth, showLogo: true, showQr: true, showBarcode: true, showWatermark: true, blackAndWhite: true },
             expected.format,

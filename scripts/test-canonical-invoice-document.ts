@@ -63,6 +63,52 @@ function drawingText(page: PDFPage) {
   }).join("\n")
 }
 
+function assertDrawingStaysAbove(page: PDFPage, boundary: number) {
+  const drawing = drawingText(page)
+  type Matrix = [number, number, number, number, number, number]
+  const multiply = (left: Matrix, right: Matrix): Matrix => [
+    left[0] * right[0] + left[2] * right[1],
+    left[1] * right[0] + left[3] * right[1],
+    left[0] * right[2] + left[2] * right[3],
+    left[1] * right[2] + left[3] * right[3],
+    left[0] * right[4] + left[2] * right[5] + left[4],
+    left[1] * right[4] + left[3] * right[5] + left[5],
+  ]
+  const transformedY = (matrix: Matrix, x: number, y: number) => matrix[1] * x + matrix[3] * y + matrix[5]
+  let transform: Matrix = [1, 0, 0, 1, 0, 0]
+  const stack: Matrix[] = []
+  const auditedY: number[] = []
+  for (const rawLine of drawing.split(/\r?\n/)) {
+    const parts = rawLine.trim().split(/\s+/)
+    const operator = parts.at(-1)
+    if (operator === "q") {
+      stack.push([...transform])
+    } else if (operator === "Q") {
+      transform = stack.pop() || [1, 0, 0, 1, 0, 0]
+    } else if (operator === "cm" && parts.length >= 7) {
+      transform = multiply(transform, parts.slice(-7, -1).map(Number) as Matrix)
+    } else if ((operator === "m" || operator === "l") && parts.length >= 3) {
+      auditedY.push(transformedY(transform, Number(parts.at(-3)), Number(parts.at(-2))))
+    } else if (operator === "re" && parts.length >= 5) {
+      const [x, y, rectangleWidth, rectangleHeight] = parts.slice(-5, -1).map(Number)
+      auditedY.push(
+        transformedY(transform, x, y),
+        transformedY(transform, x + rectangleWidth, y),
+        transformedY(transform, x, y + rectangleHeight),
+        transformedY(transform, x + rectangleWidth, y + rectangleHeight),
+      )
+    } else if (operator === "Tm" && parts.length >= 7) {
+      const x = Number(parts.at(-3))
+      const y = Number(parts.at(-2))
+      auditedY.push(transformedY(transform, x, y))
+    }
+  }
+  assert.ok(auditedY.length > 80, "Half A4 Top geometry audit found too few drawing coordinates")
+  for (const y of auditedY) {
+    assert.ok(y >= boundary - 0.5, `Half A4 Top drawing at y=${y} crossed the ${boundary.toFixed(2)}pt boundary`)
+  }
+}
+
 async function run() {
   clearCanonicalInvoiceDocumentCache()
   const representative = {
@@ -134,6 +180,16 @@ async function run() {
   assert.ok(halfTopText.length > 80, "Half A4 Top must substantially fill its intended content region")
   assert.ok(halfTopText.every((item) => item.y >= halfTopBoundary - 0.5), "Half A4 Top text must leave the lower physical half blank")
   assert.ok(Math.min(...halfTopText.map((item) => item.y)) < halfTopBoundary + 35, "Half A4 Top must use the lower edge of its top-half content region")
+  const amountWordsY = halfTopText.find((item) => item.text === "Amount in words")?.y
+  const grandTotalY = halfTopText.find((item) => item.text === "Grand Total")?.y
+  assert.ok(amountWordsY !== undefined && grandTotalY !== undefined, "Half A4 Top must contain amount-in-words and totals sections")
+  assert.ok(grandTotalY < amountWordsY - 20, "Half A4 Top totals must sit lower than amount in words with intentional breathing space")
+  assertDrawingStaysAbove(halfTopDocument.getPage(0), halfTopBoundary)
+
+  const halfCompactOne = await getCanonicalInvoiceDocument(invoice(1, true), settings, "half-compact")
+  const halfCompactOneText = (await pdfText(halfCompactOne.bytes)).replace(/\s+/g, " ")
+  assert.match(halfCompactOneText, /NOTES & TERMS/, "Short Half A4 Compact invoices must use their flexible body area intentionally")
+  assert.match(halfCompactOneText, /Amount in words[\s\S]*Grand Total/, "Half A4 Compact must retain readable aligned summary sections")
 
   const colour = await getCanonicalInvoiceDocument(representative, { ...settings, blackAndWhite: false }, "a4")
   const monochrome = await getCanonicalInvoiceDocument(representative, { ...settings, blackAndWhite: true }, "a4")
