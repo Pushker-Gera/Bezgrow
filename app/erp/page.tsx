@@ -15,7 +15,7 @@ export default function ErpPage() {
       description="Bring daily operations together with business workspaces, license-based access, role-aware controls, analytics, customer records, and professional billing output."
       highlights={["Business workspace", "Offline license", "Customer CRM", "Analytics dashboard", "Role control", "Launch readiness"]}
       workflows={["Manage workspace", "Control operations", "Analyze business health"]}
-      metrics={[["Workspace", "Cloud"], ["Admin", "Control"], ["Reports", "Live"]]}
+      metrics={[["Workspace", "Local"], ["Offline", "Ready"], ["Reports", "Private"]]}
     />
   )
 }

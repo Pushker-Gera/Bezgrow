@@ -14,7 +14,6 @@ export const defaultPrintSettings: PrintSettings = {
   showGstDetails: true,
   showSignature: true,
   showWatermark: false,
-  blackAndWhite: false,
   pharmaMode: false,
   autoPrintAfterSave: false,
 }
@@ -24,7 +23,7 @@ export function readStoredPrintSettings() {
 
   try {
     const stored = window.localStorage.getItem("bezgrow.print-settings")
-    return stored ? { ...defaultPrintSettings, ...JSON.parse(stored) } as PrintSettings : defaultPrintSettings
+    return stored ? normalizePrintSettings(JSON.parse(stored)) : defaultPrintSettings
   } catch {
     return defaultPrintSettings
   }
@@ -33,6 +32,15 @@ export function readStoredPrintSettings() {
 export function saveStoredPrintSettings(settings: PrintSettings) {
   if (typeof window === "undefined") return
   window.localStorage.setItem("bezgrow.print-settings", JSON.stringify(settings))
+}
+
+export function normalizePrintSettings(value: unknown): PrintSettings {
+  const parsed = value && typeof value === "object" ? value as Record<string, unknown> : {}
+  // Older releases persisted `blackAndWhite`. It is intentionally ignored so
+  // OS/printer monochrome controls remain the single source of that choice.
+  const { blackAndWhite: _retiredBlackAndWhite, ...compatible } = parsed
+  void _retiredBlackAndWhite
+  return { ...defaultPrintSettings, ...compatible } as PrintSettings
 }
 
 export async function loadStoredPrintSettings(organizationId: string) {
@@ -44,7 +52,7 @@ export async function loadStoredPrintSettings(organizationId: string) {
 
   try {
     const parsed = typeof stored === "string" ? JSON.parse(stored) : stored
-    const settings = { ...defaultPrintSettings, ...(parsed as Partial<PrintSettings>) }
+    const settings = normalizePrintSettings(parsed)
     saveStoredPrintSettings(settings)
     return settings
   } catch {

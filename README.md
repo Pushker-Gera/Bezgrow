@@ -181,7 +181,7 @@ The local SQLite database contains normalized domain tables, including:
 ```text
 organizations, local_users, organization_members
 products, categories, units, warehouses, inventory_items, stock_batches, stock_movements
-customers, suppliers, sales_invoices, sales_invoice_items, orders, order_items
+customers, suppliers, sales_invoices, sales_invoice_items, orders (historical archive), order_items (historical archive)
 quotations, purchase_invoices, payments, payment_receipts, expenses, ledger_entries
 business_settings, print_templates, feature_flags, local_audit_logs, backup_manifest
 ```

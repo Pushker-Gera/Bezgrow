@@ -50,6 +50,53 @@ export function dateValue(row: Record<string, unknown> | null | undefined, field
   return stringFrom(row, fields) || "-"
 }
 
+function compactQrText(value: string, maximum = 80) {
+  const normalized = value.replace(/[\r\n\t]+/g, " ").replace(/\s+/g, " ").trim()
+  return normalized.length > maximum ? `${normalized.slice(0, maximum - 3)}...` : normalized
+}
+
+export function buildInvoiceQrPayload({
+  business,
+  gstin,
+  invoiceNumber,
+  invoiceDate,
+  customer,
+  subtotal,
+  tax,
+  grandTotal,
+  paymentStatus,
+  paid,
+  due,
+}: {
+  business: string
+  gstin?: string
+  invoiceNumber: string
+  invoiceDate: string
+  customer: string
+  subtotal: number
+  tax: number
+  grandTotal: number
+  paymentStatus: string
+  paid: number
+  due: number
+}) {
+  const lines = [
+    "BEZGROW INVOICE",
+    `Business: ${compactQrText(business)}`,
+    ...(gstin && gstin !== "-" ? [`GSTIN: ${compactQrText(gstin, 24)}`] : []),
+    `Invoice: ${compactQrText(invoiceNumber, 40)}`,
+    `Date: ${compactQrText(invoiceDate, 32)}`,
+    `Customer: ${compactQrText(customer)}`,
+    `Subtotal: Rs ${subtotal.toFixed(2)}`,
+    `Tax: Rs ${tax.toFixed(2)}`,
+    `Grand Total: Rs ${grandTotal.toFixed(2)}`,
+    `Payment Status: ${compactQrText(paymentStatus || "unpaid", 24)}`,
+    `Paid: Rs ${paid.toFixed(2)}`,
+    `Due: Rs ${due.toFixed(2)}`,
+  ]
+  return lines.join("\n")
+}
+
 export function buildPrintInvoice({
   invoice,
   items,
@@ -107,15 +154,15 @@ export function buildPrintInvoice({
     return {
       id: item.id || `${invoice.id}-${index}`,
       name: stringFrom(item, ["product_name", "name"]) || stringFrom(product, ["name"]) || "Product",
-      batchNumber: stringFrom(item, ["batch_no", "batch_number"]) || stringFrom(product, ["batch_no", "batch_number"]) || "-",
-      manufacturingDate: dateValue(item, ["manufacturing_date", "mfg_date"]) || dateValue(product, ["manufacturing_date", "mfg_date"]),
-      expiryDate: dateValue(item, ["expiry_date"]) || dateValue(product, ["expiry_date"]),
-      scheduleType: stringFrom(item, ["schedule_type"]) || stringFrom(product, ["schedule_type"]) || "-",
-      hsnCode: stringFrom(item, ["hsn_code", "hsn"]) || stringFrom(product, ["hsn_code", "hsn"]) || "-",
+      batchNumber: stringFrom(item, ["batch_no", "batch_number"]) || "-",
+      manufacturingDate: dateValue(item, ["manufacturing_date", "mfg_date"]),
+      expiryDate: dateValue(item, ["expiry_date"]),
+      scheduleType: stringFrom(item, ["schedule_type"]) || "-",
+      hsnCode: stringFrom(item, ["hsn_code", "hsn"]) || "-",
       quantity,
       freeQuantity: numberFrom(item, ["free_quantity", "free_qty"]),
-      unit: stringFrom(item, ["unit"]) || stringFrom(product, ["unit"]) || "PCS",
-      mrp: numberFrom(item, ["mrp"]) || numberFrom(product, ["mrp", "price", "sale_rate"]) || rate,
+      unit: stringFrom(item, ["unit"]) || "PCS",
+      mrp: numberFrom(item, ["mrp"]) || rate,
       rate,
       discountPercent,
       discountAmount,
@@ -141,20 +188,25 @@ export function buildPrintInvoice({
   const igst = explicitIgst || mappedIgst || (!hasMappedTax && isInterstate ? taxTotal : 0)
 
   const invoiceNumber = stringFrom(invoice, ["invoice_number"]) || invoice.id
+  const invoiceDate = dateValue(invoice, ["created_at", "invoice_date"])
+  const businessName = stringFrom(organization, ["business_name", "name"]) || "Your Business"
+  const businessGstin = stringFrom(organization, ["gst_number", "gstin", "tax_id"]) || "-"
+  const customerName = stringFrom(customer, ["name"]) || stringFrom(invoice, ["customer_name"]) || "Walk-in customer"
+  const paymentStatus = stringFrom(invoice, ["payment_status", "status"]) || (dueAmount > 0 ? "unpaid" : "paid")
   void origin
 
   return {
     id: invoice.id,
     invoiceNumber,
     invoiceTitle: stringFrom(invoice, ["invoice_type"]) === "no_gst" ? "Bill of Supply" : "Tax Invoice",
-    invoiceDate: dateValue(invoice, ["created_at", "invoice_date"]),
+    invoiceDate,
     dueDate: dateValue(invoice, ["due_date"]),
     salesperson: stringFrom(invoice, ["salesperson", "salesperson_name"]) || "-",
     enterprise: {
       organizationId: stringFrom(organization, ["id"]) || stringFrom(invoice, ["organization_id"]),
-      name: stringFrom(organization, ["business_name", "name"]) || "Your Business",
+      name: businessName,
       businessType: stringFrom(organization, ["business_type", "industry", "business_category"]) || "Enterprise",
-      gstNumber: stringFrom(organization, ["gst_number", "gstin", "tax_id"]) || "-",
+      gstNumber: businessGstin,
       fssai: stringFrom(organization, ["fssai", "fssai_number"]) || "-",
       phone: stringFrom(organization, ["phone", "contact_phone"]) || "-",
       email: stringFrom(organization, ["email", "support_email"]) || "-",
@@ -165,7 +217,7 @@ export function buildPrintInvoice({
     },
     customer: {
       id: stringFrom(customer, ["customer_code", "id"]) || stringFrom(invoice, ["customer_id"]) || "-",
-      name: stringFrom(customer, ["name"]) || stringFrom(invoice, ["customer_name"]) || "Walk-in customer",
+      name: customerName,
       address: stringFrom(customer, ["address", "billing_address"]) || "-",
       phone: stringFrom(customer, ["phone"]) || "-",
       email: stringFrom(customer, ["email"]) || "-",
@@ -194,8 +246,20 @@ export function buildPrintInvoice({
     },
     terms: [],
     notes: stringFrom(invoice, ["notes"]),
-    qrValue: `BEZGROW-INVOICE:${invoiceNumber}:${grandTotal.toFixed(2)}`,
+    qrValue: buildInvoiceQrPayload({
+      business: businessName,
+      gstin: businessGstin,
+      invoiceNumber,
+      invoiceDate,
+      customer: customerName,
+      subtotal,
+      tax: cgst + sgst + igst,
+      grandTotal,
+      paymentStatus,
+      paid,
+      due: dueAmount,
+    }),
     barcodeValue: invoiceNumber,
-    watermark: stringFrom(organization, ["business_name", "name"]) || "BUSINESS",
+    watermark: businessName,
   }
 }

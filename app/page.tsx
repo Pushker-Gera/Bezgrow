@@ -2,9 +2,9 @@ import type { Metadata } from "next"
 import HomeClient from "./home-client"
 
 const siteUrl = "https://www.bezgrow.com"
-const title = "Bezgrow | Inventory Management, GST Billing & ERP Software"
+const title = "Bezgrow | Offline Billing & Inventory Software"
 const description =
-  "Bezgrow is a cloud-based inventory management, GST billing, retail POS and ERP software platform designed for retail, wholesale and service businesses."
+  "Professional local-first billing, invoicing and inventory management software for Windows and macOS. Work offline with business data stored on your own computer."
 const keywords = [
   "inventory management software",
   "GST billing software",
@@ -15,6 +15,12 @@ const keywords = [
   "invoice software",
   "inventory tracking software",
   "business management software",
+  "offline billing software",
+  "desktop billing software",
+  "billing software for Windows",
+  "billing software for Mac",
+  "offline inventory software",
+  "local-first ERP",
 ]
 
 export const metadata: Metadata = {
@@ -35,7 +41,7 @@ export const metadata: Metadata = {
         url: `${siteUrl}/opengraph-image`,
         width: 1200,
         height: 630,
-        alt: "Bezgrow cloud inventory management, GST billing, POS and ERP software",
+        alt: "Bezgrow offline billing and inventory management software for Windows and macOS",
       },
     ],
   },
@@ -58,13 +64,7 @@ const softwareApplicationSchema = {
   description,
   url: siteUrl,
   applicationCategory: "BusinessApplication",
-  operatingSystem: "Web",
-  offers: {
-    "@type": "Offer",
-    price: "0",
-    priceCurrency: "INR",
-    availability: "https://schema.org/InStock",
-  },
+  operatingSystem: "Windows, macOS",
   publisher: {
     "@type": "Organization",
     name: "Bezgrow",

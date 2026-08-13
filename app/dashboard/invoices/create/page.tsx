@@ -44,6 +44,9 @@ type Product = {
   barcode?: string | null
   batch_no?: string | null
   expiry_date?: string | null
+  hsn_code?: string | null
+  unit?: string | null
+  mrp?: number | null
   min_stock?: number | null
 }
 
@@ -101,6 +104,11 @@ type InvoiceItemPayload = {
   line_total: number
   gst_amount: number
   product_name: string
+  batch_no: string | null
+  expiry_date: string | null
+  hsn_code: string | null
+  unit: string | null
+  mrp: number | null
   stock_at_queue?: number
 }
 
@@ -301,7 +309,7 @@ export default function CreateInvoicePage() {
 
     return products
       .filter((product) =>
-        [product.name, product.sku, product.barcode, product.category]
+        [product.name, product.batch_no, product.hsn_code, product.sku, product.barcode, product.category]
           .filter(Boolean)
           .join(" ")
           .toLowerCase()
@@ -382,13 +390,14 @@ export default function CreateInvoicePage() {
     const product = products.find(
       (item) =>
         item.barcode?.toLowerCase() === code ||
+        item.batch_no?.toLowerCase() === code ||
         item.sku?.toLowerCase() === code
     )
 
     if (!product) {
       setNotice({
         title: "Barcode Not Found",
-        message: "No product matches this barcode or SKU.",
+        message: "No product matches this barcode or Batch No.",
         type: "warning",
       })
       return
@@ -557,6 +566,11 @@ export default function CreateInvoicePage() {
       invoice_id: localInvoiceId,
       product_id: item.product_id,
       product_name: item.product_name,
+      batch_no: item.batch_no,
+      expiry_date: item.expiry_date,
+      hsn_code: item.hsn_code,
+      unit: item.unit,
+      mrp: item.mrp,
       quantity: item.quantity,
       unit_price: item.unit_price,
       tax_percent: item.tax_percent,
@@ -676,6 +690,7 @@ export default function CreateInvoicePage() {
     }
 
     const invoiceItems: InvoiceItemPayload[] = items.map((item) => {
+      const product = productsMap.get(item.product_id)
       const lineBase = item.quantity * item.unit_price
       const discountAmount = (lineBase * item.discount_percent) / 100
       const discountedBase = lineBase - discountAmount
@@ -689,7 +704,12 @@ export default function CreateInvoicePage() {
         discount_percent: item.discount_percent,
         line_total: discountedBase,
         gst_amount: gstAmount,
-        product_name: productsMap.get(item.product_id)?.name || "",
+        product_name: product?.name || "",
+        batch_no: product?.batch_no?.trim() || null,
+        expiry_date: product?.expiry_date || null,
+        hsn_code: product?.hsn_code?.trim() || null,
+        unit: product?.unit?.trim() || null,
+        mrp: product?.mrp == null ? null : Number(product.mrp),
       }
     })
 
@@ -797,7 +817,10 @@ export default function CreateInvoicePage() {
         <div className="absolute bottom-[-180px] right-[-160px] h-[560px] w-[560px] rounded-full bg-blue-500/10 blur-[190px] animate-pulse" />
       </div>
 
-      <main className="relative z-10 mx-auto max-w-[1800px] space-y-5 px-4 py-4 sm:space-y-8 sm:px-5 sm:py-6 lg:px-8">
+      <main
+        className="relative z-10 mx-auto max-w-[1800px] space-y-5 px-4 py-4 sm:space-y-8 sm:px-5 sm:py-6 lg:px-8"
+        data-enter-navigation="true"
+      >
         <section className="inventory-sheen rounded-lg border border-white/10 bg-white/[0.035] p-5 shadow-[0_0_90px_rgba(0,0,0,0.5)] backdrop-blur-2xl sm:rounded-[40px] sm:p-8 lg:p-10">
           <div className="flex flex-col gap-8 xl:flex-row xl:items-end xl:justify-between">
             <div>
@@ -973,7 +996,7 @@ export default function CreateInvoicePage() {
                   <input
                     value={productSearch}
                     onChange={(event) => setProductSearch(event.target.value)}
-                    placeholder="Search product, SKU, barcode, or category"
+                    placeholder="Search product, Batch No., HSN, barcode, or category"
                     className={inputClass()}
                   />
                 </FieldLabel>
@@ -981,11 +1004,12 @@ export default function CreateInvoicePage() {
 
               <div className="mt-6 rounded-lg border border-cyan-400/20 bg-cyan-500/10 p-4 sm:rounded-[28px] sm:p-5">
                 <p className="text-xs font-bold uppercase tracking-[0.2em] text-cyan-200">
-                  Barcode / SKU
+                  Barcode / Batch No.
                 </p>
                 <div className="mt-4 grid grid-cols-1 gap-4 lg:grid-cols-[1fr,150px,180px]">
-                  <FieldLabel label="Barcode / SKU">
+                  <FieldLabel label="Barcode / Batch No.">
                     <input
+                      data-enter-navigation="false"
                       value={barcodeInput}
                       onChange={(event) => setBarcodeInput(event.target.value)}
                       onKeyDown={(event) => {
@@ -994,7 +1018,7 @@ export default function CreateInvoicePage() {
                           handleBarcodeScan()
                         }
                       }}
-                      placeholder="Scan barcode or type SKU, then press Enter"
+                      placeholder="Scan barcode or type Batch No., then press Enter"
                       className={inputClass()}
                     />
                   </FieldLabel>
@@ -1038,7 +1062,7 @@ export default function CreateInvoicePage() {
                             <option value="">Select product</option>
                             {productOptions.map((product) => (
                               <option key={product.id} value={product.id}>
-                                {product.name} {product.sku ? `- ${product.sku}` : ""} ({product.stock || 0} stock)
+                                {product.name} {product.batch_no ? `- Batch ${product.batch_no}` : ""} ({product.stock || 0} stock)
                               </option>
                             ))}
                           </select>
@@ -1099,7 +1123,7 @@ export default function CreateInvoicePage() {
                 </div>
               </div>
               <div className="mt-7 grid grid-cols-1 gap-3 sm:grid-cols-2">
-                <button onClick={() => void saveInvoice(false)} disabled={loading} className="h-14 rounded-lg bg-white text-base font-black text-black disabled:opacity-50 sm:h-16 sm:rounded-2xl sm:text-lg">
+                <button data-enter-primary onClick={() => void saveInvoice(false)} disabled={loading} className="h-14 rounded-lg bg-white text-base font-black text-black disabled:opacity-50 sm:h-16 sm:rounded-2xl sm:text-lg">
                   {loading ? "Saving..." : "Save Bill"}
                 </button>
                 <button onClick={() => void saveInvoice(true)} disabled={loading} className="h-14 rounded-lg bg-gradient-to-r from-cyan-400 to-blue-600 text-base font-black text-black shadow-[0_20px_70px_rgba(34,211,238,0.28)] disabled:opacity-50 sm:h-16 sm:rounded-2xl sm:text-lg">

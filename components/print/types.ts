@@ -14,7 +14,6 @@ export type PrintSettings = {
   showGstDetails: boolean
   showSignature: boolean
   showWatermark: boolean
-  blackAndWhite: boolean
   pharmaMode: boolean
   autoPrintAfterSave: boolean
 }

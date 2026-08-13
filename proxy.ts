@@ -13,6 +13,7 @@ const desktopServerBuild = process.env.BEZGROW_DESKTOP_BUILD === "1"
 
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL?.trim()
 const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY?.trim()
+const privateHeaders = { "Cache-Control": "no-store", "X-Robots-Tag": "noindex, nofollow, noarchive" }
 
 type ProfileGate = {
   role: string | null
@@ -63,20 +64,20 @@ export async function proxy(request: NextRequest) {
   if (localDesktopHost && adminRoute) {
     const pageSession = request.cookies.get(DESKTOP_ADMIN_PAGE_COOKIE)?.value
     if (desktopServerBuild && verifyDesktopAdminPageSession(pageSession)) {
-      return NextResponse.next({ request })
+      return NextResponse.next({ request, headers: privateHeaders })
     }
     return new NextResponse("Platform Administration is available only inside an authorized Bezgrow desktop application.", {
       status: 403,
-      headers: { "Cache-Control": "no-store", "Content-Type": "text/plain; charset=utf-8" },
+      headers: { ...privateHeaders, "Content-Type": "text/plain; charset=utf-8" },
     })
   }
 
   if (localDesktopHost && desktopAuthMarked && protectedRoute) {
-    return NextResponse.next()
+    return NextResponse.next({ headers: privateHeaders })
   }
 
   if (localDesktopHost && desktopServerBuild && protectedRoute) {
-    return NextResponse.next()
+    return NextResponse.next({ headers: privateHeaders })
   }
 
   if (localDesktopHost && protectedRoute) {
@@ -94,7 +95,7 @@ export async function proxy(request: NextRequest) {
   if (adminRoute) {
     return new NextResponse("Platform Administration is available only inside an authorized Bezgrow desktop application.", {
       status: 403,
-      headers: { "Cache-Control": "no-store", "Content-Type": "text/plain; charset=utf-8" },
+      headers: { ...privateHeaders, "Content-Type": "text/plain; charset=utf-8" },
     })
   }
 

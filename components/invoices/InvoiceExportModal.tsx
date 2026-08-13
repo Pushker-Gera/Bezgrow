@@ -461,7 +461,7 @@ export function InvoiceExportModal(props: Props) {
           </div>
           {reportShare && (
             <div className="fixed inset-0 z-[110] grid place-items-center overflow-y-auto bg-black/80 p-4 backdrop-blur-xl" role="presentation">
-              <section className="grid w-full max-w-lg gap-4 rounded-3xl border border-white/10 bg-[#080d16] p-5 shadow-2xl" role="dialog" aria-modal="true" aria-label="Local report sharing">
+              <section data-enter-navigation="true" className="grid w-full max-w-lg gap-4 rounded-3xl border border-white/10 bg-[#080d16] p-5 shadow-2xl" role="dialog" aria-modal="true" aria-label="Local report sharing">
                 <div>
                   <p className="text-xs font-black uppercase tracking-[0.18em] text-cyan-200">{reportShare.channel === "whatsapp" ? "WhatsApp Report" : "Email Report"}</p>
                   <h3 className="mt-2 text-2xl font-black">Prepare local PDF share</h3>
@@ -480,7 +480,7 @@ export function InvoiceExportModal(props: Props) {
                 <div className="grid gap-2 sm:grid-cols-2">
                   <button className="report-action" onClick={() => void saveReport()}>Save PDF</button>
                   <button className="report-action" onClick={() => void copyReportShareMessage()}>{reportShare.channel === "email" ? "Copy Email Message" : "Copy prepared message"}</button>
-                  <button className="report-action primary" onClick={() => void openPreparedReportMessage()} disabled={reportShare.busy}>{reportShare.busy ? "Opening..." : reportShare.channel === "email" ? "Open Email Draft" : "Open WhatsApp"}</button>
+                  <button data-enter-primary="true" className="report-action primary" onClick={() => void openPreparedReportMessage()} disabled={reportShare.busy}>{reportShare.busy ? "Opening..." : reportShare.channel === "email" ? "Open Email Draft" : "Open WhatsApp"}</button>
                   <button className="report-action" onClick={() => setReportShare(null)} disabled={reportShare.busy}>Close</button>
                 </div>
               </section>
@@ -496,7 +496,7 @@ export function InvoiceExportModal(props: Props) {
 
   return (
     <div className="fixed inset-0 z-[80] overflow-y-auto bg-black/80 p-3 backdrop-blur-xl sm:p-6" role="presentation">
-      <section className="mx-auto max-w-6xl rounded-[28px] border border-white/10 bg-[#080c12] p-4 text-white shadow-2xl sm:p-6" role="dialog" aria-modal="true" aria-labelledby="invoice-export-title">
+      <section data-enter-navigation="true" className="mx-auto max-w-6xl rounded-[28px] border border-white/10 bg-[#080c12] p-4 text-white shadow-2xl sm:p-6" role="dialog" aria-modal="true" aria-labelledby="invoice-export-title">
         <header className="flex flex-col gap-4 border-b border-white/10 pb-5 sm:flex-row sm:items-start sm:justify-between">
           <div>
             <p className="text-xs font-black uppercase tracking-[0.18em] text-cyan-200">{props.kind === "csv" ? "Structured Offline Export" : "Professional PDF Report"}</p>
@@ -605,7 +605,7 @@ export function InvoiceExportModal(props: Props) {
                 <button onClick={() => void prepareData(props.kind === "pdf" && (reportOptions.includeLineItems || reportOptions.reportType === "detailed-lines"))} disabled={Boolean(busy)} className="h-12 rounded-xl border border-white/10 bg-white/[0.06] font-black">
                   {busy === "preview" ? "Preparing..." : props.kind === "csv" ? "Preview Data" : "Preview Report"}
                 </button>
-                <button onClick={props.kind === "csv" ? () => void exportCsvFile() : () => void generatePdfReport()} disabled={Boolean(busy) || dataset?.summary.invoiceCount === 0} className="h-12 rounded-xl bg-white font-black text-black disabled:opacity-50">
+                <button data-enter-primary="true" onClick={props.kind === "csv" ? () => void exportCsvFile() : () => void generatePdfReport()} disabled={Boolean(busy) || dataset?.summary.invoiceCount === 0} className="h-12 rounded-xl bg-white font-black text-black disabled:opacity-50">
                   {props.kind === "csv" ? (busy === "csv" ? "Exporting..." : "Export CSV") : (busy === "pdf" ? "Generating..." : "Generate PDF")}
                 </button>
                 <button onClick={reset} disabled={Boolean(busy)} className="h-11 rounded-xl border border-white/10 text-sm font-black">Reset Filters</button>

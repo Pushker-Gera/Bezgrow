@@ -1006,7 +1006,13 @@ function CustomerFormModal({
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 p-2 backdrop-blur-sm sm:p-4">
-      <div className="max-h-[calc(100dvh-16px)] w-full max-w-3xl overflow-y-auto rounded-lg border border-white/10 bg-[#050606] shadow-2xl inventory-sheen sm:max-h-[calc(100vh-32px)]">
+      <div
+        className="max-h-[calc(100dvh-16px)] w-full max-w-3xl overflow-y-auto rounded-lg border border-white/10 bg-[#050606] shadow-2xl inventory-sheen sm:max-h-[calc(100vh-32px)]"
+        role="dialog"
+        aria-modal="true"
+        aria-label={editMode ? "Edit customer" : "Add customer"}
+        data-enter-navigation="true"
+      >
         <div className="sticky top-0 z-30 flex items-center justify-between border-b border-white/10 bg-[#050606]/95 p-4 backdrop-blur-xl sm:p-5">
           <div>
             <p className="text-xs uppercase tracking-[0.18em] text-sky-300">Customer Account</p>
@@ -1039,7 +1045,7 @@ function CustomerFormModal({
               <option value="distributor">Distributor</option>
             </select>
           </SelectShell>
-          <textarea className={`${inputClass} min-h-28 md:col-span-2`} placeholder="Billing address" value={form.address} onChange={(event) => onChange("address", event.target.value)} />
+          <textarea data-enter-empty-advance="true" className={`${inputClass} min-h-28 md:col-span-2`} placeholder="Billing address" value={form.address} onChange={(event) => onChange("address", event.target.value)} />
         </div>
 
         <div className="mx-4 rounded-lg border border-emerald-400/20 bg-emerald-400/10 p-4 text-sm text-emerald-100 sm:mx-5">
@@ -1051,6 +1057,7 @@ function CustomerFormModal({
           <button
             disabled={saving}
             onClick={onSave}
+            data-enter-primary
             className="w-full rounded-lg bg-gradient-to-r from-sky-300 to-emerald-300 px-5 py-4 font-black text-black disabled:opacity-60"
           >
             {saving ? "Saving..." : editMode ? "Save Customer" : "Create Customer"}

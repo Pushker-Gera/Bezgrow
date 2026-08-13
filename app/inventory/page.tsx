@@ -11,11 +11,11 @@ export default function InventoryPage() {
   return (
     <FeaturePage
       eyebrow="Inventory management"
-      title="Cloud inventory software for stock, batches, warehouses, and suppliers."
-      description="Track product movement, low stock, batches, expiry dates, warehouses, purchase readiness, and inventory value from one fast business workspace."
+      title="Offline inventory software for stock, batches, warehouses, and suppliers."
+      description="Track product movement, low stock, batches, expiry dates, warehouses, purchase readiness, and inventory value locally on your Windows or Mac computer."
       highlights={["Stock tracking", "Batch and expiry", "Supplier records", "Warehouse movement", "Low-stock alerts", "Inventory valuation"]}
       workflows={["Create products", "Track stock movement", "Monitor inventory health"]}
-      metrics={[["Stock", "Realtime"], ["Batches", "Ready"], ["Warehouses", "Multi"]]}
+      metrics={[["Storage", "Local"], ["Batches", "Ready"], ["Offline", "Yes"]]}
     />
   )
 }

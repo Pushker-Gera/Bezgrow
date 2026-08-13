@@ -23,6 +23,7 @@ type ProductRow = {
     warehouse: string | null
     manufacturer: string | null
     price: number | null
+    hsn_code: string | null
     stock: number | null
     batch_no: string | null
     mrp: number | null
@@ -57,7 +58,8 @@ type ProductForm = {
     name: string
     description: string
     manufacturer: string
-    sku: string
+    legacySku: string
+    hsnCode: string
     barcode: string
     category: string
     unit: string
@@ -109,7 +111,8 @@ const emptyForm: ProductForm = {
     name: "",
     description: "",
     manufacturer: "",
-    sku: "",
+    legacySku: "",
+    hsnCode: "",
     barcode: "",
     category: "",
     unit: "pcs",
@@ -237,7 +240,8 @@ function formFromProduct(product: ProductRow): ProductForm {
         name: product.name || "",
         description: product.description || "",
         manufacturer: product.manufacturer || "",
-        sku: product.sku || "",
+        legacySku: product.sku || "",
+        hsnCode: product.hsn_code || "",
         barcode: product.barcode || "",
         category: product.category || "",
         unit: product.unit || "pcs",
@@ -496,7 +500,10 @@ export default function ProductsPage() {
             name: form.name.trim(),
             description: form.description.trim() || null,
             manufacturer: form.manufacturer.trim() || null,
-            sku: form.sku.trim() || null,
+            // Existing internal SKU values remain available to legacy code, but
+            // Batch No. is the ordinary product workflow and UUID is the identity.
+            sku: form.legacySku.trim() || null,
+            hsn_code: form.hsnCode.trim() || null,
             barcode: form.barcode.trim() || null,
             category: form.category.trim() || null,
             unit: form.unit || "pcs",
@@ -668,7 +675,8 @@ export default function ProductsPage() {
 
             return {
                 name: product.name,
-                sku: product.sku || "",
+                batchNumber: product.batch_no || "",
+                hsnCode: product.hsn_code || "",
                 barcode: product.barcode || "",
                 category: product.category || "",
                 supplier: product.supplier || "",
@@ -687,7 +695,8 @@ export default function ProductsPage() {
         try {
             const result = await exportCsv(`bezgrow-products-${new Date().toISOString().slice(0, 10)}.csv`, [
                 { header: "Name", value: "name" },
-                { header: "SKU", value: "sku", preserveLeadingZeros: true },
+                { header: "Batch No.", value: "batchNumber", preserveLeadingZeros: true },
+                { header: "HSN / SAC Code", value: "hsnCode", preserveLeadingZeros: true },
                 { header: "Barcode", value: "barcode", preserveLeadingZeros: true },
                 { header: "Category", value: "category" },
                 { header: "Supplier", value: "supplier" },
@@ -840,7 +849,7 @@ export default function ProductsPage() {
 
     const erpModules = [
         "Product records",
-        "SKU and barcode control",
+        "Batch and barcode control",
         "Pricing and GST",
         "Supplier mapping",
         "Warehouse labels",
@@ -878,7 +887,7 @@ export default function ProductsPage() {
                             </h1>
 
                             <p className="mt-4 max-w-4xl text-base leading-7 text-neutral-300">
-                                A professional product list for SKUs, pricing, GST,
+                                A professional product list for batch data, pricing, GST,
                                 batches, expiry, suppliers, warehouse labels, billing
                                 readiness, and stock audit trails.
                             </p>
@@ -886,7 +895,7 @@ export default function ProductsPage() {
 
                         <div className="grid gap-3 sm:grid-cols-3">
                             {[
-                                `${analytics.totalProducts} active SKUs`,
+                                `${analytics.totalProducts} active products`,
                                 `${analytics.suppliersCount} suppliers`,
                                 `${productHealth}% stock health`,
                             ].map((signal) => (
@@ -910,7 +919,7 @@ export default function ProductsPage() {
                             <input
                                 value={search}
                                 onChange={(event) => setSearch(event.target.value)}
-                                placeholder="Search product, SKU, category, supplier"
+                                placeholder="Search product, batch, HSN, category, supplier"
                                 className="h-14 min-w-0 rounded-lg border border-white/10 bg-black/60 px-5 text-base outline-none transition-all placeholder:text-neutral-500 focus:border-sky-300/60 focus:ring-2 focus:ring-sky-400/10"
                             />
                             <div className="relative min-w-0">
@@ -1059,7 +1068,7 @@ export default function ProductsPage() {
                                             <div className="min-w-0">
                                                 <h3 className="truncate text-base font-black text-white">{product.name}</h3>
                                                 <p className="mt-1 truncate text-xs text-neutral-500">
-                                                    SKU {product.sku || "N/A"} | {product.category || "General"}
+                                                    Batch No. {product.batch_no || "-"} | {product.category || "General"}
                                                 </p>
                                             </div>
                                             <span className={`shrink-0 rounded-full border px-3 py-1 text-xs font-black ${stock <= 0
@@ -1173,7 +1182,8 @@ export default function ProductsPage() {
                                                 <td className="rounded-l-lg px-3 py-4">
                                                     <p className="font-semibold text-white">{product.name}</p>
                                                     <div className="mt-1 flex flex-wrap gap-2 text-xs text-neutral-500">
-                                                        <span>SKU: {product.sku || "N/A"}</span>
+                                                        <span>Batch No.: {product.batch_no || "-"}</span>
+                                                        {product.hsn_code && <span>HSN/SAC: {product.hsn_code}</span>}
                                                         {product.barcode && <span>Barcode: {product.barcode}</span>}
                                                     </div>
                                                 </td>
@@ -1358,7 +1368,6 @@ export default function ProductsPage() {
                     saving={saving}
                     editMode={Boolean(editProduct)}
                     hasBarcodeScanning={hasBarcodeScanning}
-                    hasBatchTracking={hasBatchTracking}
                     hasShippingLabels={hasShippingLabels}
                     hasSerialNumbers={hasSerialNumbers}
                     hasVariants={hasVariants}
@@ -1421,7 +1430,6 @@ function ProductFormModal({
     saving,
     editMode,
     hasBarcodeScanning,
-    hasBatchTracking,
     hasShippingLabels,
     hasSerialNumbers,
     hasVariants,
@@ -1435,7 +1443,6 @@ function ProductFormModal({
     saving: boolean
     editMode: boolean
     hasBarcodeScanning: boolean
-    hasBatchTracking: boolean
     hasShippingLabels: boolean
     hasSerialNumbers: boolean
     hasVariants: boolean
@@ -1451,7 +1458,13 @@ function ProductFormModal({
 
     return (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 p-2 backdrop-blur-sm sm:p-4">
-            <div className="relative max-h-[calc(100dvh-16px)] w-full max-w-6xl overflow-y-auto overscroll-contain rounded-lg border border-white/10 bg-[#050606] shadow-2xl inventory-sheen sm:max-h-[calc(100vh-32px)]">
+            <div
+                className="relative max-h-[calc(100dvh-16px)] w-full max-w-6xl overflow-y-auto overscroll-contain rounded-lg border border-white/10 bg-[#050606] shadow-2xl inventory-sheen sm:max-h-[calc(100vh-32px)]"
+                role="dialog"
+                aria-modal="true"
+                aria-label={editMode ? "Edit product" : "Add product"}
+                data-enter-navigation="true"
+            >
                 <div className="sticky top-0 z-30 flex items-center justify-between gap-4 border-b border-white/10 bg-[#050606]/95 p-4 backdrop-blur-xl sm:p-5">
                     <div>
                         <p className="text-xs uppercase tracking-[0.18em] text-sky-300">
@@ -1481,21 +1494,22 @@ function ProductFormModal({
                             Identity
                         </h3>
                         <input className={inputClass} placeholder="Product name" value={form.name} onChange={(event) => onChange("name", event.target.value)} />
-                        <textarea className={`${inputClass} min-h-28`} placeholder="Description" value={form.description} onChange={(event) => onChange("description", event.target.value)} />
+                        <textarea data-enter-empty-advance="true" className={`${inputClass} min-h-28`} placeholder="Description" value={form.description} onChange={(event) => onChange("description", event.target.value)} />
                         <input className={inputClass} placeholder="Manufacturer / Brand" value={form.manufacturer} onChange={(event) => onChange("manufacturer", event.target.value)} />
                         <input className={inputClass} placeholder="Category" value={form.category} onChange={(event) => onChange("category", event.target.value)} />
                         {hasVariants && (
                             <div className="rounded-lg border border-sky-400/20 bg-sky-400/10 p-3 text-xs text-sky-100">
-                                Variant-ready: create separate SKUs for each size, color, or package variant.
+                                Variant-ready: create a separate product record for each size, color, or package variant.
                             </div>
                         )}
                     </section>
 
                     <section className="space-y-3">
                         <h3 className="text-sm font-bold uppercase tracking-[0.16em] text-neutral-400">
-                            SKU and Supply
+                            Batch and Supply
                         </h3>
-                        <input className={inputClass} placeholder="SKU" value={form.sku} onChange={(event) => onChange("sku", event.target.value)} />
+                        <input className={inputClass} aria-label="Batch No." placeholder="BATCH NO." value={form.batchNo} onChange={(event) => onChange("batchNo", event.target.value)} />
+                        <input className={inputClass} aria-label="HSN or SAC Code" placeholder="HSN / SAC Code" value={form.hsnCode} onChange={(event) => onChange("hsnCode", event.target.value)} />
                         {hasBarcodeScanning && (
                             <input className={inputClass} placeholder="Barcode" value={form.barcode} onChange={(event) => onChange("barcode", event.target.value)} />
                         )}
@@ -1524,7 +1538,7 @@ function ProductFormModal({
                         )}
                         {hasShippingLabels && (
                             <div className="rounded-lg border border-sky-400/20 bg-sky-400/10 p-3 text-xs text-sky-100">
-                                Shipping-label workflow is available from billing and order modules.
+                                Shipping-label workflow is available from billing.
                             </div>
                         )}
                     </section>
@@ -1542,9 +1556,6 @@ function ProductFormModal({
                             <input className={inputClass} type="number" placeholder="GST %" value={form.gst} onChange={(event) => onChange("gst", event.target.value)} />
                         </div>
                         <input className={inputClass} type="number" placeholder="Fallback price" value={form.price} onChange={(event) => onChange("price", event.target.value)} />
-                        {hasBatchTracking && (
-                            <input className={inputClass} placeholder="Batch number" value={form.batchNo} onChange={(event) => onChange("batchNo", event.target.value)} />
-                        )}
                         <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
                             <label className="text-xs text-neutral-400">
                                 Expiry date
@@ -1583,6 +1594,7 @@ function ProductFormModal({
                     <button
                         disabled={saving}
                         onClick={onSave}
+                        data-enter-primary
                         className="w-full rounded-lg bg-gradient-to-r from-sky-300 to-emerald-300 px-5 py-4 font-black text-black transition-all hover:shadow-lg hover:shadow-sky-500/20 disabled:cursor-not-allowed disabled:opacity-60"
                     >
                         {saving ? "Saving..." : editMode ? "Save Product Changes" : "Create Product"}
@@ -1620,7 +1632,7 @@ function ProductDetailsModal({
                         </p>
                         <h2 className="mt-2 text-3xl font-black">{product.name}</h2>
                         <p className="mt-1 text-sm text-neutral-500">
-                            SKU {product.sku || "N/A"} | {product.category || "General"}
+                            Batch No. {product.batch_no || "-"} | {product.category || "General"}
                         </p>
                     </div>
                     <button
@@ -1653,7 +1665,8 @@ function ProductDetailsModal({
                         ["Supplier", product.supplier || "-"],
                         ["Warehouse", product.warehouse || "Main Warehouse"],
                         ["Barcode", product.barcode || "-"],
-                        ["Batch", product.batch_no || "-"],
+                        ["Batch No.", product.batch_no || "-"],
+                        ["HSN / SAC", product.hsn_code || "-"],
                         ["Unit", product.unit || "pcs"],
                         ["Purchase Rate", money(purchase)],
                         ["Sale Rate", money(sale)],

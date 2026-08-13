@@ -59,7 +59,7 @@ export const featureRegistry: Record<FeatureKey, FeatureDefinition> = {
   barcode_scanning: {
     key: "barcode_scanning",
     label: "Barcode scanning",
-    description: "Scan SKU and barcode values for retail checkout and stock lookup.",
+    description: "Scan batch and barcode values for retail checkout and stock lookup.",
     category: "inventory",
     requiresPlan: "starter",
   },

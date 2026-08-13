@@ -24,7 +24,6 @@ type BillingMetrics = {
   lowStockCount: number
   customerCount: number
   productCount: number
-  orderCount: number
 }
 
 type WeeklyBar = {
@@ -56,7 +55,6 @@ const emptyBillingMetrics: BillingMetrics = {
   lowStockCount: 0,
   customerCount: 0,
   productCount: 0,
-  orderCount: 0,
 }
 
 function numberFrom(row: Record<string, unknown>, fields: string[]) {
@@ -260,7 +258,7 @@ export default function BillingPage() {
                     ["Avg Invoice", money(analytics.avgInvoice)],
                     ["Tax Ledger", money(analytics.tax)],
                     ["Customers", analytics.customerCount],
-                    ["Orders", analytics.orderCount],
+                    ["Invoices", analytics.invoiceCount],
                     ["Products", analytics.productCount],
                     ["Low Stock", analytics.lowStockCount],
                   ].map(([label, value]) => (

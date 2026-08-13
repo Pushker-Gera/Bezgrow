@@ -32,7 +32,7 @@ export async function generateMetadata({ params }: SeoPageProps): Promise<Metada
       "Bezgrow",
       "inventory management software",
       "GST billing software",
-      "ERP software",
+      "offline billing software",
       "retail POS software",
       "business management software",
     ],
@@ -82,14 +82,9 @@ export default async function SeoLandingPage({ params }: SeoPageProps) {
     "@type": "SoftwareApplication",
     name: "Bezgrow",
     applicationCategory: "BusinessApplication",
-    operatingSystem: "Web",
+    operatingSystem: "Windows, macOS",
     url: `${siteUrl}/${page.slug}`,
     description: page.metaDescription,
-    offers: {
-      "@type": "Offer",
-      price: "0",
-      priceCurrency: "INR",
-    },
     publisher: {
       "@type": "Organization",
       name: "Bezgrow",
@@ -105,7 +100,7 @@ export default async function SeoLandingPage({ params }: SeoPageProps) {
           <BezgrowLogoMark className="h-11 w-11" size={44} />
           <span>
             <span className="block text-lg font-black">Bezgrow</span>
-            <span className="block text-xs uppercase tracking-[0.18em] text-white/45">Business Cloud</span>
+            <span className="block text-xs uppercase tracking-[0.18em] text-white/45">Local-first desktop</span>
           </span>
         </Link>
         <nav className="hidden items-center gap-2 rounded-full border border-white/10 bg-white/[0.04] px-2 py-2 md:flex" aria-label="SEO page navigation">

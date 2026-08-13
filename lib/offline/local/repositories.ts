@@ -329,6 +329,10 @@ function invoiceItemRow(input: DataRow, organizationId: string, index = 0) {
     product_name: text(input, ["product_name"]),
     description: text(input, ["description"]),
     hsn_code: text(input, ["hsn_code", "hsn"]),
+    batch_no: text(input, ["batch_no", "batch_number"]),
+    expiry_date: text(input, ["expiry_date"]),
+    unit: text(input, ["unit"]),
+    mrp: sqlValue(input.mrp),
     quantity: number(input, ["quantity"], 0),
     unit_price: number(input, ["unit_price"], 0),
     tax_percent: number(input, ["tax_percent", "gst"], 0),
@@ -1300,8 +1304,8 @@ export async function queryNormalizedProducts(organizationId: string, query: Nor
   const search = query.search.trim()
   if (search) {
     const term = likeTerm(search)
-    where.push("(p.name LIKE ? COLLATE NOCASE OR p.sku LIKE ? COLLATE NOCASE OR p.category LIKE ? COLLATE NOCASE OR p.supplier LIKE ? COLLATE NOCASE OR p.barcode LIKE ? COLLATE NOCASE)")
-    values.push(term, term, term, term, term)
+    where.push("(p.name LIKE ? COLLATE NOCASE OR p.batch_no LIKE ? COLLATE NOCASE OR p.hsn_code LIKE ? COLLATE NOCASE OR p.sku LIKE ? COLLATE NOCASE OR p.category LIKE ? COLLATE NOCASE OR p.supplier LIKE ? COLLATE NOCASE OR p.barcode LIKE ? COLLATE NOCASE)")
+    values.push(term, term, term, term, term, term, term)
   }
   if (query.category && query.category !== "all") {
     where.push("(p.category = ? OR p.category_id = ?)")

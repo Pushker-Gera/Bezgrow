@@ -11,6 +11,7 @@ type ProductRow = {
     id: string
     name: string | null
     sku: string | null
+    batch_no: string | null
     category: string | null
     stock: number | null
     min_stock: number | null
@@ -31,7 +32,6 @@ type DashboardState = {
         customers: number
         invoices: number
         warehouses: number
-        orders: number
     }
     summaryMetrics: {
         totalRevenue: number
@@ -43,8 +43,6 @@ type DashboardState = {
         inventoryValue: number
         costValue: number
         potentialProfit: number
-        pendingOrders: number
-        fulfillmentRate: number
         inventoryHealth: number
         collectionRate: number
         erpHealth: number
@@ -65,7 +63,6 @@ const emptyDashboard: DashboardState = {
         customers: 0,
         invoices: 0,
         warehouses: 0,
-        orders: 0,
     },
     summaryMetrics: {
         totalRevenue: 0,
@@ -77,8 +74,6 @@ const emptyDashboard: DashboardState = {
         inventoryValue: 0,
         costValue: 0,
         potentialProfit: 0,
-        pendingOrders: 0,
-        fulfillmentRate: 0,
         inventoryHealth: 100,
         collectionRate: 0,
         erpHealth: 0,
@@ -169,7 +164,6 @@ export default function Dashboard() {
                     customers: Number(payload.metrics?.customerCount || 0),
                     invoices: Number(payload.metrics?.invoiceCount || 0),
                     warehouses: Number(payload.metrics?.warehouseCount || 0),
-                    orders: Number(payload.metrics?.orderCount || 0),
                 },
                 summaryMetrics: {
                     ...emptyDashboard.summaryMetrics,
@@ -186,11 +180,10 @@ export default function Dashboard() {
                 return
             }
 
-            const [products, customers, invoices, orders, movements] = await Promise.all([
+            const [products, customers, invoices, movements] = await Promise.all([
                 getOfflineData<ProductRow[]>(organizationId, "products", []),
                 getOfflineData<AnyRow[]>(organizationId, "customers", []),
                 getOfflineData<AnyRow[]>(organizationId, "invoices", []),
-                getOfflineData<AnyRow[]>(organizationId, "orders", []),
                 getOfflineData<AnyRow[]>(organizationId, "stock_movements", []),
             ])
             const today = new Date()
@@ -233,7 +226,6 @@ export default function Dashboard() {
                     customers: customers.length,
                     invoices: invoices.length,
                     warehouses: 0,
-                    orders: orders.length,
                 },
                 summaryMetrics: {
                     ...emptyDashboard.summaryMetrics,
@@ -246,8 +238,6 @@ export default function Dashboard() {
                     inventoryValue,
                     costValue,
                     potentialProfit: inventoryValue - costValue,
-                    pendingOrders: orders.filter((order) => stringFrom(order, ["status"]).toLowerCase() === "pending").length,
-                    fulfillmentRate: 0,
                     inventoryHealth,
                     collectionRate,
                     erpHealth: Math.round((inventoryHealth + collectionRate) / 2),
@@ -331,7 +321,7 @@ export default function Dashboard() {
         {
             label: "Business Health",
             value: `${metrics.erpHealth}%`,
-            meta: `${metrics.fulfillmentRate}% fulfillment`,
+            meta: `${metrics.collectionRate}% collection`,
             accent: "from-amber-200 to-yellow-500",
             valueClass: "text-amber-200",
             href: "/dashboard/charts",
@@ -343,7 +333,6 @@ export default function Dashboard() {
         ["Products", "/dashboard/products", "Stock list"],
         ["Stock", "/dashboard/inventory", "Inventory"],
         ["Customers", "/dashboard/customers", "Customer list"],
-        ["Orders", "/dashboard/orders", "Delivery"],
         ["Reports", "/dashboard/charts", "Analytics"],
     ]
 
@@ -426,7 +415,7 @@ export default function Dashboard() {
                             </h1>
                             <p className="mt-4 max-w-4xl text-base leading-7 text-neutral-300">
                                 Live business control for {dashboard.organizationName}: sales,
-                                stock, collections, customers, orders, and daily activity.
+                                stock, collections, customers, invoices, and daily activity.
                             </p>
                         </div>
 
@@ -555,10 +544,10 @@ export default function Dashboard() {
                                 </div>
                                 <div className="rounded-lg border border-white/10 bg-white/[0.04] px-4 py-3">
                                     <p className="text-sm font-black text-amber-200">
-                                        {metrics.fulfillmentRate}%
+                                        {metrics.pendingInvoices}
                                     </p>
                                     <p className="text-[10px] uppercase tracking-[0.12em] text-neutral-500">
-                                        orders
+                                        pending
                                     </p>
                                 </div>
                             </div>
@@ -613,7 +602,7 @@ export default function Dashboard() {
                                         <div className="min-w-0">
                                             <p className="truncate font-semibold">{product.name || "Product"}</p>
                                             <p className="text-xs text-neutral-500">
-                                                SKU {product.sku || "N/A"}
+                                                Batch No. {product.batch_no || "-"}
                                             </p>
                                         </div>
                                         <p className="text-xl font-black text-red-200">

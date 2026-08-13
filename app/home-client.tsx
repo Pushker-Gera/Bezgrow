@@ -14,12 +14,12 @@ const capabilityGroups = [
   ["Admin", "Licenses, businesses, analytics, launch controls"],
 ]
 
-const signals = ["Realtime stock", "Smart invoices", "License access", "Mobile ready", "Global operations", "Thermal POS"]
+const signals = ["Offline ready", "Local SQLite", "Smart invoices", "Licence access", "Windows & macOS", "Thermal POS"]
 
 const seoSections = [
   [
     "Inventory Management Software",
-    "Manage stock, batches, suppliers, warehouses, expiry tracking, purchase orders, and inventory movement in the local desktop app.",
+    "Manage stock, batches, suppliers, warehouses, expiry tracking, purchases, and inventory movement in the local desktop app.",
   ],
   [
     "GST Billing Software",
@@ -152,7 +152,7 @@ export default function HomeClient() {
               Inventory Management, GST Billing & ERP Software for Modern Businesses
             </h1>
             <p className="mx-auto mt-5 max-w-3xl text-center text-sm leading-7 text-white/62 sm:mt-6 sm:text-lg sm:leading-8">
-              Bezgrow keeps inventory, billing, customers, orders, and reports in a private SQLite database on your desktop while licensing and updates stay online.
+              Professional offline-first billing and inventory software built for fast everyday business operations. Your products, customers, invoices, stock, and reports stay in a private SQLite database on your computer.
             </p>
             <div className="mt-7 flex w-full flex-col gap-3 sm:mt-8 sm:w-auto sm:flex-row">
               <button onClick={() => router.push("/signup")} className="h-12 w-full rounded-2xl bg-cyan-300 px-6 font-black text-black shadow-[0_0_44px_rgba(34,211,238,0.25)] transition hover:-translate-y-0.5 hover:bg-cyan-200 sm:h-14 sm:w-auto sm:px-8">
@@ -248,7 +248,7 @@ export default function HomeClient() {
       </section>
 
       <footer className="border-t border-white/10 px-5 py-8 text-center text-sm text-white/45 lg:px-8">
-        <p>Bezgrow - Cloud Inventory Management, GST Billing, Retail POS, Wholesale Inventory, and ERP Software.</p>
+        <p>Bezgrow — local-first billing, GST invoicing, inventory and stock management software for Windows and macOS.</p>
       </footer>
     </>
   )

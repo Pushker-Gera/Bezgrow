@@ -1,7 +1,7 @@
 {
   "name": "Bezgrow",
   "short_name": "Bezgrow",
-  "description": "Cloud Inventory Management, Billing, POS and ERP Software",
+  "description": "Local-first billing, invoicing and inventory software for Windows and macOS",
   "id": "/",
   "start_url": "/",
   "scope": "/",

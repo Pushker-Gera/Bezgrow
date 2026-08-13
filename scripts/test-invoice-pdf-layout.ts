@@ -7,7 +7,9 @@ import { defaultPrintSettings } from "../components/print/settings/defaults"
 import type { PrintFormat, PrintInvoice } from "../components/print/types"
 
 const PT_PER_MM = 72 / 25.4
-const logo = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAYAAABytg0kAAAAFElEQVR42mP8z8Dwn4GBgYGJAQoAHgQCAelx2VQAAAAASUVORK5CYII="
+// Deliberately wide (5:1) business logo fixture: contain-fit rendering must
+// preserve this aspect ratio in every professional invoice format.
+const logo = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAA4QAAAC0CAMAAAD7AhI5AAAAA1BMVEUIf1v9d4EnAAAACXBIWXMAAAPoAAAD6AG1e1JrAAAAtElEQVR42u3BMQEAAADCoPVPbQ0PoAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAB+DXmiAAFnVcQYAAAAAElFTkSuQmCC"
 
 export function invoice(itemCount: number, gst: boolean): PrintInvoice {
   const items = Array.from({ length: itemCount }, (_, index) => {
@@ -90,8 +92,20 @@ export function invoice(itemCount: number, gst: boolean): PrintInvoice {
     },
     terms: ["Goods once sold will not be returned.", "Payment is due by the stated due date."],
     notes: "Representative print layout regression invoice.",
-    qrValue: `BEZGROW:INV-LAYOUT-${itemCount}`,
-    barcodeValue: `INVLAYOUT${String(itemCount).padStart(2, "0")}`,
+    qrValue: [
+      "BEZGROW INVOICE",
+      "Business: Bezgrow Representative Healthcare Distribution and Retail Private Limited",
+      `Invoice: INV-LAYOUT-${itemCount}`,
+      "Date: 2026-08-01",
+      "Customer: A Representative Customer With A Deliberately Long Legal Trading Name",
+      `Subtotal: Rs ${subtotal.toFixed(2)}`,
+      `Tax: Rs ${tax.toFixed(2)}`,
+      `Grand Total: Rs ${grandTotal.toFixed(2)}`,
+      "Payment Status: Partial",
+      `Paid: Rs ${(grandTotal / 2).toFixed(2)}`,
+      `Due: Rs ${(grandTotal / 2).toFixed(2)}`,
+    ].join("\n"),
+    barcodeValue: `INV-LAYOUT-${itemCount}`,
     watermark: "PAID",
   }
 }
@@ -124,12 +138,20 @@ async function run() {
       for (const expected of formats) {
         const bytes = await createInvoicePdf(
           invoice(itemCount, gst),
-          { ...defaultPrintSettings, thermalWidth: expected.thermalWidth, showLogo: true, showQr: true, showBarcode: true },
+          { ...defaultPrintSettings, thermalWidth: expected.thermalWidth, showLogo: true, showQr: true, showBarcode: true, showWatermark: true, pharmaMode: true },
           expected.format,
         )
         assert.equal(new TextDecoder().decode(bytes.slice(0, 5)), "%PDF-")
         const document = await PDFDocument.load(bytes)
-        assert.equal(document.getPageCount(), 1, `${expected.label}/${itemCount}/${gst ? "gst" : "non-gst"} split unexpectedly`)
+        const shouldPaginate =
+          (expected.format === "a4" && itemCount > 15) ||
+          (expected.format === "half-compact" && itemCount > 10) ||
+          (expected.format === "half-top" && itemCount > 12)
+        if (shouldPaginate) {
+          assert.ok(document.getPageCount() >= 2, `${expected.label}/${itemCount}/${gst ? "gst" : "non-gst"} should paginate professionally`)
+        } else {
+          assert.equal(document.getPageCount(), 1, `${expected.label}/${itemCount}/${gst ? "gst" : "non-gst"} split unexpectedly`)
+        }
         const page = document.getPage(0)
         assert.ok(page.node.Contents(), `${expected.label} produced a blank first page`)
         closeTo(page.getWidth(), expected.widthMm * PT_PER_MM)
@@ -140,18 +162,10 @@ async function run() {
         assert.equal(box.y, 0)
         closeTo(box.width, page.getWidth())
         closeTo(box.height, page.getHeight())
-        const keepRepresentativeFixture = keepFixtures && (
-          (itemCount === 20 && gst) ||
-          ((expected.format === "half-compact" || expected.format === "half-top") && [1, 5].includes(itemCount))
-        )
-        if (keepRepresentativeFixture) {
-          writeFileSync(`${fixtureDirectory}/${expected.label}-${itemCount}-items-${gst ? "gst" : "non-gst"}-bw-watermark.pdf`, await createInvoicePdf(
-            invoice(itemCount, gst),
-            { ...defaultPrintSettings, thermalWidth: expected.thermalWidth, showLogo: true, showQr: true, showBarcode: true, showWatermark: true, blackAndWhite: true },
-            expected.format,
-          ))
+        if (keepFixtures) {
+          writeFileSync(`${fixtureDirectory}/${expected.label}-${itemCount}-items-${gst ? "gst" : "non-gst"}-pharma-watermark.pdf`, bytes)
         }
-        results.push(`${expected.label}:${itemCount}:${gst ? "gst" : "non-gst"}=1page ${page.getWidth().toFixed(2)}x${page.getHeight().toFixed(2)}pt`)
+        results.push(`${expected.label}:${itemCount}:${gst ? "gst" : "non-gst"}=${document.getPageCount()}page ${page.getWidth().toFixed(2)}x${page.getHeight().toFixed(2)}pt`)
       }
     }
   }

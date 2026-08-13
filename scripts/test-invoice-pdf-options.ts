@@ -14,7 +14,6 @@ const toggles = [
   "showGstDetails",
   "showSignature",
   "showWatermark",
-  "blackAndWhite",
   "pharmaMode",
 ] as const
 
@@ -52,7 +51,7 @@ async function run() {
       rendered += 1
     }
   }
-  assert.equal(rendered, 2_560)
+  assert.equal(rendered, 1_280)
   console.log(`invoice-pdf-options-ok combinations=${2 ** toggles.length} rendered=${rendered}`)
 }
 

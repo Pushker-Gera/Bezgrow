@@ -67,13 +67,12 @@ const experimentalFeatureCatalog = [
   ["gst_b2b", "GST B2B Billing", "Business invoices, buyer tax IDs, GST-ready line items, and tax visibility."],
   ["batch_tracking", "Batch Tracking", "Track lots, expiry, manufacturing, and procurement batches."],
   ["expiry_tracking", "Expiry Tracking", "Alerts for pharmacy, grocery, cosmetics, and perishable inventory."],
-  ["barcode_scanning", "Barcode Scanning", "Enable SKU/barcode workflows for retail and warehouse teams."],
+  ["barcode_scanning", "Barcode Scanning", "Enable barcode workflows for retail and warehouse teams."],
   ["thermal_printing", "Thermal Printing", "POS receipt layout support for counters, malls, and small format printers."],
   ["purchase_orders", "Purchase Orders", "Supplier purchasing, procurement controls, and incoming inventory planning."],
-  ["warehouse_transfers", "Warehouse Transfers", "Move stock across branches, stores, warehouses, and fulfillment locations."],
+  ["warehouse_transfers", "Warehouse Transfers", "Move stock across branches, stores, and warehouse locations."],
   ["bulk_inventory", "Bulk Inventory", "High-volume stock operations for distributors and wholesale teams."],
   ["shipping_labels", "Shipping Labels", "Courier metadata, tracking numbers, and parcel-ready operations."],
-  ["awb_tracking", "AWB Tracking", "Airway bill and courier reference tracking for shipped orders."],
   ["parcel_qr", "Parcel QR", "Parcel QR codes for packing, dispatch, and delivery handoff workflows."],
   ["bulk_pricing", "Wholesale Billing", "Wholesale invoices, bulk pricing, and B2B billing flows."],
   ["size_variants", "Variants", "Size, color, and variant-ready inventory structures."],
@@ -82,8 +81,6 @@ const experimentalFeatureCatalog = [
   ["warranty_tracking", "Warranty Tracking", "Capture warranty-ready sales and service workflows."],
   ["prescription_required", "Prescription Required", "Medicine sale controls for prescription-only products."],
   ["prescription_upload", "Prescription Upload", "Attach prescription evidence to pharmacy customer billing."],
-  ["kot_printing", "KOT Printing", "Kitchen order ticket workflows for restaurant and cafe operations."],
-  ["table_management", "Table Management", "Table-aware order and billing workflows for dine-in businesses."],
   ["raw_materials", "Raw Materials", "Track input stock used for manufacturing, food, or assembled products."],
   ["recipe_tracking", "Recipe Tracking", "Connect recipes or bills of materials to stock consumption."],
   ["production_batches", "Production Batches", "Batch manufactured goods with cost, quantity, and traceability."],
@@ -748,7 +745,7 @@ export default function SettingsPage() {
 
         <section className="grid grid-cols-1 gap-6 2xl:grid-cols-[1fr,420px]">
           <div className="space-y-6">
-            <div className="rounded-[36px] border border-white/10 bg-white/[0.035] p-7 backdrop-blur-2xl">
+            <div className="rounded-[36px] border border-white/10 bg-white/[0.035] p-7 backdrop-blur-2xl" data-enter-navigation="true">
               <h2 className="text-3xl font-black">Business Profile</h2>
               <div className="mt-6 grid grid-cols-1 gap-4 md:grid-cols-2">
                 <input value={form.name} onChange={(e) => setForm((current) => ({ ...current, name: e.target.value }))} placeholder="Business name" className="h-14 rounded-2xl border border-white/10 bg-black/50 px-5 outline-none focus:border-cyan-400/40" />
@@ -780,9 +777,9 @@ export default function SettingsPage() {
                 <input value={form.fssai} onChange={(e) => setForm((current) => ({ ...current, fssai: e.target.value }))} placeholder="FSSAI number" className="h-14 rounded-2xl border border-white/10 bg-black/50 px-5 outline-none focus:border-cyan-400/40" />
                 <input value={form.website} onChange={(e) => setForm((current) => ({ ...current, website: e.target.value }))} placeholder="Website" className="h-14 rounded-2xl border border-white/10 bg-black/50 px-5 outline-none focus:border-cyan-400/40" />
                 <input value={form.branchName} onChange={(e) => setForm((current) => ({ ...current, branchName: e.target.value }))} placeholder="Branch name" className="h-14 rounded-2xl border border-white/10 bg-black/50 px-5 outline-none focus:border-cyan-400/40" />
-                <textarea value={form.address} onChange={(e) => setForm((current) => ({ ...current, address: e.target.value }))} placeholder="Business address" className="min-h-28 rounded-2xl border border-white/10 bg-black/50 px-5 py-4 outline-none focus:border-cyan-400/40 md:col-span-2" />
+                <textarea data-enter-empty-advance="true" value={form.address} onChange={(e) => setForm((current) => ({ ...current, address: e.target.value }))} placeholder="Business address" className="min-h-28 rounded-2xl border border-white/10 bg-black/50 px-5 py-4 outline-none focus:border-cyan-400/40 md:col-span-2" />
               </div>
-              <button onClick={saveOrganization} disabled={saving} className="mt-6 h-14 rounded-2xl bg-white px-7 font-black text-black disabled:opacity-50">
+              <button data-enter-primary onClick={saveOrganization} disabled={saving} className="mt-6 h-14 rounded-2xl bg-white px-7 font-black text-black disabled:opacity-50">
                 {saving ? "Saving..." : "Save Business"}
               </button>
             </div>
@@ -816,7 +813,7 @@ export default function SettingsPage() {
               </div>
             </div>
 
-            <div className="rounded-[36px] border border-cyan-400/20 bg-cyan-500/[0.06] p-7 backdrop-blur-2xl">
+            <div className="rounded-[36px] border border-cyan-400/20 bg-cyan-500/[0.06] p-7 backdrop-blur-2xl" data-enter-navigation="true">
               <div className="flex flex-col gap-2 md:flex-row md:items-end md:justify-between">
                 <div>
                   <h2 className="text-3xl font-black">Print Settings</h2>
@@ -867,7 +864,6 @@ export default function SettingsPage() {
                   ["showGstDetails", "GST Details"],
                   ["showSignature", "Signature"],
                   ["showWatermark", "Watermark"],
-                  ["blackAndWhite", "Black & White"],
                   ["pharmaMode", "Pharma Mode"],
                   ["autoPrintAfterSave", "Auto Print"],
                 ].map(([key, label]) => (
@@ -882,7 +878,7 @@ export default function SettingsPage() {
                   </label>
                 ))}
               </div>
-              <button type="button" onClick={() => void savePrintSettings()} className="mt-6 h-12 rounded-2xl bg-white px-6 text-sm font-black text-black">
+              <button type="button" data-enter-primary onClick={() => void savePrintSettings()} className="mt-6 h-12 rounded-2xl bg-white px-6 text-sm font-black text-black">
                 Save Print Settings
               </button>
             </div>

@@ -50,7 +50,8 @@ assert.match(pages.support, /adminMutation\("\/api\/admin\/support", "POST"/, "S
 assert.match(pages.security, /AdminListControls/, "Security search and filters must use live list controls.")
 assert.match(pages.analytics, /onChange=\{\(event\) => setDays/, "Analytics range selector must trigger a reload.")
 assert.match(pages.download, /available=\{info\.available\}/, "Download buttons must reflect independent availability.")
-assert.match(pages.download, /href=\{webAppUrl\}/, "Open Web App must be a real link.")
+assert.match(pages.download, /macInstallerPath[\s\S]*windowsInstallerPath/, "The local-first download page must expose both desktop platforms.")
+assert.match(pages.download, /Activate a valid licence online once[\s\S]*work offline/, "The download page must describe the truthful offline licence lifecycle.")
 assert.match(pages.download, /<button[\s\S]*disabled[\s\S]*cursor-not-allowed/, "Unavailable downloads must render disabled buttons.")
 assert.doesNotMatch(pages.download, /checkedInReleaseManifest/, "Download buttons must not use stale checked-in metadata.")
 

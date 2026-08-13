@@ -33,12 +33,14 @@ PDF.js renders the validated bytes into the existing invoice preview area. A tem
 
 ## Page contracts
 
-- Full A4: 210mm x 297mm portrait. Representative invoices up to 20 lines remain one page; unusually long invoices use controlled continuation pages.
-- Half A4 Compact: 148mm x 210mm portrait.
-- Half A4 Top: one A4 document with content constrained to the intended top half.
+- Full A4: 210mm x 297mm portrait. Ordinary invoices remain one page; unusually long invoices use controlled continuation pages instead of microscopic type.
+- Half A4 Compact: 148mm x 210mm portrait, recomposed for the smaller geometry and paginated when required.
+- Half A4 Top: A4 pages with every invoice page constrained to the intended top half and the lower physical half blank.
 - Thermal: selected 58mm or 80mm width with content-driven height. Thermal output is never placed on A4.
 
-Black-and-white mode changes colour only. It keeps white paper, dark text and borders, subtle watermark opacity, and unfiltered black QR/barcode geometry.
+Uploaded PNG, JPEG, and supported WebP logos are local business data. Invoice rendering uses contain-fit geometry so square, portrait, and wide logos retain their aspect ratio. Watermarks are centered, diagonal, low-opacity drawing operations behind invoice content.
+
+The QR bitmap contains a deterministic, compact summary from the saved invoice snapshot: business, invoice reference/date, customer name, subtotal, tax, grand total, payment status, paid, and due. It never contains licence keys, device identifiers, authentication tokens, internal database IDs, or application secrets. The Code 39 barcode contains only the human-readable invoice reference printed below it. Automated tests decode both generated symbols.
 
 ## Save and print
 

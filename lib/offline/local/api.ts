@@ -66,8 +66,6 @@ const dailyEndpoints = new Set([
   "/api/purchases/order",
   "/api/purchases/goods-received",
   "/api/purchases/supplier-payment",
-  "/api/orders/list",
-  "/api/orders/create",
   "/api/quotations/list",
   "/api/quotations/create",
   "/api/delivery-challans/list",
@@ -654,15 +652,24 @@ async function createInvoice(body: DataRow, organizationId: string) {
     created_at: now,
     updated_at: now,
   }
-  const nextItems: DataRow[] = items.map((item) => ({
-    ...item,
-    id: createOfflineId("invoice-item"),
-    organization_id: organizationId,
-    invoice_id: invoiceId,
-    sync_status: "pending_create",
-    created_at: now,
-    updated_at: now,
-  }))
+  const nextItems: DataRow[] = items.map((item) => {
+    const product = products.find((row) => row.id === item.product_id)
+    return {
+      ...item,
+      id: createOfflineId("invoice-item"),
+      organization_id: organizationId,
+      invoice_id: invoiceId,
+      product_name: localString(item.product_name) || localString(product?.name),
+      batch_no: localString(item.batch_no || item.batch_number) || localString(product?.batch_no) || null,
+      expiry_date: localString(item.expiry_date) || localString(product?.expiry_date) || null,
+      hsn_code: localString(item.hsn_code || item.hsn) || localString(product?.hsn_code) || null,
+      unit: localString(item.unit) || localString(product?.unit) || null,
+      mrp: item.mrp ?? product?.mrp ?? null,
+      sync_status: "pending_create",
+      created_at: now,
+      updated_at: now,
+    }
+  })
   const nextProducts = products.map((product) => {
     const quantity = quantityByProduct.get(String(product.id || "")) || 0
     return quantity > 0 ? { ...product, stock: localNumber(product.stock) - quantity, sync_status: "pending_update", updated_at: now } : product
@@ -1003,102 +1010,6 @@ async function deleteInvoice(body: DataRow, organizationId: string) {
     pendingAction(createOfflineId("invoice-delete-action"), "delete_invoice", organizationId, { invoiceId })
   )
   return ok({ invoiceId, restoredItems: items.length })
-}
-
-async function listOrders(url: URL, organizationId: string) {
-  const search = url.searchParams.get("search") || ""
-  let rows = await readCollection<DataRow>(organizationId, "orders")
-  rows = rows.filter((row) => rowMatches(row, ["order_number", "customer_name", "customer_phone", "tracking_number", "courier_name", "courier"], search))
-  rows = sortRows(rows, "created_at", "desc").map((order) => ({ ...order, courier_name: order.courier_name || order.courier || null }))
-  return jsonResponse(paginate(url, rows))
-}
-
-async function createOrder(body: DataRow, organizationId: string) {
-  const items = Array.isArray(body.items) ? (body.items as DataRow[]) : []
-  if (!items.length) return fail("Invalid order.", 422)
-  const now = nowIso()
-  const [products, orders, orderItems, movements] = await Promise.all([
-    readCollection<DataRow>(organizationId, "products"),
-    readCollection<DataRow>(organizationId, "orders"),
-    readCollection<DataRow>(organizationId, "order_items"),
-    readCollection<DataRow>(organizationId, "stock_movements"),
-  ])
-  const quantityByProduct = new Map<string, number>()
-  items.forEach((item) => {
-    const productId = localString(item.product_id)
-    if (productId) quantityByProduct.set(productId, (quantityByProduct.get(productId) || 0) + localNumber(item.quantity))
-  })
-  for (const [productId, quantity] of quantityByProduct) {
-    const product = products.find((row) => row.id === productId)
-    if (!product) return fail("One or more products were not found.", 404)
-    if (localNumber(product.stock) < quantity) return fail("Order quantity exceeds available stock.", 409)
-  }
-  const orderId = createOfflineId("order")
-  const orderNumber = `OFFLINE-ORD-${Date.now()}`
-  const totalAmount = items.reduce((sum, item) => sum + localNumber(item.total), 0)
-  const orderRecord = {
-    ...body,
-    id: orderId,
-    organization_id: organizationId,
-    order_number: orderNumber,
-    total_amount: totalAmount,
-    grand_total: totalAmount,
-    total: totalAmount,
-    sync_status: "pending_create",
-    created_at: now,
-    updated_at: now,
-  }
-  const nextOrderItems = items.map((item) => ({
-    ...item,
-    id: createOfflineId("order-item"),
-    organization_id: organizationId,
-    order_id: orderId,
-    sync_status: "pending_create",
-    created_at: now,
-    updated_at: now,
-  }))
-  const nextProducts = products.map((product) => {
-    const quantity = quantityByProduct.get(String(product.id || "")) || 0
-    return quantity > 0 ? { ...product, stock: localNumber(product.stock) - quantity, sync_status: "pending_update", updated_at: now } : product
-  })
-  const nextMovements = [
-    ...Array.from(quantityByProduct.entries()).map(([productId, quantity]) => {
-      const product = products.find((row) => row.id === productId)
-      const previousStock = localNumber(product?.stock)
-      return {
-        id: createOfflineId("stock-movement"),
-        organization_id: organizationId,
-        product_id: productId,
-        product_name: product?.name || "",
-        type: "sale",
-        quantity: -quantity,
-        previous_stock: previousStock,
-        new_stock: previousStock - quantity,
-        reason: `Order ${orderNumber}`,
-        reference_no: orderId,
-        reference_type: "order",
-        reference_id: orderId,
-        sync_status: "pending_create",
-        created_at: now,
-        updated_at: now,
-      }
-    }),
-    ...movements,
-  ]
-  await writeCollections(organizationId, [
-    { collection: "products", value: nextProducts },
-    { collection: "inventory_items", value: nextProducts },
-    { collection: "orders", value: [orderRecord, ...orders] },
-    { collection: "order_items", value: [...nextOrderItems, ...orderItems] },
-    { collection: "stock_movements", value: nextMovements },
-  ])
-  await queue({
-    id: createOfflineId("order-action"),
-    type: "create_order",
-    organizationId,
-    payload: { localOrderId: orderId, order: { ...body, items: undefined }, items },
-  })
-  return ok({ id: orderId, order_id: orderId, order_number: orderNumber })
 }
 
 function normalizedCommercialItems(items: DataRow[], documentId: string, organizationId: string, ownerKey: string) {
@@ -1571,10 +1482,9 @@ async function localWorkspaceBootstrap() {
 
 async function dashboardSummary(organizationId: string) {
   const workspace = getCachedWorkspaceBootstrap()
-  const [productsRaw, invoicesRaw, ordersRaw, customersRaw, warehousesRaw, movementsRaw] = await Promise.all([
+  const [productsRaw, invoicesRaw, customersRaw, warehousesRaw, movementsRaw] = await Promise.all([
     readCollection<DataRow>(organizationId, "products"),
     readCollection<DataRow>(organizationId, "invoices"),
-    readCollection<DataRow>(organizationId, "orders"),
     readCollection<DataRow>(organizationId, "customers"),
     readCollection<DataRow>(organizationId, "warehouses"),
     readCollection<DataRow>(organizationId, "stock_movements"),
@@ -1582,7 +1492,6 @@ async function dashboardSummary(organizationId: string) {
 
   const products = filterDeleted(productsRaw)
   const invoices = filterDeleted(invoicesRaw)
-  const orders = filterDeleted(ordersRaw)
   const customers = filterDeleted(customersRaw)
   const warehouses = filterDeleted(warehousesRaw)
   const today = new Date().toISOString().slice(0, 10)
@@ -1595,11 +1504,9 @@ async function dashboardSummary(organizationId: string) {
   const outOfStockProducts = products.filter((product) => localNumber(product.stock) <= 0)
   const inventoryValue = products.reduce((sum, product) => sum + localNumber(product.stock) * localNumber(product.sale_rate || product.price || product.mrp || product.purchase_rate), 0)
   const costValue = products.reduce((sum, product) => sum + localNumber(product.stock) * localNumber(product.purchase_rate), 0)
-  const pendingOrders = orders.filter((order) => ["pending", "processing", "created"].includes(localString(order.order_status || order.status).toLowerCase())).length
-  const fulfillmentRate = orders.length ? Math.round(((orders.length - pendingOrders) / orders.length) * 100) : 0
   const inventoryHealth = products.length ? Math.round(((products.length - lowStockProducts.length) / products.length) * 100) : 100
   const collectionRate = totalRevenue > 0 ? Math.round((paidRevenue / totalRevenue) * 100) : 0
-  const erpHealth = Math.max(0, Math.min(100, Math.round(inventoryHealth * 0.35 + fulfillmentRate * 0.25 + collectionRate * 0.25 + (pendingInvoices === 0 ? 15 : Math.max(0, 15 - pendingInvoices * 2)))))
+  const erpHealth = Math.max(0, Math.min(100, Math.round(inventoryHealth * 0.45 + collectionRate * 0.4 + (pendingInvoices === 0 ? 15 : Math.max(0, 15 - pendingInvoices * 2)))))
   const weeklyRevenue = weekLabels.map((label) => ({ label, value: 0 }))
 
   invoices.forEach((invoice) => {
@@ -1630,9 +1537,6 @@ async function dashboardSummary(organizationId: string) {
       inventoryValue,
       costValue,
       potentialProfit: inventoryValue - costValue,
-      orderCount: orders.length,
-      pendingOrders,
-      fulfillmentRate,
       inventoryHealth,
       collectionRate,
       erpHealth,
@@ -1650,16 +1554,14 @@ async function dashboardSummary(organizationId: string) {
 }
 
 async function billingSummary(organizationId: string) {
-  const [invoicesRaw, customersRaw, productsRaw, ordersRaw] = await Promise.all([
+  const [invoicesRaw, customersRaw, productsRaw] = await Promise.all([
     readCollection<DataRow>(organizationId, "invoices"),
     readCollection<DataRow>(organizationId, "customers"),
     readCollection<DataRow>(organizationId, "products"),
-    readCollection<DataRow>(organizationId, "orders"),
   ])
   const invoices = sortRows(filterDeleted(invoicesRaw), "created_at", "desc")
   const customers = filterDeleted(customersRaw)
   const products = filterDeleted(productsRaw)
-  const orders = filterDeleted(ordersRaw)
   const customerMap = new Map(customers.map((customer) => [customer.id, customer]))
   const enrichedInvoices = invoices.map((invoice) => {
     const customer = customerMap.get(invoice.customer_id as string)
@@ -1714,7 +1616,6 @@ async function billingSummary(organizationId: string) {
       lowStockCount: lowStock.length,
       customerCount: customers.length,
       productCount: products.length,
-      orderCount: orders.length,
     },
     weeklyRevenue,
     recentInvoices: enrichedInvoices.slice(0, 10),
@@ -1862,8 +1763,6 @@ export async function localApiFetch(input: RequestInfo | URL, init: RequestInit 
     if (method === "POST" && url.pathname === "/api/purchases/order") return { handled: true, response: await purchaseCreate(body || {}, organizationId, "purchase_order") }
     if (method === "POST" && url.pathname === "/api/purchases/goods-received") return { handled: true, response: await purchaseCreate(body || {}, organizationId, "goods_received") }
     if (method === "POST" && url.pathname === "/api/purchases/supplier-payment") return { handled: true, response: await paymentCreate({ ...(body || {}), party_type: "supplier", payment_type: "cash_payment", direction: "out" }, organizationId) }
-    if (method === "GET" && url.pathname === "/api/orders/list") return { handled: true, response: await listOrders(url, organizationId) }
-    if (method === "POST" && url.pathname === "/api/orders/create") return { handled: true, response: await createOrder(body || {}, organizationId) }
     if (method === "GET" && url.pathname === "/api/quotations/list") return { handled: true, response: await listQuotations(url, organizationId) }
     if (method === "POST" && url.pathname === "/api/quotations/create") return { handled: true, response: await createQuotation(body || {}, organizationId) }
     if (method === "GET" && url.pathname === "/api/delivery-challans/list") return { handled: true, response: await listDeliveryChallans(url, organizationId) }

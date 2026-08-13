@@ -172,7 +172,7 @@ Core additions:
 
 Modified runtime groups:
 
-- all ERP routes under `app/api/{customers,dashboard,inventory,invoice-shares,invoices,orders,products,report-shares,settings,workspace}` and `app/api/[...erp]`
+- all active ERP routes under `app/api/{customers,dashboard,inventory,invoice-shares,invoices,products,report-shares,settings,workspace}` and `app/api/[...erp]`; the ordinary Orders routes were retired later while their SQLite tables remained archived
 - desktop proxy, license check-in, auth/login/callback/startup, browser gates, dashboard layout/detail/print/label pages
 - `lib/offline/*`, `lib/api/{professional-erp,stock-movements,tenant}.ts`, invoice-share helpers, workspace bootstrap, app updates, proxy
 - desktop API/update coordinator, invoice export, and print engine components

@@ -37,7 +37,7 @@ for (const table of ["database_health", "license_state", "device_activations", "
 
 const indexes = schema.match(/CREATE INDEX IF NOT EXISTS/g) || [];
 assert.ok(indexes.length >= 40, `Expected broad offline indexes; found ${indexes.length}.`);
-assert.match(schema, /LOCAL_DB_VERSION\s*=\s*8/, "Local DB version should reflect the current normalized schema.");
+assert.match(schema, /LOCAL_DB_VERSION\s*=\s*9/, "Local DB version should reflect the current normalized schema.");
 
 assert.match(dashboardLayout, /LocalDatabaseRecovery/, "Dashboard must render the local database recovery screen.");
 assert.match(dashboardLayout, /getLocalDatabaseService\(\)\.ensureReady\(\)/, "Dashboard must await the authoritative startup manager.");
@@ -54,7 +54,8 @@ assert.match(recovery, /Copy Diagnostics/, "Recovery screen must support diagnos
 assert.doesNotMatch(recovery, /license_key|SUPABASE|PASSWORD|PRIVATE_KEY/i, "Diagnostics UI must not expose secret fields.");
 
 assert.match(proxy, /BEZGROW_DESKTOP_BUILD === "1"/, "Proxy must distinguish packaged desktop from ordinary localhost web.");
-assert.match(proxy, /localDesktopHost && desktopServerBuild && protectedRoute[\s\S]*NextResponse\.next\(\)/, "Packaged desktop protected routes must reach the client license guard.");
+assert.match(proxy, /localDesktopHost && desktopServerBuild && protectedRoute[\s\S]*NextResponse\.next\(\{ headers: privateHeaders \}\)/, "Packaged desktop protected routes must reach the client license guard with private-route headers.");
+assert.match(proxy, /X-Robots-Tag": "noindex, nofollow, noarchive"/, "Private desktop ERP routes must remain excluded from search indexing.");
 assert.match(startupRedirect, /ensureReady\(\)/, "Startup redirect must wait for local database readiness.");
 assert.doesNotMatch(startupRedirect, /integrityReport\(\)/, "Startup redirect must not repeat a full integrity check.");
 assert.match(startupRedirect, /restoreLicensedWorkspaceContext\(\)/, "Startup redirect must restore licensed workspace before deciding.");

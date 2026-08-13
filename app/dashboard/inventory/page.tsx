@@ -14,6 +14,7 @@ type ProductRow = {
     organization_id?: string | null
     name: string
     sku: string | null
+    hsn_code: string | null
     stock: number | null
     min_stock: number | null
     purchase_rate: number | null
@@ -465,7 +466,8 @@ export default function InventoryPage() {
 
         const rows = filteredProducts.map((product) => ({
             product: product.name,
-            sku: product.sku || "",
+            batchNumber: product.batch_no || "",
+            hsnCode: product.hsn_code || "",
             category: product.category || "",
             stock: product.currentStock,
             minimumStock: product.min_stock ?? "",
@@ -477,7 +479,8 @@ export default function InventoryPage() {
         try {
             const result = await exportCsv(`bezgrow-inventory-${new Date().toISOString().slice(0, 10)}.csv`, [
                 { header: "Product", value: "product" },
-                { header: "SKU", value: "sku", preserveLeadingZeros: true },
+                { header: "Batch No.", value: "batchNumber", preserveLeadingZeros: true },
+                { header: "HSN / SAC Code", value: "hsnCode", preserveLeadingZeros: true },
                 { header: "Category", value: "category" },
                 { header: "Stock", value: "stock" },
                 { header: "Minimum Stock", value: "minimumStock" },
@@ -505,6 +508,8 @@ export default function InventoryPage() {
             const matchesSearch =
                 !term ||
                 product.name.toLowerCase().includes(term) ||
+                (product.batch_no || "").toLowerCase().includes(term) ||
+                (product.hsn_code || "").toLowerCase().includes(term) ||
                 (product.sku || "").toLowerCase().includes(term) ||
                 (product.category || "").toLowerCase().includes(term) ||
                 product.warehouseName.toLowerCase().includes(term)
@@ -561,7 +566,7 @@ export default function InventoryPage() {
 
     const statCards = [
         {
-            label: "Total SKUs",
+            label: "Total Products",
             value: stats.totalSkus,
             accent: "from-white to-neutral-400",
             meta: `${filteredProducts.length} in current view`,
@@ -582,7 +587,7 @@ export default function InventoryPage() {
             label: "Sold Units",
             value: stats.soldUnits,
             accent: "from-sky-200 to-blue-500",
-            meta: `${stats.totalInvoices} billed orders`,
+            meta: `${stats.totalInvoices} billed invoices`,
         },
         {
             label: "Inventory Value",
@@ -666,7 +671,7 @@ export default function InventoryPage() {
                             <input
                                 value={search}
                                 onChange={(event) => setSearch(event.target.value)}
-                                placeholder="Search product, SKU, category, warehouse"
+                                placeholder="Search product, Batch No., HSN, category, warehouse"
                                 className="h-12 rounded-lg border border-white/10 bg-black/60 px-4 text-sm outline-none transition-all focus:border-emerald-300/60 focus:ring-2 focus:ring-emerald-400/10"
                             />
                             <select
@@ -771,7 +776,7 @@ export default function InventoryPage() {
                                             <div className="min-w-0">
                                                 <h3 className="truncate text-base font-black text-white">{product.name}</h3>
                                                 <p className="mt-1 truncate text-xs text-neutral-500">
-                                                    SKU {product.sku || "N/A"} | {product.category || "General"}
+                                                    Batch No. {product.batch_no || "-"} | {product.category || "General"}
                                                 </p>
                                             </div>
                                             <span className={`shrink-0 rounded-full border px-3 py-1 text-xs font-black ${isOut ? "border-red-400/30 bg-red-400/10 text-red-200" : isLow ? "border-amber-400/30 bg-amber-400/10 text-amber-200" : "border-emerald-400/30 bg-emerald-400/10 text-emerald-200"}`}>
@@ -840,7 +845,7 @@ export default function InventoryPage() {
                                                         {product.name}
                                                     </p>
                                                     <p className="mt-1 text-xs text-neutral-500">
-                                                        SKU: {product.sku || "N/A"}
+                                                        Batch No.: {product.batch_no || "-"}
                                                     </p>
                                                 </td>
                                                 <td className="px-3 py-4 text-neutral-300">
@@ -1084,7 +1089,13 @@ export default function InventoryPage() {
 
             {(showAddStockModal || showTransferModal) && (
                 <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 p-4 backdrop-blur-sm">
-                    <div className="relative w-full max-w-xl overflow-hidden rounded-lg border border-white/10 bg-[#050606] p-6 shadow-2xl inventory-sheen">
+                    <div
+                        className="relative w-full max-w-xl overflow-hidden rounded-lg border border-white/10 bg-[#050606] p-6 shadow-2xl inventory-sheen"
+                        role="dialog"
+                        aria-modal="true"
+                        aria-label={showAddStockModal ? "Add stock" : "Transfer inventory"}
+                        data-enter-navigation="true"
+                    >
                         <div className="flex items-center justify-between">
                             <h2 className="text-2xl font-bold">
                                 {showAddStockModal ? "Add Stock" : "Transfer Inventory"}
@@ -1180,6 +1191,7 @@ export default function InventoryPage() {
 
                             <button
                                 disabled={actionLoading}
+                                data-enter-primary
                                 onClick={() =>
                                     applyStockChange(showAddStockModal ? "add" : "transfer")
                                 }

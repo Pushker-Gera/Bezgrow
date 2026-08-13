@@ -18,7 +18,6 @@ const customers = read("app/dashboard/customers/page.tsx")
 const invoices = read("app/dashboard/invoices/page.tsx")
 const invoiceCreate = read("app/dashboard/invoices/create/page.tsx")
 const inventory = read("app/dashboard/inventory/page.tsx")
-const orders = read("app/dashboard/orders/page.tsx")
 const settings = read("app/dashboard/settings/page.tsx")
 const recovery = read("components/offline/LocalDatabaseRecovery.tsx")
 const rust = read("src-tauri/src/lib.rs")
@@ -91,7 +90,6 @@ for (const [name, page] of [
   ["invoices", invoices],
   ["invoice create", invoiceCreate],
   ["inventory", inventory],
-  ["orders", orders],
   ["settings", settings],
 ]) {
   assert.match(page, /shouldUseWebOfflineFallback/, `${name} must explicitly reject the web fallback in packaged Tauri.`)
@@ -103,6 +101,9 @@ assert.match(
 )
 assert.doesNotMatch(dashboard, /supabase|\/api\/auth\/logout/, "Desktop logout must not depend on Supabase.")
 assert.doesNotMatch(dashboard, /clearOfflineData|clearNormalizedData/, "Logout must not delete business data or the license.")
+assert.doesNotMatch(dashboard, /dashboard\/orders|>\s*Orders\s*</, "The retired Orders module must not remain in ordinary ERP navigation.")
+assert.match(schema, /CREATE TABLE IF NOT EXISTS orders/, "Historical order rows must remain recoverable after the Orders UI is retired.")
+assert.doesNotMatch(localApi, /url\.pathname === "\/api\/orders\//, "Retired Orders workflows must not remain exposed through the local API.")
 
 // Loaders and stale requests must terminate deterministically.
 assert.match(customers, /skipNextCustomersRefresh/, "Customer initialization must not duplicate its initial fetch.")

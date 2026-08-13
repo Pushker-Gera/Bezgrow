@@ -14,8 +14,8 @@ const iconVersion = "20260701"
 
 export const metadata: Metadata = {
   metadataBase: new URL(siteUrl),
-  title: "Bezgrow",
-  description: "Cloud Inventory Management, Billing, POS and ERP Software",
+  title: "Bezgrow | Offline Billing & Inventory Software",
+  description: "Professional local-first billing, invoicing and inventory management software for Windows and macOS. Works offline with business data stored on your computer.",
   applicationName: "Bezgrow",
   manifest: "/manifest.json",
   alternates: {
@@ -50,13 +50,13 @@ export const metadata: Metadata = {
     type: "website",
     url: siteUrl,
     siteName: "Bezgrow",
-    title: "Bezgrow",
-    description: "Cloud Inventory Management, Billing, POS and ERP Software",
+    title: "Bezgrow | Offline Billing & Inventory Software",
+    description: "Professional local-first billing, invoicing and inventory management software for Windows and macOS.",
   },
   twitter: {
     card: "summary_large_image",
-    title: "Bezgrow",
-    description: "Cloud Inventory Management, Billing, POS and ERP Software",
+    title: "Bezgrow | Offline Billing & Inventory Software",
+    description: "Professional local-first billing, invoicing and inventory management software for Windows and macOS.",
   },
   robots: {
     index: true,
@@ -92,22 +92,15 @@ const structuredData = [
     url: siteUrl,
     logo: `${siteUrl}/icon-512.png?v=${iconVersion}`,
     image: `${siteUrl}/icon-512.png?v=${iconVersion}`,
-    sameAs: [siteUrl],
   },
   {
     "@context": "https://schema.org",
     "@type": "SoftwareApplication",
     name: "Bezgrow",
     applicationCategory: "BusinessApplication",
-    operatingSystem: "Web",
+    operatingSystem: "Windows, macOS",
     url: siteUrl,
-    description: "Cloud Inventory Management, Billing, POS and ERP Software",
-    offers: {
-      "@type": "Offer",
-      price: "0",
-      priceCurrency: "INR",
-      availability: "https://schema.org/InStock",
-    },
+    description: "Local-first desktop billing, invoicing, GST-ready inventory and stock management software that works offline after licence activation.",
     publisher: {
       "@type": "Organization",
       name: "Bezgrow",

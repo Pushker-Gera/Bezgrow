@@ -11,7 +11,7 @@ const exports: Array<{ label: string; slug: string; collection?: OfflineCollecti
   { label: "Products", slug: "products", collection: "products" },
   { label: "Customers", slug: "customers", collection: "customers" },
   { label: "Inventory", slug: "inventory", collection: "inventory_items" },
-  { label: "Orders", slug: "orders", collection: "orders" },
+  { label: "Historical Orders (archived)", slug: "historical-orders", collection: "orders" },
   { label: "Suppliers", slug: "suppliers", collection: "suppliers" },
   { label: "Purchases", slug: "purchases", collection: "purchase_invoices" },
   { label: "Payments", slug: "payments", collection: "payments" },
@@ -104,4 +104,3 @@ export function LocalDataExportsPanel({ organizationId }: { organizationId: stri
     </div>
   )
 }
-

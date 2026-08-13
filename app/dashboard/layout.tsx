@@ -5,6 +5,7 @@ import { usePathname, useRouter } from "next/navigation"
 import type { ReactNode } from "react"
 import { useEffect, useMemo, useRef, useState } from "react"
 import { BezgrowLogoMark } from "@/components/brand/BezgrowLogoMark"
+import { FormKeyboardNavigation } from "@/components/forms/FormKeyboardNavigation"
 import DesktopBackButton from "@/components/desktop/DesktopBackButton"
 import PlatformAdminLauncher from "@/components/desktop/PlatformAdminLauncher"
 import LocalDatabaseRecovery from "@/components/offline/LocalDatabaseRecovery"
@@ -19,7 +20,6 @@ const navItems = [
     ["Products", "/dashboard/products"],
     ["Customers", "/dashboard/customers"],
     ["Invoices", "/dashboard/invoices"],
-    ["Orders", "/dashboard/orders"],
     ["Billing", "/dashboard/billing"],
     ["Stock", "/dashboard/inventory"],
     ["Reports", "/dashboard/charts"],
@@ -34,7 +34,6 @@ const mobilePrimaryNav = [
 ]
 
 const mobileMoreNav = [
-    ["Orders", "/dashboard/orders"],
     ["Reports", "/dashboard/charts"],
     ["Billing", "/dashboard/billing"],
     ["Stock", "/dashboard/inventory"],
@@ -198,6 +197,7 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
 
     return (
         <div className="responsive-shell flex h-dvh max-h-dvh overflow-hidden bg-black text-white">
+            <FormKeyboardNavigation />
             <aside className="hidden w-[292px] shrink-0 border-r border-white/10 bg-[#060909] p-5 lg:flex lg:flex-col">
                 <div className="inventory-sheen rounded-[30px] border border-white/10 bg-white/[0.035] p-5">
                     <div className="flex items-center gap-4">

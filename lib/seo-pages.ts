@@ -21,10 +21,10 @@ export type SeoLandingPage = {
 }
 
 const commonBenefits = [
-  "Cloud access for teams and owners",
+  "Local SQLite storage on the business computer",
   "Inventory, billing, customers, and analytics in one workspace",
   "GST-ready invoices and professional print formats",
-  "Role-based access for growing businesses",
+  "Offline operation after licence activation",
 ]
 
 export const seoLandingPages: SeoLandingPage[] = [
@@ -32,14 +32,14 @@ export const seoLandingPages: SeoLandingPage[] = [
     slug: "inventory-management-software",
     title: "Inventory Management Software for Retail, Wholesale, and Service Businesses",
     metaTitle: "Inventory Management Software | Bezgrow",
-    metaDescription: "Bezgrow inventory management software helps businesses manage stock, batches, suppliers, warehouses, expiry tracking, and inventory movement from one cloud platform.",
+    metaDescription: "Bezgrow offline inventory management software helps businesses manage stock, batches, suppliers, warehouses, expiry tracking, and movement on Windows and Mac.",
     eyebrow: "Inventory Software",
-    summary: "Manage stock, batches, suppliers, warehouses, expiry tracking, purchase readiness, and movement history from one fast cloud inventory platform.",
+    summary: "Manage stock, batches, suppliers, warehouses, expiry tracking, purchase readiness, and movement history in one fast local-first desktop workspace.",
     primaryKeyword: "inventory management software",
     sections: [
       {
-        heading: "Cloud Inventory Management",
-        body: "Bezgrow helps teams track product quantities, low-stock items, inventory value, product categories, units, GST rates, and movement logs without switching tools.",
+        heading: "Offline Inventory Management",
+        body: "Bezgrow keeps product quantities, low-stock items, inventory value, product categories, units, GST rates, and movement logs in SQLite on the business computer.",
       },
       {
         heading: "Stock Control for Daily Operations",
@@ -74,7 +74,7 @@ export const seoLandingPages: SeoLandingPage[] = [
       },
       {
         heading: "Professional Invoice Printing",
-        body: "Bezgrow supports invoice workflows for A4 invoices, compact bills, thermal receipts, and shareable public invoice links.",
+        body: "Bezgrow supports Full A4, Half A4 Compact, Half A4 Top, and thermal receipts using a local PDF and print workflow.",
       },
     ],
     benefits: ["GST invoice generation", "Payment status tracking", "A4 and thermal print support", "Customer billing records", ...commonBenefits],
@@ -156,9 +156,9 @@ export const seoLandingPages: SeoLandingPage[] = [
     slug: "erp-software",
     title: "ERP Software for Inventory, Billing, Customers, Analytics, and Admin Control",
     metaTitle: "ERP Software | Bezgrow",
-    metaDescription: "Bezgrow ERP software combines inventory, GST billing, customers, orders, analytics, admin workflows, and business management in one cloud platform.",
-    eyebrow: "Cloud ERP",
-    summary: "Bring inventory, billing, customers, orders, analytics, license-based access, and administration into one professional ERP workspace.",
+    metaDescription: "Bezgrow local-first ERP software combines offline inventory, GST billing, customers, invoices, stock, analytics, and local backups for Windows and macOS.",
+    eyebrow: "Local-first ERP",
+    summary: "Bring inventory, billing, customers, invoices, stock, analytics, licence-based access, and local backups into one professional desktop ERP workspace.",
     primaryKeyword: "ERP software",
     sections: [
       {
@@ -175,11 +175,11 @@ export const seoLandingPages: SeoLandingPage[] = [
     faqs: [
       {
         question: "What does ERP software do?",
-        answer: "ERP software combines business workflows such as inventory, billing, customers, orders, reports, and administration in one system.",
+        answer: "ERP software combines business workflows such as inventory, billing, customers, invoices, stock, reports, and administration in one system.",
       },
       {
         question: "Is Bezgrow a cloud ERP?",
-        answer: "Yes. Bezgrow is a cloud-based ERP workspace for inventory, billing, customers, analytics, and business operations.",
+        answer: "No. Bezgrow is a local-first desktop ERP. Ordinary products, customers, invoices, and stock stay in SQLite on the business computer; internet is used only for appropriate platform features such as licence activation and releases.",
       },
     ],
   },
@@ -260,7 +260,7 @@ export const seoLandingPages: SeoLandingPage[] = [
       },
       {
         heading: "Professional Billing Output",
-        body: "Use print-ready invoice formats, customer information, GST details, and shareable invoice links for smoother customer service.",
+        body: "Use print-ready invoice formats, customer information, GST details, local PDF export, and text sharing for smoother customer service.",
       },
     ],
     benefits: ["Medical billing", "GST invoices", "Customer records", "Medicine inventory connection", ...commonBenefits],
@@ -277,33 +277,33 @@ export const seoLandingPages: SeoLandingPage[] = [
     ],
   },
   {
-    slug: "cloud-inventory-management-software",
-    title: "Cloud Inventory Management Software for Real-Time Business Operations",
-    metaTitle: "Cloud Inventory Management Software | Bezgrow",
-    metaDescription: "Use Bezgrow cloud inventory management software to manage stock, products, customers, invoices, reports, and business operations from anywhere.",
-    eyebrow: "Cloud Inventory",
-    summary: "Manage products, stock, customers, billing, reports, and business operations securely from a cloud-based ERP workspace.",
-    primaryKeyword: "cloud inventory management software",
+    slug: "offline-inventory-software",
+    title: "Offline Inventory Software for Local Stock and Billing Operations",
+    metaTitle: "Offline Inventory Software for Windows & Mac | Bezgrow",
+    metaDescription: "Use Bezgrow offline inventory software to manage stock, products, customers, invoices, and reports locally on Windows and macOS.",
+    eyebrow: "Offline Inventory",
+    summary: "Manage products, stock, customers, billing, reports, and everyday business operations locally, even when the internet is unavailable.",
+    primaryKeyword: "offline inventory software",
     sections: [
       {
-        heading: "Inventory Access From Anywhere",
-        body: "Bezgrow helps owners and teams access business records through the browser, with installable PWA support for mobile and desktop.",
+        heading: "Inventory Stored on Your Computer",
+        body: "Bezgrow stores ordinary business records in a local SQLite database on the licensed Windows or Mac computer instead of sending ERP data to a cloud datastore.",
       },
       {
-        heading: "Cloud Billing and Reporting",
-        body: "Connect stock, invoices, customer records, payments, and analytics so the business has a cleaner operational view.",
+        heading: "Offline Billing and Reporting",
+        body: "Connect stock, invoices, customer records, payments, and analytics locally so the business can continue operating without an internet connection.",
       },
     ],
-    benefits: ["Cloud access", "PWA installability", "Team-ready workflows", "Inventory analytics", ...commonBenefits],
-    useCases: ["Growing teams", "Multi-device businesses", "Retail owners", "Wholesale operators"],
+    benefits: ["Offline access", "Local database", "Local backups", "Inventory analytics", ...commonBenefits],
+    useCases: ["Retail shops", "Owner-operated businesses", "Medical stores", "Wholesale operators"],
     faqs: [
       {
-        question: "What is cloud inventory management software?",
-        answer: "Cloud inventory management software lets businesses manage stock and product records online from supported devices.",
+        question: "What is offline inventory software?",
+        answer: "Offline inventory software stores and manages product and stock records on the business computer, allowing normal work to continue without internet access.",
       },
       {
-        question: "Is Bezgrow cloud-based?",
-        answer: "Yes. Bezgrow is a cloud-based ERP and inventory workspace built for browser, mobile, and desktop use.",
+        question: "Does Bezgrow work without internet?",
+        answer: "Yes. After licence activation, normal billing, inventory, customer, reporting, backup, PDF, and print workflows operate from local SQLite without internet access.",
       },
     ],
   },
@@ -311,9 +311,9 @@ export const seoLandingPages: SeoLandingPage[] = [
     slug: "business-management-software",
     title: "Business Management Software for Inventory, Billing, Customers, and Reports",
     metaTitle: "Business Management Software | Bezgrow",
-    metaDescription: "Bezgrow business management software helps teams manage inventory, GST billing, customers, invoices, orders, analytics, and admin workflows.",
+    metaDescription: "Bezgrow business management software helps businesses manage offline inventory, GST billing, customers, invoices, stock, analytics, and local backups.",
     eyebrow: "Business Management",
-    summary: "Run inventory, billing, customers, invoices, orders, analytics, and admin workflows from one business management platform.",
+    summary: "Run inventory, billing, customers, invoices, stock, analytics, and local backup workflows from one desktop business management platform.",
     primaryKeyword: "business management software",
     sections: [
       {
@@ -330,11 +330,11 @@ export const seoLandingPages: SeoLandingPage[] = [
     faqs: [
       {
         question: "What is business management software?",
-        answer: "Business management software helps companies manage daily operations such as inventory, billing, customers, orders, reports, and team access.",
+        answer: "Business management software helps companies manage daily operations such as inventory, billing, customers, invoices, stock, reports, and access control.",
       },
       {
         question: "What can Bezgrow manage?",
-        answer: "Bezgrow can manage inventory, GST billing, customer records, invoices, orders, analytics, and admin workflows.",
+        answer: "Bezgrow can manage inventory, GST billing, customer records, invoices, stock, analytics, local backups, and professional printing.",
       },
     ],
   },

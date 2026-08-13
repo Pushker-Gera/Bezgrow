@@ -9,14 +9,13 @@ import {
 
 const macInstallerPath = "/api/downloads/desktop?platform=mac"
 const windowsInstallerPath = "/api/downloads/desktop?platform=windows"
-const webAppUrl = "https://www.bezgrow.com"
 
 export const dynamic = "force-dynamic"
 export const revalidate = 0
 
 export const metadata: Metadata = {
-  title: "Download Bezgrow Desktop App",
-  description: "Download the Bezgrow desktop ERP app for Mac and Windows.",
+  title: "Download Bezgrow Offline Billing Software for Windows & Mac",
+  description: "Download Bezgrow local-first billing, invoicing and inventory management software for Windows and macOS. Activate once, then work offline with local data.",
   alternates: {
     canonical: "https://www.bezgrow.com/download",
   },
@@ -163,32 +162,6 @@ function InstallerCard({
   )
 }
 
-function MobileInstallCard({
-  label,
-  description,
-  steps,
-  href,
-}: {
-  label: string
-  description: string
-  steps: string
-  href: string
-}) {
-  return (
-    <div className="min-w-0 rounded-2xl border border-white/10 bg-black/25 p-4">
-      <a
-        href={href}
-        className="flex min-h-12 items-center justify-center rounded-2xl border border-cyan-300/25 bg-cyan-300/10 px-5 text-sm font-black text-cyan-100 transition hover:border-cyan-200/50 hover:bg-cyan-300/15 sm:min-h-14"
-      >
-        Open Web App
-      </a>
-      <h2 className="mt-4 text-base font-black text-white">{label}</h2>
-      <p className="mt-3 text-sm leading-6 text-white/58 [overflow-wrap:anywhere]">{description}</p>
-      <p className="mt-2 text-xs font-bold text-white/42 [overflow-wrap:anywhere]">{steps}</p>
-    </div>
-  )
-}
-
 export default async function DownloadPage() {
   const availability = await getDesktopReleaseAvailability()
   const releaseManifest = availability.manifest
@@ -212,7 +185,7 @@ export default async function DownloadPage() {
           <p className="text-xs font-black uppercase tracking-[0.22em] text-cyan-200">Desktop ERP</p>
           <h1 className="mt-4 break-words text-3xl font-black leading-tight tracking-tight [overflow-wrap:anywhere] sm:text-5xl">Bezgrow Desktop App</h1>
           <p className="mt-4 max-w-2xl break-words leading-8 text-white/62 [overflow-wrap:anywhere]">
-            Install Bezgrow on your computer for desktop ERP workflows, persistent login, local offline data, printing, and sync when internet returns.
+            Install Bezgrow for billing, invoicing, stock control, local backups, and professional printing. After licence activation, ordinary ERP work continues offline and stays on this computer.
           </p>
 
           <div className="mt-6 inline-flex rounded-full border border-white/10 bg-black/35 px-4 py-2 text-sm font-bold text-white/65">
@@ -249,21 +222,6 @@ export default async function DownloadPage() {
             </details>
           )}
 
-          <div className="mt-5 grid gap-3 sm:grid-cols-2">
-            <MobileInstallCard
-              label="Install on Android"
-              href={webAppUrl}
-              description="Open Bezgrow in Chrome, then use the browser menu to add it to your Home screen or install the app."
-              steps="Chrome menu -> Add to Home screen / Install app"
-            />
-            <MobileInstallCard
-              label="Install on iPhone"
-              href={webAppUrl}
-              description="Open Bezgrow in Safari, then use Share to add it to your Home Screen."
-              steps="Share -> Add to Home Screen"
-            />
-          </div>
-
           <div className="mt-8 grid gap-4 text-sm leading-7 text-white/58 md:grid-cols-3">
             <div className="rounded-2xl border border-white/10 bg-black/25 p-4">
               <h2 className="text-base font-black text-white">1. Download</h2>
@@ -274,8 +232,8 @@ export default async function DownloadPage() {
               <p className="mt-2">Open the installer and follow your system prompts.</p>
             </div>
             <div className="rounded-2xl border border-white/10 bg-black/25 p-4">
-              <h2 className="text-base font-black text-white">3. Sign In</h2>
-              <p className="mt-2">Log in once online, then Bezgrow can reopen with local offline data.</p>
+              <h2 className="text-base font-black text-white">3. Activate</h2>
+              <p className="mt-2">Activate a valid licence online once, then continue normal billing and inventory work offline.</p>
             </div>
           </div>
         </div>

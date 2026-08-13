@@ -458,7 +458,7 @@ export function PrintEngine({
             </div>
           </section>
 
-          <section>
+          <section data-enter-navigation="true">
             <p className="control-label">Print Settings</p>
             <select value={settings.thermalWidth} onChange={(event) => updateSettings({ thermalWidth: event.target.value as PrintSettings["thermalWidth"] })}>
               <option value="auto">Thermal auto width</option>
@@ -483,7 +483,6 @@ export function PrintEngine({
               ["showGstDetails", "Show GST Details"],
               ["showSignature", "Show Signature"],
               ["showWatermark", "Show Watermark"],
-              ["blackAndWhite", "Black & White"],
               ["pharmaMode", "Pharma Mode"],
               ["autoPrintAfterSave", "Auto Print After Save"],
             ].map(([key, label]) => (

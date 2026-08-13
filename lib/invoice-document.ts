@@ -87,8 +87,9 @@ function validatePageContract(
 
   const shouldBeOnePage =
     format === "thermal" ||
-    format === "half-top" ||
-    (invoice.items.length <= 20 && (format === "a4" || format === "half-compact"))
+    (format === "half-top" && invoice.items.length <= 12) ||
+    (format === "half-compact" && invoice.items.length <= 10) ||
+    (format === "a4" && invoice.items.length <= 15)
   if (shouldBeOnePage && pages.length !== 1) {
     throw new Error(`The generated ${format} invoice unexpectedly contains ${pages.length} pages.`)
   }

@@ -1,6 +1,6 @@
 "use client"
 
-export const LOCAL_DB_VERSION = 8
+export const LOCAL_DB_VERSION = 9
 export const LOCAL_DB_URL = "sqlite:bezgrow-offline.db"
 
 export const normalizedTables = [
@@ -1077,6 +1077,23 @@ export const localMigrations: Array<{ version: number; name: string; sql: string
       "CREATE INDEX IF NOT EXISTS idx_suppliers_org_updated ON suppliers (organization_id, datetime(updated_at) DESC)",
       "CREATE INDEX IF NOT EXISTS idx_payments_org_updated ON payments (organization_id, datetime(updated_at) DESC)",
       "CREATE INDEX IF NOT EXISTS idx_expenses_org_updated ON expenses (organization_id, datetime(updated_at) DESC)",
+    ],
+  },
+  {
+    version: 9,
+    name: "invoice_item_product_snapshot_fields",
+    sql: [
+      "ALTER TABLE sales_invoice_items ADD COLUMN batch_no TEXT",
+      "ALTER TABLE sales_invoice_items ADD COLUMN expiry_date TEXT",
+      "ALTER TABLE sales_invoice_items ADD COLUMN unit TEXT",
+      "ALTER TABLE sales_invoice_items ADD COLUMN mrp REAL",
+      `UPDATE sales_invoice_items
+       SET batch_no = COALESCE(NULLIF(trim(batch_no), ''), (SELECT p.batch_no FROM products p WHERE p.id = sales_invoice_items.product_id AND p.organization_id = sales_invoice_items.organization_id)),
+           expiry_date = COALESCE(NULLIF(trim(expiry_date), ''), (SELECT p.expiry_date FROM products p WHERE p.id = sales_invoice_items.product_id AND p.organization_id = sales_invoice_items.organization_id)),
+           hsn_code = COALESCE(NULLIF(trim(hsn_code), ''), (SELECT p.hsn_code FROM products p WHERE p.id = sales_invoice_items.product_id AND p.organization_id = sales_invoice_items.organization_id)),
+           unit = COALESCE(NULLIF(trim(unit), ''), (SELECT p.unit FROM products p WHERE p.id = sales_invoice_items.product_id AND p.organization_id = sales_invoice_items.organization_id)),
+           mrp = COALESCE(mrp, (SELECT p.mrp FROM products p WHERE p.id = sales_invoice_items.product_id AND p.organization_id = sales_invoice_items.organization_id))`,
+      "CREATE INDEX IF NOT EXISTS idx_sales_items_batch_expiry ON sales_invoice_items (organization_id, batch_no, expiry_date)",
     ],
   },
 ]

@@ -20,7 +20,7 @@ export function FeaturePage({ eyebrow, title, description, highlights, workflows
             <BezgrowLogoMark className="h-11 w-11" size={44} />
             <span>
               <span className="block text-lg font-black">Bezgrow</span>
-              <span className="block text-xs uppercase tracking-[0.18em] text-white/45">Business Cloud</span>
+              <span className="block text-xs uppercase tracking-[0.18em] text-white/45">Local-first desktop</span>
             </span>
           </Link>
           <div className="flex items-center gap-2">

@@ -129,7 +129,7 @@ export default function ProfilePage() {
                   </p>
 
                   <p className="text-lg font-semibold text-white">
-                    {organization?.business_category || "Global Retail"}
+                    {organization?.business_category || "Retail Business"}
                   </p>
                 </div>
 
@@ -153,7 +153,7 @@ export default function ProfilePage() {
             <div className="relative z-10">
 
               <div className="mb-5 inline-flex max-w-full items-center gap-2 rounded-full border border-cyan-500/20 bg-cyan-500/10 px-4 py-2 text-[10px] uppercase tracking-[0.16em] text-cyan-300 sm:mb-6 sm:text-xs sm:tracking-[0.2em]">
-                Global ERP Infrastructure
+                Local-first ERP Workspace
               </div>
 
               <h1 className="bg-gradient-to-r from-white via-cyan-100 to-blue-300 bg-clip-text text-3xl font-black leading-tight tracking-tight text-transparent sm:text-5xl xl:text-6xl xl:leading-none">
@@ -161,8 +161,8 @@ export default function ProfilePage() {
               </h1>
 
               <p className="mt-4 max-w-3xl text-sm leading-6 text-neutral-400 sm:mt-6 sm:text-lg sm:leading-8">
-                Centralized enterprise identity management for your global inventory,
-                billing, fulfillment and warehouse operations.
+                Business identity for local inventory, billing, customer,
+                reporting, and warehouse operations.
               </p>
 
             </div>
@@ -181,11 +181,11 @@ export default function ProfilePage() {
 
               <div className="rounded-3xl border border-white/10 bg-white/[0.03] p-6 hover:border-cyan-400/30 transition-all duration-300 hover:-translate-y-1">
                 <p className="text-xs uppercase tracking-[0.18em] text-neutral-500 mb-3">
-                  Cloud Sync
+                  Local Data
                 </p>
 
                 <h3 className="text-3xl font-black text-cyan-300 sm:text-4xl">
-                  Active
+                  On Device
                 </h3>
               </div>
 
@@ -201,11 +201,11 @@ export default function ProfilePage() {
 
               <div className="rounded-3xl border border-white/10 bg-gradient-to-br from-cyan-500/10 to-blue-500/10 p-6 hover:border-cyan-400/30 transition-all duration-300 hover:-translate-y-1">
                 <p className="text-xs uppercase tracking-[0.18em] text-neutral-400 mb-3">
-                  Infrastructure
+                  Offline Operation
                 </p>
 
                 <h3 className="text-3xl font-black text-white sm:text-4xl">
-                  Global
+                  Ready
                 </h3>
               </div>
 
@@ -248,25 +248,6 @@ export default function ProfilePage() {
 
                     <p className="text-sm text-neutral-500 mt-1">
                       Manage inventory catalog
-                    </p>
-                  </div>
-
-                  <span className="text-cyan-300 text-xl group-hover:translate-x-1 transition-all">
-                    →
-                  </span>
-                </Link>
-
-                <Link
-                  href="/dashboard/orders"
-                  className="group flex items-center justify-between gap-4 rounded-2xl border border-white/10 bg-white/[0.03] px-4 py-4 transition-all duration-300 hover:-translate-y-1 hover:border-cyan-500/30 hover:bg-cyan-500/[0.05] sm:px-5 sm:py-5"
-                >
-                  <div>
-                    <p className="font-semibold text-white text-lg">
-                      Orders
-                    </p>
-
-                    <p className="text-sm text-neutral-500 mt-1">
-                      Enterprise fulfillment flow
                     </p>
                   </div>
 

@@ -49,7 +49,7 @@ Tables created or materially managed by migrations include suppliers, financial 
 
 - Local SQLite logical URL: `sqlite:bezgrow-offline.db`
 - Tauri SQL preload: `src-tauri/tauri.conf.json` -> `plugins.sql.preload`
-- Local SQLite schema version: `LOCAL_DB_VERSION = 6` in `lib/offline/local/schema.ts`
+- Local SQLite schema version: `LOCAL_DB_VERSION = 9` in `lib/offline/local/schema.ts`
 - Local SQLite storage is handled through `@tauri-apps/plugin-sql`; physical storage is in the Tauri app data area for `com.bezgrow.erp`, commonly under the macOS application support profile. Verify the exact path from the running app profile before copying.
 
 Safe local SQLite export checklist:
