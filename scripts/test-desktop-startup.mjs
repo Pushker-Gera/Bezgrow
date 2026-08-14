@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process"
-import { existsSync } from "node:fs"
+import { existsSync, readFileSync } from "node:fs"
 import { createServer } from "node:net"
 import { dirname, join } from "node:path"
 import { performance } from "node:perf_hooks"
@@ -9,9 +9,24 @@ import packageJson from "../package.json" with { type: "json" }
 const root = dirname(dirname(fileURLToPath(import.meta.url)))
 const nodeBinary = join(root, "desktop-runtime", "node", process.platform === "win32" ? "node.exe" : "node")
 const serverEntry = join(root, "desktop-runtime", "next-server", "server.js")
+const buildIdentityPath = join(root, "desktop-runtime", "next-server", "public", "desktop-build.json")
+const configuredStartupTimeout = Number(process.env.BEZGROW_DESKTOP_STARTUP_TIMEOUT_MS || 15_000)
+const startupTimeoutMs = Number.isFinite(configuredStartupTimeout) && configuredStartupTimeout >= 3_000
+  ? configuredStartupTimeout
+  : 15_000
 
-if (!existsSync(nodeBinary) || !existsSync(serverEntry)) {
+if (!existsSync(nodeBinary) || !existsSync(serverEntry) || !existsSync(buildIdentityPath)) {
   throw new Error("Run npm run desktop:prepare before measuring desktop startup.")
+}
+
+const buildIdentity = JSON.parse(readFileSync(buildIdentityPath, "utf8"))
+if (
+  buildIdentity.applicationVersion !== packageJson.version ||
+  !/^[a-f0-9]{40}$/i.test(buildIdentity.gitCommit || "") ||
+  Number.isNaN(Date.parse(buildIdentity.builtAt || "")) ||
+  buildIdentity.sourceTreeDirty === true
+) {
+  throw new Error("The prepared desktop runtime does not contain a clean, version-matched build identity.")
 }
 
 const port = await new Promise((resolve, reject) => {
@@ -36,6 +51,8 @@ const child = spawn(nodeBinary, [serverEntry], {
     BEZGROW_DESKTOP_BUILD: "1",
     BEZGROW_RUNTIME_TOKEN: runtimeToken,
     BEZGROW_RUNTIME_VERSION: packageJson.version,
+    BEZGROW_RUNTIME_BUILD_COMMIT: buildIdentity.gitCommit,
+    BEZGROW_RUNTIME_BUILD_TIMESTAMP: buildIdentity.builtAt,
     BEZGROW_RUNTIME_SHELL_PID: String(process.pid),
     NEXT_TELEMETRY_DISABLED: "1",
   },
@@ -43,13 +60,24 @@ const child = spawn(nodeBinary, [serverEntry], {
 })
 
 let stderr = ""
+let stdout = ""
+let childExit = null
 child.stderr.on("data", (chunk) => {
   stderr = `${stderr}${chunk}`.slice(-4000)
+})
+child.stdout.on("data", (chunk) => {
+  stdout = `${stdout}${chunk}`.slice(-4000)
+})
+child.once("exit", (code, signal) => {
+  childExit = { code, signal }
 })
 
 try {
   let response
-  while (performance.now() - startedAt < 3000) {
+  let healthy = false
+  let lastHealth = null
+  let responseFailure = ""
+  while (performance.now() - startedAt < startupTimeoutMs && !childExit) {
     try {
       response = await fetch(`http://127.0.0.1:${port}/api/desktop-health`, {
         redirect: "manual",
@@ -57,12 +85,19 @@ try {
       })
       if (response.status === 200) {
         const health = await response.json()
+        lastHealth = health
         if (
           health.runtime === "bezgrow-embedded" &&
           health.appVersion === packageJson.version &&
           health.shellPid === process.pid &&
           health.serverPid === child.pid
-        ) break
+        ) {
+          healthy = true
+          break
+        }
+      } else if (response.status >= 500) {
+        responseFailure = `${response.status} ${await response.text()}`
+        break
       }
     } catch {
       // The bundled server has not bound its loopback socket yet.
@@ -71,11 +106,15 @@ try {
   }
 
   const startupMs = performance.now() - startedAt
-  if (!response || response.status !== 200) {
-    throw new Error(`Desktop server did not become ready within 3000ms.\n${stderr}`)
+  if (!healthy) {
+    throw new Error(
+      `Desktop server did not become ready within ${startupTimeoutMs}ms.` +
+      `\nhealth=${responseFailure || JSON.stringify(lastHealth) || response?.status || "unreachable"}` +
+      `\nexit=${JSON.stringify(childExit)}\nstdout:\n${stdout}\nstderr:\n${stderr}`
+    )
   }
-  if (startupMs >= 3000) {
-    throw new Error(`Desktop server startup exceeded 3000ms: ${startupMs.toFixed(1)}ms`)
+  if (startupMs >= startupTimeoutMs) {
+    throw new Error(`Desktop server startup exceeded ${startupTimeoutMs}ms: ${startupMs.toFixed(1)}ms`)
   }
   const unauthenticated = await fetch(`http://127.0.0.1:${port}/api/desktop-health`)
   if (unauthenticated.status !== 404) {
@@ -83,15 +122,21 @@ try {
   }
   console.log(`desktop-startup-ok ${startupMs.toFixed(1)}ms`)
 } finally {
-  child.kill()
-  await new Promise((resolve) => {
-    const timeout = setTimeout(() => {
-      child.kill("SIGKILL")
-      resolve()
-    }, 2000)
-    child.once("exit", () => {
-      clearTimeout(timeout)
-      resolve()
+  let forcedShutdown = false
+  if (child.exitCode === null && child.signalCode === null) {
+    child.kill()
+    forcedShutdown = await new Promise((resolve) => {
+      const timeout = setTimeout(() => {
+        child.kill("SIGKILL")
+        resolve(true)
+      }, 5000)
+      child.once("exit", () => {
+        clearTimeout(timeout)
+        resolve(false)
+      })
     })
-  })
+  }
+  if (forcedShutdown) {
+    throw new Error("Desktop server did not shut down within 5000ms after termination.")
+  }
 }
