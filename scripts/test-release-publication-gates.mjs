@@ -31,6 +31,8 @@ assert.match(writer, /Published release metadata requires a local verified insta
 assert.match(publicAssetVerifier, /remote\.digest === digest/, "Published GitHub asset digests must match the final local bytes.")
 assert.match(publicAssetVerifier, /response\.status === 200/, "Published installer URLs must return HTTP 200 before metadata advances.")
 assert.match(metadataPublisher, /release_status: "draft"[\s\S]*stagedReleases[\s\S]*\.in\("id", releaseIds\)/, "Control-plane releases must stage all artifacts before one multi-platform promotion.")
+assert.match(metadataPublisher, /supportsColumns[\s\S]*supportsMandatoryAfter[\s\S]*supportsUpdaterMetadata/, "Control-plane publication must safely detect optional release-schema migrations.")
+assert.match(metadataPublisher, /entry\.channel !== "internal"[\s\S]*!supportsUpdaterMetadata/, "Stable updater publication must fail closed when updater schema columns are unavailable.")
 assert.match(writer, /Bezgrow-mac\.dmg\.release\.json/, "Publication must write the Mac sidecar manifest.")
 assert.match(writer, /buildTimestamp/, "Published artifacts must record their build timestamp.")
 assert.match(workflow, /mac-build\.json/, "The Mac release must carry a checked build-provenance record.")

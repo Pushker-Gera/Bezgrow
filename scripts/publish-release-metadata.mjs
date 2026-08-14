@@ -36,6 +36,24 @@ const supabase = createClient(supabaseUrl, serviceRoleKey, {
   auth: { persistSession: false, autoRefreshToken: false },
 })
 
+async function supportsColumns(table, columns) {
+  const result = await supabase.from(table).select(columns.join(",")).limit(0)
+  if (!result.error) return true
+  if (["42703", "PGRST204"].includes(result.error.code)) return false
+  throw result.error
+}
+
+const supportsMandatoryAfter = await supportsColumns("desktop_releases", ["mandatory_after"])
+const supportsUpdaterMetadata = await supportsColumns("release_artifacts", [
+  "updater_url",
+  "updater_size",
+  "updater_sha256",
+  "updater_signature_status",
+])
+if (manifest.mandatoryAfter && !supportsMandatoryAfter) {
+  throw new Error("The control plane must apply the mandatory_after migration before scheduling a mandatory release.")
+}
+
 const definitions = [
   { key: "mac", platform: "macos", architecture: manifest.mac?.architecture, artifactType: "dmg" },
   { key: "macX64", platform: "macos", architecture: "x64", artifactType: "dmg" },
@@ -103,6 +121,9 @@ for (const entry of artifacts) {
   ) {
     throw new Error(`${entry.key} is missing verified Tauri v2 updater metadata and cannot be published as stable.`)
   }
+  if (entry.channel !== "internal" && primaryUpdaterArtifact && !supportsUpdaterMetadata) {
+    throw new Error("The control plane must apply the updater metadata migration before publishing a stable release.")
+  }
 
   const response = await fetch(installer.downloadUrl, {
     method: "HEAD",
@@ -133,23 +154,26 @@ for (const entries of grouped.values()) {
     architecture: first.architecture,
     release_channel: first.channel,
   }
+  const releaseValues = {
+    ...identity,
+    release_status: "draft",
+    minimum_supported_version: manifest.minimumSupportedVersion || null,
+    release_notes: Array.isArray(manifest.releaseNotes)
+      ? manifest.releaseNotes.join("\n")
+      : manifest.releaseNotes || null,
+    rollout_percentage: 100,
+    mandatory: Boolean(manifest.mandatory),
+    active: false,
+    published_at: null,
+    updated_at: new Date().toISOString(),
+  }
+  if (supportsMandatoryAfter) {
+    releaseValues.mandatory_after = manifest.mandatoryAfter || null
+  }
   const releaseResult = await supabase
     .from("desktop_releases")
     .upsert(
-      {
-        ...identity,
-        release_status: "draft",
-        minimum_supported_version: manifest.minimumSupportedVersion || null,
-        release_notes: Array.isArray(manifest.releaseNotes)
-          ? manifest.releaseNotes.join("\n")
-          : manifest.releaseNotes || null,
-        rollout_percentage: 100,
-        mandatory: Boolean(manifest.mandatory),
-        mandatory_after: manifest.mandatoryAfter || null,
-        active: false,
-        published_at: null,
-        updated_at: new Date().toISOString(),
-      },
+      releaseValues,
       {
         onConflict: "version,build_number,platform,architecture,release_channel",
       }
@@ -160,32 +184,35 @@ for (const entries of grouped.values()) {
 
   for (const entry of entries) {
     const installer = entry.installer
+    const artifactValues = {
+      release_id: releaseResult.data.id,
+      artifact_type: entry.artifactType,
+      file_name: installer.filename || basename(new URL(installer.downloadUrl).pathname),
+      file_url: installer.downloadUrl,
+      file_size: installer.size,
+      sha256: installer.sha256.toLowerCase(),
+      update_signature: installer.updateSignature || null,
+      signature_status: installer.signed === true ? "valid" : "invalid",
+      notarization_status:
+        entry.platform === "macos"
+          ? installer.notarized === true
+            ? "valid"
+            : "invalid"
+          : "not_applicable",
+      code_signing_status: installer.signed === true ? "valid" : "invalid",
+      validation_status: "valid",
+      validated_at: new Date().toISOString(),
+      validation_error: null,
+      updated_at: new Date().toISOString(),
+    }
+    if (supportsUpdaterMetadata) {
+      artifactValues.updater_url = installer.updaterUrl || null
+      artifactValues.updater_size = installer.updaterSize || null
+      artifactValues.updater_sha256 = installer.updaterSha256?.toLowerCase() || null
+      artifactValues.updater_signature_status = installer.updaterSignatureVerified === true ? "valid" : "missing"
+    }
     const artifactResult = await supabase.from("release_artifacts").upsert(
-      {
-        release_id: releaseResult.data.id,
-        artifact_type: entry.artifactType,
-        file_name: installer.filename || basename(new URL(installer.downloadUrl).pathname),
-        file_url: installer.downloadUrl,
-        file_size: installer.size,
-        sha256: installer.sha256.toLowerCase(),
-        update_signature: installer.updateSignature || null,
-        updater_url: installer.updaterUrl || null,
-        updater_size: installer.updaterSize || null,
-        updater_sha256: installer.updaterSha256?.toLowerCase() || null,
-        updater_signature_status: installer.updaterSignatureVerified === true ? "valid" : "missing",
-        signature_status: installer.signed === true ? "valid" : "invalid",
-        notarization_status:
-          entry.platform === "macos"
-            ? installer.notarized === true
-              ? "valid"
-              : "invalid"
-            : "not_applicable",
-        code_signing_status: installer.signed === true ? "valid" : "invalid",
-        validation_status: "valid",
-        validated_at: new Date().toISOString(),
-        validation_error: null,
-        updated_at: new Date().toISOString(),
-      },
+      artifactValues,
       { onConflict: "release_id,file_url" }
     )
     if (artifactResult.error) throw artifactResult.error
