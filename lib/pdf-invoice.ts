@@ -224,9 +224,18 @@ function bytesFromDataUrl(value: string) {
 async function loadImageBytesFromUrl(url: string) {
   if (!url) return null
   try {
-    const response = await fetch(url)
-    if (!response.ok) return null
-    const bytes = new Uint8Array(await response.arrayBuffer())
+    // WebKit in a packaged Tauri app can reject fetch(data:...), even though
+    // Chromium and Node accept it. Saved business logos are deliberately
+    // passed to the PDF generator as self-contained data URLs, so decode those
+    // bytes directly instead of asking the network stack to load them.
+    const bytes = /^data:/i.test(url)
+      ? bytesFromDataUrl(url)
+      : await (async () => {
+          const response = await fetch(url)
+          if (!response.ok) return null
+          return new Uint8Array(await response.arrayBuffer())
+        })()
+    if (!bytes?.length) return null
     const isPng = bytes[0] === 0x89 && bytes[1] === 0x50 && bytes[2] === 0x4e && bytes[3] === 0x47
     const isJpeg = bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff
     if (isPng || isJpeg) {

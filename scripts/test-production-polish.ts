@@ -149,6 +149,25 @@ async function run() {
     payment: { ...representative.payment, paidAmount: representative.totals.grandTotal, dueAmount: 0, balanceAmount: 0 },
   }
   const formats: PrintFormat[] = ["a4", "half-compact", "half-top", "thermal"]
+  const packagedWebKitLogo = representative.enterprise.logoUrl.replace(",", ",\n")
+  const originalFetch = globalThis.fetch
+  globalThis.fetch = ((input: RequestInfo | URL, init?: RequestInit) => {
+    if (String(input).startsWith("data:")) {
+      throw new Error("Packaged WebKit blocks fetch(data:...) in this regression fixture.")
+    }
+    return originalFetch(input, init)
+  }) as typeof fetch
+  try {
+    const packagedBytes = await createInvoicePdf(
+      { ...representative, enterprise: { ...representative.enterprise, logoUrl: packagedWebKitLogo } },
+      { ...defaultPrintSettings, showLogo: true, showQr: false, showBarcode: false },
+      "a4"
+    )
+    assert.ok(await paintedRasterImageCount(packagedBytes) > 0, "Saved data-URL logos must render when packaged WebKit blocks fetch(data:...)")
+  } finally {
+    globalThis.fetch = originalFetch
+  }
+
   for (const format of formats) {
     const settings = {
       ...defaultPrintSettings,
