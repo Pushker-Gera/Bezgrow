@@ -58,6 +58,17 @@ if (!includes("Platform Admin Login") || !includes("/api/platform-admin/device/a
 if (!includes("canonical-pdf-preview")) {
   throw new Error("Packaged app is missing the canonical PDF preview implementation.")
 }
+for (const required of [
+  "The saved business logo could not be embedded in the invoice PDF.",
+  "Exact amount:",
+  "data-money-value",
+  "About / Version",
+  "Copy Build ID",
+]) {
+  if (!includes(required)) {
+    throw new Error(`Packaged app is missing release-critical invoice/KPI/build-identity behavior: ${required}`)
+  }
+}
 const executableBytes = readFileSync(executable)
 if (!executableBytes.includes(Buffer.from("desktop_open_pdf_for_print"))) {
   throw new Error("Packaged app is missing the validated native PDF print command.")

@@ -1,6 +1,6 @@
 {
   "name": "saas-project",
-  "version": "0.1.12",
+  "version": "0.1.13",
   "private": true,
   "engines": {
     "node": ">=22 <23"
@@ -40,7 +40,7 @@
     "test:desktop-hardening": "node scripts/test-desktop-hardening-contract.mjs",
     "test:release-artifacts": "node scripts/test-release-artifacts.mjs",
     "test:release-publication": "node scripts/test-release-publication-gates.mjs",
-    "test:release-gates": "npm run test:release-version-alignment && npm run test:architecture && npm run test:data-authority:ci && npm run test:admin-control-plane && npm run test:admin-api-security && npm run test:license && npm run test:desktop-sqlite-regression && npm run test:desktop-hardening && npm run test:offline && npm run test:final-offline-network && npm run test:backup && npm run test:invoice-print && npm run test:updater && npm run test:release-artifacts && npm run test:release-publication",
+    "test:release-gates": "npm run test:release-version-alignment && npm run test:production-polish && npm run test:money-card-layout && npm run test:architecture && npm run test:data-authority:ci && npm run test:admin-control-plane && npm run test:admin-api-security && npm run test:license && npm run test:desktop-sqlite-regression && npm run test:desktop-hardening && npm run test:offline && npm run test:final-offline-network && npm run test:backup && npm run test:invoice-print && npm run test:updater && npm run test:release-artifacts && npm run test:release-publication",
     "test:release-version-alignment": "node scripts/verify-release-version-alignment.mjs",
     "test:release-metadata": "node scripts/test-release-metadata.mjs",
     "test:updater": "node --import tsx scripts/test-updater-system.ts",
@@ -55,6 +55,7 @@
     "test:invoice-print-layout": "node --import tsx scripts/test-invoice-pdf-layout.ts",
     "test:invoice-print-options": "node --import tsx scripts/test-invoice-pdf-options.ts",
     "test:invoice-rendered-codes": "node --import tsx scripts/test-rendered-invoice-codes.ts",
+    "test:money-card-layout": "node scripts/test-money-card-layout.mjs",
     "qa:invoice-production-polish": "node --import tsx scripts/generate-production-polish-qa.ts",
     "test:reports": "node scripts/test-report-chart-contract.mjs",
     "test:final-offline-network": "node scripts/test-final-offline-network.mjs",
@@ -113,6 +114,7 @@
     "sharp": "0.35.3"
   },
   "devDependencies": {
+    "@playwright/test": "^1.51.1",
     "@tailwindcss/postcss": "^4.3.3",
     "@tauri-apps/cli": "^2.11.3",
     "@types/node": "^20",

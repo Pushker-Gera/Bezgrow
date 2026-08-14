@@ -44,6 +44,10 @@ async function supportsColumns(table, columns) {
 }
 
 const supportsMandatoryAfter = await supportsColumns("desktop_releases", ["mandatory_after"])
+const supportsReleaseProvenance = await supportsColumns("desktop_releases", [
+  "build_commit",
+  "build_timestamp",
+])
 const supportsUpdaterMetadata = await supportsColumns("release_artifacts", [
   "updater_url",
   "updater_size",
@@ -52,6 +56,9 @@ const supportsUpdaterMetadata = await supportsColumns("release_artifacts", [
 ])
 if (manifest.mandatoryAfter && !supportsMandatoryAfter) {
   throw new Error("The control plane must apply the mandatory_after migration before scheduling a mandatory release.")
+}
+if (!supportsReleaseProvenance) {
+  throw new Error("The control plane must apply the desktop release build-provenance migration before publishing installers.")
 }
 
 const definitions = [
@@ -91,6 +98,14 @@ for (const entry of artifacts) {
   }
   if (!installer.downloadUrl || !/^https:\/\//i.test(installer.downloadUrl)) {
     throw new Error(`A final public HTTPS download URL is required for ${entry.key}.`)
+  }
+  if (installer.version !== version) {
+    throw new Error(`${entry.key} metadata version ${installer.version || "(missing)"} does not match release ${version}.`)
+  }
+  const publicFilename = basename(new URL(installer.downloadUrl).pathname)
+  const recordedFilename = installer.filename || publicFilename
+  if (publicFilename !== recordedFilename || !recordedFilename.includes(version)) {
+    throw new Error(`${entry.key} must use an immutable URL ending in its exact versioned installer filename.`)
   }
   if (!installer.size || !/^[a-f0-9]{64}$/i.test(installer.sha256 || "")) {
     throw new Error(`Verified size and SHA-256 are required for ${entry.key}.`)
@@ -164,6 +179,8 @@ for (const entries of grouped.values()) {
     rollout_percentage: 100,
     mandatory: Boolean(manifest.mandatory),
     active: false,
+    build_commit: expectedCommit.toLowerCase(),
+    build_timestamp: first.installer.buildTimestamp,
     published_at: null,
     updated_at: new Date().toISOString(),
   }

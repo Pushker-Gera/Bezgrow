@@ -51,6 +51,7 @@ assert.match(
 assert.match(validator, /application\/json/, "HTML/JSON installer rejection is missing.")
 assert.match(validator, /function inferredVersion[\s\S]*\\d\+\\\.\\d\+\\\.\\d\+[\s\S]*\?=\[-_\.\]/, "Version parsing must stop before the x64 filename suffix.")
 assert.match(validator, /Installer SHA-256 does not match release metadata/, "Checksum mismatch must block downloads.")
+assert.match(validator, /does not contain metadata version/, "Unversioned physical installer filenames must be rejected.")
 assert.match(validator, /commitLike\(candidate\.buildCommit\)/, "Downloads must require an immutable source commit.")
 assert.match(validator, /timestampLike\(candidate\.buildTimestamp\)/, "Downloads must require an immutable build timestamp.")
 assert.match(validator, /const available = checksumVerified && metadataValid/, "Downloads must require both verified bytes and complete immutable metadata.")
@@ -58,9 +59,10 @@ assert.match(validator, /Installer architecture .* does not match metadata archi
 assert.match(publicReleaseSource, /checkedInCandidates/, "Local public/downloads artifacts must be discovered.")
 assert.match(publicReleaseSource, /configuredCandidates/, "Configured installer URLs must be discovered.")
 assert.match(publicReleaseSource, /releaseCandidateVersions/, "The download page must evaluate immutable release versions independently of the website package version.")
+assert.match(publicReleaseSource, /Fail closed on the newest intended version/, "The download page must not fall back to an older complete installer cohort.")
 assert.match(
   publicReleaseSource,
-  /mac\.available &&[\s\S]*windows\.available &&[\s\S]*mac\.installer\?\.version === version &&[\s\S]*windows\.installer\?\.version === version/,
+  /mac\.available &&[\s\S]*windows\.available &&[\s\S]*mac\.installer\?\.version === releaseVersion &&[\s\S]*windows\.installer\?\.version === releaseVersion/,
   "The download page must expose only a complete same-version Mac and Windows release cohort."
 )
 assert.match(desktopReleaseRoute, /platforms:/, "Desktop release API must return independent platform records.")

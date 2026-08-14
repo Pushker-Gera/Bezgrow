@@ -526,6 +526,25 @@ jobs:
           & node $arguments
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
+      - name: Download and verify the previously published Windows installer
+        shell: pwsh
+        run: |
+          $release = Get-Content -Raw "public\downloads\Bezgrow-windows.exe.release.json" | ConvertFrom-Json
+          $currentVersion = node -p "require('./package.json').version"
+          if ([string]::IsNullOrWhiteSpace($release.downloadUrl) -or
+              [string]::IsNullOrWhiteSpace($release.sha256) -or
+              $release.version -eq $currentVersion) {
+            throw "A distinct, checksum-pinned previous Windows release is required for the in-place upgrade test."
+          }
+          $previousInstaller = Join-Path $env:RUNNER_TEMP $release.filename
+          Invoke-WebRequest -Uri $release.downloadUrl -OutFile $previousInstaller
+          $actualSha = (Get-FileHash -LiteralPath $previousInstaller -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($actualSha -ne $release.sha256.ToLowerInvariant()) {
+            throw "The previous Windows installer SHA-256 does not match checked-in release metadata."
+          }
+          "BEZGROW_PREVIOUS_WINDOWS_INSTALLER=$previousInstaller" >> $env:GITHUB_ENV
+          "BEZGROW_PREVIOUS_WINDOWS_VERSION=$($release.version)" >> $env:GITHUB_ENV
+
       - name: Verify bundled server startup and shutdown
         run: node scripts/test-desktop-startup.mjs
 
@@ -536,7 +555,12 @@ jobs:
             "src-tauri\target\x86_64-pc-windows-msvc\release\bundle\nsis\Bezgrow_*.exe" |
             Select-Object -First 1
           if (-not $installer) { throw "NSIS installer was not generated." }
-          .\scripts\test-windows-installer.ps1 -InstallerPath $installer.FullName
+          .\scripts\test-windows-installer.ps1 `
+            -InstallerPath $installer.FullName `
+            -PreviousInstallerPath $env:BEZGROW_PREVIOUS_WINDOWS_INSTALLER `
+            -PreviousVersion $env:BEZGROW_PREVIOUS_WINDOWS_VERSION `
+            -ExpectedVersion (node -p "require('./package.json').version") `
+            -ExpectedCommit "${{ github.sha }}"
 
       - name: Upload installed-app smoke diagnostics
         if: always()
@@ -920,6 +944,7 @@ jobs:
           WINDOWS_DIR="release-artifacts/windows-x64"
           if [ -d "$WINDOWS_DIR" ]; then
             WINDOWS_SIGNING="$(tr -d '\r\n' < "$WINDOWS_DIR/windows-signing-status.txt")"
+            WINDOWS_BUILD_TIMESTAMP="$(node -p "require('./release-artifacts/windows-x64/windows-build.json').builtAt")"
             WINDOWS_SIGNED=false
             WINDOWS_CHANNEL="internal"
             if [ "$WINDOWS_SIGNING" = "valid" ]; then
@@ -943,12 +968,14 @@ jobs:
               --windows-signed "$WINDOWS_SIGNED"
               --windows-channel "$WINDOWS_CHANNEL"
               --windows-installer-type "nsis"
+              --windows-build-timestamp "$WINDOWS_BUILD_TIMESTAMP"
               --windows-msi-url "$BASE_URL/$WINDOWS_MSI_NAME"
               --windows-msi-file "$WINDOWS_MSI"
               --windows-msi-filename "$WINDOWS_MSI_NAME"
               --windows-msi-signed "$WINDOWS_SIGNED"
               --windows-msi-channel "$WINDOWS_CHANNEL"
               --windows-msi-installer-type "msi"
+              --windows-msi-build-timestamp "$WINDOWS_BUILD_TIMESTAMP"
             )
             if [ -f "$WINDOWS_EXE.sig" ]; then
               MANIFEST_ARGS+=(
@@ -967,6 +994,7 @@ jobs:
                 --windows-portable-signed "$WINDOWS_SIGNED"
                 --windows-portable-channel "$WINDOWS_CHANNEL"
                 --windows-portable-installer-type "portable-exe"
+                --windows-portable-build-timestamp "$WINDOWS_BUILD_TIMESTAMP"
               )
             fi
             if [ -n "$WINDOWS_PORTABLE_ZIP" ]; then
@@ -978,6 +1006,7 @@ jobs:
                 --windows-portable-zip-signed "false"
                 --windows-portable-zip-channel "$WINDOWS_CHANNEL"
                 --windows-portable-zip-installer-type "portable-zip"
+                --windows-portable-zip-build-timestamp "$WINDOWS_BUILD_TIMESTAMP"
               )
             fi
           fi

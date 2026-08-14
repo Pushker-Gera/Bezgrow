@@ -401,10 +401,12 @@ async function validateUncached(candidate: InstallerCandidate): Promise<Validate
     )
   }
   const filenameVersion = inferredVersion(filename)
-  if (candidate.version && filenameVersion && candidate.version !== filenameVersion) {
+  if (candidate.version && filenameVersion !== candidate.version) {
     return unavailable(
       { ...candidate, filename, size: bytes.size, sha256: bytes.sha256 },
-      `Installer version ${filenameVersion} does not match metadata version ${candidate.version}.`
+      filenameVersion
+        ? `Installer version ${filenameVersion} does not match metadata version ${candidate.version}.`
+        : `Installer filename ${filename} does not contain metadata version ${candidate.version}.`
     )
   }
   if (candidate.size && candidate.size !== bytes.size) {
@@ -427,6 +429,7 @@ async function validateUncached(candidate: InstallerCandidate): Promise<Validate
     semverLike(candidate.version) &&
       candidate.architecture &&
       candidate.filename &&
+      filenameVersion === candidate.version &&
       candidate.size &&
       sha256Like(candidate.sha256) &&
       commitLike(candidate.buildCommit) &&

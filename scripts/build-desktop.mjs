@@ -1,6 +1,6 @@
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -25,8 +25,6 @@ const generatedConfigPath = join(generatedConfigDir, "tauri.generated.conf.json"
 const tauriCli = join(root, "node_modules", "@tauri-apps", "cli", "tauri.js");
 const publicDownloadsDir = join(root, "public", "downloads");
 const publicMacReleaseManifest = join(root, "public", "downloads", "Bezgrow-mac.dmg.release.json");
-const publicWindowsExe = join(publicDownloadsDir, "Bezgrow-windows.exe");
-const publicWindowsMsi = join(publicDownloadsDir, "Bezgrow-windows.msi");
 const publicWindowsExeReleaseManifest = join(publicDownloadsDir, "Bezgrow-windows.exe.release.json");
 const publicWindowsMsiReleaseManifest = join(publicDownloadsDir, "Bezgrow-windows.msi.release.json");
 const desktopReleaseManifest = join(publicDownloadsDir, "desktop-release.json");
@@ -45,6 +43,13 @@ const releaseRoot = targetTriple
 const publicMacFilename = `Bezgrow-${packageVersion}-${buildArchitecture("macos")}.dmg`;
 const publicMacDmg = join(publicDownloadsDir, publicMacFilename);
 const publicMacDownloadPath = `/downloads/${publicMacFilename}`;
+const publicWindowsArchitecture = buildArchitecture("windows") === "x86_64" ? "x64" : "arm64";
+const publicWindowsExeFilename = `Bezgrow-Setup-${packageVersion}-${publicWindowsArchitecture}.exe`;
+const publicWindowsMsiFilename = `Bezgrow-${packageVersion}-${publicWindowsArchitecture}.msi`;
+const publicWindowsExe = join(publicDownloadsDir, publicWindowsExeFilename);
+const publicWindowsMsi = join(publicDownloadsDir, publicWindowsMsiFilename);
+const publicWindowsExeDownloadPath = `/downloads/${publicWindowsExeFilename}`;
+const publicWindowsMsiDownloadPath = `/downloads/${publicWindowsMsiFilename}`;
 
 function preserveMacAppBundle(args) {
   if (process.platform !== "darwin") return args;
@@ -394,28 +399,28 @@ function verifyPublicWindowsInstaller() {
   const signed = true;
 
   writeInstallerReleaseManifest(publicWindowsExeReleaseManifest, {
-    file: "/downloads/Bezgrow-windows.exe",
-    downloadUrl: "/downloads/Bezgrow-windows.exe",
+    file: publicWindowsExeDownloadPath,
+    downloadUrl: publicWindowsExeDownloadPath,
     version: packageVersion,
     sha256: exeSha256,
     size: exeBytes.length,
     ...releaseTrustMetadata({
       platform: "windows",
-      filename: "Bezgrow-windows.exe",
+      filename: publicWindowsExeFilename,
       signed,
       productionTrusted: true,
     }),
     generatedAt,
   });
   writeInstallerReleaseManifest(publicWindowsMsiReleaseManifest, {
-    file: "/downloads/Bezgrow-windows.msi",
-    downloadUrl: "/downloads/Bezgrow-windows.msi",
+    file: publicWindowsMsiDownloadPath,
+    downloadUrl: publicWindowsMsiDownloadPath,
     version: packageVersion,
     sha256: msiSha256,
     size: msiBytes.length,
     ...releaseTrustMetadata({
       platform: "windows",
-      filename: "Bezgrow-windows.msi",
+      filename: publicWindowsMsiFilename,
       signed,
       productionTrusted: true,
     }),
@@ -423,28 +428,28 @@ function verifyPublicWindowsInstaller() {
   });
   writeDesktopReleaseManifest({
     windows: {
-      file: "/downloads/Bezgrow-windows.exe",
-      downloadUrl: "/downloads/Bezgrow-windows.exe",
+      file: publicWindowsExeDownloadPath,
+      downloadUrl: publicWindowsExeDownloadPath,
       version: packageVersion,
       sha256: exeSha256,
       size: exeBytes.length,
       ...releaseTrustMetadata({
         platform: "windows",
-        filename: "Bezgrow-windows.exe",
+        filename: publicWindowsExeFilename,
         signed,
         productionTrusted: true,
       }),
       generatedAt,
     },
     windowsMsi: {
-      file: "/downloads/Bezgrow-windows.msi",
-      downloadUrl: "/downloads/Bezgrow-windows.msi",
+      file: publicWindowsMsiDownloadPath,
+      downloadUrl: publicWindowsMsiDownloadPath,
       version: packageVersion,
       sha256: msiSha256,
       size: msiBytes.length,
       ...releaseTrustMetadata({
         platform: "windows",
-        filename: "Bezgrow-windows.msi",
+        filename: publicWindowsMsiFilename,
         signed,
         productionTrusted: true,
       }),
@@ -521,14 +526,14 @@ function copyGeneratedInstallersForDownloads() {
     const generatedAt = new Date().toISOString();
     const signed = publicWindowsBuild ? verifyAuthenticodeSignature(windowsExePath) : envBoolean("BEZGROW_WINDOWS_SIGNED");
     writeInstallerReleaseManifest(publicWindowsExeReleaseManifest, {
-      file: "/downloads/Bezgrow-windows.exe",
-      downloadUrl: "/downloads/Bezgrow-windows.exe",
+      file: publicWindowsExeDownloadPath,
+      downloadUrl: publicWindowsExeDownloadPath,
       version: packageVersion,
       sha256,
       size: bytes.length,
       ...releaseTrustMetadata({
         platform: "windows",
-        filename: "Bezgrow-windows.exe",
+        filename: publicWindowsExeFilename,
         signed,
         productionTrusted: Boolean(publicWindowsBuild && signed),
       }),
@@ -536,14 +541,14 @@ function copyGeneratedInstallersForDownloads() {
     });
     writeDesktopReleaseManifest({
       windows: {
-        file: "/downloads/Bezgrow-windows.exe",
-        downloadUrl: "/downloads/Bezgrow-windows.exe",
+        file: publicWindowsExeDownloadPath,
+        downloadUrl: publicWindowsExeDownloadPath,
         version: packageVersion,
         sha256,
         size: bytes.length,
         ...releaseTrustMetadata({
           platform: "windows",
-          filename: "Bezgrow-windows.exe",
+          filename: publicWindowsExeFilename,
           signed,
           productionTrusted: Boolean(publicWindowsBuild && signed),
         }),
@@ -560,14 +565,14 @@ function copyGeneratedInstallersForDownloads() {
     const generatedAt = new Date().toISOString();
     const signed = publicWindowsBuild ? verifyAuthenticodeSignature(windowsMsiPath) : envBoolean("BEZGROW_WINDOWS_SIGNED");
     writeInstallerReleaseManifest(publicWindowsMsiReleaseManifest, {
-      file: "/downloads/Bezgrow-windows.msi",
-      downloadUrl: "/downloads/Bezgrow-windows.msi",
+      file: publicWindowsMsiDownloadPath,
+      downloadUrl: publicWindowsMsiDownloadPath,
       version: packageVersion,
       sha256,
       size: bytes.length,
       ...releaseTrustMetadata({
         platform: "windows",
-        filename: "Bezgrow-windows.msi",
+        filename: publicWindowsMsiFilename,
         signed,
         productionTrusted: Boolean(publicWindowsBuild && signed),
       }),
@@ -575,14 +580,14 @@ function copyGeneratedInstallersForDownloads() {
     });
     writeDesktopReleaseManifest({
       windowsMsi: {
-        file: "/downloads/Bezgrow-windows.msi",
-        downloadUrl: "/downloads/Bezgrow-windows.msi",
+        file: publicWindowsMsiDownloadPath,
+        downloadUrl: publicWindowsMsiDownloadPath,
         version: packageVersion,
         sha256,
         size: bytes.length,
         ...releaseTrustMetadata({
           platform: "windows",
-          filename: "Bezgrow-windows.msi",
+          filename: publicWindowsMsiFilename,
           signed,
           productionTrusted: Boolean(publicWindowsBuild && signed),
         }),
@@ -594,6 +599,10 @@ function copyGeneratedInstallersForDownloads() {
 }
 
 mkdirSync(generatedConfigDir, { recursive: true });
+// Only packaging output is removed. Cargo dependency caches remain intact, and
+// no application-support, SQLite, licence, logo, settings, or backup path is
+// under this repository target directory.
+rmSync(join(releaseRoot, "bundle"), { recursive: true, force: true });
 const config = configureUpdater(
   configureWindowsSigning(
     configureMacSigning(JSON.parse(readFileSync(tauriConfigPath, "utf8")))

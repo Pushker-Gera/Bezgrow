@@ -17,6 +17,8 @@ const cargo = read("src-tauri/Cargo.toml");
 const tauriBuild = read("src-tauri/build.rs");
 const rust = read("src-tauri/src/lib.rs");
 const prepare = read("scripts/prepare-desktop-build.mjs");
+const nextBuild = read("scripts/build-next.mjs");
+const desktopBuild = read("scripts/build-desktop.mjs");
 const runtime = read("lib/desktop/tauri.ts");
 const loginPage = read("app/login/page.tsx");
 const authCallback = read("app/auth/callback/route.ts");
@@ -73,6 +75,10 @@ assert.equal(windowsConfig.bundle.windows.webviewInstallMode.type, "offlineInsta
 assert.equal(windowsConfig.app.trayIcon.iconPath, "icons/32x32.png", "Windows notification-area icon is missing.");
 
 assert.match(prepare, /BEZGROW_DESKTOP_BUILD/, "Desktop prepare must build with the desktop build flag.");
+assert.match(nextBuild, /rmSync\(join\(root, "\.next"\)/, "Production Next builds must remove prior generated output before compiling.");
+assert.doesNotMatch(nextBuild, /renameSync|standalone-stale/, "Production Next builds must not retain stale standalone assets.");
+assert.match(prepare, /\.standalone-stale-[\s\S]*rmSync/, "Desktop prepare must remove legacy stale runtime directories.");
+assert.match(desktopBuild, /rmSync\(join\(releaseRoot, "bundle"\)/, "Desktop packaging must remove prior installer staging output.");
 assert.match(prepare, /BEZGROW_DESKTOP_NODE_BINARY/, "Cross-architecture Windows builds must bundle the matching Node runtime.");
 assert.match(prepare, /serverSource\s*=\s*join\(root,\s*"\.next",\s*"server"\)/, "Desktop prepare must read .next/server assets.");
 assert.match(prepare, /"chunks"/, "Desktop prepare must copy server chunks into standalone output.");
@@ -92,6 +98,8 @@ assert.match(rust, /fn start_runtime_supervisor[\s\S]*local_runtime_responds\(&o
 assert.match(rust, /RUNTIME_HEALTH_HEADER[\s\S]*local_runtime_responds/, "The native health check must send the per-launch runtime credential.");
 assert.match(desktopHealthRoute, /timingSafeEqual[\s\S]*BEZGROW_RUNTIME_TOKEN[\s\S]*bezgrow-embedded/, "The embedded health route must require the per-launch token and remain hidden on the hosted site.");
 assert.match(desktopHealthRoute, /desktop-build\.json[\s\S]*gitCommit[\s\S]*buildTimestamp[\s\S]*platform[\s\S]*architecture/, "The embedded health route must report the packaged build identity.");
+assert.match(tauriBuild, /BEZGROW_BUILD_COMMIT[\s\S]*BEZGROW_BUILD_TIMESTAMP/, "The native executable must compile the exact release SHA and build timestamp.");
+assert.match(rust, /BEZGROW_RUNTIME_BUILD_COMMIT[\s\S]*BEZGROW_RUNTIME_BUILD_TIMESTAMP/, "The native executable must bind the bundled web runtime to its own build identity.");
 assert.match(rust, /RuntimeOwnership[\s\S]*shell_pid[\s\S]*server_pid[\s\S]*app_version[\s\S]*token[\s\S]*started_at/, "Runtime ownership must persist shell, server, version, token, and timestamp identity.");
 assert.match(rust, /tauri_plugin_single_instance[\s\S]*focus_running_bezgrow/, "A second launch must focus the existing Bezgrow window.");
 assert.match(rust, /main\.hide\(\)[\s\S]*create_startup_error_window/, "A failed bundled runtime must hide the ERP webview before showing recovery.");

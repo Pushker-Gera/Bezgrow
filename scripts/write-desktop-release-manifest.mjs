@@ -47,6 +47,10 @@ function installerWarning(platform, signed, notarized) {
   return null;
 }
 
+function filenameVersion(filename) {
+  return filename.match(/(?:^|[-_.])v?(\d+\.\d+\.\d+)(?=[-_.]|$)/i)?.[1] || "";
+}
+
 function buildInstaller(prefix, version, architecture) {
   const platform = prefix.startsWith("mac") ? "macos" : "windows";
   const url = readArg(`--${prefix}-url`);
@@ -64,6 +68,10 @@ function buildInstaller(prefix, version, architecture) {
   const filename =
     readArg(`--${prefix}-filename`) ||
     basename((downloadUrl || file).split("?")[0]);
+  const buildCommit =
+    readArg(`--${prefix}-build-commit`) || readArg("--build-commit") || "";
+  const buildTimestamp =
+    readArg(`--${prefix}-build-timestamp`) || readArg("--build-timestamp") || "";
   const notarized =
     platform === "macos" && readBooleanArg(`--${prefix}-notarized`);
   const signed =
@@ -74,9 +82,21 @@ function buildInstaller(prefix, version, architecture) {
     version &&
       architecture &&
       filename &&
+      filenameVersion(filename) === version &&
       size &&
-      /^[a-f0-9]{64}$/i.test(hash || "")
+      /^[a-f0-9]{64}$/i.test(hash || "") &&
+      /^[a-f0-9]{40}$/i.test(buildCommit) &&
+      !Number.isNaN(Date.parse(buildTimestamp))
   );
+  if (publicationStatus === "published" && !metadataValid) {
+    throw new Error(`${prefix} published metadata must have matching semantic filename/version, full build SHA, build timestamp, architecture, size, and SHA-256.`);
+  }
+  if (publicationStatus === "published" && downloadUrl) {
+    const publicFilename = basename(new URL(downloadUrl).pathname);
+    if (publicFilename !== filename || filenameVersion(publicFilename) !== version) {
+      throw new Error(`${prefix} published URL must be immutable and end in the exact versioned installer filename.`);
+    }
+  }
   const releaseChannel =
     readArg(`--${prefix}-channel`) ||
     readArg("--channel") ||
@@ -157,10 +177,8 @@ function buildInstaller(prefix, version, architecture) {
     publicationStatus,
     releaseDate: generatedAt,
     mandatoryAfter: readArg("--mandatory-after") || undefined,
-    buildCommit:
-      readArg(`--${prefix}-build-commit`) || readArg("--build-commit") || undefined,
-    buildTimestamp:
-      readArg(`--${prefix}-build-timestamp`) || readArg("--build-timestamp") || generatedAt,
+    buildCommit: buildCommit || undefined,
+    buildTimestamp: buildTimestamp || undefined,
     workflowRunId: readArg("--workflow-run-id") || undefined,
   };
 }

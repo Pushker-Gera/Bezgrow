@@ -12,6 +12,7 @@ const publicAssetVerifier = read("scripts/verify-published-release-assets.mjs")
 assert.match(workflow, /release-gates:\s*[\s\S]*npm run test:release-gates/, "Desktop publication must depend on explicit local-first release gates.")
 assert.match(workflow, /mac:\s*[\s\S]*needs:\s*release-gates/, "The Mac build must require the release-gate job.")
 assert.match(workflow, /Verify packaged Mac launch, local SQLite, and clean shutdown[\s\S]*test:desktop-lifecycle:mac/, "The Mac artifact must pass a real packaged launch, SQLite, and shutdown lifecycle before publication.")
+assert.match(workflow, /Download and verify the previously published Windows installer[\s\S]*PreviousInstallerPath/, "Windows release CI must test an in-place upgrade from the checksum-pinned previous public version.")
 assert.match(workflow, /windows:\s*[\s\S]*needs:\s*release-gates/, "The Windows build must require the release-gate job.")
 assert.match(workflow, /runs-on:\s*windows-latest[\s\S]*--bundles", "msi,nsis"/, "Genuine Windows x64 NSIS and MSI builds must run on windows-latest.")
 assert.match(workflow, /needs\.mac\.result == 'success' &&[\s\S]*needs\.windows\.result == 'success'/, "Publication must require both platform builds from the same workflow.")
@@ -32,6 +33,7 @@ assert.match(publicAssetVerifier, /remote\.digest === digest/, "Published GitHub
 assert.match(publicAssetVerifier, /response\.status === 200/, "Published installer URLs must return HTTP 200 before metadata advances.")
 assert.match(metadataPublisher, /release_status: "draft"[\s\S]*stagedReleases[\s\S]*\.in\("id", releaseIds\)/, "Control-plane releases must stage all artifacts before one multi-platform promotion.")
 assert.match(metadataPublisher, /supportsColumns[\s\S]*supportsMandatoryAfter[\s\S]*supportsUpdaterMetadata/, "Control-plane publication must safely detect optional release-schema migrations.")
+assert.match(metadataPublisher, /supportsReleaseProvenance[\s\S]*build_commit:[\s\S]*build_timestamp:/, "Control-plane publication must persist the exact installer build SHA and timestamp.")
 assert.match(metadataPublisher, /entry\.channel !== "internal"[\s\S]*!supportsUpdaterMetadata/, "Stable updater publication must fail closed when updater schema columns are unavailable.")
 assert.match(writer, /Bezgrow-mac\.dmg\.release\.json/, "Publication must write the Mac sidecar manifest.")
 assert.match(writer, /buildTimestamp/, "Published artifacts must record their build timestamp.")
@@ -43,6 +45,8 @@ assert.doesNotMatch(workflow, /The exact previewed invoice PDF remains on this d
 const releaseGateScript = packageJson.scripts["test:release-gates"] || ""
 for (const required of [
   "test:release-version-alignment",
+  "test:production-polish",
+  "test:money-card-layout",
   "test:architecture",
   "test:data-authority:ci",
   "test:admin-control-plane",

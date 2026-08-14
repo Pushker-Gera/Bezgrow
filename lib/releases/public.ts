@@ -56,6 +56,8 @@ type ReleaseRow = {
   active?: boolean
   created_at?: string
   published_at: string | null
+  build_commit?: string | null
+  build_timestamp?: string | null
   release_artifacts?: ArtifactRow[]
 }
 
@@ -277,6 +279,8 @@ function controlPlaneCandidate(release: ReleaseRow): InstallerCandidate | null {
     notarized:
       release.platform === "macos" && artifact.notarization_status === "valid",
     generatedAt: artifact.validated_at || release.published_at,
+    buildCommit: release.build_commit || null,
+    buildTimestamp: release.build_timestamp || null,
     releaseChannel: release.release_channel,
     releaseNotes: release.release_notes,
     buildNumber: release.build_number,
@@ -538,7 +542,7 @@ export async function getDesktopReleaseAvailability(): Promise<PublicDesktopRele
   try {
     const result = await adminSupabase
       .from("desktop_releases")
-      .select("id,version,build_number,platform,architecture,release_channel,release_status,active,rollout_percentage,minimum_supported_version,release_notes,mandatory,published_at,created_at,release_artifacts(file_url,file_size,sha256,validation_status,validation_error,signature_status,notarization_status,code_signing_status,validated_at,artifact_type,file_name)")
+      .select("id,version,build_number,platform,architecture,release_channel,release_status,active,rollout_percentage,minimum_supported_version,release_notes,mandatory,published_at,created_at,build_commit,build_timestamp,release_artifacts(file_url,file_size,sha256,validation_status,validation_error,signature_status,notarization_status,code_signing_status,validated_at,artifact_type,file_name)")
       .order("created_at", { ascending: false })
       .limit(64)
     if (result.error) {
@@ -557,29 +561,25 @@ export async function getDesktopReleaseAvailability(): Promise<PublicDesktopRele
     })
   }
 
-  let newestAttempt: { version: string; mac: PublicReleaseAvailability; windows: PublicReleaseAvailability } | null = null
-  for (const version of releaseCandidateVersions(rows)) {
-    const [mac, windows] = await Promise.all([
-      availabilityForPlatform("macos", rows, controlPlaneError, version),
-      availabilityForPlatform("windows", rows, controlPlaneError, version),
-    ])
-    newestAttempt ||= { version, mac, windows }
-    if (
-      mac.available &&
-      windows.available &&
-      mac.installer?.version === version &&
-      windows.installer?.version === version
-    ) {
-      return desktopAvailability(mac, windows)
-    }
+  // Fail closed on the newest intended version. Falling back to an older
+  // complete cohort while a newer website/control-plane version is incomplete
+  // is precisely how stale installers get served under confusing release UI.
+  const releaseVersion = releaseCandidateVersions(rows)[0] || packageVersion() || "current"
+  const [mac, windows] = await Promise.all([
+    availabilityForPlatform("macos", rows, controlPlaneError, releaseVersion),
+    availabilityForPlatform("windows", rows, controlPlaneError, releaseVersion),
+  ])
+  if (
+    mac.available &&
+    windows.available &&
+    mac.installer?.version === releaseVersion &&
+    windows.installer?.version === releaseVersion
+  ) {
+    return desktopAvailability(mac, windows)
   }
-
-  const fallbackVersion = newestAttempt?.version || packageVersion() || "current"
-  const mac = newestAttempt?.mac || missingAvailability("macos", `No genuine macOS installer for Bezgrow ${fallbackVersion} was found.`)
-  const windows = newestAttempt?.windows || missingAvailability("windows", `No genuine Windows installer for Bezgrow ${fallbackVersion} was found.`)
   return desktopAvailability(
-    mac.available ? incompleteCohortAvailability("macos", fallbackVersion, windows) : mac,
-    windows.available ? incompleteCohortAvailability("windows", fallbackVersion, mac) : windows
+    mac.available ? incompleteCohortAvailability("macos", releaseVersion, windows) : mac,
+    windows.available ? incompleteCohortAvailability("windows", releaseVersion, mac) : windows
   )
 }
 

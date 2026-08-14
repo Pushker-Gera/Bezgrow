@@ -32,6 +32,28 @@ async function pdfText(bytes: Uint8Array) {
   }
 }
 
+async function paintedRasterImageCount(bytes: Uint8Array) {
+  const pdfjs = await import("pdfjs-dist/legacy/build/pdf.mjs")
+  const standardFontDataUrl = decodeURIComponent(new URL("../node_modules/pdfjs-dist/standard_fonts/", import.meta.url).pathname)
+  const loading = pdfjs.getDocument({ data: bytes.slice(), standardFontDataUrl })
+  try {
+    const document = await loading.promise
+    let count = 0
+    for (let pageNumber = 1; pageNumber <= document.numPages; pageNumber += 1) {
+      const page = await document.getPage(pageNumber)
+      const operators = await page.getOperatorList()
+      count += operators.fnArray.filter((operator) =>
+        operator === pdfjs.OPS.paintImageXObject ||
+        operator === pdfjs.OPS.paintInlineImageXObject ||
+        operator === pdfjs.OPS.paintImageMaskXObject
+      ).length
+    }
+    return count
+  } finally {
+    await loading.destroy()
+  }
+}
+
 async function pdfTextBaselines(bytes: Uint8Array) {
   const pdfjs = await import("pdfjs-dist/legacy/build/pdf.mjs")
   const standardFontDataUrl = decodeURIComponent(new URL("../node_modules/pdfjs-dist/standard_fonts/", import.meta.url).pathname)
@@ -140,6 +162,7 @@ async function run() {
     const bytes = await createInvoicePdf(paid, settings, format)
     const images = await embeddedImages(bytes)
     assert.ok(images.some((image) => image.width === 900 && image.height === 180 && image.bytes > 0), `${format} must embed non-empty saved logo image data`)
+    assert.ok(await paintedRasterImageCount(bytes) > 0, `${format} must paint the saved logo into rendered page content`)
     const text = await pdfText(bytes)
     assert.match(text, /Due Date: -/, `${format} must render a clean missing due-date fallback`)
     assert.match(text, /Balance Due:? Rs 0\.00/, `${format} must render a fully-paid balance of zero`)
@@ -180,6 +203,23 @@ async function run() {
 
   assert.equal(formatExactIndianMoney(0), "₹0")
   assert.equal(formatExactIndianMoney(-125000), "-₹1,25,000")
+  const representativeMoney = [
+    [999, "exact"],
+    [9_999, "exact"],
+    [99_999, "exact"],
+    [9_99_999, "compact"],
+    [1_23_45_678, "compact"],
+    [9_99_99_99_999, "compact"],
+    [1_00_00_00_00_00_000, "compact"],
+    [Number.MAX_SAFE_INTEGER, "compact"],
+  ] as const
+  for (const [value, expectedMode] of representativeMoney) {
+    const formatted = moneyDisplay(value)
+    assert.equal(formatted.compact ? "compact" : "exact", expectedMode, `${value} must use ${expectedMode} KPI formatting`)
+    assert.equal(formatted.exact, formatExactIndianMoney(value), `${value} must preserve its exact accounting value`)
+    if (formatted.compact) assert.match(formatted.display, /(?:L|Cr)$/, `${value} must use an Indian compact-money suffix`)
+  }
+
   const enterpriseAmount = moneyDisplay(12_333_432_060_0)
   assert.equal(enterpriseAmount.compact, true)
   assert.match(enterpriseAmount.display, /(?:Cr|L Cr)$/)
@@ -189,6 +229,7 @@ async function run() {
   assert.match(moneyComponent, /title=\{formatted\.exact\}/, "Exact KPI money must be available by tooltip")
   assert.match(moneyComponent, /aria-label=\{formatted\.exact\}/, "Exact KPI money must be exposed accessibly")
   assert.match(moneyComponent, /min-w-0/, "Money values must be allowed to shrink inside grid and flex cards")
+  assert.match(moneyComponent, /overflow-hidden/, "Money values must never paint outside their KPI card")
   for (const source of [
     "app/dashboard/page.tsx",
     "app/dashboard/inventory/page.tsx",

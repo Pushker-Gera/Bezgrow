@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { chmodSync, copyFileSync, cpSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, copyFileSync, cpSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join, relative, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -7,6 +7,7 @@ const root = dirname(dirname(fileURLToPath(import.meta.url)));
 const standaloneDir = join(root, ".next", "standalone");
 const desktopServerDir = join(root, "desktop-runtime", "next-server");
 const desktopNodeDir = join(root, "desktop-runtime", "node");
+const desktopRuntimeDir = join(root, "desktop-runtime");
 const packageVersion = JSON.parse(readFileSync(join(root, "package.json"), "utf8")).version;
 const targetTriple = process.env.BEZGROW_DESKTOP_TARGET || "";
 const targetsWindows = targetTriple.includes("windows") || (!targetTriple && process.platform === "win32");
@@ -53,7 +54,13 @@ const buildIdentity = {
   sourceTreeDirty,
 };
 
-rmSync(standaloneDir, { recursive: true, force: true });
+for (const entry of readdirSync(desktopRuntimeDir, { withFileTypes: true })) {
+  if (entry.isDirectory() && (entry.name.startsWith(".standalone-stale-") || entry.name.startsWith(".next-stale-"))) {
+    rmSync(join(desktopRuntimeDir, entry.name), { recursive: true, force: true });
+  }
+}
+rmSync(join(root, ".next"), { recursive: true, force: true });
+rmSync(join(root, "out"), { recursive: true, force: true });
 rmSync(desktopServerDir, { recursive: true, force: true });
 rmSync(desktopNodeDir, { recursive: true, force: true });
 

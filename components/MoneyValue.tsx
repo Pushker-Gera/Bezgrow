@@ -4,7 +4,7 @@ export function MoneyValue({
   value,
   precision = 0,
   currency = "INR",
-  compactAt = 15,
+  compactAt = 8,
   className = "",
 }: {
   value: number
@@ -22,7 +22,7 @@ export function MoneyValue({
 
   return (
     <span
-      className={`block min-w-0 max-w-full whitespace-nowrap leading-none tracking-tight ${responsiveSize} ${className}`}
+      className={`block w-full min-w-0 max-w-full overflow-hidden whitespace-nowrap leading-none tracking-tight ${responsiveSize} ${className}`}
       title={formatted.exact}
       aria-label={formatted.exact}
       data-money-value="true"

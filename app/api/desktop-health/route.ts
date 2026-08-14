@@ -47,6 +47,8 @@ export function GET(request: Request) {
 
   const shellPid = Number(process.env.BEZGROW_RUNTIME_SHELL_PID)
   const appVersion = process.env.BEZGROW_RUNTIME_VERSION
+  const nativeBuildCommit = process.env.BEZGROW_RUNTIME_BUILD_COMMIT
+  const nativeBuildTimestamp = process.env.BEZGROW_RUNTIME_BUILD_TIMESTAMP
   if (!appVersion || !Number.isSafeInteger(shellPid) || shellPid <= 0) {
     return NextResponse.json({ status: "runtime_invalid" }, { status: 503 })
   }
@@ -54,6 +56,8 @@ export function GET(request: Request) {
   if (
     !build ||
     build.applicationVersion !== appVersion ||
+    build.gitCommit !== nativeBuildCommit ||
+    build.builtAt !== nativeBuildTimestamp ||
     !/^[a-f0-9]{40}$/i.test(build.gitCommit || "") ||
     Number.isNaN(Date.parse(build.builtAt || "")) ||
     !["macos", "windows", "linux"].includes(build.platform || "") ||

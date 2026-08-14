@@ -1,6 +1,18 @@
 fn main() {
     println!("cargo:rustc-check-cfg=cfg(bezgrow_updater_enabled)");
     println!("cargo:rerun-if-env-changed=BEZGROW_UPDATER_PUBLIC_KEY");
+    println!("cargo:rerun-if-env-changed=BEZGROW_BUILD_COMMIT");
+    println!("cargo:rerun-if-env-changed=BEZGROW_BUILD_TIMESTAMP");
+    let build_commit = std::env::var("BEZGROW_BUILD_COMMIT")
+        .ok()
+        .filter(|value| value.len() == 40 && value.bytes().all(|byte| byte.is_ascii_hexdigit()))
+        .unwrap_or_else(|| "development".to_string());
+    let build_timestamp = std::env::var("BEZGROW_BUILD_TIMESTAMP")
+        .ok()
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or_else(|| "development".to_string());
+    println!("cargo:rustc-env=BEZGROW_BUILD_COMMIT={build_commit}");
+    println!("cargo:rustc-env=BEZGROW_BUILD_TIMESTAMP={build_timestamp}");
     if std::env::var("BEZGROW_UPDATER_PUBLIC_KEY")
         .map(|value| !value.trim().is_empty())
         .unwrap_or(false)

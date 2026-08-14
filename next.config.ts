@@ -47,30 +47,21 @@ const nextConfig: NextConfig = {
         source,
         headers: iconHeaders,
       })),
-      {
-        source: "/downloads/Bezgrow-windows.exe",
+      ...[
+        "/downloads/desktop-release.json",
+        "/downloads/Bezgrow-mac.dmg.release.json",
+        "/downloads/Bezgrow-windows.exe.release.json",
+        "/downloads/Bezgrow-windows.msi.release.json",
+        "/downloads/Bezgrow-windows.msix.release.json",
+      ].map((source) => ({
+        source,
         headers: [
-          { key: "Content-Type", value: "application/vnd.microsoft.portable-executable" },
-          { key: "Content-Disposition", value: "attachment; filename=\"Bezgrow-windows.exe\"" },
+          { key: "Cache-Control", value: "private, no-store, max-age=0, must-revalidate" },
+          { key: "CDN-Cache-Control", value: "no-store" },
+          { key: "Pragma", value: "no-cache" },
           { key: "X-Content-Type-Options", value: "nosniff" },
         ],
-      },
-      {
-        source: "/downloads/Bezgrow-windows.msi",
-        headers: [
-          { key: "Content-Type", value: "application/x-msi" },
-          { key: "Content-Disposition", value: "attachment; filename=\"Bezgrow-windows.msi\"" },
-          { key: "X-Content-Type-Options", value: "nosniff" },
-        ],
-      },
-      {
-        source: "/downloads/Bezgrow-windows.msix",
-        headers: [
-          { key: "Content-Type", value: "application/msix" },
-          { key: "Content-Disposition", value: "attachment; filename=\"Bezgrow-windows.msix\"" },
-          { key: "X-Content-Type-Options", value: "nosniff" },
-        ],
-      },
+      })),
       {
         source: "/admin/:path*",
         headers: [

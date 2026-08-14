@@ -81,6 +81,10 @@ use webview2_com::Microsoft::Web::WebView2::Win32::{
 use windows::core::Interface;
 
 const KEYCHAIN_SERVICE: &str = "com.bezgrow.erp";
+#[cfg(not(debug_assertions))]
+const NATIVE_BUILD_COMMIT: &str = env!("BEZGROW_BUILD_COMMIT");
+#[cfg(not(debug_assertions))]
+const NATIVE_BUILD_TIMESTAMP: &str = env!("BEZGROW_BUILD_TIMESTAMP");
 const LOCAL_DATABASE_NAME: &str = "bezgrow-offline.db";
 const WINDOWS_APP_DATA_DIR: &str = "Bezgrow";
 const INSTALLATION_DIRECTORY: &str = "Installation";
@@ -4575,6 +4579,8 @@ fn start_next_server<R: tauri::Runtime>(
         .env("BEZGROW_DESKTOP_BUILD", "1")
         .env("BEZGROW_RUNTIME_TOKEN", &token)
         .env("BEZGROW_RUNTIME_VERSION", &app_version)
+        .env("BEZGROW_RUNTIME_BUILD_COMMIT", NATIVE_BUILD_COMMIT)
+        .env("BEZGROW_RUNTIME_BUILD_TIMESTAMP", NATIVE_BUILD_TIMESTAMP)
         .env("BEZGROW_RUNTIME_SHELL_PID", shell_pid.to_string())
         .env("NEXT_TELEMETRY_DISABLED", "1")
         .env("TEMP", &temporary_directory)

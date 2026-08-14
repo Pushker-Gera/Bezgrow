@@ -53,7 +53,12 @@ export function moneyDisplay(value: number, options: { precision?: number; curre
   const precision = options.precision ?? 0
   const currency = options.currency ?? "INR"
   const exact = formatExactIndianMoney(value, precision, currency)
-  const compactAt = options.compactAt ?? 15
+  // Five-column desktop KPI grids leave roughly 180-220px per card. Indian
+  // currency strings longer than eight characters wrap or clip at the intended
+  // display size, so switch to lakh/crore notation before that can happen.
+  // The exact accounting value remains available separately for assistive
+  // technology and the native title tooltip.
+  const compactAt = options.compactAt ?? 8
   const compact = exact.length > compactAt
   return {
     exact,

@@ -15,6 +15,13 @@ const embeddedArchitecture = process.env.NEXT_PUBLIC_BEZGROW_BUILD_ARCHITECTURE 
 const buildChannel = process.env.NEXT_PUBLIC_BEZGROW_BUILD_CHANNEL || "development"
 const shortBuildCommit = /^[a-f0-9]{7,40}$/i.test(buildCommit) ? buildCommit.slice(0, 7) : buildCommit
 const displayBuildPlatform = buildPlatform === "macos" ? "macOS" : buildPlatform === "windows" ? "Windows" : buildPlatform
+const displayBuildTimestamp = Number.isNaN(Date.parse(buildTimestamp))
+  ? buildTimestamp
+  : `${new Intl.DateTimeFormat("en-IN", {
+      dateStyle: "medium",
+      timeStyle: "medium",
+      timeZone: "Asia/Kolkata",
+    }).format(new Date(buildTimestamp))} IST`
 
 function localServerSummary() {
   if (typeof window === "undefined") return null
@@ -94,6 +101,23 @@ export default function DesktopDiagnosticsPanel() {
   const [status, setStatus] = useState("")
   const [busy, setBusy] = useState(false)
 
+  async function copyBuildIdentity() {
+    const safeIdentity = [
+      `Bezgrow ERP`,
+      `Version: ${buildVersion}`,
+      `Build SHA: ${buildCommit}`,
+      `Build date: ${buildTimestamp}`,
+      `Platform: ${displayBuildPlatform} ${embeddedArchitecture || desktopArchitecture()}`,
+      `Channel: ${buildChannel}`,
+    ].join("\n")
+    try {
+      await navigator.clipboard.writeText(safeIdentity)
+      setStatus("Safe build diagnostics copied.")
+    } catch {
+      setStatus("Copy was blocked by the operating system. Use Export Safe Diagnostics instead.")
+    }
+  }
+
   async function exportDiagnostics() {
     setBusy(true)
     setStatus("Preparing sanitized diagnostics…")
@@ -115,9 +139,9 @@ export default function DesktopDiagnosticsPanel() {
 
   return (
     <section className="rounded-[36px] border border-white/10 bg-white/[0.035] p-7 backdrop-blur-2xl">
-      <h2 className="text-3xl font-black">Desktop Diagnostics</h2>
+      <h2 className="text-3xl font-black">About / Version</h2>
       <p className="mt-2 max-w-3xl text-sm leading-6 text-neutral-500">
-        Save a technical report for support. It never includes passwords, tokens, license keys,
+        Identify the exact desktop build or save a technical report for support. These diagnostics never include passwords, tokens, licence keys,
         customers, products, invoices, or other business records.
       </p>
       <div className="mt-5 grid gap-3 text-sm sm:grid-cols-2 lg:grid-cols-4" aria-label="Application build identity">
@@ -131,21 +155,30 @@ export default function DesktopDiagnosticsPanel() {
         </div>
         <div className="rounded-2xl border border-white/10 bg-black/35 p-4">
           <p className="text-xs font-black uppercase tracking-[0.16em] text-neutral-500">Built</p>
-          <p className="mt-2 font-semibold text-white">{buildTimestamp}</p>
+          <p className="mt-2 font-semibold text-white">{displayBuildTimestamp}</p>
         </div>
         <div className="rounded-2xl border border-white/10 bg-black/35 p-4">
           <p className="text-xs font-black uppercase tracking-[0.16em] text-neutral-500">Platform</p>
           <p className="mt-2 font-semibold text-white">{displayBuildPlatform} {embeddedArchitecture || desktopArchitecture()}</p>
         </div>
       </div>
-      <button
-        type="button"
-        disabled={busy}
-        onClick={() => void exportDiagnostics()}
-        className="mt-6 h-12 rounded-2xl bg-white px-6 text-sm font-black text-black disabled:cursor-wait disabled:opacity-60"
-      >
-        {busy ? "Preparing…" : "Export Diagnostics"}
-      </button>
+      <div className="mt-6 flex flex-wrap gap-3">
+        <button
+          type="button"
+          onClick={() => void copyBuildIdentity()}
+          className="h-12 rounded-2xl border border-white/15 bg-white/[0.06] px-6 text-sm font-black text-white"
+        >
+          Copy Build ID
+        </button>
+        <button
+          type="button"
+          disabled={busy}
+          onClick={() => void exportDiagnostics()}
+          className="h-12 rounded-2xl bg-white px-6 text-sm font-black text-black disabled:cursor-wait disabled:opacity-60"
+        >
+          {busy ? "Preparing…" : "Export Safe Diagnostics"}
+        </button>
+      </div>
       {status && <p className="mt-4 text-sm font-semibold text-cyan-100">{status}</p>}
     </section>
   )

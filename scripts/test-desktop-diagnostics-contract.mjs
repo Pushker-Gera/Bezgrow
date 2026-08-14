@@ -17,7 +17,12 @@ assert.match(panel, /NEXT_PUBLIC_BEZGROW_BUILD_TIMESTAMP/, "Diagnostics must exp
 assert.match(panel, /NEXT_PUBLIC_BEZGROW_BUILD_PLATFORM/, "Diagnostics must expose the build platform.")
 assert.match(panel, /NEXT_PUBLIC_BEZGROW_BUILD_ARCHITECTURE/, "Diagnostics must expose the build architecture.")
 assert.match(panel, /Bezgrow \{buildVersion\}/, "Settings must display the application version.")
+assert.match(panel, /About \/ Version/, "Settings must expose an explicit About / Version section.")
+assert.match(panel, /Copy Build ID/, "Settings must offer a safe build-identity copy action.")
+assert.match(panel, /Build SHA: \$\{buildCommit\}/, "Copied build identity must contain the exact commit SHA.")
+assert.match(panel, /Build date: \$\{buildTimestamp\}/, "Copied build identity must contain the exact build timestamp.")
 assert.match(health, /desktop-build\.json[\s\S]*gitCommit[\s\S]*buildTimestamp[\s\S]*platform[\s\S]*architecture/, "Authenticated desktop health must expose the same safe build identity.")
+assert.match(health, /build\.gitCommit !== nativeBuildCommit[\s\S]*build\.builtAt !== nativeBuildTimestamp/, "Desktop health must reject a web bundle whose identity differs from the native binary.")
 assert.match(prepare, /platform:\s*buildPlatform[\s\S]*architecture:\s*targetArchitecture/, "The embedded build manifest must record platform and architecture.")
 for (const forbidden of ["license_key", "device_id", "SUPABASE_SERVICE_ROLE_KEY", "BEZGROW_LICENSE_PRIVATE_KEY"]) {
   assert.doesNotMatch(panel, new RegExp(forbidden), `Diagnostic export must not include ${forbidden}.`)

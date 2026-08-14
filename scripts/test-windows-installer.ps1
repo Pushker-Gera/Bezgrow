@@ -1,6 +1,10 @@
 param(
   [Parameter(Mandatory = $true)]
-  [string]$InstallerPath
+  [string]$InstallerPath,
+  [string]$PreviousInstallerPath = "",
+  [string]$PreviousVersion = "",
+  [string]$ExpectedVersion = "",
+  [string]$ExpectedCommit = ""
 )
 
 $ErrorActionPreference = "Stop"
@@ -22,6 +26,7 @@ $diagnosticsRoot = if ([string]::IsNullOrWhiteSpace($env:RUNNER_TEMP)) {
 }
 $installedNode = Join-Path $installDirectory "node\node.exe"
 $installedServer = Join-Path $installDirectory "next-server\server.js"
+$installedBuildIdentity = Join-Path $installDirectory "next-server\public\desktop-build.json"
 $installedSqliteTest = Join-Path $PSScriptRoot "test-windows-installed-sqlite.mjs"
 $offlineFirewallRules = @(
   "BezgrowReleaseSmokeApplication",
@@ -188,10 +193,28 @@ function Test-BezgrowWindowControls([System.Diagnostics.Process]$ApplicationProc
   } 10 "Launch cycle $Cycle could not restore."
 }
 
-function Invoke-Installer([string[]]$Arguments) {
-  $process = Start-Process -FilePath $installer -ArgumentList $Arguments -Wait -PassThru
+function Invoke-InstallerAt([string]$InstallerFile, [string[]]$Arguments) {
+  $process = Start-Process -FilePath $InstallerFile -ArgumentList $Arguments -Wait -PassThru
   if ($process.ExitCode -ne 0) {
     throw "Installer exited with code $($process.ExitCode)."
+  }
+}
+
+function Invoke-Installer([string[]]$Arguments) {
+  Invoke-InstallerAt $installer $Arguments
+}
+
+function Assert-InstalledBuildIdentity([string]$Version, [string]$Commit = "") {
+  Assert-Path $installedBuildIdentity "Installed build identity is missing."
+  $identity = Get-Content -Raw -LiteralPath $installedBuildIdentity | ConvertFrom-Json
+  if (-not [string]::IsNullOrWhiteSpace($Version) -and $identity.applicationVersion -ne $Version) {
+    throw "Installed app reports version $($identity.applicationVersion) instead of $Version."
+  }
+  if (-not [string]::IsNullOrWhiteSpace($Commit) -and $identity.gitCommit -ne $Commit) {
+    throw "Installed app reports build $($identity.gitCommit) instead of $Commit."
+  }
+  if ([string]::IsNullOrWhiteSpace($identity.gitCommit) -or [string]::IsNullOrWhiteSpace($identity.builtAt)) {
+    throw "Installed app build identity is incomplete."
   }
 }
 
@@ -413,7 +436,9 @@ function Invoke-AppLaunchCycle(
 }
 
 try {
-Invoke-Installer @("/S")
+$previousInstaller = if ([string]::IsNullOrWhiteSpace($PreviousInstallerPath)) { "" } else { (Resolve-Path -LiteralPath $PreviousInstallerPath).Path }
+$initialInstaller = if ([string]::IsNullOrWhiteSpace($previousInstaller)) { $installer } else { $previousInstaller }
+Invoke-InstallerAt $initialInstaller @("/S")
 Assert-Path $application "Program Files application was not installed."
 Assert-Path $uninstaller "Uninstaller was not registered."
 Assert-Path $installedNode "Bundled Node runtime was not installed."
@@ -436,6 +461,14 @@ New-Item -ItemType Directory -Force $dataRoot | Out-Null
 Set-Content -LiteralPath $sentinel -Value "preserve-across-update-and-uninstall" -Encoding UTF8
 Invoke-AppLaunchCycle 1 -TestRuntimeRecovery -TestWindowControls
 Invoke-InstalledSqliteCrud "seed"
+if (-not [string]::IsNullOrWhiteSpace($previousInstaller)) {
+  Assert-InstalledBuildIdentity $PreviousVersion
+  Invoke-Installer @("/S", "/UPDATE")
+  Assert-Path $sentinel "The in-place upgrade removed Bezgrow user data."
+  Assert-Path $database "The in-place upgrade removed the Bezgrow SQLite database."
+  Invoke-InstalledSqliteCrud "verify"
+  Assert-InstalledBuildIdentity $ExpectedVersion $ExpectedCommit
+}
 Invoke-AppLaunchCycle 2 -LaunchPath $startMenuShortcut
 Invoke-InstalledSqliteCrud "verify"
 
@@ -475,7 +508,7 @@ Invoke-AppLaunchCycle 4 -LaunchPath $desktopShortcut
 Invoke-InstalledSqliteCrud "verify"
 
 Write-SmokeDiagnostics "All installer smoke checks completed successfully." $null
-Write-Host "windows-installer-smoke-ok cycles=4 start_menu=ok desktop_shortcut=ok console_windows=none fixed_port=43124 health=ok route=ok sqlite_crud=ok license_persistence=ok offline=ok runtime_recovery=ok window_controls=ok external_browser=none orphan_processes=0 update_preservation=ok uninstall_preservation=ok reinstall=ok"
+Write-Host "windows-installer-smoke-ok cycles=4 start_menu=ok desktop_shortcut=ok console_windows=none fixed_port=43124 health=ok route=ok sqlite_crud=ok license_persistence=ok offline=ok runtime_recovery=ok window_controls=ok external_browser=none orphan_processes=0 previous_version_upgrade=$(-not [string]::IsNullOrWhiteSpace($previousInstaller)) update_preservation=ok uninstall_preservation=ok reinstall=ok"
 } catch {
   Write-SmokeDiagnostics "Installer smoke failed: $($_.Exception.Message)" $null
   throw
