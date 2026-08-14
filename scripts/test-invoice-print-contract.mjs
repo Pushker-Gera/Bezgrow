@@ -126,6 +126,8 @@ assert.match(rust, /objc_getAssociatedObject[\s\S]*A native print dialog is alre
 assert.match(rust, /Some\(sel!\(printOperationDidRun:success:contextInfo:\)\)/, "AppKit must receive the lifecycle completion selector.")
 assert.match(rust, /drop\(operation\);[\s\S]*Validated invoice PDF passed to native print UI[\s\S]*let print_status = print_launch\.status/, "Native print launch must release the desktop critical-operation guard and return after the system dialog opens.")
 assert.doesNotMatch(rust, /futures_channel::oneshot|completion\.await/, "The macOS modeless print sheet must not keep a Tauri invoke pending while AppKit owns the modal UI.")
+assert.match(rust, /with_webview[\s\S]*Native print launch failed: \{error\}[\s\S]*macOS system print dialog failed: \{error\}/, "Failures inside the asynchronous macOS webview callback must be recorded safely.")
+assert.doesNotMatch(rust, /Arc::new\(Mutex::new\(None::<Result<\(\), String>>\)\)|callback_result|The macOS print operation did not start/, "The Tauri command must not synchronously read a webview callback result before the main-thread callback runs.")
 assert.match(rust, /ICoreWebView2_16[\s\S]*ShowPrintUI\(COREWEBVIEW2_PRINT_DIALOG_KIND_SYSTEM\)/, "Windows must open its system print dialog for the validated PDF.")
 assert.match(rust, /"invoice-native-print"[\s\S]*visible\(false\)[\s\S]*skip_taskbar\(true\)/, "The Windows PDF print bridge must stay hidden and off the taskbar.")
 assert.doesNotMatch(rust, /fn open_pdf_with_default_application/, "Invoice printing must not use the registered external PDF application.")

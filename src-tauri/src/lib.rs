@@ -2116,8 +2116,6 @@ fn open_validated_pdf_with_native_print_dialog<R: tauri::Runtime>(
 ) -> Result<NativePrintLaunch, String> {
     #[cfg(target_os = "macos")]
     {
-        use std::sync::Arc;
-
         let session_id = format!(
             "{}-{}",
             std::process::id(),
@@ -2131,8 +2129,7 @@ fn open_validated_pdf_with_native_print_dialog<R: tauri::Runtime>(
         let main_window = app
             .get_webview_window("main")
             .ok_or_else(|| "The Bezgrow window is unavailable for native printing.".to_string())?;
-        let print_result = Arc::new(Mutex::new(None::<Result<(), String>>));
-        let callback_result = Arc::clone(&print_result);
+        let callback_app = app.clone();
         let callback_session_id = session_id.clone();
         let callback_log_path = log_path.clone();
         main_window
@@ -2230,16 +2227,19 @@ fn open_validated_pdf_with_native_print_dialog<R: tauri::Runtime>(
                     );
                     Ok(())
                 })();
-                if let Ok(mut slot) = callback_result.lock() {
-                    *slot = Some(result);
+                if let Err(error) = result {
+                    append_pdf_print_lifecycle_log(
+                        &callback_log_path,
+                        &callback_session_id,
+                        format!("Native print launch failed: {error}"),
+                    );
+                    append_startup_log_handle(
+                        &callback_app,
+                        format!("macOS system print dialog failed: {error}"),
+                    );
                 }
             })
             .map_err(|error| format!("Unable to open the macOS system print dialog: {error}"))?;
-        print_result
-            .lock()
-            .map_err(|_| "The macOS print result could not be read.".to_string())?
-            .take()
-            .ok_or_else(|| "The macOS print operation did not start.".to_string())??;
         let _ = path;
         return Ok(NativePrintLaunch {
             status: "dialog_opened",
