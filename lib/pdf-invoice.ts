@@ -11,6 +11,7 @@ import {
 import QRCode from "qrcode"
 import type { PrintFormat, PrintInvoice, PrintInvoiceItem, PrintSettings } from "@/components/print/types"
 import { defaultPrintSettings } from "@/components/print/settings/defaults"
+import { formatIndiaState } from "@/lib/india-gst-states"
 
 type PdfContext = {
   document: PDFDocument
@@ -61,17 +62,24 @@ function dateText(value: string) {
   return Number.isNaN(date.getTime()) ? safeText(value) : date.toLocaleDateString("en-IN")
 }
 
+function shortDateText(value: string) {
+  if (!value || value === "-") return "-"
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return safeText(value)
+  return `${String(date.getMonth() + 1).padStart(2, "0")}/${String(date.getFullYear()).slice(-2)}`
+}
+
 function pageSize(format: PrintFormat, settings: PrintSettings, itemCount: number, termCount = 0): [number, number] {
   if (format === "thermal") {
     const width = (settings.thermalWidth === "58mm" ? 58 : 80) * POINTS_PER_MM
-    const fixedContentHeight = 180 + (settings.showLogo ? 52 : 0)
+    const fixedContentHeight = 204 + (settings.showLogo ? 52 : 0)
     const totalsHeight = (settings.showGstDetails ? 6 : 5) * 12 + 4
     const referenceHeight = (settings.showBarcode ? 54 : 0) + (settings.showQr ? 74 : 0)
     const termsHeight = termCount > 0 ? 18 + termCount * 10 : 0
-    const footerAndSafety = 32
+    const footerAndSafety = 68
     const itemHeight = settings.thermalWidth === "58mm"
-      ? (settings.pharmaMode ? 45 : 35)
-      : (settings.pharmaMode ? 34 : 25)
+      ? (settings.pharmaMode ? 55 : 35)
+      : (settings.pharmaMode ? 44 : 25)
     const height = Math.max(
       settings.thermalWidth === "58mm" ? 255 : 275,
       fixedContentHeight + itemCount * itemHeight + totalsHeight + termsHeight + referenceHeight + footerAndSafety,
@@ -271,10 +279,13 @@ async function embedImage(document: PDFDocument, bytes: Uint8Array | null) {
   }
 }
 
+export function containedImageDimensions(imageWidth: number, imageHeight: number, maximumWidth: number, maximumHeight: number) {
+  const scale = Math.min(maximumWidth / imageWidth, maximumHeight / imageHeight)
+  return { width: imageWidth * scale, height: imageHeight * scale }
+}
+
 function drawContainedImage(page: PDFPage, image: PDFImage, x: number, y: number, width: number, height: number) {
-  const scale = Math.min(width / image.width, height / image.height)
-  const drawnWidth = image.width * scale
-  const drawnHeight = image.height * scale
+  const { width: drawnWidth, height: drawnHeight } = containedImageDimensions(image.width, image.height, width, height)
   page.drawImage(image, {
     x: x + (width - drawnWidth) / 2,
     y: y + (height - drawnHeight) / 2,
@@ -293,6 +304,9 @@ async function prepareContext(invoice: PrintInvoice, settings: PrintSettings, fo
     ? await imageBytesFromUrl(invoice.enterprise.logoUrl)
     : null
   const logo = await embedImage(document, logoBytes)
+  if (settings.showLogo && invoice.enterprise.logoUrl && !logo) {
+    throw new Error("The saved business logo could not be embedded in the invoice PDF.")
+  }
   let qr: PDFImage | null = null
   if (settings.showQr && invoice.qrValue) {
     try {
@@ -312,51 +326,60 @@ async function prepareContext(invoice: PrintInvoice, settings: PrintSettings, fo
 function drawHeader(context: PdfContext, page: PDFPage, invoice: PrintInvoice, top: number, compact = false) {
   const { regular, bold, logo, settings } = context
   const margin = pageMargin(settings, compact)
-  const logoWidth = compact ? 68 : 96
-  const logoHeight = compact ? 34 : 46
+  const logoWidth = compact ? 58 : 86
+  const logoHeight = compact ? 36 : 54
   let brandX = margin
   if (settings.showLogo && logo) {
     drawContainedImage(page, logo, margin, top - logoHeight, logoWidth, logoHeight)
     brandX += logoWidth + 10
   }
-  const cardWidth = compact ? 150 : 175
+  const cardWidth = compact ? 146 : 184
   const cardX = page.getWidth() - margin - cardWidth
   const brandWidth = Math.max(80, cardX - brandX - 12)
-  const nameSize = Math.max(compact ? 10.5 : 16, fontSize(settings, compact ? 10.5 : 16))
-  const nameLines = wrapText(invoice.enterprise.name, bold, nameSize, brandWidth, compact ? 3 : 2)
-  nameLines.forEach((line, index) => drawText(page, bold, line, brandX, top - 15 - index * (nameSize + 2), nameSize, ink(settings), brandWidth))
-  const detailsStart = top - (compact ? 53 : 45)
-  const addressSize = Math.max(compact ? 7.1 : 8.5, fontSize(settings, compact ? 7.1 : 8.5))
-  drawText(page, regular, invoice.enterprise.address, brandX, detailsStart, addressSize, muted(settings), brandWidth)
+  const nameSize = Math.max(compact ? 10 : 15, fontSize(settings, compact ? 10 : 15))
+  const nameLines = wrapText(invoice.enterprise.name, bold, nameSize, brandWidth, compact ? 2 : 3)
+  nameLines.forEach((line, index) => drawText(page, bold, line, brandX, top - 14 - index * (nameSize + 1.5), nameSize, ink(settings), brandWidth))
+  const detailsStart = compact
+    ? top - 43
+    : Math.min(top - 48, top - 19 - nameLines.length * (nameSize + 1.5))
+  const addressSize = Math.max(compact ? 6.5 : 7.8, fontSize(settings, compact ? 6.5 : 7.8))
+  const addressLines = wrapText(invoice.enterprise.address, regular, addressSize, brandWidth, 2)
+  addressLines.forEach((line, index) => drawText(page, regular, line, brandX, detailsStart - index * (addressSize + 2), addressSize, muted(settings), brandWidth))
   const contact = [
-    invoice.enterprise.gstNumber !== "-" ? `GST: ${invoice.enterprise.gstNumber}` : "",
+    invoice.enterprise.gstNumber !== "-" ? `GSTIN: ${invoice.enterprise.gstNumber}` : "",
     invoice.enterprise.phone !== "-" ? `Phone: ${invoice.enterprise.phone}` : "",
   ].filter(Boolean).join(" | ")
-  if (contact) drawText(page, regular, contact, brandX, detailsStart - 13, fontSize(settings, compact ? 6.5 : 7.8), muted(settings), brandWidth)
+  const identityY = detailsStart - addressLines.length * (addressSize + 2) - 2
+  if (contact) drawText(page, regular, contact, brandX, identityY, fontSize(settings, compact ? 6.1 : 7.1), muted(settings), brandWidth)
   if (!compact) {
     const secondary = [
       invoice.enterprise.email !== "-" ? `Email: ${invoice.enterprise.email}` : "",
       invoice.enterprise.fssai !== "-" ? `FSSAI: ${invoice.enterprise.fssai}` : "",
       invoice.enterprise.website !== "-" ? invoice.enterprise.website : "",
     ].filter(Boolean).join(" | ")
-    if (secondary) drawText(page, regular, secondary, brandX, detailsStart - 24, fontSize(settings, 6.7), muted(settings), brandWidth)
+    if (secondary) drawText(page, regular, secondary, brandX, identityY - 12, fontSize(settings, 6.5), muted(settings), brandWidth)
   }
 
-  page.drawRectangle({ x: cardX, y: top - 58, width: cardWidth, height: 56, color: soft(settings), borderColor: border(settings), borderWidth: 0.8 })
-  drawText(page, bold, invoice.invoiceTitle, cardX + 10, top - 17, Math.max(8, fontSize(settings, 8)), muted(settings))
-  drawText(page, bold, invoice.invoiceNumber, cardX + 10, top - 35, Math.max(compact ? 11 : 14, fontSize(settings, compact ? 11 : 14)), accent(settings), cardWidth - 20)
-  drawText(page, regular, `Date: ${dateText(invoice.invoiceDate)}`, cardX + 10, top - 49, Math.max(7.5, fontSize(settings, 7.5)), ink(settings))
-  if (!compact) {
-    drawText(page, regular, `Due: ${dateText(invoice.dueDate)}`, cardX + 88, top - 49, fontSize(settings, 7.4), ink(settings), cardWidth - 98)
-    const operational = [
-      invoice.enterprise.branchName !== "-" ? `Branch: ${invoice.enterprise.branchName}` : "",
-      invoice.salesperson !== "-" ? `Salesperson: ${invoice.salesperson}` : "",
-    ].filter(Boolean).join(" | ")
-    if (operational) drawText(page, regular, operational, cardX + 10, top - 66, fontSize(settings, 6.5), muted(settings), cardWidth - 20)
-  }
-  const dividerY = top - (compact ? 72 : 78)
+  const cardHeight = compact ? 84 : 96
+  page.drawRectangle({ x: cardX, y: top - cardHeight, width: cardWidth, height: cardHeight, color: soft(settings), borderColor: border(settings), borderWidth: 0.8 })
+  page.drawRectangle({ x: cardX, y: top - 4, width: 3, height: 4, color: accent(settings) })
+  drawText(page, bold, invoice.invoiceTitle.toUpperCase(), cardX + 11, top - 14, Math.max(7.2, fontSize(settings, 7.2)), muted(settings), cardWidth - 22)
+  drawText(page, regular, "Invoice Number", cardX + 11, top - 27, Math.max(5.5, fontSize(settings, 5.5)), muted(settings), cardWidth - 22)
+  drawText(page, bold, invoice.invoiceNumber, cardX + 11, top - 41, Math.max(compact ? 10 : 12.5, fontSize(settings, compact ? 10 : 12.5)), accent(settings), cardWidth - 22)
+  const metaSize = Math.max(compact ? 6.2 : 6.8, fontSize(settings, compact ? 6.2 : 6.8))
+  drawText(page, regular, `Invoice Date: ${dateText(invoice.invoiceDate)}`, cardX + 11, top - 56, metaSize, ink(settings), cardWidth - 22)
+  drawText(page, regular, `Due Date: ${dateText(invoice.dueDate)}`, cardX + 11, top - 69, metaSize, ink(settings), cardWidth - 22)
+  const branch = invoice.enterprise.branchName !== "-" ? invoice.enterprise.branchName : "-"
+  drawText(page, regular, `Branch: ${branch}`, cardX + 11, top - (compact ? 78 : 82), metaSize, muted(settings), cardWidth - 22)
+  const dividerY = top - cardHeight - 10
   page.drawLine({ start: { x: margin, y: dividerY }, end: { x: page.getWidth() - margin, y: dividerY }, thickness: 1.4, color: ink(settings) })
   return dividerY - 12
+}
+
+function paymentStatus(invoice: PrintInvoice) {
+  if (invoice.payment.dueAmount <= 0) return "Paid"
+  if (invoice.payment.paidAmount > 0) return "Partially paid"
+  return "Unpaid"
 }
 
 function drawCustomer(context: PdfContext, page: PDFPage, invoice: PrintInvoice, y: number, compact = false) {
@@ -385,9 +408,9 @@ function drawCustomer(context: PdfContext, page: PDFPage, invoice: PrintInvoice,
   const taxX = margin + width + gap + 10
   drawText(page, bold, "TAX & PAYMENT", taxX, y - 15, fontSize(settings, 7), accent(settings))
   if (settings.showGstDetails) drawText(page, regular, `GSTIN: ${invoice.customer.gstin}`, taxX, y - 31, Math.max(7.4, fontSize(settings, 7.4)), ink(settings), width - 20)
-  drawText(page, regular, `State: ${invoice.customer.state} (${invoice.customer.stateCode})`, taxX, y - (compact ? 42 : 46), Math.max(7.1, fontSize(settings, 7.1)), muted(settings), width - 20)
+  drawText(page, regular, `State: ${formatIndiaState(invoice.customer.state, invoice.customer.stateCode)}`, taxX, y - (compact ? 42 : 46), Math.max(7.1, fontSize(settings, 7.1)), muted(settings), width - 20)
   drawText(page, regular, `Payment: ${invoice.payment.mode}`, taxX, y - (compact ? 54 : 61), Math.max(7.4, fontSize(settings, 7.4)), ink(settings), width - 20)
-  if (!compact) drawText(page, regular, `Due: ${dateText(invoice.dueDate)}`, taxX, y - 75, Math.max(7.1, fontSize(settings, 7.1)), muted(settings), width - 20)
+  if (!compact) drawText(page, regular, `Status: ${paymentStatus(invoice)}`, taxX, y - 75, Math.max(7.1, fontSize(settings, 7.1)), muted(settings), width - 20)
   return y - height - 10
 }
 
@@ -449,20 +472,20 @@ function drawTableHeader(context: PdfContext, page: PDFPage, y: number, compact:
 function itemCell(item: PrintInvoiceItem, key: string, index = 0) {
   if (key === "index") return String(index + 1)
   if (key === "item") return item.name
-  if (key === "batch") return `${item.batchNumber} / ${dateText(item.expiryDate)}`
+  if (key === "batch") return `${item.batchNumber} / ${shortDateText(item.expiryDate)}`
   if (key === "hsn") return item.hsnCode
   if (key === "qty") return String(item.quantity)
   if (key === "free") return String(item.freeQuantity)
   if (key === "unit") return item.unit
   if (key === "mrp") return item.mrp.toFixed(2)
-  if (key === "rate") return money(item.rate)
+  if (key === "rate") return item.rate.toFixed(2)
   if (key === "gst") return `${item.cgstPercent + item.sgstPercent + item.igstPercent}%`
-  if (key === "discount") return `${item.discountPercent.toFixed(1)}% / ${item.discountAmount.toFixed(2)}`
+  if (key === "discount") return `${item.discountPercent.toFixed(1)}% ${item.discountAmount.toFixed(2)}`
   if (key === "taxable") return item.taxableValue.toFixed(2)
-  if (key === "cgst") return `${item.cgstPercent.toFixed(1)}% / ${item.cgstAmount.toFixed(2)}`
-  if (key === "sgst") return `${item.sgstPercent.toFixed(1)}% / ${item.sgstAmount.toFixed(2)}`
-  if (key === "igst") return `${item.igstPercent.toFixed(1)}% / ${item.igstAmount.toFixed(2)}`
-  return money(item.finalAmount)
+  if (key === "cgst") return `${item.cgstPercent.toFixed(1)}%`
+  if (key === "sgst") return `${item.sgstPercent.toFixed(1)}%`
+  if (key === "igst") return `${item.igstPercent.toFixed(1)}%`
+  return item.finalAmount.toFixed(2)
 }
 
 function drawItemRow(context: PdfContext, page: PDFPage, item: PrintInvoiceItem, index: number, y: number, compact: boolean, rowHeight?: number) {
@@ -481,7 +504,7 @@ function drawItemRow(context: PdfContext, page: PDFPage, item: PrintInvoiceItem,
     color: WHITE,
   })
   for (const column of columns) {
-    if (column.key === "item" && !compact) {
+    if (column.key === "item" && (!compact || height >= 21)) {
       const lines = wrapText(item.name, bold, rowFontSize, column.width - 6, 2)
       const lineHeight = rowFontSize + 1.5
       const blockHeight = lines.length * lineHeight
@@ -491,15 +514,17 @@ function drawItemRow(context: PdfContext, page: PDFPage, item: PrintInvoiceItem,
       })
       continue
     }
+    const cellPadding = compact && column.key === "hsn" ? 2 : compact ? 4 : 3
+    const cellFontSize = compact && column.key === "hsn" ? Math.min(rowFontSize, 6.2) : rowFontSize
     drawText(
       page,
       column.key === "item" || column.key === "amount" ? bold : regular,
       itemCell(item, column.key, index),
-      column.x + (compact ? 4 : 3),
-      y - height + Math.max(3, (height - rowFontSize) / 2),
-      rowFontSize,
+      column.x + cellPadding,
+      y - height + Math.max(3, (height - cellFontSize) / 2),
+      cellFontSize,
       ink(settings),
-      column.width - (compact ? 8 : 6)
+      column.width - cellPadding * 2
     )
   }
   return y - height
@@ -606,7 +631,7 @@ function drawTotalsAndFooter(context: PdfContext, page: PDFPage, invoice: PrintI
     ? detailsY - renderedTerms * 11 - 8
     : boxBottom + 22
   drawText(page, bold, `Paid: ${money(invoice.payment.paidAmount)}`, margin, paymentTop, fontSize(settings, 8), ink(settings), leftWidth)
-  drawText(page, bold, `Due: ${money(invoice.payment.dueAmount)}`, margin, paymentTop - 13, fontSize(settings, 8), ink(settings), leftWidth)
+  drawText(page, bold, `Balance Due: ${money(invoice.payment.dueAmount)}`, margin, paymentTop - 13, fontSize(settings, 8), ink(settings), leftWidth)
 
   const codesY = Math.max(32, boxBottom - (compact ? 64 : 78))
   const barcodeWidth = compact ? 120 : 165
@@ -726,9 +751,9 @@ function renderHalfCompactInvoice(context: PdfContext, invoice: PrintInvoice) {
   if (settings.showGstDetails) {
     drawText(page, regular, `GSTIN: ${invoice.customer.gstin}`, taxX, y - 29, fontSize(settings, 6.5), ink(settings), customerWidth - 18)
   }
-  drawText(page, regular, `State: ${invoice.customer.state} (${invoice.customer.stateCode})`, taxX, y - 42, fontSize(settings, 6.3), muted(settings), customerWidth - 18)
+  drawText(page, regular, `State: ${formatIndiaState(invoice.customer.state, invoice.customer.stateCode)}`, taxX, y - 42, fontSize(settings, 6.3), muted(settings), customerWidth - 18)
   drawText(page, regular, `Payment: ${invoice.payment.mode}`, taxX, y - 55, fontSize(settings, 6.6), ink(settings), customerWidth - 18)
-  drawText(page, regular, `Paid: ${money(invoice.payment.paidAmount)} | Due: ${money(invoice.payment.dueAmount)}`, taxX, y - 67, fontSize(settings, 6.1), muted(settings), customerWidth - 18)
+  drawText(page, regular, `Status: ${paymentStatus(invoice)}`, taxX, y - 67, fontSize(settings, 6.1), muted(settings), customerWidth - 18)
   y -= customerHeight + 10
 
   const table = drawTableHeader(context, page, y, true)
@@ -736,7 +761,7 @@ function renderHalfCompactInvoice(context: PdfContext, invoice: PrintInvoice) {
   const summaryTop = 194
   const availableRowsHeight = y - summaryTop
   const rowHeight = invoice.items.length > 0
-    ? Math.max(18, Math.min(24, availableRowsHeight / invoice.items.length))
+    ? Math.max(17, Math.min(24, availableRowsHeight / invoice.items.length))
     : 24
   for (const [index, item] of invoice.items.entries()) {
     if (y - rowHeight < summaryTop - 0.5) {
@@ -776,7 +801,7 @@ function renderHalfCompactInvoice(context: PdfContext, invoice: PrintInvoice) {
   })
   const detailsY = summaryTop - 34 - amountLines.length * 10
   drawText(page, bold, `Paid: ${money(invoice.payment.paidAmount)}`, margin, detailsY, fontSize(settings, 6.8), ink(settings), leftWidth)
-  drawText(page, bold, `Due: ${money(invoice.payment.dueAmount)}`, margin, detailsY - 11, fontSize(settings, 6.8), ink(settings), leftWidth)
+  drawText(page, bold, `Balance Due: ${money(invoice.payment.dueAmount)}`, margin, detailsY - 11, fontSize(settings, 6.8), ink(settings), leftWidth)
 
   const totalRows = [
     ["Subtotal", invoice.totals.subtotal],
@@ -874,7 +899,7 @@ function renderHalfTopInvoice(context: PdfContext, invoice: PrintInvoice, pageNu
   drawText(page, bold, invoice.invoiceTitle, metaX + 10, y - 14, fontSize(settings, 7.4), muted(settings))
   drawText(page, bold, invoice.invoiceNumber, metaX + 10, y - 32, fontSize(settings, 11.5), accent(settings), 112)
   drawText(page, regular, `Date: ${dateText(invoice.invoiceDate)}`, metaX + 10, y - 45, fontSize(settings, 7), ink(settings), 82)
-  drawText(page, regular, `Due: ${dateText(invoice.dueDate)}`, metaX + 96, y - 45, fontSize(settings, 7), ink(settings), 80)
+  drawText(page, regular, `Due Date: ${dateText(invoice.dueDate)}`, metaX + 94, y - 45, fontSize(settings, 6.6), ink(settings), 82)
   y -= 60
   page.drawLine({ start: { x: margin, y }, end: { x: width - margin, y }, thickness: 1, color: ink(settings) })
   y -= 15
@@ -886,7 +911,7 @@ function renderHalfTopInvoice(context: PdfContext, invoice: PrintInvoice, pageNu
   if (settings.showGstDetails) {
     drawText(page, regular, `GSTIN: ${invoice.customer.gstin}`, margin + 50, y, fontSize(settings, 6.8), muted(settings), 190)
   }
-  drawText(page, regular, `State: ${invoice.customer.state} (${invoice.customer.stateCode})`, margin + 255, y, fontSize(settings, 6.8), muted(settings), 135)
+  drawText(page, regular, `State: ${formatIndiaState(invoice.customer.state, invoice.customer.stateCode)}`, margin + 255, y, fontSize(settings, 6.8), muted(settings), 135)
   drawText(page, regular, `Payment: ${invoice.payment.mode}`, margin + 395, y, fontSize(settings, 6.8), muted(settings), 130)
   y -= 13
 
@@ -943,7 +968,7 @@ function renderHalfTopInvoice(context: PdfContext, invoice: PrintInvoice, pageNu
     })
   })
   const totalPanelX = margin + breakdownWidth + 8
-  drawText(page, regular, `Paid ${money(invoice.payment.paidAmount)} | Due ${money(invoice.payment.dueAmount)}`, totalPanelX, totalsTop - 13, Math.max(6.2, fontSize(settings, 6.2)), muted(settings), width - margin - totalPanelX)
+  drawText(page, regular, `Paid ${money(invoice.payment.paidAmount)} | Balance Due ${money(invoice.payment.dueAmount)}`, totalPanelX, totalsTop - 13, Math.max(5.8, fontSize(settings, 5.8)), muted(settings), width - margin - totalPanelX)
   drawText(page, bold, "Grand Total", totalPanelX, totalsBottom + 8, Math.max(8.5, fontSize(settings, 8.5)), accent(settings))
   const grandText = money(invoice.totals.grandTotal)
   const halfTopGrandSize = Math.max(8.5, fontSize(settings, 8.5))
@@ -1002,13 +1027,16 @@ function renderThermalInvoice(context: PdfContext, invoice: PrintInvoice) {
   page.drawLine({ start: { x: margin, y }, end: { x: width - margin, y }, thickness: 0.7, color: ink(settings), dashArray: [3, 2] })
   y -= 14
   for (const [label, value] of [
-    ["Invoice", invoice.invoiceNumber],
-    ["Date", dateText(invoice.invoiceDate)],
+    ["Invoice Number", invoice.invoiceNumber],
+    ["Invoice Date", dateText(invoice.invoiceDate)],
+    ["Due Date", dateText(invoice.dueDate)],
     ["Customer", invoice.customer.name],
+    ["State", formatIndiaState(invoice.customer.state, invoice.customer.stateCode)],
     ["Payment", invoice.payment.mode],
   ]) {
-    drawText(page, regular, label, margin, y, fontSize(settings, 7.5), muted(settings))
-    drawText(page, bold, value, width * 0.39, y, fontSize(settings, 7.5), ink(settings), width * 0.61 - margin)
+    drawText(page, regular, `${label}:`, margin, y, fontSize(settings, 7.5), muted(settings))
+    const valueX = width * (settings.thermalWidth === "58mm" ? 0.45 : 0.39)
+    drawText(page, bold, value, valueX, y, fontSize(settings, 7.5), ink(settings), width - valueX - margin)
     y -= 12
   }
   page.drawLine({ start: { x: margin, y }, end: { x: width - margin, y }, thickness: 0.7, color: ink(settings), dashArray: [3, 2] })
@@ -1028,6 +1056,10 @@ function renderThermalInvoice(context: PdfContext, invoice: PrintInvoice) {
       const pharma = `Batch: ${item.batchNumber || "-"} | Exp: ${dateText(item.expiryDate)}`
       drawText(page, regular, pharma, margin, y, Math.max(6.5, fontSize(settings, 6.5)), muted(settings), width - margin * 2)
       y -= 10
+      if (settings.showHsn) {
+        drawText(page, regular, `HSN: ${item.hsnCode || "-"}`, margin, y, Math.max(6.5, fontSize(settings, 6.5)), muted(settings), width - margin * 2)
+        y -= 10
+      }
     }
     y -= 5
   }
@@ -1041,7 +1073,7 @@ function renderThermalInvoice(context: PdfContext, invoice: PrintInvoice) {
       : []),
     ["Grand Total", invoice.totals.grandTotal],
     ["Paid", invoice.payment.paidAmount],
-    ["Due", invoice.payment.dueAmount],
+    ["Balance Due", invoice.payment.dueAmount],
   ] as Array<[string, number]>) {
     drawText(page, label === "Grand Total" ? bold : regular, label, margin, y, fontSize(settings, label === "Grand Total" ? 9 : 7.5), ink(settings))
     const valueText = money(value)

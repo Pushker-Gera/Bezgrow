@@ -16,6 +16,8 @@ type Customer = {
   name: string
   phone?: string | null
   gst_number?: string | null
+  state?: string | null
+  state_code?: string | null
 }
 
 type OfflineInvoiceRow = Record<string, unknown> & {
@@ -910,7 +912,9 @@ export default function CreateInvoicePage() {
                   <select value={selectedCustomer} onChange={(e) => setSelectedCustomer(e.target.value)} className={inputClass()}>
                     <option value="">Choose customer</option>
                     {visibleCustomers.map((customer) => (
-                      <option key={customer.id} value={customer.id}>{customer.name}</option>
+                      <option key={customer.id} value={customer.id}>
+                        {customer.name}{customer.state ? ` - ${customer.state}${customer.state_code ? ` (${customer.state_code})` : ""}` : ""}
+                      </option>
                     ))}
                   </select>
                 </FieldLabel>

@@ -37,7 +37,18 @@ function safeInvoiceFilename(invoiceNumber: string) {
  * memory and is never logged or persisted.
  */
 export function invoiceDocumentKey(invoice: PrintInvoice, settings: PrintSettings, format: PrintFormat) {
-  return JSON.stringify({ invoice, settings, format })
+  const logoUrl = invoice.enterprise.logoUrl || ""
+  const logoFingerprint = logoUrl.startsWith("data:")
+    ? `${logoUrl.length}:${logoUrl.slice(0, 48)}:${logoUrl.slice(-48)}`
+    : logoUrl
+  return JSON.stringify({
+    invoice: {
+      ...invoice,
+      enterprise: { ...invoice.enterprise, logoUrl: logoFingerprint },
+    },
+    settings,
+    format,
+  })
 }
 
 function closeTo(value: number, expected: number, tolerance = 0.4) {

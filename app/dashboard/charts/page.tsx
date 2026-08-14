@@ -2,6 +2,7 @@
 
 import Link from "next/link"
 import { useEffect, useMemo, useState } from "react"
+import { MoneyValue } from "@/components/MoneyValue"
 import {
     Bar,
     BarChart,
@@ -329,15 +330,17 @@ export default function AnalyticsPage() {
                     <>
                         <section className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-5">
                             {[
-                                ["Revenue", money(analytics.totalRevenue), "text-emerald-200"],
-                                ["Inventory Value", money(analytics.inventoryValue), "text-sky-200"],
-                                ["Potential Profit", money(analytics.potentialProfit), "text-amber-200"],
-                                ["Customers", state.customers.length, "text-white"],
-                                ["Expiry Risk", analytics.expired.length + analytics.expiringSoon.length, "text-red-200"],
-                            ].map(([label, value, color]) => (
-                                <div key={label} className="rounded-lg border border-white/10 bg-black/70 p-5 shadow-xl">
+                                { label: "Revenue", value: analytics.totalRevenue, color: "text-emerald-200", money: true },
+                                { label: "Inventory Value", value: analytics.inventoryValue, color: "text-sky-200", money: true },
+                                { label: "Potential Profit", value: analytics.potentialProfit, color: "text-amber-200", money: true },
+                                { label: "Customers", value: state.customers.length, color: "text-white", money: false },
+                                { label: "Expiry Risk", value: analytics.expired.length + analytics.expiringSoon.length, color: "text-red-200", money: false },
+                            ].map(({ label, value, color, money: isMoney }) => (
+                                <div key={label} className="min-w-0 overflow-hidden rounded-lg border border-white/10 bg-black/70 p-5 shadow-xl">
                                     <p className="text-xs uppercase tracking-[0.18em] text-neutral-500">{label}</p>
-                                    <p className={`mt-4 text-3xl font-black ${color}`}>{value}</p>
+                                    <div className={`mt-4 min-w-0 font-black ${color}`}>
+                                        {isMoney ? <MoneyValue value={value} className="font-black" /> : <span className="text-3xl">{value}</span>}
+                                    </div>
                                 </div>
                             ))}
                         </section>

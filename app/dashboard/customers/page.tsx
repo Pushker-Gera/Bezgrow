@@ -2,11 +2,13 @@
 
 import { useEffect, useMemo, useRef, useState } from "react"
 import { useDebounce } from "use-debounce"
+import { MoneyValue } from "@/components/MoneyValue"
 import { apiFetch } from "@/lib/api/client-fetch"
 import { exportCsv } from "@/lib/desktop-file-export"
 import { getOrganizationId } from "@/lib/getOrganization"
 import { createOfflineId, getOfflineData, putOfflineData, queueOfflineAction } from "@/lib/offline/db"
 import { offlineFallbackMessage, shouldSaveOffline, shouldUseWebOfflineFallback } from "@/lib/offline/network"
+import { INDIA_GST_STATES, gstStateFromGstin, stateCodeForName } from "@/lib/india-gst-states"
 
 type Customer = {
   id: string
@@ -15,6 +17,8 @@ type Customer = {
   email: string | null
   address: string | null
   gst_number: string | null
+  state: string | null
+  state_code: string | null
   created_at: string
   updated_at?: string | null
   is_active: boolean
@@ -42,6 +46,8 @@ type CustomerForm = {
   email: string
   address: string
   gstNumber: string
+  state: string
+  stateCode: string
   customerType: string
 }
 
@@ -51,6 +57,8 @@ type CustomerSavePayload = {
   email: string | null
   address: string | null
   gst_number: string | null
+  state: string | null
+  state_code: string | null
   customer_type: string
 }
 
@@ -66,6 +74,8 @@ const emptyForm: CustomerForm = {
   email: "",
   address: "",
   gstNumber: "",
+  state: "",
+  stateCode: "",
   customerType: "retail",
 }
 
@@ -135,6 +145,8 @@ function formFromCustomer(customer: Customer): CustomerForm {
     email: customer.email || "",
     address: customer.address || "",
     gstNumber: customer.gst_number || "",
+    state: customer.state || "",
+    stateCode: customer.state_code || stateCodeForName(customer.state),
     customerType: customer.customer_type || "retail",
   }
 }
@@ -269,6 +281,8 @@ export default function CustomersPage() {
       email: payload.email || null,
       address: payload.address || null,
       gst_number: payload.gst_number,
+      state: payload.state,
+      state_code: payload.state_code,
       customer_type: payload.customer_type || "retail",
       organization_id: organizationId,
       is_active: editCustomer?.is_active ?? true,
@@ -320,6 +334,8 @@ export default function CustomersPage() {
       email: form.email.trim() || null,
       address: form.address.trim() || null,
       gst_number: form.gstNumber.trim() || null,
+      state: form.state.trim() || null,
+      state_code: form.stateCode.trim() || null,
       customer_type: form.customerType || "retail",
     }
 
@@ -554,6 +570,8 @@ export default function CustomersPage() {
       Email: customer.email || "",
       Address: customer.address || "",
       GST: customer.gst_number || "",
+      State: customer.state || "",
+      "State Code": customer.state_code || "",
       Type: customer.customer_type || "retail",
       Status: customer.is_active ? "Active" : "Inactive",
       Revenue: customer.invoiceRevenue,
@@ -708,16 +726,18 @@ export default function CustomersPage() {
 
         <section className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-6">
           {[
-            ["Total Customers", metrics.totalCustomers, "text-white"],
-            ["Active", metrics.activeCustomers, "text-emerald-200"],
-            ["Inactive", metrics.inactiveCustomers, "text-red-200"],
-            ["GST Customers", metrics.gstCustomers, "text-sky-200"],
-            ["Revenue", money(metrics.totalRevenue), "text-emerald-200"],
-            ["Avg Value", money(metrics.averageRevenue), "text-amber-200"],
-          ].map(([label, value, color]) => (
-            <div key={label} className="rounded-lg border border-white/10 bg-black/70 p-5 shadow-xl">
+            { label: "Total Customers", value: metrics.totalCustomers, color: "text-white", money: false },
+            { label: "Active", value: metrics.activeCustomers, color: "text-emerald-200", money: false },
+            { label: "Inactive", value: metrics.inactiveCustomers, color: "text-red-200", money: false },
+            { label: "GST Customers", value: metrics.gstCustomers, color: "text-sky-200", money: false },
+            { label: "Revenue", value: metrics.totalRevenue, color: "text-emerald-200", money: true },
+            { label: "Avg Value", value: metrics.averageRevenue, color: "text-amber-200", money: true },
+          ].map(({ label, value, color, money: isMoney }) => (
+            <div key={label} className="min-w-0 overflow-hidden rounded-lg border border-white/10 bg-black/70 p-5 shadow-xl">
               <p className="text-xs uppercase tracking-[0.18em] text-neutral-500">{label}</p>
-              <p className={`mt-4 text-3xl font-black ${color}`}>{value}</p>
+              <div className={`mt-4 min-w-0 font-black ${color}`}>
+                {isMoney ? <MoneyValue value={value} compactAt={12} className="font-black" /> : <span className="text-3xl">{value}</span>}
+              </div>
             </div>
           ))}
         </section>
@@ -1032,7 +1052,18 @@ function CustomerFormModal({
           <input className={inputClass} placeholder="Customer name" value={form.name} onChange={(event) => onChange("name", event.target.value)} />
           <input className={inputClass} placeholder="Phone" value={form.phone} onChange={(event) => onChange("phone", event.target.value)} />
           <input className={inputClass} placeholder="Email" value={form.email} onChange={(event) => onChange("email", event.target.value)} />
-          <input className={inputClass} placeholder="GST number" value={form.gstNumber} onChange={(event) => onChange("gstNumber", event.target.value)} />
+          <input
+            className={inputClass}
+            placeholder="GST number"
+            value={form.gstNumber}
+            onChange={(event) => {
+              const value = event.target.value.toUpperCase()
+              onChange("gstNumber", value)
+              const inferred = gstStateFromGstin(value)
+              if (inferred && !form.state) onChange("state", inferred.name)
+              if (inferred && !form.stateCode) onChange("stateCode", inferred.code)
+            }}
+          />
           <SelectShell>
             <select
               value={form.customerType}
@@ -1045,6 +1076,30 @@ function CustomerFormModal({
               <option value="distributor">Distributor</option>
             </select>
           </SelectShell>
+          <SelectShell>
+            <select
+              value={form.state}
+              onChange={(event) => {
+                onChange("state", event.target.value)
+                onChange("stateCode", stateCodeForName(event.target.value))
+              }}
+              aria-label="State"
+              className="w-full appearance-none rounded-lg border border-white/10 bg-black py-3 pl-4 pr-14 text-sm outline-none transition-all focus:border-sky-300"
+            >
+              <option value="">Select state / union territory</option>
+              {INDIA_GST_STATES.map((state) => (
+                <option key={state.code} value={state.name}>{state.name}</option>
+              ))}
+            </select>
+          </SelectShell>
+          <input
+            className={inputClass}
+            placeholder="State code"
+            inputMode="numeric"
+            maxLength={2}
+            value={form.stateCode}
+            onChange={(event) => onChange("stateCode", event.target.value.replace(/\D/g, "").slice(0, 2))}
+          />
           <textarea data-enter-empty-advance="true" className={`${inputClass} min-h-28 md:col-span-2`} placeholder="Billing address" value={form.address} onChange={(event) => onChange("address", event.target.value)} />
         </div>
 
@@ -1103,6 +1158,7 @@ function CustomerDetailModal({
             ["Phone", customer.phone || "-"],
             ["Email", customer.email || "-"],
             ["GST", customer.gst_number || "Non-GST"],
+            ["State", customer.state ? `${customer.state}${customer.state_code ? ` (${customer.state_code})` : ""}` : "-"],
             ["Created", formatDate(customer.created_at)],
           ].map(([label, value]) => (
             <div key={label} className="rounded-lg border border-white/10 bg-white/[0.04] p-4">

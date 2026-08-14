@@ -2,6 +2,7 @@
 
 import Link from "next/link"
 import { useEffect, useMemo, useState } from "react"
+import { MoneyValue } from "@/components/MoneyValue"
 import { apiFetch } from "@/lib/api/client-fetch"
 
 type DataRow = Record<string, unknown> & {
@@ -190,19 +191,21 @@ export default function BillingPage() {
 
         <section className="grid grid-cols-1 gap-5 md:grid-cols-2 2xl:grid-cols-4">
           {[
-            ["Revenue", money(analytics.revenue), "text-cyan-200", `${analytics.invoiceCount} invoices`],
-            ["Outstanding", money(analytics.outstanding), "text-amber-200", `${analytics.unpaidCount} unpaid, ${analytics.partialCount} partial`],
-            ["Collection", `${analytics.collectionRate}%`, "text-emerald-200", `${analytics.paidCount} paid invoices`],
-            ["Inventory Value", money(analytics.inventoryValue), "text-blue-200", `${analytics.lowStockCount} low stock alerts`],
-          ].map(([label, value, color, helper]) => (
+            { label: "Revenue", value: analytics.revenue, color: "text-cyan-200", helper: `${analytics.invoiceCount} invoices`, money: true },
+            { label: "Outstanding", value: analytics.outstanding, color: "text-amber-200", helper: `${analytics.unpaidCount} unpaid, ${analytics.partialCount} partial`, money: true },
+            { label: "Collection", value: analytics.collectionRate, color: "text-emerald-200", helper: `${analytics.paidCount} paid invoices`, money: false },
+            { label: "Inventory Value", value: analytics.inventoryValue, color: "text-blue-200", helper: `${analytics.lowStockCount} low stock alerts`, money: true },
+          ].map(({ label, value, color, helper, money: isMoney }) => (
             <div
               key={label}
-              className="group relative overflow-hidden rounded-[32px] border border-white/10 bg-gradient-to-br from-zinc-950 via-black to-zinc-950 p-7 transition-all duration-300 hover:-translate-y-1 hover:border-cyan-400/30 hover:shadow-[0_0_45px_rgba(34,211,238,0.12)]"
+              className="group relative min-w-0 overflow-hidden rounded-[32px] border border-white/10 bg-gradient-to-br from-zinc-950 via-black to-zinc-950 p-7 transition-all duration-300 hover:-translate-y-1 hover:border-cyan-400/30 hover:shadow-[0_0_45px_rgba(34,211,238,0.12)]"
             >
               <div className="absolute inset-0 bg-[radial-gradient(circle_at_top_left,rgba(34,211,238,0.10),transparent_34%)] opacity-0 transition-opacity duration-300 group-hover:opacity-100" />
               <div className="relative">
                 <p className="text-xs font-semibold uppercase tracking-[0.2em] text-neutral-500">{label}</p>
-                <p className={`mt-5 text-4xl font-black tracking-tight ${color}`}>{value}</p>
+                <div className={`mt-5 min-w-0 font-black ${color}`}>
+                  {isMoney ? <MoneyValue value={value} className="font-black" /> : <span className="text-4xl">{value}%</span>}
+                </div>
                 <p className="mt-4 text-sm text-neutral-500">{helper}</p>
               </div>
             </div>
@@ -255,16 +258,18 @@ export default function BillingPage() {
                 <h2 className="text-3xl font-black tracking-tight">Billing Intelligence</h2>
                 <div className="mt-7 grid grid-cols-2 gap-4">
                   {[
-                    ["Avg Invoice", money(analytics.avgInvoice)],
-                    ["Tax Ledger", money(analytics.tax)],
-                    ["Customers", analytics.customerCount],
-                    ["Invoices", analytics.invoiceCount],
-                    ["Products", analytics.productCount],
-                    ["Low Stock", analytics.lowStockCount],
-                  ].map(([label, value]) => (
-                    <div key={label} className="rounded-3xl border border-white/10 bg-black/35 p-5">
+                    { label: "Avg Invoice", value: analytics.avgInvoice, money: true },
+                    { label: "Tax Ledger", value: analytics.tax, money: true },
+                    { label: "Customers", value: analytics.customerCount, money: false },
+                    { label: "Invoices", value: analytics.invoiceCount, money: false },
+                    { label: "Products", value: analytics.productCount, money: false },
+                    { label: "Low Stock", value: analytics.lowStockCount, money: false },
+                  ].map(({ label, value, money: isMoney }) => (
+                    <div key={label} className="min-w-0 overflow-hidden rounded-3xl border border-white/10 bg-black/35 p-5">
                       <p className="text-xs uppercase tracking-[0.18em] text-neutral-500">{label}</p>
-                      <p className="mt-3 text-2xl font-black text-white">{value}</p>
+                      {isMoney
+                        ? <MoneyValue value={value} compactAt={11} className="mt-3 font-black text-white" />
+                        : <p className="mt-3 text-2xl font-black text-white">{value}</p>}
                     </div>
                   ))}
                 </div>

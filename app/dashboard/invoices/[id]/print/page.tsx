@@ -5,7 +5,7 @@ import { useParams } from "next/navigation"
 import { PrintEngine } from "@/components/print/PrintEngine"
 import { loadStoredPrintSettings, readStoredPrintSettings } from "@/components/print/settings/defaults"
 import type { PrintInvoice, PrintSettings } from "@/components/print/types"
-import { resolveBusinessLogoUrl } from "@/lib/business-logo"
+import { resolveBusinessLogoDataUrl } from "@/lib/business-logo"
 import { getCachedWorkspaceBootstrap, getOfflineData } from "@/lib/offline/db"
 import { buildPrintInvoice, resolvePrintOrganization, stringFrom, type PrintRow } from "@/lib/print-invoice-builder"
 
@@ -49,7 +49,7 @@ export default function PrintInvoicePage() {
       cachedWorkspace?.organization as Record<string, unknown> | null,
       cachedOrganization
     )
-    const logoUrl = await resolveBusinessLogoUrl(stringFrom(resolvedOrganization, ["logo_path"])).catch(() => "")
+    const logoUrl = await resolveBusinessLogoDataUrl(stringFrom(resolvedOrganization, ["logo_path"])).catch(() => "")
     setOrganization(resolvedOrganization ? { ...resolvedOrganization, logo_url: logoUrl } : null)
     setCustomer(
       cachedCustomers.find((row) => stringFrom(row, ["id"]) === customerId || stringFrom(row, ["offline_local_id"]) === customerId) || null

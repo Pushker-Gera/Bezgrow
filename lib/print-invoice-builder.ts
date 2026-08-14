@@ -1,5 +1,6 @@
 import type { PrintInvoice, PrintInvoiceItem } from "@/components/print/types"
 import { amountInIndianWords } from "@/components/print/utils"
+import { stateCodeForName } from "@/lib/india-gst-states"
 
 export type PrintRow = Record<string, unknown> & { id: string }
 
@@ -92,7 +93,7 @@ export function buildInvoiceQrPayload({
     `Grand Total: Rs ${grandTotal.toFixed(2)}`,
     `Payment Status: ${compactQrText(paymentStatus || "unpaid", 24)}`,
     `Paid: Rs ${paid.toFixed(2)}`,
-    `Due: Rs ${due.toFixed(2)}`,
+    `Balance Due: Rs ${due.toFixed(2)}`,
   ]
   return lines.join("\n")
 }
@@ -127,9 +128,10 @@ export function buildPrintInvoice({
   const taxableAmount = numberFrom(invoice, ["taxable_amount"]) || Math.max(0, subtotal - discount)
   const paid = numberFrom(invoice, ["paid_amount"]) ||
     (stringFrom(invoice, ["payment_status", "status"]).toLowerCase() === "paid" ? grandTotal : 0)
-  const dueAmount = numberFrom(invoice, ["outstanding_amount", "due_amount"]) || Math.max(0, grandTotal - paid)
+  const dueAmount = Math.max(0, numberFrom(invoice, ["outstanding_amount", "due_amount"]) || (grandTotal - paid))
   const organizationStateCode = stringFrom(organization, ["state_code", "gst_state_code"])
-  const customerStateCode = stringFrom(customer, ["state_code", "gst_state_code"])
+  const customerState = stringFrom(customer, ["state"])
+  const customerStateCode = stringFrom(customer, ["state_code", "gst_state_code"]) || stateCodeForName(customerState)
   const supplyType = stringFrom(invoice, ["supply_type", "tax_type"]).toLowerCase()
   const isInterstate =
     supplyType === "interstate" ||
@@ -222,8 +224,8 @@ export function buildPrintInvoice({
       phone: stringFrom(customer, ["phone"]) || "-",
       email: stringFrom(customer, ["email"]) || "-",
       gstin: stringFrom(customer, ["gst_number", "gstin", "tax_id"]) || "-",
-      state: stringFrom(customer, ["state"]) || "-",
-      stateCode: stringFrom(customer, ["state_code"]) || "-",
+      state: customerState || "-",
+      stateCode: customerStateCode || "-",
     },
     items: mappedItems,
     payment: {

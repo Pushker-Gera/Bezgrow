@@ -248,6 +248,7 @@ function customerRow(input: DataRow, organizationId: string, index = 0) {
     address: text(input, ["address"]),
     city: text(input, ["city"]),
     state: text(input, ["state"]),
+    state_code: text(input, ["state_code", "gst_state_code"]),
     country: text(input, ["country"]),
     customer_type: text(input, ["customer_type"], "retail"),
     opening_balance: number(input, ["opening_balance"], 0),

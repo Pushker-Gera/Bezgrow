@@ -103,7 +103,7 @@ export function invoice(itemCount: number, gst: boolean): PrintInvoice {
       `Grand Total: Rs ${grandTotal.toFixed(2)}`,
       "Payment Status: Partial",
       `Paid: Rs ${(grandTotal / 2).toFixed(2)}`,
-      `Due: Rs ${(grandTotal / 2).toFixed(2)}`,
+      `Balance Due: Rs ${(grandTotal / 2).toFixed(2)}`,
     ].join("\n"),
     barcodeValue: `INV-LAYOUT-${itemCount}`,
     watermark: "PAID",

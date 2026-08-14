@@ -3,6 +3,7 @@
 import Link from "next/link"
 import { useEffect, useMemo, useRef, useState } from "react"
 import { useDebounce } from "use-debounce"
+import { MoneyValue } from "@/components/MoneyValue"
 import { apiFetch } from "@/lib/api/client-fetch"
 import { exportCsv } from "@/lib/desktop-file-export"
 import { getOrganizationFeatures } from "@/lib/get-organization-features"
@@ -813,6 +814,7 @@ export default function ProductsPage() {
         {
             label: "Products",
             value: analytics.totalProducts,
+            moneyValue: undefined,
             meta: `${analytics.categoriesCount} categories`,
             filter: "all",
             accent: "from-white to-neutral-400",
@@ -820,6 +822,7 @@ export default function ProductsPage() {
         {
             label: "Low Stock",
             value: analytics.lowStockCount,
+            moneyValue: undefined,
             meta: `${analytics.outOfStockCount} out of stock`,
             filter: "low",
             accent: "from-amber-200 to-yellow-500",
@@ -827,13 +830,15 @@ export default function ProductsPage() {
         {
             label: "Expiry Risk",
             value: analytics.expiredCount + analytics.expiringSoonCount,
+            moneyValue: undefined,
             meta: `${analytics.expiringSoonCount} expiring in 30 days`,
             filter: "expiringSoon",
             accent: "from-red-200 to-rose-500",
         },
         {
             label: "Inventory Value",
-            value: money(analytics.totalInventoryValue),
+            value: "",
+            moneyValue: analytics.totalInventoryValue,
             meta: `${money(analytics.totalPotentialProfit)} potential margin`,
             filter: "all",
             accent: "from-emerald-200 to-green-500",
@@ -841,6 +846,7 @@ export default function ProductsPage() {
         {
             label: "Suppliers",
             value: analytics.suppliersCount,
+            moneyValue: undefined,
             meta: `${analytics.warehousesCount} warehouse labels`,
             filter: "all",
             accent: "from-sky-200 to-blue-500",
@@ -1000,14 +1006,16 @@ export default function ProductsPage() {
                         <button
                             key={item.label}
                             onClick={() => setActiveFilter(item.filter)}
-                            className="group relative overflow-hidden rounded-lg border border-white/10 bg-black/70 p-5 text-left shadow-xl backdrop-blur transition-all duration-300 hover:-translate-y-1 hover:border-white/20"
+                            className="group relative min-w-0 overflow-hidden rounded-lg border border-white/10 bg-black/70 p-5 text-left shadow-xl backdrop-blur transition-all duration-300 hover:-translate-y-1 hover:border-white/20"
                         >
                             <div className={`absolute inset-x-0 top-0 h-1 bg-gradient-to-r ${item.accent}`} />
                             <p className="text-xs uppercase tracking-[0.18em] text-neutral-500">
                                 {item.label}
                             </p>
-                            <h2 className={`mt-4 text-3xl font-black tracking-tight text-transparent bg-clip-text bg-gradient-to-r ${item.accent}`}>
-                                {item.value}
+                            <h2 className={`mt-4 min-w-0 font-black ${item.moneyValue !== undefined ? "text-emerald-200" : `text-transparent bg-clip-text bg-gradient-to-r ${item.accent}`}`}>
+                                {item.moneyValue !== undefined
+                                    ? <MoneyValue value={item.moneyValue} className="font-black" />
+                                    : <span className="text-3xl">{item.value}</span>}
                             </h2>
                             <p className="mt-3 text-xs text-neutral-500">
                                 {item.meta}
@@ -1304,15 +1312,11 @@ export default function ProductsPage() {
                             <div className="mt-5 grid grid-cols-2 gap-3">
                                 <div className="rounded-lg border border-white/10 bg-white/[0.04] p-4">
                                     <p className="text-xs text-neutral-500">Cost Value</p>
-                                    <p className="mt-2 text-lg font-black text-sky-200">
-                                        {money(analytics.totalCostValue)}
-                                    </p>
+                                    <MoneyValue value={analytics.totalCostValue} compactAt={12} className="mt-2 font-black text-sky-200" />
                                 </div>
                                 <div className="rounded-lg border border-white/10 bg-white/[0.04] p-4">
                                     <p className="text-xs text-neutral-500">Potential Profit</p>
-                                    <p className="mt-2 text-lg font-black text-emerald-200">
-                                        {money(analytics.totalPotentialProfit)}
-                                    </p>
+                                    <MoneyValue value={analytics.totalPotentialProfit} compactAt={12} className="mt-2 font-black text-emerald-200" />
                                 </div>
                             </div>
                         </div>

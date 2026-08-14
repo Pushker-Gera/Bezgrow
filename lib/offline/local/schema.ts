@@ -1,6 +1,6 @@
 "use client"
 
-export const LOCAL_DB_VERSION = 9
+export const LOCAL_DB_VERSION = 10
 export const LOCAL_DB_URL = "sqlite:bezgrow-offline.db"
 
 export const normalizedTables = [
@@ -1094,6 +1094,14 @@ export const localMigrations: Array<{ version: number; name: string; sql: string
            unit = COALESCE(NULLIF(trim(unit), ''), (SELECT p.unit FROM products p WHERE p.id = sales_invoice_items.product_id AND p.organization_id = sales_invoice_items.organization_id)),
            mrp = COALESCE(mrp, (SELECT p.mrp FROM products p WHERE p.id = sales_invoice_items.product_id AND p.organization_id = sales_invoice_items.organization_id))`,
       "CREATE INDEX IF NOT EXISTS idx_sales_items_batch_expiry ON sales_invoice_items (organization_id, batch_no, expiry_date)",
+    ],
+  },
+  {
+    version: 10,
+    name: "customer_gst_state_fields",
+    sql: [
+      "ALTER TABLE customers ADD COLUMN state_code TEXT",
+      "CREATE INDEX IF NOT EXISTS idx_customers_org_state ON customers (organization_id, state_code, state)",
     ],
   },
 ]

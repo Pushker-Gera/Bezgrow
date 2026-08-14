@@ -2,6 +2,7 @@
 
 import Link from "next/link"
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
+import { MoneyValue } from "@/components/MoneyValue"
 import { apiFetch } from "@/lib/api/client-fetch"
 import { getCachedWorkspaceBootstrap, getOfflineData } from "@/lib/offline/db"
 
@@ -288,7 +289,8 @@ export default function Dashboard() {
     const kpiCards = [
         {
             label: "Revenue",
-            value: money(metrics.totalRevenue),
+            value: "",
+            moneyValue: metrics.totalRevenue,
             meta: `${money(metrics.todayRevenue)} today`,
             accent: "from-emerald-200 to-green-500",
             valueClass: "text-emerald-200",
@@ -296,7 +298,8 @@ export default function Dashboard() {
         },
         {
             label: "Inventory Value",
-            value: money(metrics.inventoryValue),
+            value: "",
+            moneyValue: metrics.inventoryValue,
             meta: `${money(metrics.potentialProfit)} potential margin`,
             accent: "from-sky-200 to-blue-500",
             valueClass: "text-sky-200",
@@ -305,6 +308,7 @@ export default function Dashboard() {
         {
             label: "Products",
             value: dashboard.counts.products,
+            moneyValue: undefined,
             meta: `${metrics.lowStockCount} low stock`,
             accent: "from-white to-neutral-400",
             valueClass: "text-white",
@@ -313,6 +317,7 @@ export default function Dashboard() {
         {
             label: "Customers",
             value: dashboard.counts.customers,
+            moneyValue: undefined,
             meta: `${dashboard.counts.invoices} invoices`,
             accent: "from-cyan-200 to-blue-500",
             valueClass: "text-cyan-200",
@@ -321,6 +326,7 @@ export default function Dashboard() {
         {
             label: "Business Health",
             value: `${metrics.erpHealth}%`,
+            moneyValue: undefined,
             meta: `${metrics.collectionRate}% collection`,
             accent: "from-amber-200 to-yellow-500",
             valueClass: "text-amber-200",
@@ -500,14 +506,16 @@ export default function Dashboard() {
                         <Link
                             key={card.label}
                             href={card.href}
-                            className="group relative flex min-h-[148px] flex-col overflow-hidden rounded-lg border border-white/10 bg-black/70 p-4 shadow-xl backdrop-blur transition-all duration-300 hover:-translate-y-1 hover:border-white/20 sm:min-h-[170px] sm:p-5"
+                            className="group relative flex min-h-[148px] min-w-0 flex-col overflow-hidden rounded-lg border border-white/10 bg-black/70 p-4 shadow-xl backdrop-blur transition-all duration-300 hover:-translate-y-1 hover:border-white/20 sm:min-h-[170px] sm:p-5"
                         >
                             <div className={`absolute inset-x-0 top-0 h-1 bg-gradient-to-r ${card.accent}`} />
                             <p className="text-xs uppercase tracking-[0.18em] text-neutral-500">
                                 {card.label}
                             </p>
-                            <h2 className={`mt-4 text-3xl font-black tracking-tight sm:mt-5 sm:text-4xl ${card.valueClass}`}>
-                                {card.value}
+                            <h2 className={`mt-4 min-w-0 font-black sm:mt-5 ${card.valueClass}`}>
+                                {card.moneyValue !== undefined
+                                    ? <MoneyValue value={card.moneyValue} className="font-black" />
+                                    : <span className="text-3xl sm:text-4xl">{card.value}</span>}
                             </h2>
                             <p className="mt-auto pt-5 text-xs text-neutral-500">{card.meta}</p>
                         </Link>

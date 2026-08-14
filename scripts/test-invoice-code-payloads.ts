@@ -64,7 +64,7 @@ async function run() {
     "Invoice: INV-00003",
     "Grand Total: Rs 1180.00",
     "Payment Status: Partial",
-    "Due: Rs 680.00",
+    "Balance Due: Rs 680.00",
   ]) assert.match(decodedQr, new RegExp(expected.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")))
   for (const secret of ["licence", "license key", "device id", "token", "password", "secret", "internal database id"]) {
     assert.doesNotMatch(decodedQr, new RegExp(secret, "i"))

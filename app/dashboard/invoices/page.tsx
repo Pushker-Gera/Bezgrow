@@ -4,6 +4,7 @@ import Link from "next/link"
 import type { ReactNode } from "react"
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { useDebounce } from "use-debounce"
+import { MoneyValue } from "@/components/MoneyValue"
 import { apiFetch } from "@/lib/api/client-fetch"
 import { getOrganizationId } from "@/lib/getOrganization"
 import { createOfflineId, getOfflineData, putOfflineData, queueOfflineAction } from "@/lib/offline/db"
@@ -532,19 +533,21 @@ export default function InvoicesPage() {
 
         <section className="grid grid-cols-1 gap-5 md:grid-cols-2 2xl:grid-cols-4">
           {[
-            ["Total Revenue", money(analytics.revenue), "text-cyan-200", "All invoice value"],
-            ["Outstanding", money(analytics.outstanding), "text-amber-200", `${analytics.overdueCount} overdue`],
-            ["Collection Rate", `${analytics.collectionRate}%`, "text-emerald-200", `${analytics.paidCount} paid invoices`],
-            ["Tax Ledger", money(analytics.tax), "text-blue-200", "GST and tax visibility"],
-          ].map(([label, value, color, helper]) => (
+            { label: "Total Revenue", value: analytics.revenue, color: "text-cyan-200", helper: "All invoice value", money: true },
+            { label: "Outstanding", value: analytics.outstanding, color: "text-amber-200", helper: `${analytics.overdueCount} overdue`, money: true },
+            { label: "Collection Rate", value: analytics.collectionRate, color: "text-emerald-200", helper: `${analytics.paidCount} paid invoices`, money: false },
+            { label: "Tax Ledger", value: analytics.tax, color: "text-blue-200", helper: "GST and tax visibility", money: true },
+          ].map(({ label, value, color, helper, money: isMoney }) => (
             <div
               key={label}
-              className="group relative overflow-hidden rounded-lg border border-white/10 bg-gradient-to-br from-zinc-950 via-black to-zinc-950 p-4 transition-all duration-300 hover:-translate-y-1 hover:border-cyan-400/30 hover:shadow-[0_0_45px_rgba(34,211,238,0.12)] sm:rounded-[32px] sm:p-7"
+              className="group relative min-w-0 overflow-hidden rounded-lg border border-white/10 bg-gradient-to-br from-zinc-950 via-black to-zinc-950 p-4 transition-all duration-300 hover:-translate-y-1 hover:border-cyan-400/30 hover:shadow-[0_0_45px_rgba(34,211,238,0.12)] sm:rounded-[32px] sm:p-7"
             >
               <div className="absolute inset-0 bg-[radial-gradient(circle_at_top_left,rgba(34,211,238,0.10),transparent_34%)] opacity-0 transition-opacity duration-300 group-hover:opacity-100" />
               <div className="relative">
                 <p className="text-xs font-semibold uppercase tracking-[0.2em] text-neutral-500">{label}</p>
-                <p className={`mt-4 text-3xl font-black tracking-tight sm:mt-5 sm:text-4xl ${color}`}>{value}</p>
+                <div className={`mt-4 min-w-0 font-black sm:mt-5 ${color}`}>
+                  {isMoney ? <MoneyValue value={value} className="font-black" /> : <span className="text-3xl sm:text-4xl">{value}%</span>}
+                </div>
                 <p className="mt-3 text-sm text-neutral-500 sm:mt-4">{helper}</p>
               </div>
             </div>
