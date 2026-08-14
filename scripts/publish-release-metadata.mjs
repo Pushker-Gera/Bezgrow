@@ -123,6 +123,7 @@ const grouped = Map.groupBy(
   (entry) => `${entry.platform}:${entry.architecture}:${entry.channel}`
 )
 
+const stagedReleases = []
 for (const entries of grouped.values()) {
   const first = entries[0]
   const identity = {
@@ -137,7 +138,7 @@ for (const entries of grouped.values()) {
     .upsert(
       {
         ...identity,
-        release_status: "published",
+        release_status: "draft",
         minimum_supported_version: manifest.minimumSupportedVersion || null,
         release_notes: Array.isArray(manifest.releaseNotes)
           ? manifest.releaseNotes.join("\n")
@@ -145,8 +146,8 @@ for (const entries of grouped.values()) {
         rollout_percentage: 100,
         mandatory: Boolean(manifest.mandatory),
         mandatory_after: manifest.mandatoryAfter || null,
-        active: true,
-        published_at: new Date().toISOString(),
+        active: false,
+        published_at: null,
         updated_at: new Date().toISOString(),
       },
       {
@@ -190,12 +191,48 @@ for (const entries of grouped.values()) {
     if (artifactResult.error) throw artifactResult.error
   }
 
+  stagedReleases.push({
+    id: releaseResult.data.id,
+    identity,
+    entries,
+  })
+}
+
+if (stagedReleases.length !== grouped.size || stagedReleases.length < 2) {
+  throw new Error("A public desktop release requires staged Mac and Windows release records.")
+}
+
+const stagedPlatforms = new Set(stagedReleases.map((release) => release.identity.platform))
+if (!stagedPlatforms.has("macos") || !stagedPlatforms.has("windows")) {
+  throw new Error("Control-plane publication requires both staged Mac and Windows release records.")
+}
+
+const publishedAt = new Date().toISOString()
+const releaseIds = stagedReleases.map((release) => release.id)
+const promotion = await supabase
+  .from("desktop_releases")
+  .update({
+    release_status: "published",
+    active: true,
+    rollout_percentage: 100,
+    published_at: publishedAt,
+    updated_at: publishedAt,
+  })
+  .in("id", releaseIds)
+  .select("id")
+if (promotion.error) throw promotion.error
+if ((promotion.data || []).length !== releaseIds.length) {
+  throw new Error("Control-plane release promotion did not publish every staged platform record.")
+}
+
+for (const release of stagedReleases) {
+  const { identity, entries, id } = release
   const audit = await supabase.from("admin_audit_logs").insert({
     admin_user_id: null,
     admin_email: "github-actions",
     action: "RELEASE_PUBLISHED_BY_CI",
     target_type: "desktop_release",
-    target_id: releaseResult.data.id,
+    target_id: id,
     previous_values: null,
     new_values: {
       ...identity,
@@ -212,4 +249,6 @@ for (const entries of grouped.values()) {
   if (audit.error) throw audit.error
 }
 
-console.log(`Published integrity-verified control-plane metadata for ${artifacts.length} installer artifacts.`)
+console.log(
+  `Atomically published ${stagedReleases.length} platform records with integrity-verified metadata for ${artifacts.length} installer artifacts.`
+)

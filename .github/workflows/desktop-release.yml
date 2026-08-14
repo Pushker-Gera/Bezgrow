@@ -76,6 +76,8 @@ jobs:
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
       - uses: actions/setup-node@v4
         with:
           node-version-file: .nvmrc
@@ -115,6 +117,8 @@ jobs:
       BEZGROW_UPDATER_PUBLIC_KEY: ${{ vars.BEZGROW_UPDATER_PUBLIC_KEY || secrets.BEZGROW_UPDATER_PUBLIC_KEY }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
 
       - uses: actions/setup-node@v4
         with:
@@ -345,6 +349,8 @@ jobs:
       BEZGROW_UPDATER_PUBLIC_KEY: ${{ vars.BEZGROW_UPDATER_PUBLIC_KEY || secrets.BEZGROW_UPDATER_PUBLIC_KEY }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
 
       - uses: actions/setup-node@v4
         with:
@@ -683,7 +689,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ github.event.repository.default_branch }}
+          ref: ${{ github.sha }}
+          fetch-depth: 0
 
       - uses: actions/setup-node@v4
         with:
@@ -790,6 +797,16 @@ jobs:
             echo "BEZGROW_NOTES"
           } >> "$GITHUB_OUTPUT"
 
+      - name: Verify the release source is still current main
+        shell: bash
+        run: |
+          git fetch origin "${{ github.event.repository.default_branch }}" --no-tags
+          CURRENT_MAIN="$(git rev-parse FETCH_HEAD)"
+          if [ "$CURRENT_MAIN" != "${{ github.sha }}" ]; then
+            echo "origin/${{ github.event.repository.default_branch }} advanced to $CURRENT_MAIN after this release started. Refusing to publish stale installers from ${{ github.sha }}."
+            exit 1
+          fi
+
       - name: Create or update GitHub Release
         shell: bash
         run: |
@@ -830,6 +847,19 @@ jobs:
               gh release upload "$TAG" "$ASSET"
             fi
           done
+
+      - name: Verify uploaded digests and public installer URLs
+        shell: bash
+        run: |
+          TAG="${{ steps.release.outputs.tag }}"
+          RELEASE_JSON="$RUNNER_TEMP/bezgrow-github-release.json"
+          gh api "repos/$REPOSITORY/releases/tags/$TAG" > "$RELEASE_JSON"
+          node scripts/verify-published-release-assets.mjs \
+            --root release-artifacts \
+            --release-json "$RELEASE_JSON" \
+            --tag "$TAG" \
+            --version "${{ steps.release.outputs.version }}" \
+            --commit "${{ github.sha }}"
 
       - name: Write verified website release metadata
         if: steps.release.outputs.draft != 'true'
@@ -1003,6 +1033,7 @@ jobs:
           node scripts/verify-production-windows-download.mjs
           --site https://www.bezgrow.com
           --version "${{ steps.release.outputs.version }}"
+          --commit "${{ github.sha }}"
           --attempts 40
           --interval-ms 15000
 
@@ -1031,5 +1062,6 @@ jobs:
           --site https://www.bezgrow.com
           --version "$(node -p "require('./package.json').version")"
           --commit "${{ github.sha }}"
+          --launch true
           --attempts 40
           --interval-ms 15000

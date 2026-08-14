@@ -353,11 +353,11 @@ function missingAvailability(
 async function availabilityForPlatform(
   platform: InstallerPlatform,
   rows: ReleaseRow[],
-  controlPlaneError: string | null
+  controlPlaneError: string | null,
+  requestedVersion: string | null
 ): Promise<PublicReleaseAvailability> {
-  const currentVersion = packageVersion()
   const platformRows = rows.filter(
-    (row) => row.platform === platform && (!currentVersion || row.version === currentVersion)
+    (row) => row.platform === platform && (!requestedVersion || row.version === requestedVersion)
   )
   const controlCandidates = publishedRows(platformRows, platform)
     .map(controlPlaneCandidate)
@@ -367,7 +367,7 @@ async function availabilityForPlatform(
     ...checkedCandidates,
     ...controlCandidates,
     ...configuredCandidates(platform),
-  ]).filter((candidate) => !currentVersion || candidate.version === currentVersion)
+  ]).filter((candidate) => !requestedVersion || candidate.version === requestedVersion)
 
   if (candidates.length === 0) {
     if (platformRows.length > 0) {
@@ -390,7 +390,7 @@ async function availabilityForPlatform(
     return missingAvailability(
       platform,
       controlPlaneError ||
-        `No genuine ${platform === "macos" ? "macOS" : "Windows"} installer for Bezgrow ${currentVersion || "current"} was found in local downloads, release metadata, or configured URLs.`
+        `No genuine ${platform === "macos" ? "macOS" : "Windows"} installer for Bezgrow ${requestedVersion || "current"} was found in local downloads, release metadata, or configured URLs.`
     )
   }
 
@@ -424,6 +424,98 @@ async function availabilityForPlatform(
     reason,
     installer: null,
   }
+}
+
+function compareReleaseVersions(left: string, right: string) {
+  const parse = (value: string) => {
+    const [core, prerelease = ""] = value.split("-", 2)
+    return { parts: core.split(".").map((part) => Number(part)), prerelease }
+  }
+  const a = parse(left)
+  const b = parse(right)
+  for (let index = 0; index < Math.max(a.parts.length, b.parts.length); index += 1) {
+    const difference = (b.parts[index] || 0) - (a.parts[index] || 0)
+    if (difference !== 0) return difference
+  }
+  if (!a.prerelease && b.prerelease) return -1
+  if (a.prerelease && !b.prerelease) return 1
+  return b.prerelease.localeCompare(a.prerelease)
+}
+
+function releaseCandidateVersions(rows: ReleaseRow[]) {
+  const candidates = [
+    packageVersion(),
+    ...rows
+      .filter(
+        (row) =>
+          row.release_status === "published" &&
+          row.active &&
+          row.published_at &&
+          Number(row.rollout_percentage ?? 100) === 100
+      )
+      .map((row) => row.version),
+    ...checkedInCandidates("macos").map((candidate) => candidate.version),
+    ...checkedInCandidates("windows").map((candidate) => candidate.version),
+    ...configuredCandidates("macos").map((candidate) => candidate.version),
+    ...configuredCandidates("windows").map((candidate) => candidate.version),
+  ]
+  return [...new Set(candidates.filter((version): version is string => Boolean(version && /^\d+\.\d+\.\d+(?:[-+][A-Za-z0-9.-]+)?$/.test(version))))]
+    .sort(compareReleaseVersions)
+}
+
+function desktopAvailability(
+  mac: PublicReleaseAvailability,
+  windows: PublicReleaseAvailability
+): PublicDesktopReleaseAvailability {
+  const manifest: PublicDesktopReleaseManifest = {
+    generatedAt: new Date(0).toISOString(),
+    releaseNotes: [],
+  }
+  for (const availability of [mac, windows]) {
+    const installer = availability.installer
+    if (!installer) continue
+    const key = manifestKey(installer)
+    manifest[key] = installer
+    if (!manifest.version) manifest.version = installer.version || undefined
+    if (
+      installer.generatedAt &&
+      Date.parse(installer.generatedAt) > Date.parse(manifest.generatedAt)
+    ) {
+      manifest.generatedAt = installer.generatedAt
+    }
+    if (installer.releaseNotes && !manifest.releaseNotes.includes(installer.releaseNotes)) {
+      manifest.releaseNotes.push(installer.releaseNotes)
+    }
+  }
+
+  return {
+    manifest:
+      manifest.mac ||
+      manifest.macX64 ||
+      manifest.windows ||
+      manifest.windowsMsi ||
+      manifest.windowsMsix ||
+      manifest.windowsArm64 ||
+      manifest.windowsArm64Msi ||
+      manifest.windowsArm64Msix
+        ? manifest
+        : null,
+    mac,
+    windows,
+  }
+}
+
+function incompleteCohortAvailability(
+  platform: InstallerPlatform,
+  version: string,
+  counterpart: PublicReleaseAvailability
+) {
+  const counterpartName = platform === "macos" ? "Windows" : "macOS"
+  return missingAvailability(
+    platform,
+    `Bezgrow ${version} remains unpublished because its ${counterpartName} installer has not passed integrity validation: ${counterpart.reason}`,
+    counterpart.status
+  )
 }
 
 function manifestKey(installer: PublicInstallerRelease) {
@@ -465,47 +557,30 @@ export async function getDesktopReleaseAvailability(): Promise<PublicDesktopRele
     })
   }
 
-  const [mac, windows] = await Promise.all([
-    availabilityForPlatform("macos", rows, controlPlaneError),
-    availabilityForPlatform("windows", rows, controlPlaneError),
-  ])
-
-  const manifest: PublicDesktopReleaseManifest = {
-    generatedAt: new Date(0).toISOString(),
-    releaseNotes: [],
-  }
-  for (const availability of [mac, windows]) {
-    const installer = availability.installer
-    if (!installer) continue
-    const key = manifestKey(installer)
-    manifest[key] = installer
-    if (!manifest.version) manifest.version = installer.version || undefined
+  let newestAttempt: { version: string; mac: PublicReleaseAvailability; windows: PublicReleaseAvailability } | null = null
+  for (const version of releaseCandidateVersions(rows)) {
+    const [mac, windows] = await Promise.all([
+      availabilityForPlatform("macos", rows, controlPlaneError, version),
+      availabilityForPlatform("windows", rows, controlPlaneError, version),
+    ])
+    newestAttempt ||= { version, mac, windows }
     if (
-      installer.generatedAt &&
-      Date.parse(installer.generatedAt) > Date.parse(manifest.generatedAt)
+      mac.available &&
+      windows.available &&
+      mac.installer?.version === version &&
+      windows.installer?.version === version
     ) {
-      manifest.generatedAt = installer.generatedAt
-    }
-    if (installer.releaseNotes && !manifest.releaseNotes.includes(installer.releaseNotes)) {
-      manifest.releaseNotes.push(installer.releaseNotes)
+      return desktopAvailability(mac, windows)
     }
   }
 
-  return {
-    manifest:
-      manifest.mac ||
-      manifest.macX64 ||
-      manifest.windows ||
-      manifest.windowsMsi ||
-      manifest.windowsMsix ||
-      manifest.windowsArm64 ||
-      manifest.windowsArm64Msi ||
-      manifest.windowsArm64Msix
-        ? manifest
-        : null,
-    mac,
-    windows,
-  }
+  const fallbackVersion = newestAttempt?.version || packageVersion() || "current"
+  const mac = newestAttempt?.mac || missingAvailability("macos", `No genuine macOS installer for Bezgrow ${fallbackVersion} was found.`)
+  const windows = newestAttempt?.windows || missingAvailability("windows", `No genuine Windows installer for Bezgrow ${fallbackVersion} was found.`)
+  return desktopAvailability(
+    mac.available ? incompleteCohortAvailability("macos", fallbackVersion, windows) : mac,
+    windows.available ? incompleteCohortAvailability("windows", fallbackVersion, mac) : windows
+  )
 }
 
 export async function getPublicDesktopReleaseManifest(): Promise<PublicDesktopReleaseManifest | null> {

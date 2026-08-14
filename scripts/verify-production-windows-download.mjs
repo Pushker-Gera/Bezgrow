@@ -10,11 +10,15 @@ function arg(name, fallback = "") {
 
 const site = arg("--site", "https://www.bezgrow.com").replace(/\/$/, "")
 const expectedVersion = arg("--version")
+const expectedCommit = arg("--commit")
 const attempts = Math.max(1, Number(arg("--attempts", "1")) || 1)
 const intervalMs = Math.max(0, Number(arg("--interval-ms", "0")) || 0)
 
 if (!/^https:\/\//i.test(site)) throw new Error("Production site must use HTTPS.")
 if (!expectedVersion) throw new Error("Expected Windows version is required.")
+if (!/^[a-f0-9]{40}$/i.test(expectedCommit)) {
+  throw new Error("Expected Windows commit must be a complete 40-character SHA.")
+}
 
 function wait(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms))
@@ -139,6 +143,14 @@ async function verify() {
     throw new Error(
       `Production reports Windows ${installer?.version || "unknown"} instead of ${expectedVersion}.`
     )
+  }
+  if (installer?.buildCommit !== expectedCommit) {
+    throw new Error(
+      `Production Windows metadata came from ${installer?.buildCommit || "unknown"}, not ${expectedCommit}.`
+    )
+  }
+  if (Number.isNaN(Date.parse(installer?.buildTimestamp || ""))) {
+    throw new Error("Production Windows metadata is missing a valid build timestamp.")
   }
   if (!/^[a-f0-9]{64}$/i.test(installer?.sha256 || "") || !(installer?.size > 1024 * 1024)) {
     throw new Error("Production Windows metadata is missing a credible size or SHA-256.")

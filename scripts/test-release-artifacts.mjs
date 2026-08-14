@@ -57,7 +57,12 @@ assert.match(validator, /const available = checksumVerified && metadataValid/, "
 assert.match(validator, /Installer architecture .* does not match metadata architecture/, "Architecture mismatch must block downloads.")
 assert.match(publicReleaseSource, /checkedInCandidates/, "Local public/downloads artifacts must be discovered.")
 assert.match(publicReleaseSource, /configuredCandidates/, "Configured installer URLs must be discovered.")
-assert.match(publicReleaseSource, /candidate\.version === currentVersion/, "The download page must not expose an installer from an older application version.")
+assert.match(publicReleaseSource, /releaseCandidateVersions/, "The download page must evaluate immutable release versions independently of the website package version.")
+assert.match(
+  publicReleaseSource,
+  /mac\.available &&[\s\S]*windows\.available &&[\s\S]*mac\.installer\?\.version === version &&[\s\S]*windows\.installer\?\.version === version/,
+  "The download page must expose only a complete same-version Mac and Windows release cohort."
+)
 assert.match(desktopReleaseRoute, /platforms:/, "Desktop release API must return independent platform records.")
 assert.match(desktopDownloadRoute, /release\.available/, "Download route must gate on integrity availability.")
 assert.match(desktopDownloadRoute, /binaryInstallerResponse/, "Validated installers must be returned as binary responses.")
@@ -123,6 +128,7 @@ assert.match(
 )
 assert.match(productionWindowsVerifier, /method: "GET"/, "Production verification must download the complete installer with GET.")
 assert.match(productionWindowsVerifier, /createHash\("sha256"\)/, "Production verification must hash downloaded installer bytes.")
+assert.match(productionWindowsVerifier, /installer\?\.buildCommit !== expectedCommit/, "Production Windows verification must require the exact source commit.")
 assert.match(productionWindowsVerifier, /peArchitecture\(firstBytes\)/, "Production verification must validate a real PE executable.")
 assert.match(productionWindowsVerifier, /releases\\\/download/, "Production verification must require durable GitHub Release storage.")
 assert.match(productionMacVerifier, /method: "GET"/, "Production Mac verification must download the complete installer with GET.")
