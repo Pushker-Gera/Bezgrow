@@ -218,6 +218,9 @@ jobs:
               npm run desktop:build:mac
           fi
 
+      - name: Verify packaged Mac launch, local SQLite, and clean shutdown
+        run: npm run test:desktop-lifecycle:mac -- --cycles 3
+
       - name: Verify and stage Mac installer
         shell: bash
         run: |

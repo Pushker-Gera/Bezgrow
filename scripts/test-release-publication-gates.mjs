@@ -11,6 +11,7 @@ const publicAssetVerifier = read("scripts/verify-published-release-assets.mjs")
 
 assert.match(workflow, /release-gates:\s*[\s\S]*npm run test:release-gates/, "Desktop publication must depend on explicit local-first release gates.")
 assert.match(workflow, /mac:\s*[\s\S]*needs:\s*release-gates/, "The Mac build must require the release-gate job.")
+assert.match(workflow, /Verify packaged Mac launch, local SQLite, and clean shutdown[\s\S]*test:desktop-lifecycle:mac/, "The Mac artifact must pass a real packaged launch, SQLite, and shutdown lifecycle before publication.")
 assert.match(workflow, /windows:\s*[\s\S]*needs:\s*release-gates/, "The Windows build must require the release-gate job.")
 assert.match(workflow, /runs-on:\s*windows-latest[\s\S]*--bundles", "msi,nsis"/, "Genuine Windows x64 NSIS and MSI builds must run on windows-latest.")
 assert.match(workflow, /needs\.mac\.result == 'success' &&[\s\S]*needs\.windows\.result == 'success'/, "Publication must require both platform builds from the same workflow.")
