@@ -173,7 +173,11 @@ export function PrintEngine({
       if (error instanceof DOMException && error.name === "AbortError") {
         setNotice("")
       } else {
-        setNotice(error instanceof Error ? error.message : `${label} could not be completed.`)
+        setNotice(error instanceof Error
+          ? error.message
+          : typeof error === "string" && error.trim()
+            ? error
+            : `${label} could not be completed.`)
       }
     } finally {
       release()

@@ -110,7 +110,6 @@ struct PdfPrintLifecycleIvars {
     print_info: RefCell<Option<Retained<NSPrintInfo>>>,
     operation: RefCell<Option<Retained<NSPrintOperation>>>,
     window: Weak<NSWindow>,
-    completion: RefCell<Option<futures_channel::oneshot::Sender<&'static str>>>,
     terminal: RefCell<&'static str>,
     completion_started: AtomicBool,
     cleanup_started: AtomicBool,
@@ -221,18 +220,11 @@ define_class!(
                 &ivars.session_id,
                 format!("Objects released; active_sessions={active}"),
             );
-
-            if let Some(completion) = ivars.completion.borrow_mut().take() {
-                // The callback log records printed versus cancelled. The
-                // terminal delivered to the caller is set there before this
-                // finalizer runs.
-                let _ = completion.send(terminal);
-                append_pdf_print_lifecycle_log(
-                    &ivars.log_path,
-                    &ivars.session_id,
-                    "Promise resolved",
-                );
-            }
+            append_pdf_print_lifecycle_log(
+                &ivars.log_path,
+                &ivars.session_id,
+                format!("Native print lifecycle completed; terminal={terminal}"),
+            );
         }
     }
 );
@@ -245,7 +237,6 @@ impl PdfPrintLifecycle {
         print_info: Retained<NSPrintInfo>,
         operation: Retained<NSPrintOperation>,
         window: &NSWindow,
-        completion: futures_channel::oneshot::Sender<&'static str>,
         session_id: String,
         log_path: PathBuf,
     ) -> Retained<Self> {
@@ -254,7 +245,6 @@ impl PdfPrintLifecycle {
             print_info: RefCell::new(Some(print_info)),
             operation: RefCell::new(Some(operation)),
             window: Weak::new(window),
-            completion: RefCell::new(Some(completion)),
             terminal: RefCell::new("failed"),
             completion_started: AtomicBool::new(false),
             cleanup_started: AtomicBool::new(false),
@@ -1252,8 +1242,6 @@ struct DesktopPlatformAdminProof {
 
 struct NativePrintLaunch {
     status: &'static str,
-    #[cfg(target_os = "macos")]
-    completion: Option<futures_channel::oneshot::Receiver<&'static str>>,
 }
 
 #[derive(Serialize)]
@@ -2139,7 +2127,6 @@ fn open_validated_pdf_with_native_print_dialog<R: tauri::Runtime>(
                 .unwrap_or_default()
         );
         let log_path = startup_log_path(app);
-        let (completion_tx, completion_rx) = futures_channel::oneshot::channel();
         append_pdf_print_lifecycle_log(&log_path, &session_id, "Print entered; session created");
         let main_window = app
             .get_webview_window("main")
@@ -2205,7 +2192,6 @@ fn open_validated_pdf_with_native_print_dialog<R: tauri::Runtime>(
                         print_info,
                         operation,
                         window,
-                        completion_tx,
                         callback_session_id.clone(),
                         callback_log_path.clone(),
                     );
@@ -2257,7 +2243,6 @@ fn open_validated_pdf_with_native_print_dialog<R: tauri::Runtime>(
         let _ = path;
         return Ok(NativePrintLaunch {
             status: "dialog_opened",
-            completion: Some(completion_rx),
         });
     }
 
@@ -2385,7 +2370,7 @@ async fn desktop_open_pdf_for_print<R: tauri::Runtime>(
     if written != bytes {
         return Err("The temporary invoice PDF bytes changed after writing.".to_string());
     }
-    let mut print_launch =
+    let print_launch =
         open_validated_pdf_with_native_print_dialog(&app, &destination, written.clone())?;
     drop(operation);
     append_startup_log_handle(
@@ -2396,16 +2381,12 @@ async fn desktop_open_pdf_for_print<R: tauri::Runtime>(
         ),
     );
 
-    #[cfg(target_os = "macos")]
-    let print_status = match print_launch.completion.take() {
-        Some(completion) => completion.await.map_err(|_| {
-            "The native print session ended without resolving its Print or Cancel result."
-                .to_string()
-        })?,
-        None => print_launch.status,
-    };
-    #[cfg(not(target_os = "macos"))]
     let print_status = print_launch.status;
+
+    append_startup_log_handle(
+        &app,
+        format!("Native print command returning status={print_status}"),
+    );
 
     Ok(DesktopOpenedPdf {
         path: destination.to_string_lossy().to_string(),
