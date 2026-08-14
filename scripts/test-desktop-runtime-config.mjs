@@ -80,6 +80,8 @@ assert.match(nextBuild, /rmSync\(join\(root, "\.next"\)/, "Production Next build
 assert.doesNotMatch(nextBuild, /renameSync|standalone-stale/, "Production Next builds must not retain stale standalone assets.");
 assert.match(prepare, /\.standalone-stale-[\s\S]*rmSync/, "Desktop prepare must remove legacy stale runtime directories.");
 assert.match(desktopBuild, /rmSync\(join\(releaseRoot, "bundle"\)/, "Desktop packaging must remove prior installer staging output.");
+assert.match(desktopBuild, /desktop-build\.json[\s\S]*BEZGROW_DESKTOP_PREPARED[\s\S]*preparedBuildIdentity\?\.gitCommit[\s\S]*preparedBuildIdentity\?\.builtAt/, "Prepared-mode packaging must compile the native app from the exact embedded web build identity.");
+assert.match(desktopBuild, /preparedBuildIdentity\.gitCommit !== gitHead[\s\S]*preparedBuildIdentity\.sourceTreeDirty !== false[\s\S]*sourceTreeDirty/, "Prepared-mode packaging must reject stale or dirty embedded resources.");
 assert.match(prepare, /BEZGROW_DESKTOP_NODE_BINARY/, "Cross-architecture Windows builds must bundle the matching Node runtime.");
 assert.match(prepare, /serverSource\s*=\s*join\(root,\s*"\.next",\s*"server"\)/, "Desktop prepare must read .next/server assets.");
 assert.match(prepare, /"chunks"/, "Desktop prepare must copy server chunks into standalone output.");

@@ -8,8 +8,27 @@ const root = dirname(dirname(fileURLToPath(import.meta.url)));
 const packageJson = JSON.parse(readFileSync(join(root, "package.json"), "utf8"));
 const packageVersion = packageJson.version;
 const gitResult = spawnSync("git", ["rev-parse", "HEAD"], { cwd: root, encoding: "utf8" });
-const buildCommit = (process.env.BEZGROW_BUILD_COMMIT || gitResult.stdout || "").trim();
-const buildTimestamp = (process.env.BEZGROW_BUILD_TIMESTAMP || new Date().toISOString()).trim();
+const gitHead = (gitResult.stdout || "").trim();
+const sourceStatusResult = spawnSync(
+  "git",
+  ["status", "--porcelain", "--untracked-files=no"],
+  { cwd: root, encoding: "utf8" }
+);
+const sourceTreeDirty = sourceStatusResult.status !== 0 || sourceStatusResult.stdout.trim().length > 0;
+const preparedBuildIdentityPath = join(root, "desktop-runtime", "next-server", "public", "desktop-build.json");
+const preparedBuildIdentity = process.env.BEZGROW_DESKTOP_PREPARED === "1"
+  ? JSON.parse(readFileSync(preparedBuildIdentityPath, "utf8"))
+  : null;
+const buildCommit = (
+  process.env.BEZGROW_BUILD_COMMIT ||
+  preparedBuildIdentity?.gitCommit ||
+  gitHead
+).trim();
+const buildTimestamp = (
+  process.env.BEZGROW_BUILD_TIMESTAMP ||
+  preparedBuildIdentity?.builtAt ||
+  new Date().toISOString()
+).trim();
 if (!/^[a-f0-9]{40}$/i.test(buildCommit)) {
   throw new Error("Desktop builds require a complete 40-character Git commit SHA.");
 }
@@ -75,6 +94,31 @@ function buildArchitecture(platform) {
   if (/x86_64|x64|amd64/i.test(targetTriple)) return platform === "windows" ? "x86_64" : "x64";
   if (process.arch === "arm64") return "arm64";
   return platform === "windows" ? "x86_64" : "x64";
+}
+
+if (preparedBuildIdentity) {
+  const expectedPlatform = process.platform === "win32" || targetTriple.includes("windows")
+    ? "windows"
+    : process.platform === "darwin" || targetTriple.includes("apple-darwin")
+      ? "macos"
+      : "linux";
+  const expectedArchitecture = buildArchitecture(expectedPlatform) === "x86_64"
+    ? "x64"
+    : buildArchitecture(expectedPlatform);
+  if (
+    preparedBuildIdentity.applicationVersion !== packageVersion ||
+    preparedBuildIdentity.gitCommit !== gitHead ||
+    preparedBuildIdentity.gitCommit !== buildCommit ||
+    preparedBuildIdentity.builtAt !== buildTimestamp ||
+    preparedBuildIdentity.platform !== expectedPlatform ||
+    preparedBuildIdentity.architecture !== expectedArchitecture ||
+    preparedBuildIdentity.sourceTreeDirty !== false ||
+    sourceTreeDirty
+  ) {
+    throw new Error(
+      "Prepared desktop resources do not match the clean version, commit, timestamp, platform, and architecture being packaged."
+    );
+  }
 }
 
 function releaseTrustMetadata({ platform, filename, signed, notarized = false, productionTrusted = false }) {
