@@ -8,6 +8,7 @@ import { exportCsv } from "@/lib/desktop-file-export"
 import { getOrganizationFeatures } from "@/lib/get-organization-features"
 import { getOrganizationId } from "@/lib/getOrganization"
 import { createOfflineId, getOfflineData, putOfflineData, queueOfflineAction } from "@/lib/offline/db"
+import { calculateInventoryCost } from "@/lib/offline/local/inventory-cost"
 import { shouldUseWebOfflineFallback } from "@/lib/offline/network"
 
 type ProductRow = {
@@ -56,6 +57,18 @@ type StockMovementRow = {
     warehouses?: RelationName
 }
 
+type StockBatchRow = {
+    id: string
+    product_id: string | null
+    warehouse_id?: string | null
+    batch_no?: string | null
+    quantity: number | null
+    purchase_rate: number | null
+    purchase_date?: string | null
+    created_at?: string | null
+    deleted_at?: string | null
+}
+
 type InvoiceRow = {
     id: string
     grand_total: number | null
@@ -76,7 +89,7 @@ type InventoryStats = {
     soldUnits: number
     totalInvoices: number
     invoiceRevenue: number
-    inventoryValue: number
+    inventoryCost: number
 }
 
 type MovementView = {
@@ -114,7 +127,7 @@ const emptyStats: InventoryStats = {
     soldUnits: 0,
     totalInvoices: 0,
     invoiceRevenue: 0,
-    inventoryValue: 0,
+    inventoryCost: 0,
 }
 
 const movementLabels: Record<string, string> = {
@@ -160,11 +173,14 @@ export default function InventoryPage() {
     const [showTransferModal, setShowTransferModal] = useState(false)
     const [selectedProductId, setSelectedProductId] = useState("")
     const [quantity, setQuantity] = useState("")
+    const [purchaseRate, setPurchaseRate] = useState("")
+    const [purchaseDate, setPurchaseDate] = useState("")
     const [warehouseId, setWarehouseId] = useState("")
     const [expiryDate, setExpiryDate] = useState("")
     const [batchNo, setBatchNo] = useState("")
     const [barcode, setBarcode] = useState("")
     const [shippingQr, setShippingQr] = useState("")
+    const [formError, setFormError] = useState("")
 
     const hasBatchTracking = features.includes("batch_tracking")
     const hasBarcodeScanning = features.includes("barcode_scanning")
@@ -177,12 +193,13 @@ export default function InventoryPage() {
     }
 
     async function loadCachedInventory(orgId: string, showOfflineNotice = true) {
-        const [cachedProducts, cachedInvoices, cachedInvoiceItems, cachedMovements, cachedWarehouses] = await Promise.all([
+        const [cachedProducts, cachedInvoices, cachedInvoiceItems, cachedMovements, cachedWarehouses, cachedBatches] = await Promise.all([
             getOfflineData<ProductRow[]>(orgId, "products", []),
             getOfflineData<InvoiceRow[]>(orgId, "invoices", []),
             getOfflineData<InvoiceItemRow[]>(orgId, "invoice_items", []),
             getOfflineData<StockMovementRow[]>(orgId, "stock_movements", []),
             getOfflineData<WarehouseRow[]>(orgId, "warehouses", []),
+            getOfflineData<StockBatchRow[]>(orgId, "stock_batches", []),
         ])
 
         const productRows = cachedProducts.filter((product) => !product.deleted_at)
@@ -203,15 +220,13 @@ export default function InventoryPage() {
                 })
                 .reduce((sum, item) => sum + Number(item.quantity || 0), 0)
             const currentStock = Number(product.stock || 0)
-            const unitValue = Number(
-                product.sale_rate || product.price || product.purchase_rate || 0
-            )
+            const unitCost = Number(product.purchase_rate || 0)
 
             return {
                 ...product,
                 currentStock,
                 soldQuantity,
-                inventoryValue: currentStock * unitValue,
+                inventoryValue: currentStock * unitCost,
                 warehouseName:
                     warehouseNameById.get(product.warehouse_id || "") ||
                     product.warehouse ||
@@ -230,10 +245,7 @@ export default function InventoryPage() {
             (sum, item) => sum + Number(item.quantity || 0),
             0
         )
-        const inventoryValue = normalizedProducts.reduce(
-            (sum, product) => sum + product.inventoryValue,
-            0
-        )
+        const inventoryCost = calculateInventoryCost(productRows, cachedBatches)
         const invoiceRevenue = invoiceRows.reduce(
             (sum, invoice) => sum + Number(invoice.grand_total || 0),
             0
@@ -280,7 +292,7 @@ export default function InventoryPage() {
             soldUnits,
             totalInvoices: invoiceRows.length,
             invoiceRevenue,
-            inventoryValue,
+            inventoryCost,
         })
         setWarehouseStats(
             warehouseList.map((warehouse) => ({
@@ -340,24 +352,30 @@ export default function InventoryPage() {
 
     async function applyStockChange(mode: "add" | "transfer") {
         setNotice("")
+        setFormError("")
         const product = products.find((item) => item.id === selectedProductId)
         const qty = Number(quantity)
+        const parsedPurchaseRate = purchaseRate === "" ? null : Number(purchaseRate)
 
         if (!product || !organizationId || !qty || qty <= 0) {
-            setNotice("Select a product and enter a quantity greater than zero.")
+            setFormError("Select a product and enter a quantity greater than zero.")
+            return
+        }
+
+        if (mode === "add" && parsedPurchaseRate !== null && (!Number.isFinite(parsedPurchaseRate) || parsedPurchaseRate < 0)) {
+            setFormError("Purchase rate must be zero or greater, or left blank.")
             return
         }
 
         if (warehouses.length > 0 && !warehouseId) {
-            setNotice("Select a warehouse for this stock movement.")
+            setFormError("Select a warehouse for this stock movement.")
             return
         }
 
-        const nextStock =
-            mode === "add" ? product.currentStock + qty : product.currentStock - qty
+        const nextStock = mode === "add" ? product.currentStock + qty : product.currentStock
 
-        if (nextStock < 0) {
-            setNotice("Transfer quantity cannot be greater than available stock.")
+        if (mode === "transfer" && qty > product.currentStock) {
+            setFormError("Transfer quantity cannot be greater than available stock.")
             return
         }
 
@@ -368,6 +386,8 @@ export default function InventoryPage() {
             mode,
             warehouse_id: warehouseId || null,
             expiry_date: mode === "add" ? expiryDate || null : null,
+            purchase_date: mode === "add" ? purchaseDate || null : null,
+            purchase_rate: mode === "add" ? parsedPurchaseRate : null,
             batch_no: mode === "add" && hasBatchTracking ? batchNo || product.batch_no || null : null,
             barcode: mode === "add" && hasBarcodeScanning ? barcode || product.barcode || null : null,
             shipping_qr: hasShippingLabels ? shippingQr || null : null,
@@ -402,6 +422,12 @@ export default function InventoryPage() {
                             batch_no: mode === "add" && hasBatchTracking ? batchNo || item.batch_no : item.batch_no,
                             barcode: mode === "add" && hasBarcodeScanning ? barcode || item.barcode : item.barcode,
                             expiry_date: mode === "add" ? expiryDate || item.expiry_date : item.expiry_date,
+                            purchase_rate:
+                                mode === "add" && parsedPurchaseRate !== null
+                                    ? product.currentStock > 0
+                                        ? (product.currentStock * Number(item.purchase_rate || 0) + qty * parsedPurchaseRate) / nextStock
+                                        : parsedPurchaseRate
+                                    : item.purchase_rate,
                             sync_status: "pending_update",
                             updated_at: now,
                         }
@@ -427,6 +453,24 @@ export default function InventoryPage() {
                 await putOfflineData(organizationId, "products", nextProducts)
                 await putOfflineData(organizationId, "inventory_items", nextProducts)
                 await putOfflineData(organizationId, "stock_movements", [localMovement, ...cachedMovements])
+                if (mode === "add") {
+                    const cachedBatches = await getOfflineData<StockBatchRow[]>(organizationId, "stock_batches", [])
+                    await putOfflineData(organizationId, "stock_batches", [{
+                        id: createOfflineId("stock-batch"),
+                        organization_id: organizationId,
+                        product_id: product.id,
+                        warehouse_id: warehouseId || null,
+                        batch_no: hasBatchTracking ? batchNo || null : null,
+                        quantity: qty,
+                        purchase_rate: parsedPurchaseRate ?? product.purchase_rate ?? null,
+                        purchase_date: purchaseDate || null,
+                        expiry_date: expiryDate || null,
+                        barcode: hasBarcodeScanning ? barcode || null : null,
+                        created_at: now,
+                        updated_at: now,
+                        sync_status: "pending_create",
+                    } as StockBatchRow, ...cachedBatches])
+                }
                 await queueOfflineAction({
                     id: createOfflineId("stock-action"),
                     type: "stock_movement",
@@ -453,10 +497,13 @@ export default function InventoryPage() {
     function resetActionForm() {
         setSelectedProductId("")
         setQuantity("")
+        setPurchaseRate("")
+        setPurchaseDate("")
         setExpiryDate("")
         setBatchNo("")
         setBarcode("")
         setShippingQr("")
+        setFormError("")
     }
 
     async function exportInventoryCsv() {
@@ -487,7 +534,7 @@ export default function InventoryPage() {
                 { header: "Minimum Stock", value: "minimumStock" },
                 { header: "Sold Quantity", value: "soldQuantity" },
                 { header: "Warehouse", value: "warehouse" },
-                { header: "Inventory Value", value: "inventoryValue" },
+                { header: "Inventory Cost", value: "inventoryValue" },
                 { header: "Expiry Date", value: "expiryDate" },
             ], rows)
             if (result) setNotice(`Inventory exported to ${result.path || result.filename}.`)
@@ -595,9 +642,9 @@ export default function InventoryPage() {
             meta: `${stats.totalInvoices} billed invoices`,
         },
         {
-            label: "Inventory Value",
+            label: "Inventory Cost",
             value: "",
-            moneyValue: stats.inventoryValue,
+            moneyValue: stats.inventoryCost,
             accent: "from-emerald-200 to-green-500",
             meta: `${money(stats.invoiceRevenue)} invoice revenue`,
         },
@@ -825,7 +872,7 @@ export default function InventoryPage() {
                                         <th className="px-3 py-2">Minimum</th>
                                         <th className="px-3 py-2">Sold</th>
                                         <th className="px-3 py-2">Warehouse</th>
-                                        <th className="px-3 py-2">Value</th>
+                                        <th className="px-3 py-2">Cost</th>
                                         <th className="px-3 py-2">Expiry</th>
                                     </tr>
                                 </thead>
@@ -1102,70 +1149,100 @@ export default function InventoryPage() {
                         aria-label={showAddStockModal ? "Add stock" : "Transfer inventory"}
                         data-enter-navigation="true"
                     >
-                        <div className="flex items-center justify-between">
+                        <div>
                             <h2 className="text-2xl font-bold">
                                 {showAddStockModal ? "Add Stock" : "Transfer Inventory"}
                             </h2>
-                            <button
-                                onClick={() => {
-                                    resetActionForm()
-                                    setShowAddStockModal(false)
-                                    setShowTransferModal(false)
-                                }}
-                                className="relative z-10 rounded-lg border border-white/10 bg-white/[0.04] px-3 py-2 text-neutral-300 transition-colors hover:text-white"
-                            >
-                                Close
-                            </button>
+                            <p className="mt-1 text-sm text-neutral-400">
+                                {showAddStockModal ? "Record a new inventory receipt." : "Move available inventory to another warehouse."}
+                            </p>
                         </div>
 
                         <div className="relative z-10 mt-5 space-y-4">
-                            <select
-                                value={selectedProductId}
-                                onChange={(event) => setSelectedProductId(event.target.value)}
-                                className="w-full rounded-lg border border-white/10 bg-black px-4 py-3 outline-none transition-all focus:border-emerald-300"
-                            >
-                                <option value="">Select product</option>
-                                {products.map((product) => (
-                                    <option key={product.id} value={product.id}>
-                                        {product.name} - stock {product.currentStock}
-                                    </option>
-                                ))}
-                            </select>
+                            <label className="block text-xs font-semibold uppercase tracking-[0.16em] text-neutral-400">
+                                Product
+                                <select
+                                    value={selectedProductId}
+                                    onChange={(event) => setSelectedProductId(event.target.value)}
+                                    className="mt-2 w-full rounded-lg border border-white/10 bg-black px-4 py-3 text-base normal-case tracking-normal text-white outline-none transition-all focus:border-emerald-300"
+                                >
+                                    <option value="">Select product</option>
+                                    {products.map((product) => (
+                                        <option key={product.id} value={product.id}>
+                                            {product.name} - stock {product.currentStock}
+                                        </option>
+                                    ))}
+                                </select>
+                            </label>
 
-                            <input
-                                type="number"
-                                min="1"
-                                value={quantity}
-                                onChange={(event) => setQuantity(event.target.value)}
-                                placeholder="Quantity"
-                                className="w-full rounded-lg border border-white/10 bg-black px-4 py-3 outline-none transition-all focus:border-emerald-300"
-                            />
-
-                            <select
-                                value={warehouseId}
-                                onChange={(event) => setWarehouseId(event.target.value)}
-                                className="w-full rounded-lg border border-white/10 bg-black px-4 py-3 outline-none transition-all focus:border-emerald-300"
-                            >
-                                {warehouses.length === 0 && (
-                                    <option value="">No warehouse configured</option>
-                                )}
-                                {warehouses.map((warehouse) => (
-                                    <option key={warehouse.id} value={warehouse.id}>
-                                        {warehouse.name}
-                                    </option>
-                                ))}
-                            </select>
-
-                            {showAddStockModal && (
+                            <div className={`grid gap-4 ${showAddStockModal ? "sm:grid-cols-2" : ""}`}>
                                 <label className="block text-xs font-semibold uppercase tracking-[0.16em] text-neutral-400">
-                                    Expiry date
+                                    Quantity
                                     <input
-                                        type="date"
-                                        value={expiryDate}
-                                        onChange={(event) => setExpiryDate(event.target.value)}
+                                        type="number"
+                                        min="0.0001"
+                                        step="any"
+                                        value={quantity}
+                                        onChange={(event) => setQuantity(event.target.value)}
+                                        placeholder="0"
                                         className="mt-2 w-full rounded-lg border border-white/10 bg-black px-4 py-3 text-base normal-case tracking-normal text-white outline-none transition-all focus:border-emerald-300"
                                     />
                                 </label>
+                                {showAddStockModal && (
+                                    <label className="block text-xs font-semibold uppercase tracking-[0.16em] text-neutral-400">
+                                        Purchase rate
+                                        <input
+                                            type="number"
+                                            min="0"
+                                            step="0.01"
+                                            value={purchaseRate}
+                                            onChange={(event) => setPurchaseRate(event.target.value)}
+                                            placeholder="Optional"
+                                            className="mt-2 w-full rounded-lg border border-white/10 bg-black px-4 py-3 text-base normal-case tracking-normal text-white outline-none transition-all focus:border-emerald-300"
+                                        />
+                                    </label>
+                                )}
+                            </div>
+
+                            <label className="block text-xs font-semibold uppercase tracking-[0.16em] text-neutral-400">
+                                Warehouse
+                                <select
+                                    value={warehouseId}
+                                    onChange={(event) => setWarehouseId(event.target.value)}
+                                    className="mt-2 w-full rounded-lg border border-white/10 bg-black px-4 py-3 text-base normal-case tracking-normal text-white outline-none transition-all focus:border-emerald-300"
+                                >
+                                    {warehouses.length === 0 && (
+                                        <option value="">No warehouse configured</option>
+                                    )}
+                                    {warehouses.map((warehouse) => (
+                                        <option key={warehouse.id} value={warehouse.id}>
+                                            {warehouse.name}
+                                        </option>
+                                    ))}
+                                </select>
+                            </label>
+
+                            {showAddStockModal && (
+                                <div className="grid gap-4 sm:grid-cols-2">
+                                    <label className="block text-xs font-semibold uppercase tracking-[0.16em] text-neutral-400">
+                                        Purchase date <span className="normal-case tracking-normal text-neutral-600">(optional)</span>
+                                        <input
+                                            type="date"
+                                            value={purchaseDate}
+                                            onChange={(event) => setPurchaseDate(event.target.value)}
+                                            className="mt-2 w-full rounded-lg border border-white/10 bg-black px-4 py-3 text-base normal-case tracking-normal text-white outline-none transition-all focus:border-emerald-300"
+                                        />
+                                    </label>
+                                    <label className="block text-xs font-semibold uppercase tracking-[0.16em] text-neutral-400">
+                                        Expiry date <span className="normal-case tracking-normal text-neutral-600">(optional)</span>
+                                        <input
+                                            type="date"
+                                            value={expiryDate}
+                                            onChange={(event) => setExpiryDate(event.target.value)}
+                                            className="mt-2 w-full rounded-lg border border-white/10 bg-black px-4 py-3 text-base normal-case tracking-normal text-white outline-none transition-all focus:border-emerald-300"
+                                        />
+                                    </label>
+                                </div>
                             )}
 
                             {showAddStockModal && hasBatchTracking && (
@@ -1195,20 +1272,39 @@ export default function InventoryPage() {
                                 />
                             )}
 
-                            <button
-                                disabled={actionLoading}
-                                data-enter-primary
-                                onClick={() =>
-                                    applyStockChange(showAddStockModal ? "add" : "transfer")
-                                }
-                                className="w-full rounded-lg bg-emerald-400 px-5 py-3 font-bold text-black transition-all hover:bg-emerald-300 disabled:cursor-not-allowed disabled:opacity-60"
-                            >
-                                {actionLoading
-                                    ? "Saving..."
-                                    : showAddStockModal
-                                    ? "Save Stock Entry"
-                                    : "Transfer Stock"}
-                            </button>
+                            {formError && (
+                                <p className="rounded-lg border border-red-400/20 bg-red-400/10 px-4 py-3 text-sm text-red-100" role="alert">
+                                    {formError}
+                                </p>
+                            )}
+
+                            <div className="flex justify-end gap-3 border-t border-white/10 pt-4">
+                                <button
+                                    type="button"
+                                    onClick={() => {
+                                        resetActionForm()
+                                        setShowAddStockModal(false)
+                                        setShowTransferModal(false)
+                                    }}
+                                    className="rounded-lg border border-white/10 bg-white/[0.04] px-5 py-3 font-semibold text-neutral-200 transition-colors hover:bg-white/[0.08]"
+                                >
+                                    Cancel
+                                </button>
+                                <button
+                                    disabled={actionLoading || !selectedProductId || Number(quantity) <= 0 || (showAddStockModal && purchaseRate !== "" && (!Number.isFinite(Number(purchaseRate)) || Number(purchaseRate) < 0))}
+                                    data-enter-primary
+                                    onClick={() =>
+                                        applyStockChange(showAddStockModal ? "add" : "transfer")
+                                    }
+                                    className="rounded-lg bg-emerald-400 px-5 py-3 font-bold text-black transition-all hover:bg-emerald-300 disabled:cursor-not-allowed disabled:opacity-60"
+                                >
+                                    {actionLoading
+                                        ? "Saving..."
+                                        : showAddStockModal
+                                        ? "Add Stock"
+                                        : "Transfer Stock"}
+                                </button>
+                            </div>
                         </div>
                     </div>
                 </div>

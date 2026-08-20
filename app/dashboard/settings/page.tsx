@@ -443,7 +443,10 @@ export default function SettingsPage() {
         })
         if (!result) return
         setNotice(`Backup restored from ${result.backupPath}. A pre-restore backup was saved at ${result.preRestoreBackupPath}.`)
+        clearWorkspaceBootstrapCache()
+        window.dispatchEvent(new Event("bezgrow:offline-data-changed"))
         await initializeSettings()
+        router.refresh()
       } catch (error) {
         setNotice(error instanceof Error ? error.message : "Backup could not be restored.")
       }
@@ -455,7 +458,10 @@ export default function SettingsPage() {
       const payload = JSON.parse(await file.text()) as unknown
       const result = await restoreOfflineBackup(payload)
       setNotice(`Backup restored: ${result.restoredRecords} records.`)
+      clearWorkspaceBootstrapCache()
+      window.dispatchEvent(new Event("bezgrow:offline-data-changed"))
       await initializeSettings()
+      router.refresh()
     } catch (error) {
       setNotice(error instanceof Error ? error.message : "Backup could not be restored.")
     } finally {
@@ -474,20 +480,6 @@ export default function SettingsPage() {
   const enabledFeatureSet = useMemo(() => {
     return new Set(features.filter((feature) => feature.is_enabled).map((feature) => feature.feature_key))
   }, [features])
-
-  const readiness = useMemo(() => {
-    const coreReadiness = [
-      ["Business profile", Boolean(form.name.trim() && form.industry.trim())],
-      ["Currency configured", Boolean(form.currency)],
-      ["Print format configured", Boolean(printSettings.paperSize)],
-      ["Invoice correction ready", true],
-    ]
-    if (!showExperimentalModules) return coreReadiness
-    return [
-      ...coreReadiness,
-      ["Development modules", enabledFeatureSet.size >= 1],
-    ]
-  }, [enabledFeatureSet, form.currency, form.industry, form.name, printSettings.paperSize])
 
   const filteredCorrectionInvoices = useMemo(() => {
     const term = invoiceSearch.trim().toLowerCase()
@@ -1024,20 +1016,6 @@ export default function SettingsPage() {
           </div>
 
           <aside className="space-y-6">
-            <div className="rounded-[36px] border border-cyan-400/20 bg-cyan-500/10 p-7 shadow-[0_0_60px_rgba(34,211,238,0.12)]">
-              <h2 className="text-3xl font-black">Setup Readiness</h2>
-              <div className="mt-7 space-y-4">
-                {readiness.map(([label, ready]) => (
-                  <div key={String(label)} className="flex items-center justify-between rounded-2xl border border-white/10 bg-black/30 px-4 py-4">
-                    <span className="text-sm font-semibold text-white">{label}</span>
-                    <span className={`rounded-full px-3 py-1 text-xs font-bold ${ready ? "bg-emerald-500/15 text-emerald-200" : "bg-amber-500/15 text-amber-200"}`}>
-                      {ready ? "Ready" : "Pending"}
-                    </span>
-                  </div>
-                ))}
-              </div>
-            </div>
-
             <div className="rounded-[36px] border border-white/10 bg-white/[0.035] p-7 backdrop-blur-2xl">
               <h2 className="text-3xl font-black">Data Safety</h2>
               <p className="mt-3 text-sm leading-6 text-neutral-400">

@@ -23,7 +23,7 @@ import {
   type LicenseFieldName,
 } from "@/lib/license/admin-license-validation"
 
-const availableFeatures = ["billing", "customers", "inventory", "products", "reports", "orders", "backup", "multi_branch"]
+const availableFeatures = ["billing", "customers", "inventory", "products", "reports", "backup", "multi_branch"]
 
 function today() {
   return new Date().toISOString().slice(0, 10)
@@ -71,11 +71,13 @@ export default function LicensesPage() {
   const [actionError, setActionError] = useState("")
   const [fieldErrors, setFieldErrors] = useState<Partial<Record<LicenseFieldName, string>>>({})
   const createRequestKey = useRef("")
+  const createInFlight = useRef(false)
   const filters = useMemo(() => ({ status, platform }), [platform, status])
   const list = useAdminList<Record<string, unknown>>("/api/admin/licenses", filters)
 
   async function submitLicense(event: FormEvent) {
     event.preventDefault()
+    if (createInFlight.current) return
     setActionError("")
     setNotice("")
     const validation = createLicenseSchema.safeParse({
@@ -96,6 +98,7 @@ export default function LicensesPage() {
     }
 
     setFieldErrors({})
+    createInFlight.current = true
     setSaving(true)
     try {
       if (!createRequestKey.current) createRequestKey.current = crypto.randomUUID()
@@ -110,10 +113,11 @@ export default function LicensesPage() {
       setForm(initialForm)
       setFieldErrors({})
       createRequestKey.current = ""
-      list.reload()
+      if (payload.license) list.prepend({ ...payload.license, effective_status: payload.license.status })
     } catch (error) {
       setActionError(error instanceof Error ? error.message : "License generation failed.")
     } finally {
+      createInFlight.current = false
       setSaving(false)
     }
   }

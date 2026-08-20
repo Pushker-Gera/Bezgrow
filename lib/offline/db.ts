@@ -539,12 +539,14 @@ export async function cacheWorkspaceBootstrap(payload: WorkspaceBootstrapPayload
       currentOrganization &&
       !currentOrganization.business_name &&
       (!currentOrganization.name || currentOrganization.name === "Business")
-    if (currentOrganization && !isPlaceholder) {
+    if (currentOrganization) {
       organization = {
         ...(payload.organization || {}),
         ...currentOrganization,
         id: organizationId,
       }
+      if (isPlaceholder && payload.organization?.name) organization.name = payload.organization.name
+      if (isPlaceholder && payload.organization?.business_name) organization.business_name = payload.organization.business_name
       const businessName = typeof currentOrganization.business_name === "string" ? currentOrganization.business_name.trim() : ""
       const genericName = typeof organization.name !== "string" || ["", "business", "your business"].includes(organization.name.trim().toLowerCase())
       if (businessName && genericName) organization.name = businessName

@@ -304,8 +304,6 @@ export default function ProductsPage() {
     const productsRequest = useRef<AbortController | null>(null)
 
     const itemsPerPage = 50
-    const hasExpiryTracking = features.includes("expiry_tracking")
-    const hasBatchTracking = features.includes("batch_tracking")
     const hasBarcodeScanning = features.includes("barcode_scanning")
     const hasShippingLabels = features.includes("shipping_labels")
     const hasVariants = features.includes("size_variants")
@@ -853,18 +851,6 @@ export default function ProductsPage() {
         },
     ]
 
-    const erpModules = [
-        "Product records",
-        "Batch and barcode control",
-        "Pricing and GST",
-        "Supplier mapping",
-        "Warehouse labels",
-        "Stock movement audit",
-        hasExpiryTracking ? "Expiry tracking" : "Expiry fields ready",
-        hasBatchTracking ? "Batch tracking" : "Batch fields ready",
-        hasShippingLabels ? "Shipping label workflow" : "Shipping-ready workflow",
-    ]
-
     return (
         <div className="inventory-grid-bg min-h-full overflow-x-hidden text-white">
             <div className="mx-auto max-w-[1900px] space-y-6 px-3 py-4 sm:px-5 lg:px-6">
@@ -1321,46 +1307,6 @@ export default function ProductsPage() {
                             </div>
                         </div>
 
-                        <div className="rounded-lg border border-white/10 bg-black/75 p-5 shadow-2xl backdrop-blur-xl">
-                            <p className="text-xs uppercase tracking-[0.18em] text-amber-300">
-                                Product Coverage
-                            </p>
-                            <h2 className="mt-2 text-2xl font-black">
-                                Operating Modules
-                            </h2>
-                            <div className="mt-4 grid grid-cols-1 gap-2">
-                                {erpModules.map((module) => (
-                                    <div
-                                        key={module}
-                                        className="flex items-center justify-between rounded-lg border border-white/10 bg-white/[0.035] px-4 py-3"
-                                    >
-                                        <span className="text-sm text-neutral-200">{module}</span>
-                                        <span className="h-2 w-2 rounded-full bg-emerald-300" />
-                                    </div>
-                                ))}
-                            </div>
-                        </div>
-
-                        <div className="rounded-lg border border-white/10 bg-black/75 p-5 shadow-2xl backdrop-blur-xl">
-                            <p className="text-xs uppercase tracking-[0.18em] text-sky-300">
-                                Enabled Features
-                            </p>
-                            <div className="mt-4 flex flex-wrap gap-2">
-                                {features.length === 0 && (
-                                    <span className="rounded-full border border-white/10 bg-white/[0.04] px-3 py-1 text-xs text-neutral-400">
-                                        Core business mode
-                                    </span>
-                                )}
-                                {features.map((feature, index) => (
-                                    <span
-                                        key={`${feature}-${index}`}
-                                        className="rounded-full border border-emerald-400/20 bg-emerald-400/10 px-3 py-1 text-xs font-semibold text-emerald-200"
-                                    >
-                                        {feature.replaceAll("_", " ")}
-                                    </span>
-                                ))}
-                            </div>
-                        </div>
                     </div>
                 </section>
             </div>

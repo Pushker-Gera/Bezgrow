@@ -4,6 +4,7 @@ import { useCallback, useEffect, useState } from "react"
 import Link from "next/link"
 import { BezgrowLogoMark } from "@/components/brand/BezgrowLogoMark"
 import { clearDesktopSession } from "@/lib/desktop/session"
+import { getOfflineData } from "@/lib/offline/db"
 import { clearWorkspaceBootstrapCache, getWorkspaceBootstrap } from "@/lib/workspaceBootstrapClient"
 import { useRouter } from "next/navigation"
 
@@ -13,6 +14,15 @@ type OrganizationProfile = {
   business_name?: string | null
   business_type?: string | null
   business_category?: string | null
+  created_at?: string | null
+  joined_at?: string | null
+}
+
+function joinedDate(value?: string | null) {
+  if (!value) return "Unavailable"
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return "Unavailable"
+  return new Intl.DateTimeFormat(undefined, { day: "2-digit", month: "short", year: "numeric" }).format(date)
 }
 
 export default function ProfilePage() {
@@ -30,7 +40,13 @@ export default function ProfilePage() {
       return
     }
     setUser(workspace.user || null)
-    setOrganization(workspace.organization ? { ...workspace.organization, id: workspace.organization.id || "local-business" } : null)
+    const organizationId = workspace.organization?.id || workspace.membership?.organization_id || ""
+    const [localOrganization] = organizationId
+      ? await getOfflineData<OrganizationProfile[]>(organizationId, "organization", []).catch(() => [])
+      : []
+    setOrganization(workspace.organization || localOrganization
+      ? { ...workspace.organization, ...localOrganization, id: organizationId || "local-business" }
+      : null)
     setLoading(false)
   }, [router])
 
@@ -201,11 +217,11 @@ export default function ProfilePage() {
 
               <div className="rounded-3xl border border-white/10 bg-gradient-to-br from-cyan-500/10 to-blue-500/10 p-6 hover:border-cyan-400/30 transition-all duration-300 hover:-translate-y-1">
                 <p className="text-xs uppercase tracking-[0.18em] text-neutral-400 mb-3">
-                  Offline Operation
+                  Joined Bezgrow
                 </p>
 
-                <h3 className="text-3xl font-black text-white sm:text-4xl">
-                  Ready
+                <h3 className="text-2xl font-black text-white sm:text-3xl">
+                  {joinedDate(organization?.joined_at || organization?.created_at)}
                 </h3>
               </div>
 

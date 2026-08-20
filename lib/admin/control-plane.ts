@@ -168,25 +168,27 @@ export async function recordLicenseEvent(input: {
   newValues?: unknown
   notes?: string | null
 }) {
-  const { error } = await adminSupabase.from("license_events").insert({
-    license_id: input.licenseId,
-    action: input.action,
-    admin_user_id: input.context.adminUserId,
-    admin_email: input.context.adminEmail,
-    previous_values: input.previousValues ?? null,
-    new_values: input.newValues ?? null,
-    notes: input.notes ?? null,
-    request_id: input.context.requestId,
-  })
-  if (error) throw new Error("License history could not be recorded.")
-
-  await writeAdminAudit(input.context, {
-    action: input.action,
-    targetType: "license",
-    targetId: input.licenseId,
-    previousValues: input.previousValues,
-    newValues: input.newValues,
-  })
+  const [eventResult, auditResult] = await Promise.allSettled([
+    adminSupabase.from("license_events").insert({
+      license_id: input.licenseId,
+      action: input.action,
+      admin_user_id: input.context.adminUserId,
+      admin_email: input.context.adminEmail,
+      previous_values: input.previousValues ?? null,
+      new_values: input.newValues ?? null,
+      notes: input.notes ?? null,
+      request_id: input.context.requestId,
+    }),
+    writeAdminAudit(input.context, {
+      action: input.action,
+      targetType: "license",
+      targetId: input.licenseId,
+      previousValues: input.previousValues,
+      newValues: input.newValues,
+    }),
+  ])
+  if (eventResult.status === "rejected" || eventResult.value.error) throw new Error("License history could not be recorded.")
+  if (auditResult.status === "rejected") throw auditResult.reason
 }
 
 function csvCell(value: unknown) {

@@ -326,15 +326,16 @@ export async function verifyPlatformAdminDeviceRequest(
 
   // Nonces only need to survive the verification window. Keep replay protection
   // bounded without making successful authorization depend on housekeeping.
-  await adminSupabase
-    .from("platform_admin_request_nonces")
-    .delete()
-    .lt("expires_at", usedAt.toISOString())
-
-  await adminSupabase
-    .from("registered_devices")
-    .update({ platform_admin_last_verified_at: usedAt.toISOString() })
-    .eq("id", device?.id)
+  await Promise.allSettled([
+    adminSupabase
+      .from("platform_admin_request_nonces")
+      .delete()
+      .lt("expires_at", usedAt.toISOString()),
+    adminSupabase
+      .from("registered_devices")
+      .update({ platform_admin_last_verified_at: usedAt.toISOString() })
+      .eq("id", device?.id),
+  ])
 
   return {
     ok: true,

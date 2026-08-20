@@ -1,6 +1,6 @@
 "use client"
 
-export const LOCAL_DB_VERSION = 10
+export const LOCAL_DB_VERSION = 11
 export const LOCAL_DB_URL = "sqlite:bezgrow-offline.db"
 
 export const normalizedTables = [
@@ -1102,6 +1102,30 @@ export const localMigrations: Array<{ version: number; name: string; sql: string
     sql: [
       "ALTER TABLE customers ADD COLUMN state_code TEXT",
       "CREATE INDEX IF NOT EXISTS idx_customers_org_state ON customers (organization_id, state_code, state)",
+    ],
+  },
+  {
+    version: 11,
+    name: "stable_workspace_joined_date",
+    sql: [
+      "ALTER TABLE organizations ADD COLUMN joined_at TEXT",
+      `UPDATE organizations
+       SET joined_at = COALESCE(
+         (SELECT MIN(candidate)
+          FROM (
+            SELECT NULLIF(trim(organizations.created_at), '') AS candidate
+            UNION ALL SELECT MIN(NULLIF(trim(products.created_at), '')) FROM products WHERE products.organization_id = organizations.id
+            UNION ALL SELECT MIN(NULLIF(trim(customers.created_at), '')) FROM customers WHERE customers.organization_id = organizations.id
+            UNION ALL SELECT MIN(NULLIF(trim(sales_invoices.created_at), '')) FROM sales_invoices WHERE sales_invoices.organization_id = organizations.id
+            UNION ALL SELECT MIN(NULLIF(trim(stock_movements.created_at), '')) FROM stock_movements WHERE stock_movements.organization_id = organizations.id
+            UNION ALL SELECT MIN(NULLIF(trim(license_state.created_at), '')) FROM license_state WHERE license_state.organization_id = organizations.id
+            UNION ALL SELECT MIN(NULLIF(trim(device_activations.activated_at), '')) FROM device_activations WHERE device_activations.organization_id = organizations.id
+          ) earliest
+          WHERE candidate IS NOT NULL),
+         datetime('now')
+       )
+       WHERE joined_at IS NULL OR trim(joined_at) = ''`,
+      "CREATE INDEX IF NOT EXISTS idx_organizations_joined_at ON organizations (joined_at)",
     ],
   },
 ]

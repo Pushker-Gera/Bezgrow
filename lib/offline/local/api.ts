@@ -588,17 +588,75 @@ function nextItemsTax(items: DataRow[]) {
   return items.reduce((sum, item) => sum + localNumber(item.gst_amount, localNumber(item.tax_amount)), 0)
 }
 
+type BatchAllocation = {
+  productId: string
+  batchId: string | null
+  warehouseId: string | null
+  quantity: number
+}
+
+function consumeInvoiceBatches(batches: DataRow[], items: DataRow[], now: string) {
+  let nextBatches = [...batches]
+  const allocations: BatchAllocation[] = []
+
+  for (const item of items) {
+    const productId = localString(item.product_id)
+    const requestedBatch = localString(item.batch_no || item.batch_number)
+    let remaining = Math.max(0, localNumber(item.quantity))
+    if (!productId || remaining <= 0) continue
+
+    const eligibleLots = nextBatches
+      .filter((lot) =>
+        lot.product_id === productId &&
+        !lot.deleted_at &&
+        localNumber(lot.quantity) > 0 &&
+        (!requestedBatch || localString(lot.batch_no) === requestedBatch)
+      )
+      .sort((left, right) => {
+        const dateOrder = localString(left.purchase_date, localString(left.created_at, "9999")).localeCompare(
+          localString(right.purchase_date, localString(right.created_at, "9999"))
+        )
+        return dateOrder || localString(left.id).localeCompare(localString(right.id))
+      })
+
+    for (const lot of eligibleLots) {
+      if (remaining <= 0) break
+      const quantity = Math.min(remaining, localNumber(lot.quantity))
+      remaining -= quantity
+      nextBatches = nextBatches.map((candidate) =>
+        candidate.id === lot.id
+          ? { ...candidate, quantity: Math.max(0, localNumber(candidate.quantity) - quantity), sync_status: "pending_update", updated_at: now }
+          : candidate
+      )
+      allocations.push({
+        productId,
+        batchId: localString(lot.id) || null,
+        warehouseId: localString(lot.warehouse_id) || null,
+        quantity,
+      })
+    }
+
+    if (requestedBatch && remaining > 0.0001) {
+      throw new Error(`Batch ${requestedBatch} does not have enough stock.`)
+    }
+    if (remaining > 0) allocations.push({ productId, batchId: null, warehouseId: null, quantity: remaining })
+  }
+
+  return { nextBatches, allocations }
+}
+
 async function createInvoice(body: DataRow, organizationId: string) {
   const now = nowIso()
   const items = Array.isArray(body.items) ? (body.items as DataRow[]) : []
   if (!items.length) return fail("Invalid invoice.", 422)
 
-  const [customers, products, invoices, invoiceItems, movements, ledgerEntries, receipts, payments, organizationRows] = await Promise.all([
+  const [customers, products, invoices, invoiceItems, movements, batches, ledgerEntries, receipts, payments, organizationRows] = await Promise.all([
     readCollection<DataRow>(organizationId, "customers"),
     readCollection<DataRow>(organizationId, "products"),
     readCollection<DataRow>(organizationId, "invoices"),
     readCollection<DataRow>(organizationId, "invoice_items"),
     readCollection<DataRow>(organizationId, "stock_movements"),
+    readCollection<DataRow>(organizationId, "stock_batches"),
     readCollection<DataRow>(organizationId, "ledger_entries"),
     readCollection<DataRow>(organizationId, "payment_receipts"),
     readCollection<DataRow>(organizationId, "payments"),
@@ -674,10 +732,19 @@ async function createInvoice(body: DataRow, organizationId: string) {
     const quantity = quantityByProduct.get(String(product.id || "")) || 0
     return quantity > 0 ? { ...product, stock: localNumber(product.stock) - quantity, sync_status: "pending_update", updated_at: now } : product
   })
+  let consumedBatches: ReturnType<typeof consumeInvoiceBatches>
+  try {
+    consumedBatches = consumeInvoiceBatches(batches, items, now)
+  } catch (error) {
+    return fail(error instanceof Error ? error.message : "The selected stock batch is unavailable.", 409)
+  }
+  const runningStock = new Map(products.map((product) => [String(product.id || ""), localNumber(product.stock)]))
   const nextMovements = [
-    ...Array.from(quantityByProduct.entries()).map(([productId, quantity]) => {
+    ...consumedBatches.allocations.map(({ productId, batchId, warehouseId, quantity }) => {
       const product = products.find((row) => row.id === productId)
-      const previousStock = localNumber(product?.stock)
+      const previousStock = runningStock.get(productId) ?? localNumber(product?.stock)
+      const newStock = previousStock - quantity
+      runningStock.set(productId, newStock)
       return {
         id: createOfflineId("stock-movement"),
         organization_id: organizationId,
@@ -686,7 +753,9 @@ async function createInvoice(body: DataRow, organizationId: string) {
         type: "sale",
         quantity: -quantity,
         previous_stock: previousStock,
-        new_stock: previousStock - quantity,
+        new_stock: newStock,
+        batch_id: batchId,
+        warehouse_id: warehouseId || product?.warehouse_id || null,
         reason: `Invoice ${invoiceNumber}`,
         reference_no: invoiceNumber,
         reference_type: "invoice",
@@ -850,6 +919,7 @@ async function createInvoice(body: DataRow, organizationId: string) {
       { collection: "inventory_items", value: nextProducts },
       { collection: "invoices", value: [invoiceRecord, ...invoices] },
       { collection: "invoice_items", value: [...nextItems, ...invoiceItems] },
+      { collection: "stock_batches", value: consumedBatches.nextBatches },
       { collection: "stock_movements", value: nextMovements },
       { collection: "ledger_entries", value: nextLedger },
       { collection: "payment_receipts", value: nextReceipts },
@@ -891,11 +961,12 @@ async function deleteInvoice(body: DataRow, organizationId: string) {
   const invoiceId = localString(body.invoice_id)
   if (!invoiceId || body.confirmation !== "DELETE") return fail("Type DELETE to confirm invoice deletion.", 422)
   const now = nowIso()
-  const [invoices, invoiceItems, products, movements, ledgerEntries, receipts, payments, customers] = await Promise.all([
+  const [invoices, invoiceItems, products, movements, batches, ledgerEntries, receipts, payments, customers] = await Promise.all([
     readCollection<DataRow>(organizationId, "invoices"),
     readCollection<DataRow>(organizationId, "invoice_items"),
     readCollection<DataRow>(organizationId, "products"),
     readCollection<DataRow>(organizationId, "stock_movements"),
+    readCollection<DataRow>(organizationId, "stock_batches"),
     readCollection<DataRow>(organizationId, "ledger_entries"),
     readCollection<DataRow>(organizationId, "payment_receipts"),
     readCollection<DataRow>(organizationId, "payments"),
@@ -937,11 +1008,44 @@ async function deleteInvoice(body: DataRow, organizationId: string) {
       ? { ...product, stock: localNumber(product.stock) + restoreQuantity, sync_status: "pending_update", updated_at: now }
       : product
   })
-  const restoreMovements = Array.from(restoreQuantityByProduct.entries())
-    .filter(([, quantity]) => quantity > 0)
-    .map(([productId, quantity]) => {
+  const restoredByBatch = new Map<string, number>()
+  for (const movement of movements) {
+    if (movement.reference_type !== "invoice_delete" || movement.reference_id !== invoiceId) continue
+    const batchId = localString(movement.batch_id)
+    if (batchId) restoredByBatch.set(batchId, (restoredByBatch.get(batchId) || 0) + Math.max(0, localNumber(movement.quantity)))
+  }
+  const batchRestoreById = new Map<string, number>()
+  const restoreAllocations: BatchAllocation[] = []
+  for (const [productId, restoreQuantity] of restoreQuantityByProduct.entries()) {
+    let remaining = restoreQuantity
+    const saleMovements = movements.filter(
+      (movement) => movement.reference_type === "invoice" && movement.reference_id === invoiceId && movement.product_id === productId && localNumber(movement.quantity) < 0
+    )
+    for (const movement of saleMovements) {
+      if (remaining <= 0) break
+      const batchId = localString(movement.batch_id)
+      if (!batchId) continue
+      const unrestored = Math.max(0, Math.abs(localNumber(movement.quantity)) - (restoredByBatch.get(batchId) || 0))
+      const quantity = Math.min(remaining, unrestored)
+      if (quantity <= 0) continue
+      remaining -= quantity
+      batchRestoreById.set(batchId, (batchRestoreById.get(batchId) || 0) + quantity)
+      restoreAllocations.push({ productId, batchId, warehouseId: localString(movement.warehouse_id) || null, quantity })
+    }
+    if (remaining > 0) restoreAllocations.push({ productId, batchId: null, warehouseId: null, quantity: remaining })
+  }
+  const nextBatches = batches.map((batch) => {
+    const quantity = batchRestoreById.get(String(batch.id || "")) || 0
+    return quantity > 0
+      ? { ...batch, quantity: localNumber(batch.quantity) + quantity, sync_status: "pending_update", updated_at: now }
+      : batch
+  })
+  const runningRestoreStock = new Map(products.map((product) => [String(product.id || ""), localNumber(product.stock)]))
+  const restoreMovements = restoreAllocations.map(({ productId, batchId, warehouseId, quantity }) => {
       const product = products.find((row) => row.id === productId)
-      const previousStock = localNumber(product?.stock)
+      const previousStock = runningRestoreStock.get(productId) ?? localNumber(product?.stock)
+      const newStock = previousStock + quantity
+      runningRestoreStock.set(productId, newStock)
       return {
         id: createOfflineId("stock-movement"),
         organization_id: organizationId,
@@ -950,7 +1054,9 @@ async function deleteInvoice(body: DataRow, organizationId: string) {
         type: "adjustment",
         quantity,
         previous_stock: previousStock,
-        new_stock: previousStock + quantity,
+        new_stock: newStock,
+        batch_id: batchId,
+        warehouse_id: warehouseId || product?.warehouse_id || null,
         reason: `Invoice ${invoice.invoice_number || invoiceId} deleted and stock restored`,
         reference_no: invoice.invoice_number || invoiceId,
         reference_type: "invoice_delete",
@@ -996,6 +1102,7 @@ async function deleteInvoice(body: DataRow, organizationId: string) {
       { collection: "inventory_items", value: nextProducts },
       { collection: "invoices", value: invoices.map((row) => (row.id === invoiceId ? tombstone(row) : row)) },
       { collection: "invoice_items", value: invoiceItems.map((row) => (row.invoice_id === invoiceId ? tombstone(row) : row)) },
+      { collection: "stock_batches", value: nextBatches },
       { collection: "stock_movements", value: [...restoreMovements, ...movements] },
       {
         collection: "ledger_entries",
@@ -1237,56 +1344,20 @@ async function stockMovement(body: DataRow, organizationId: string) {
   const quantity = localNumber(body.quantity)
   const mode = body.mode === "transfer" ? "transfer" : "add"
   if (!productId || quantity <= 0) return fail("Invalid stock movement.", 422)
-  const now = nowIso()
-  const products = await readCollection<DataRow>(organizationId, "products")
-  const movements = await readCollection<DataRow>(organizationId, "stock_movements")
-  const product = products.find((row) => row.id === productId)
-  if (!product) return fail("Product was not found.", 404)
-  const previousStock = localNumber(product.stock)
-  const nextStock = mode === "add" ? previousStock + quantity : previousStock - quantity
-  if (nextStock < 0) return fail("Transfer quantity cannot be greater than available stock.", 409)
-  const nextProducts = products.map((row) =>
-    row.id === productId
-      ? {
-          ...row,
-          stock: nextStock,
-          warehouse_id: body.warehouse_id || row.warehouse_id || null,
-          batch_no: mode === "add" ? body.batch_no || row.batch_no || null : row.batch_no,
-          barcode: mode === "add" ? body.barcode || row.barcode || null : row.barcode,
-          expiry_date: mode === "add" ? body.expiry_date || row.expiry_date || null : row.expiry_date,
-          sync_status: "pending_update",
-          updated_at: now,
-        }
-      : row
-  )
-  const movement = {
-    id: createOfflineId("stock-movement"),
-    organization_id: organizationId,
+  const result = await createInventoryMovement(organizationId, {
+    ...body,
     product_id: productId,
-    product_name: product.name || "",
-    quantity: mode === "transfer" ? -quantity : quantity,
-    type: mode === "transfer" ? "transfer" : "stock_in",
-    previous_stock: previousStock,
-    new_stock: nextStock,
-    warehouse_id: body.warehouse_id || null,
+    quantity,
+    type: mode === "transfer" ? "stock_transfer" : "stock_in",
+    target_warehouse_id: mode === "transfer" ? body.warehouse_id || null : undefined,
     reason: mode === "transfer" ? "Inventory moved to selected warehouse" : "Manual stock addition",
-    sync_status: "pending_create",
-    created_at: now,
-    updated_at: now,
-  }
-  await writeCollections(
-    organizationId,
-    [
-      { collection: "products", value: nextProducts },
-      { collection: "inventory_items", value: nextProducts },
-      { collection: "stock_movements", value: [movement, ...movements] },
-    ],
-    pendingAction(createOfflineId("stock-action"), "stock_movement", organizationId, {
-      localMovementId: movement.id,
-      movement: body,
-    })
-  )
-  return ok({ productId, previousStock, newStock: nextStock })
+  })
+  return ok({
+    productId,
+    previousStock: result.previous_stock,
+    newStock: result.new_stock,
+    movementCount: result.movement_count,
+  })
 }
 
 async function listPurchases(url: URL, organizationId: string) {

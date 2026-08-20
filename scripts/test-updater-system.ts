@@ -6,10 +6,15 @@ import { join } from "node:path"
 import {
   SAFE_AUTO_UPDATE_DELAY_MS,
   autoUpdateDue,
+  clearPendingUpdateRestart,
+  markUpdatePendingRestart,
+  pendingUpdateHasLaunched,
+  readPendingUpdateRestart,
   readUpdateDecision,
   remindLater,
   scheduleUpdate,
 } from "../lib/desktop/update-state"
+import { compareVersions, releaseForPlatform, type DesktopReleaseManifest } from "../lib/app-updates"
 import { verifyUpdaterArtifact } from "../lib/releases/updater-signature"
 
 const storage = new Map<string, string>()
@@ -32,6 +37,28 @@ assert.ok(reminded.nextPromptAt > firstSeen)
 assert.equal(reminded.firstSeenAt, firstSeen)
 const scheduled = scheduleUpdate("0.1.8", firstSeen + 60_000)
 assert.equal(autoUpdateDue(scheduled, firstSeen + 60_000), true)
+assert.equal(compareVersions("0.1.14", "0.1.13"), 1)
+assert.equal(compareVersions("1.0.0-beta.1", "1.0.0"), -1)
+
+const platformManifest: DesktopReleaseManifest = {
+  version: "0.1.14",
+  mac: { version: "0.1.14", signed: true, notarized: true, platform: "macos", architecture: "arm64" },
+  macX64: { version: "0.1.14", signed: true, notarized: true, platform: "macos", architecture: "x86_64" },
+  windows: { version: "0.1.14", signed: true, platform: "windows", architecture: "x86_64" },
+  windowsArm64: { version: "0.1.14", signed: true, platform: "windows", architecture: "arm64" },
+}
+assert.equal(releaseForPlatform(platformManifest, "mac", "arm64"), platformManifest.mac)
+assert.equal(releaseForPlatform(platformManifest, "mac", "x64"), platformManifest.macX64)
+assert.equal(releaseForPlatform(platformManifest, "windows", "arm64"), platformManifest.windowsArm64)
+assert.equal(releaseForPlatform({ windows: platformManifest.windows }, "windows", "arm64"), null, "Windows arm64 must never fall back to x64")
+assert.equal(releaseForPlatform({ mac: platformManifest.mac }, "mac", "x64"), null, "Intel macOS must never receive arm64")
+
+const pendingRestart = markUpdatePendingRestart("0.1.14", "0.1.13", firstSeen)
+assert.deepEqual(readPendingUpdateRestart(), pendingRestart)
+assert.equal(pendingUpdateHasLaunched(pendingRestart, "0.1.13"), false)
+assert.equal(pendingUpdateHasLaunched(pendingRestart, "0.1.14"), true)
+clearPendingUpdateRestart()
+assert.equal(readPendingUpdateRestart(), null)
 
 async function run() {
   const data = Buffer.from("Bezgrow genuine updater regression payload")
@@ -77,7 +104,7 @@ async function run() {
     /SHA-256 mismatch/,
   )
 
-  console.log("updater-system-ok safe-delay=48h sha256=valid minisign-ed25519=valid tamper-rejected=true")
+  console.log("updater-system-ok safe-delay=48h platform-match=strict launch-confirmation=valid sha256=valid minisign-ed25519=valid tamper-rejected=true")
 }
 
 void run()

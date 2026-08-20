@@ -89,8 +89,11 @@ function statusOf(row: Record<string, unknown>) {
   return stringFrom(row, ["payment_status", "status"]).toLowerCase() || "unpaid"
 }
 
-function readinessClass(ready: boolean) {
-  return ready ? "bg-emerald-500/15 text-emerald-200" : "bg-amber-500/15 text-amber-200"
+function statusClass(status: string) {
+  if (status === "paid") return "border-emerald-400/25 bg-emerald-500/10 text-emerald-200"
+  if (status === "partial") return "border-amber-400/25 bg-amber-500/10 text-amber-200"
+  if (status === "cancelled") return "border-red-400/25 bg-red-500/10 text-red-200"
+  return "border-cyan-400/25 bg-cyan-500/10 text-cyan-200"
 }
 
 export default function BillingPage() {
@@ -158,11 +161,11 @@ export default function BillingPage() {
                 Billing Overview
               </div>
               <h1 className="max-w-6xl text-4xl font-black leading-tight tracking-tight text-white md:text-6xl">
-                Billing, collections, tax, inventory value, and billing readiness.
+                Billing, collections, tax, and inventory at a glance.
               </h1>
               <p className="mt-5 max-w-4xl text-base leading-8 text-neutral-400 md:text-lg">
                 A professional billing view for revenue, collection risk,
-                GST/tax visibility, invoice creation, print workflows, product readiness, and daily controls.
+                GST/tax visibility, invoice creation, print workflows, and daily controls.
               </p>
             </div>
 
@@ -212,7 +215,7 @@ export default function BillingPage() {
           ))}
         </section>
 
-        <section className="grid grid-cols-1 gap-6 2xl:grid-cols-[1fr,420px]">
+        <section>
           <div className="space-y-6">
             <div className="grid grid-cols-1 gap-6 xl:grid-cols-2">
               <div className="rounded-[36px] border border-white/10 bg-white/[0.035] p-7 shadow-[0_0_70px_rgba(0,0,0,0.35)] backdrop-blur-2xl">
@@ -298,93 +301,49 @@ export default function BillingPage() {
                   <p className="mt-2 text-sm text-neutral-500">Create your first invoice to activate the billing dashboard.</p>
                 </div>
               ) : (
-                <div className="divide-y divide-white/5">
-                  {recentInvoices.map((invoice) => {
-                    const status = statusOf(invoice)
-                    const amount = numberFrom(invoice, ["grand_total", "total_amount", "total"])
-                    const invoiceNumber = stringFrom(invoice, ["invoice_number"]) || "Invoice"
-                    const customerName =
-                      stringFrom(invoice, ["customer_name"]) ||
-                      "Walk-in customer"
-
-                    return (
-                      <div key={invoice.id} className="grid gap-4 px-6 py-5 transition-colors duration-300 hover:bg-cyan-500/[0.035] md:grid-cols-[1fr,160px,160px,150px] md:items-center">
-                        <div>
-                          <p className="font-bold text-white">{customerName}</p>
-                          <p className="mt-1 text-xs text-neutral-500">
-                            {invoiceNumber} - {formatDate(invoice.created_at)}
-                          </p>
-                        </div>
-                        <span className={`w-fit rounded-full px-3 py-1 text-xs font-bold capitalize ${readinessClass(status === "paid")}`}>
-                          {status}
-                        </span>
-                        <p className="text-xl font-black text-cyan-200 md:text-right">{money(amount)}</p>
-                        <div className="flex gap-2 md:justify-end">
-                          <Link href={`/dashboard/invoices/${invoice.id}`} className="rounded-xl border border-white/10 px-4 py-2 text-sm font-semibold text-white hover:border-cyan-400/30">
-                            View
-                          </Link>
-                          <Link href={`/dashboard/invoices/${invoice.id}/print`} className="rounded-xl bg-white px-4 py-2 text-sm font-bold text-black hover:bg-cyan-100">
-                            Print
-                          </Link>
-                        </div>
-                      </div>
-                    )
-                  })}
+                <div className="overflow-x-auto">
+                  <table className="w-full min-w-[1040px] text-sm">
+                    <thead className="sticky top-0 z-10 bg-zinc-950 text-left text-xs uppercase tracking-[0.16em] text-neutral-500">
+                      <tr>
+                        <th className="px-4 py-3">Invoice #</th>
+                        <th className="px-4 py-3">Date</th>
+                        <th className="px-4 py-3">Customer</th>
+                        <th className="px-4 py-3">Status</th>
+                        <th className="px-4 py-3 text-right">Total</th>
+                        <th className="px-4 py-3 text-right">Paid</th>
+                        <th className="px-4 py-3 text-right">Due</th>
+                        <th className="px-4 py-3 text-right">Actions</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {recentInvoices.map((invoice) => {
+                        const status = statusOf(invoice)
+                        const amount = numberFrom(invoice, ["grand_total", "total_amount", "total"])
+                        const paid = numberFrom(invoice, ["paid_amount"]) || (status === "paid" ? amount : 0)
+                        const due = numberFrom(invoice, ["outstanding_amount"]) || Math.max(0, amount - paid)
+                        return (
+                          <tr key={invoice.id} className="border-t border-white/5 transition-colors hover:bg-cyan-500/[0.035]">
+                            <td className="px-4 py-3 font-bold text-white">{stringFrom(invoice, ["invoice_number"]) || "Invoice"}</td>
+                            <td className="whitespace-nowrap px-4 py-3 text-neutral-300">{formatDate(stringFrom(invoice, ["invoice_date", "date", "created_at"]))}</td>
+                            <td className="px-4 py-3 font-semibold text-white">{stringFrom(invoice, ["customer_name"]) || "Walk-in customer"}</td>
+                            <td className="px-4 py-3"><span className={`inline-flex rounded-full border px-3 py-1 text-xs font-bold capitalize ${statusClass(status)}`}>{status}</span></td>
+                            <td className="px-4 py-3 text-right font-bold text-cyan-100">{money(amount)}</td>
+                            <td className="px-4 py-3 text-right text-emerald-200">{money(paid)}</td>
+                            <td className="px-4 py-3 text-right text-amber-200">{money(due)}</td>
+                            <td className="px-4 py-3"><div className="flex justify-end gap-2">
+                              <Link href={`/dashboard/invoices/${invoice.id}`} className="rounded-lg border border-white/10 px-3 py-2 text-xs font-semibold text-white hover:border-cyan-400/30">View</Link>
+                              <Link href={`/dashboard/invoices/${invoice.id}/print`} className="rounded-lg bg-white px-3 py-2 text-xs font-bold text-black hover:bg-cyan-100">Print</Link>
+                            </div></td>
+                          </tr>
+                        )
+                      })}
+                    </tbody>
+                  </table>
                 </div>
               )}
             </div>
           </div>
 
-          <aside className="space-y-6">
-            <div className="rounded-[36px] border border-cyan-400/20 bg-cyan-500/10 p-7 shadow-[0_0_60px_rgba(34,211,238,0.12)]">
-              <h3 className="text-2xl font-black">Billing Tools</h3>
-              <div className="mt-6 space-y-4 text-sm text-neutral-300">
-                {[
-                  "GST and tax-aware invoice workflow",
-                  "Payment collection status tracking",
-                  "Inventory-linked product billing",
-                  "Customer ledger and invoice history",
-                  "A4, half-A4, and thermal print support",
-                  "CSV-ready accounting records",
-                ].map((feature) => (
-                  <div key={feature} className="rounded-2xl border border-white/10 bg-black/30 p-4">
-                    {feature}
-                  </div>
-                ))}
-              </div>
-            </div>
-
-            <div className="rounded-[36px] border border-white/10 bg-white/[0.035] p-7 backdrop-blur-2xl">
-              <h3 className="text-2xl font-black">Billing Readiness</h3>
-              <div className="mt-6 space-y-4">
-                {[
-                  ["Products connected", analytics.productCount > 0],
-                  ["Customers connected", analytics.customerCount > 0],
-                  ["Invoices active", analytics.invoiceCount > 0],
-                  ["Tax ledger visible", analytics.tax > 0],
-                  ["Collections measurable", analytics.collectionRate > 0],
-                  ["Inventory risk tracked", analytics.lowStockCount >= 0],
-                ].map(([label, ready]) => (
-                  <div key={String(label)} className="flex items-center justify-between rounded-2xl border border-white/10 bg-black/30 px-4 py-4">
-                    <span className="text-sm font-semibold text-white">{label}</span>
-                    <span className={`rounded-full px-3 py-1 text-xs font-bold ${readinessClass(Boolean(ready))}`}>
-                      {ready ? "Ready" : "Pending"}
-                    </span>
-                  </div>
-                ))}
-              </div>
-            </div>
-
-            <div className="rounded-[36px] border border-white/10 bg-gradient-to-br from-zinc-950 to-black p-7">
-              <h3 className="text-2xl font-black">Recommended Next Steps</h3>
-              <div className="mt-6 space-y-3 text-sm text-neutral-400">
-                <p>1. Add products with correct sale rates and GST.</p>
-                <p>2. Add customer phone numbers for WhatsApp sharing.</p>
-                <p>3. Review unpaid and partial bills daily.</p>
-                <p>4. Download regular backups from Settings.</p>
-              </div>
-            </div>
-          </aside>
         </section>
       </main>
     </div>

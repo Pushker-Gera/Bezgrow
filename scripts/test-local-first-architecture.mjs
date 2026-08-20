@@ -126,8 +126,10 @@ assert.doesNotMatch(desktopProxy, /api\/(products|customers|invoices|orders|inve
 assert.doesNotMatch(license, /fetch\("\/api\/license\/verify"/, "Stored licenses must verify locally without a server fallback.")
 assert.doesNotMatch(license, /operating_system:/, "Device check-ins must not send a user-agent/OS fingerprint.")
 assert.match(license, /verifyStoredLicenseRows/, "Stored license rows must be signature-verified before policy evaluation.")
-assert.doesNotMatch(updateCoordinator, /CHECK_INTERVAL_MS|setInterval\([^\n]*checkForUpdate|setTimeout\([^\n]*checkForUpdate|addEventListener\("online"/, "Normal desktop startup must not make an implicit control-plane request.")
-assert.match(updateCoordinator, /addEventListener\(UPDATE_CHECK_EVENT, handleCheck\)/, "Desktop release checks must remain explicitly user-triggered.")
+assert.match(updateCoordinator, /UPDATE_CHECK_INTERVAL_MS = 6 \* 60 \* 60 \* 1000/, "Desktop release checks must use a bounded periodic cadence.")
+assert.match(updateCoordinator, /setTimeout\(handleCheck, STARTUP_CHECK_DELAY_MS\)/, "Desktop release checks must run shortly after startup.")
+assert.match(updateCoordinator, /addEventListener\("online", handleOnline\)/, "Desktop release checks must retry after internet reconnection.")
+assert.match(updateCoordinator, /addEventListener\(UPDATE_CHECK_EVENT, handleCheck\)/, "Desktop release checks must also remain manually triggerable.")
 assert.match(loginPage, /\/offline\?reason=logged_out/, "Offline logout/reopen must enter the local licence lifecycle instead of cloud login.")
 assert.match(licensePage, /localLicenseSnapshot[\s\S]*restoreLicensedWorkspaceContext\(\)[\s\S]*markDesktopSessionActive\(\)/, "The licence screen must verify the signed local licence before restoring access.")
 

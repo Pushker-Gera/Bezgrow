@@ -20,6 +20,9 @@ const unavailableStatus: AdminControlPlaneSchemaStatus = {
   },
 }
 
+let cachedSchemaStatus: { value: AdminControlPlaneSchemaStatus; expiresAt: number } | null = null
+let schemaRequest: Promise<AdminControlPlaneSchemaStatus> | null = null
+
 function normalizeStatus(value: unknown): AdminControlPlaneSchemaStatus {
   if (!value || typeof value !== "object") return unavailableStatus
   const raw = value as {
@@ -50,6 +53,10 @@ function normalizeStatus(value: unknown): AdminControlPlaneSchemaStatus {
 }
 
 export async function verifyAdminControlPlaneSchema(requestId: string) {
+  if (cachedSchemaStatus && cachedSchemaStatus.expiresAt > Date.now()) return cachedSchemaStatus.value
+  if (schemaRequest) return schemaRequest
+
+  schemaRequest = (async () => {
   const result = await adminSupabase.rpc("admin_control_plane_schema_status")
 
   if (result.error) {
@@ -60,6 +67,7 @@ export async function verifyAdminControlPlaneSchema(requestId: string) {
       expectedVersion: ADMIN_CONTROL_PLANE_SCHEMA_VERSION,
       missingObject: "public.admin_control_plane_schema_status()",
     })
+    cachedSchemaStatus = { value: unavailableStatus, expiresAt: Date.now() + 5_000 }
     return unavailableStatus
   }
 
@@ -72,7 +80,14 @@ export async function verifyAdminControlPlaneSchema(requestId: string) {
       missing: status.missing,
     })
   }
+  cachedSchemaStatus = { value: status, expiresAt: Date.now() + (status.ready ? 60_000 : 5_000) }
   return status
+  })()
+  try {
+    return await schemaRequest
+  } finally {
+    schemaRequest = null
+  }
 }
 
 export function adminControlPlaneUnavailableMessage() {

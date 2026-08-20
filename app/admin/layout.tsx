@@ -81,7 +81,7 @@ export default function AdminLayout({ children }: { children: ReactNode }) {
         const payload = (await response.json().catch(() => ({}))) as AdminSession
         if (!response.ok || !payload.success) {
           const query = new URLSearchParams({
-            next: `${pathname}${window.location.search}`,
+            next: `${window.location.pathname}${window.location.search}`,
             platform_admin: "1",
           })
           if (response.status === 403) query.set("error", "admin_required")
@@ -100,7 +100,7 @@ export default function AdminLayout({ children }: { children: ReactNode }) {
         if (!controller.signal.aborted) setChecking(false)
       })
     return () => controller.abort()
-  }, [online, pathname, router])
+  }, [online, router])
 
   function isActive(href: string) {
     return pathname === href || (href !== "/admin" && pathname.startsWith(`${href}/`))

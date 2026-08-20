@@ -14,6 +14,34 @@ type DeviceProof = {
 const DEVICE_DENIED = "This device is not authorized for Bezgrow Platform Administration."
 const DEVICE_AUTHORIZE_PATH = "/api/platform-admin/device/authorize"
 const DEVICE_STATUS_PATH = "/api/platform-admin/device/status"
+let cachedAccessToken: { value: string; expiresAt: number } | null = null
+let sessionRequest: Promise<string | null> | null = null
+let authListenerReady = false
+
+function ensureAuthListener() {
+  if (authListenerReady || typeof window === "undefined") return
+  authListenerReady = true
+  supabase.auth.onAuthStateChange((_event, session) => {
+    cachedAccessToken = session?.access_token
+      ? { value: session.access_token, expiresAt: (session.expires_at || 0) * 1000 }
+      : null
+  })
+}
+
+async function platformAdminAccessToken() {
+  ensureAuthListener()
+  if (cachedAccessToken && cachedAccessToken.expiresAt > Date.now() + 60_000) return cachedAccessToken.value
+  if (sessionRequest) return sessionRequest
+  sessionRequest = supabase.auth.getSession().then(({ data, error }) => {
+    const session = data.session
+    if (error || !session?.access_token) return null
+    cachedAccessToken = { value: session.access_token, expiresAt: (session.expires_at || 0) * 1000 }
+    return session.access_token
+  }).finally(() => {
+    sessionRequest = null
+  })
+  return sessionRequest
+}
 
 function bytesForBody(body: BodyInit | null | undefined) {
   if (body === undefined || body === null) return new Uint8Array()
@@ -98,9 +126,8 @@ export async function secureAdminFetch(pathAndQuery: string, init: RequestInit =
   if (typeof navigator !== "undefined" && !navigator.onLine) {
     throw new Error("Platform Administration requires an internet connection.")
   }
-  const { data, error } = await supabase.auth.getSession()
-  const accessToken = data.session?.access_token
-  if (error || !accessToken) throw new Error("Platform Admin authentication required.")
+  const accessToken = await platformAdminAccessToken()
+  if (!accessToken) throw new Error("Platform Admin authentication required.")
   return desktopControlPlaneFetch(pathAndQuery, init, accessToken)
 }
 

@@ -19,10 +19,12 @@ import { createLicenseSchema, licenseValidationIssue } from "@/lib/license/admin
 import { LICENSE_SCHEMA_VERSION, type LicensePayload } from "@/lib/license/codec"
 import { createLicenseId, hasLicenseSigningKey, licenseSigningStatus, signLicensePayload } from "@/lib/license/server"
 import { adminSupabase } from "@/lib/supabase/admin"
+import { adminRequestTiming } from "@/lib/admin/request-timing"
 
 export const dynamic = "force-dynamic"
 
 const featureSchema = z.array(z.string().trim().min(1).max(80)).min(1).max(80)
+const LICENSE_LIST_COLUMNS = "id,platform_customer_id,platform_business_id,customer_name,customer_email,business_name,device_id,platform,architecture,app_version,plan_name,issue_date,expiry_date,grace_days,allowed_features,maximum_users,maximum_businesses,maximum_branches,internal_notes,status,signed_license_key,issuer_key_id,signature_algorithm,issued_by_admin_id,issued_by_admin_email,created_at,updated_at,effective_status"
 
 const updateLicenseSchema = z.object({
   id: z.string().trim().min(8).max(160),
@@ -256,9 +258,11 @@ async function persistSignedLicense(
 }
 
 export async function GET(request: Request) {
+  const timing = adminRequestTiming("/api/admin/licenses", "GET")
   const auth = await requireAdminControlPlane(request)
   if (!auth.ok) return adminFail({ requestId: crypto.randomUUID() }, auth.error, auth.status)
   const context = auth.context
+  timing.mark("authorization")
 
   try {
     const list = parseAdminListQuery(request)
@@ -271,7 +275,7 @@ export async function GET(request: Request) {
     )
     let query = adminSupabase
       .from("license_control_plane")
-      .select("*", { count: "exact" })
+      .select(LICENSE_LIST_COLUMNS, { count: "exact" })
       .order(sort.column, { ascending: sort.ascending })
 
     if (list.search) {
@@ -285,6 +289,7 @@ export async function GET(request: Request) {
     query = exportMode ? query.limit(10000) : query.range(from, to)
 
     const result = await query
+    timing.mark("license_query")
     if (result.error) {
       return adminFail(context, controlPlaneErrorMessage(result.error, "Licenses failed to load."), 500)
     }
@@ -317,20 +322,24 @@ export async function GET(request: Request) {
       )
     }
 
-    return adminOk(context, {
+    const response = adminOk(context, {
       data: rows,
       pagination: { page: list.page, limit: list.limit, total: result.count || 0 },
       licenseSigning: licenseSigningStatus(),
     })
+    timing.finish(context.requestId)
+    return response
   } catch (error) {
     return unexpectedAdminError(context, error, "Licenses failed to load.")
   }
 }
 
 export async function POST(request: Request) {
+  const timing = adminRequestTiming("/api/admin/licenses", "POST")
   const auth = await requireAdminControlPlane(request)
   if (!auth.ok) return adminFail({ requestId: crypto.randomUUID() }, auth.error, auth.status)
   const context = auth.context
+  timing.mark("authorization")
 
   if (!hasLicenseSigningKey()) {
     return adminFail(context, "License generation failed because the server signing key is not configured.", 503, {
@@ -350,6 +359,7 @@ export async function POST(request: Request) {
 
   try {
     const input = parsed.data
+    timing.mark("validation")
     const idempotencyKey = input.idempotency_key || request.headers.get("idempotency-key")?.trim() || undefined
     if (idempotencyKey) {
       const existing = await adminSupabase
@@ -360,9 +370,8 @@ export async function POST(request: Request) {
       if (existing.error) throw existing.error
       if (existing.data) {
         const existingLicense = existing.data as StoredLicense
-        const device = await adminSupabase
-          .from("registered_devices")
-          .upsert(
+        const [device, event] = await Promise.all([
+          adminSupabase.from("registered_devices").upsert(
             {
               device_id: existingLicense.device_id,
               platform_customer_id: existingLicense.platform_customer_id,
@@ -375,16 +384,16 @@ export async function POST(request: Request) {
               updated_at: new Date().toISOString(),
             },
             { onConflict: "device_id" }
-          )
+          ),
+          adminSupabase
+            .from("license_events")
+            .select("id")
+            .eq("license_id", existingLicense.id)
+            .eq("action", "LICENSE_GENERATED")
+            .limit(1)
+            .maybeSingle(),
+        ])
         if (device.error) throw device.error
-
-        const event = await adminSupabase
-          .from("license_events")
-          .select("id")
-          .eq("license_id", existingLicense.id)
-          .eq("action", "LICENSE_GENERATED")
-          .limit(1)
-          .maybeSingle()
         if (event.error) throw event.error
         if (!event.data) {
           await recordLicenseEvent({
@@ -400,17 +409,22 @@ export async function POST(request: Request) {
             }),
           })
         }
-        return adminOk(context, {
+        timing.mark("idempotent_recovery")
+        const response = adminOk(context, {
           license: existingLicense,
           license_key: existingLicense.signed_license_key,
           license_file: signedFile(existingLicense),
           duplicate: true,
         })
+        timing.finish(context.requestId)
+        return response
       }
     }
 
     const customerId = await ensureCustomer(input)
+    timing.mark("customer")
     const businessId = await ensureBusiness(input, customerId)
+    timing.mark("business")
     const licenseId = createLicenseId()
     const adminLabel = context.adminEmail || context.adminUserId
     const row = await persistSignedLicense(
@@ -443,10 +457,10 @@ export async function POST(request: Request) {
       adminLabel,
       idempotencyKey
     )
+    timing.mark("sign_and_store")
 
-    const device = await adminSupabase
-      .from("registered_devices")
-      .upsert(
+    const [device] = await Promise.all([
+      adminSupabase.from("registered_devices").upsert(
         {
           device_id: input.device_id,
           platform_customer_id: customerId,
@@ -460,29 +474,32 @@ export async function POST(request: Request) {
           updated_at: new Date().toISOString(),
         },
         { onConflict: "device_id" }
-      )
-    if (device.error) throw device.error
-
-    await recordLicenseEvent({
-      context,
-      licenseId: row.id,
-      action: "LICENSE_GENERATED",
-      newValues: compactRecord({
-        status: row.status,
-        device_id: row.device_id,
-        plan_name: row.plan_name,
-        expiry_date: row.expiry_date,
-        grace_days: row.grace_days,
-        allowed_features: row.allowed_features,
+      ),
+      recordLicenseEvent({
+        context,
+        licenseId: row.id,
+        action: "LICENSE_GENERATED",
+        newValues: compactRecord({
+          status: row.status,
+          device_id: row.device_id,
+          plan_name: row.plan_name,
+          expiry_date: row.expiry_date,
+          grace_days: row.grace_days,
+          allowed_features: row.allowed_features,
+        }),
+        notes: row.internal_notes,
       }),
-      notes: row.internal_notes,
-    })
+    ])
+    if (device.error) throw device.error
+    timing.mark("device_and_audit")
 
-    return adminOk(context, {
+    const response = adminOk(context, {
       license: row,
       license_key: row.signed_license_key,
       license_file: signedFile(row),
     })
+    timing.finish(context.requestId)
+    return response
   } catch (error) {
     return unexpectedAdminError(context, error, "License generation failed.")
   }

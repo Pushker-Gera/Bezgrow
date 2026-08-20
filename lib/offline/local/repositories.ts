@@ -185,9 +185,9 @@ async function ensureOrganization(db: SqlExecutor, organizationId: string) {
   if (!organizationId) return
   const now = nowIso()
   await db.execute(
-    `INSERT OR IGNORE INTO organizations (id, name, created_at, updated_at)
-     VALUES (?, 'Business', ?, ?)`,
-    [organizationId, now, now]
+    `INSERT OR IGNORE INTO organizations (id, name, joined_at, created_at, updated_at)
+     VALUES (?, 'Business', ?, ?, ?)`,
+    [organizationId, now, now, now]
   )
 }
 
@@ -709,6 +709,7 @@ function organizationRow(input: DataRow, organizationId: string) {
     invoice_prefix: text(input, ["invoice_prefix"]),
     next_invoice_number: number(input, ["next_invoice_number"], 1),
     financial_year_start: text(input, ["financial_year_start"]),
+    joined_at: Object.hasOwn(input, "joined_at") ? text(input, ["joined_at"]) : undefined,
     logo_path: Object.hasOwn(input, "logo_path") ? text(input, ["logo_path"]) : undefined,
     logo_mime_type: Object.hasOwn(input, "logo_mime_type") ? text(input, ["logo_mime_type"]) : undefined,
     logo_width: Object.hasOwn(input, "logo_width") ? sqlValue(input.logo_width) : undefined,

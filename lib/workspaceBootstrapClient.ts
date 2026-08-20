@@ -17,6 +17,9 @@ export type WorkspaceBootstrapPayload = {
     locale?: string | null
     business_type?: string | null
     business_category?: string | null
+    business_name?: string | null
+    created_at?: string | null
+    joined_at?: string | null
   } | null
   membership?: { organization_id?: string | null; role?: string | null } | null
   features?: string[]

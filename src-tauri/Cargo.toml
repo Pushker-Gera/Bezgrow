@@ -1,6 +1,6 @@
 [package]
 name = "bezgrow-erp"
-version = "0.1.13"
+version = "0.1.14"
 description = "Bezgrow ERP desktop shell"
 authors = ["Bezgrow"]
 edition = "2021"

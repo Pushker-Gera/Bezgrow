@@ -149,15 +149,34 @@ export function verifiedInstallerRouteForCurrentPlatform() {
     : "/api/downloads/desktop?platform=mac"
 }
 
-export function releaseForCurrentPlatform(manifest: DesktopReleaseManifest | null) {
+function releaseMatchesTarget(release: WindowsRelease | MacRelease | null | undefined, platform: "mac" | "windows", architecture: "x64" | "arm64") {
+  if (!release) return null
+  const expectedPlatform = platform === "mac" ? "macos" : "windows"
+  const expectedArchitecture = architecture === "x64" ? "x86_64" : "arm64"
+  if (release.platform && release.platform !== expectedPlatform) return null
+  if (release.architecture && release.architecture !== expectedArchitecture) return null
+  return release
+}
+
+export function releaseForPlatform(manifest: DesktopReleaseManifest | null, platform: "mac" | "windows", architecture: "x64" | "arm64") {
   if (!manifest) return null
-  if (currentPlatform() !== "windows") {
-    return desktopArchitecture() === "x64" ? manifest.macX64 || manifest.mac || null : manifest.mac || manifest.macX64 || null
+  if (platform === "mac") {
+    return architecture === "x64"
+      ? releaseMatchesTarget(manifest.macX64, platform, architecture)
+      : releaseMatchesTarget(manifest.mac, platform, architecture)
   }
-  if (desktopArchitecture() === "arm64") {
-    return manifest.windowsArm64 || manifest.windowsArm64Msi || manifest.windowsArm64Msix || manifest.windows || manifest.windowsMsi || manifest.windowsMsix || null
+  const candidates = architecture === "arm64"
+    ? [manifest.windowsArm64, manifest.windowsArm64Msi, manifest.windowsArm64Msix]
+    : [manifest.windows, manifest.windowsMsi, manifest.windowsMsix]
+  for (const candidate of candidates) {
+    const matching = releaseMatchesTarget(candidate, platform, architecture)
+    if (matching) return matching
   }
-  return manifest.windows || manifest.windowsMsi || manifest.windowsMsix || null
+  return null
+}
+
+export function releaseForCurrentPlatform(manifest: DesktopReleaseManifest | null) {
+  return releaseForPlatform(manifest, currentPlatform(), desktopArchitecture() === "arm64" ? "arm64" : "x64")
 }
 
 function releaseHref(release: ReturnType<typeof releaseForCurrentPlatform>) {

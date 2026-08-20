@@ -1293,6 +1293,17 @@ struct DesktopRestoreResult {
     organization_id: String,
 }
 
+const MAX_BACKUP_PACKAGE_BYTES: u64 = 4 * 1024 * 1024 * 1024;
+const MAX_BACKUP_DATABASE_BYTES: u64 = 3 * 1024 * 1024 * 1024;
+const MAX_BACKUP_MANIFEST_BYTES: u64 = 1024 * 1024;
+const MAX_BACKUP_ASSET_BYTES: u64 = 256 * 1024 * 1024;
+const MAX_BACKUP_ASSET_TOTAL_BYTES: u64 = 1024 * 1024 * 1024;
+const MAX_BACKUP_ASSET_COUNT: usize = 10_000;
+
+fn is_sha256(value: &str) -> bool {
+    value.len() == 64 && value.bytes().all(|byte| byte.is_ascii_hexdigit())
+}
+
 fn unix_timestamp() -> String {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -2596,7 +2607,9 @@ async fn restore_database_contents(
     let restore_result: Result<(), String> = async {
         let current_tables = sqlx::query_scalar::<_, String>(
             "SELECT name FROM main.sqlite_master
-             WHERE type = 'table' AND name NOT LIKE 'sqlite_%' AND name <> 'schema_migrations'",
+             WHERE type = 'table'
+               AND name NOT LIKE 'sqlite_%'
+               AND name NOT IN ('schema_migrations', 'license_state', 'device_activations')",
         )
         .fetch_all(&mut connection)
         .await
@@ -2846,6 +2859,14 @@ async fn desktop_restore_backup<R: tauri::Runtime>(
     let Some(source) = source else {
         return Ok(None);
     };
+    let package_bytes = fs::metadata(&source)
+        .map_err(|error| format!("Unable to inspect the selected backup: {error}"))?
+        .len();
+    if package_bytes == 0 || package_bytes > MAX_BACKUP_PACKAGE_BYTES {
+        return Err(
+            "The selected backup package is empty or exceeds the supported size.".to_string(),
+        );
+    }
     let app_data = managed_app_data_root(&app)?;
     let staging = app_data
         .join("Temporary")
@@ -2861,17 +2882,44 @@ async fn desktop_restore_backup<R: tauri::Runtime>(
         let mut entry = archive
             .by_name("manifest.json")
             .map_err(|_| "The backup manifest is missing.".to_string())?;
+        if entry.size() == 0 || entry.size() > MAX_BACKUP_MANIFEST_BYTES {
+            return Err("The backup manifest is empty or exceeds the supported size.".to_string());
+        }
         let mut bytes = Vec::new();
         entry
             .read_to_end(&mut bytes)
             .map_err(|error| format!("Unable to read the backup manifest: {error}"))?;
         serde_json::from_slice(&bytes).map_err(|_| "The backup manifest is damaged.".to_string())?
     };
-    if manifest.app != "Bezgrow" || manifest.format_version != 1 {
+    if manifest.app != "Bezgrow"
+        || manifest.format_version != 1
+        || manifest.app_version.trim().is_empty()
+    {
         return Err("This is not a compatible Bezgrow backup package.".to_string());
     }
     if manifest.organization_id != organization_id {
         return Err("This backup belongs to a different business/workspace.".to_string());
+    }
+    if manifest.database_bytes == 0
+        || manifest.database_bytes > MAX_BACKUP_DATABASE_BYTES
+        || !is_sha256(&manifest.database_checksum_sha256)
+        || manifest.assets.len() > MAX_BACKUP_ASSET_COUNT
+    {
+        return Err("The backup manifest contains invalid database or asset limits.".to_string());
+    }
+    let mut declared_asset_bytes = 0_u64;
+    let mut declared_asset_paths = HashSet::new();
+    for asset in &manifest.assets {
+        declared_asset_bytes = declared_asset_bytes
+            .checked_add(asset.bytes)
+            .ok_or_else(|| "The backup asset sizes are invalid.".to_string())?;
+        if asset.bytes > MAX_BACKUP_ASSET_BYTES
+            || declared_asset_bytes > MAX_BACKUP_ASSET_TOTAL_BYTES
+            || !is_sha256(&asset.checksum_sha256)
+            || !declared_asset_paths.insert(asset.relative_path.clone())
+        {
+            return Err("The backup manifest contains invalid or duplicate assets.".to_string());
+        }
     }
 
     let backup_database = staging.join("database.sqlite");
@@ -2879,6 +2927,9 @@ async fn desktop_restore_backup<R: tauri::Runtime>(
         let mut entry = archive
             .by_name("database.sqlite")
             .map_err(|_| "The backup database is missing.".to_string())?;
+        if entry.size() != manifest.database_bytes {
+            return Err("The backup database size does not match its manifest.".to_string());
+        }
         let mut output = fs::File::create(&backup_database)
             .map_err(|error| format!("Unable to prepare the backup database: {error}"))?;
         std::io::copy(&mut entry, &mut output)
@@ -2905,6 +2956,12 @@ async fn desktop_restore_backup<R: tauri::Runtime>(
                 asset.relative_path
             )
         })?;
+        if entry.size() != asset.bytes {
+            return Err(format!(
+                "A backup asset size does not match its manifest: {}",
+                asset.relative_path
+            ));
+        }
         let relative = Path::new(&asset.relative_path);
         if relative.is_absolute()
             || relative
@@ -2950,6 +3007,7 @@ async fn desktop_restore_backup<R: tauri::Runtime>(
             .map_err(|error| format!("Unable to prepare business assets for restore: {error}"))?;
     }
     if let Err(error) = copy_directory(&extracted_assets, &active_assets) {
+        let _ = fs::remove_dir_all(&active_assets);
         let _ = copy_directory(&pre_restore_assets, &active_assets);
         return Err(error);
     }
@@ -2959,6 +3017,16 @@ async fn desktop_restore_backup<R: tauri::Runtime>(
         let _ = copy_directory(&pre_restore_assets, &active_assets);
         let _ = fs::remove_dir_all(&staging);
         return Err(error);
+    }
+    if let Err(error) = verify_backup_database(&current_database, &organization_id).await {
+        let rollback_result = restore_database_contents(&current_database, &pre_restore).await;
+        let _ = fs::remove_dir_all(&active_assets);
+        let _ = copy_directory(&pre_restore_assets, &active_assets);
+        let _ = fs::remove_dir_all(&staging);
+        return match rollback_result {
+            Ok(()) => Err(format!("The restored database failed verification and was rolled back: {error}")),
+            Err(rollback_error) => Err(format!("The restored database failed verification ({error}) and the safety rollback also failed ({rollback_error}).")),
+        };
     }
     let _ = fs::remove_dir_all(&staging);
     Ok(Some(DesktopRestoreResult {
@@ -3721,19 +3789,39 @@ mod database_transaction_tests {
             let mut connection = SqliteConnection::connect_with(&options)
                 .await
                 .expect("create backup fixture");
-            sqlx::query("CREATE TABLE records (id INTEGER PRIMARY KEY, value TEXT NOT NULL)")
-                .execute(&mut connection)
-                .await
-                .expect("create backup fixture table");
-            sqlx::query("INSERT INTO records (id, value) VALUES (1, 'backed-up')")
-                .execute(&mut connection)
-                .await
-                .expect("insert backup fixture row");
+            for statement in [
+                "CREATE TABLE organizations (id TEXT PRIMARY KEY, name TEXT NOT NULL, deleted_at TEXT)",
+                "CREATE TABLE products (id TEXT PRIMARY KEY, organization_id TEXT NOT NULL REFERENCES organizations(id), name TEXT NOT NULL, stock REAL NOT NULL)",
+                "CREATE TABLE customers (id TEXT PRIMARY KEY, organization_id TEXT NOT NULL REFERENCES organizations(id), name TEXT NOT NULL)",
+                "CREATE TABLE sales_invoices (id TEXT PRIMARY KEY, organization_id TEXT NOT NULL REFERENCES organizations(id), customer_id TEXT NOT NULL REFERENCES customers(id), invoice_number TEXT NOT NULL, total REAL NOT NULL)",
+                "CREATE TABLE sales_invoice_items (id TEXT PRIMARY KEY, organization_id TEXT NOT NULL REFERENCES organizations(id), invoice_id TEXT NOT NULL REFERENCES sales_invoices(id), product_id TEXT NOT NULL REFERENCES products(id), quantity REAL NOT NULL)",
+                "CREATE TABLE license_state (id TEXT PRIMARY KEY, organization_id TEXT NOT NULL REFERENCES organizations(id), signed_license_key TEXT NOT NULL)",
+                "CREATE TABLE device_activations (id TEXT PRIMARY KEY, organization_id TEXT NOT NULL REFERENCES organizations(id), device_id TEXT NOT NULL)",
+                "INSERT INTO organizations VALUES ('org-a', 'Backed-up Business', NULL)",
+                "INSERT INTO products VALUES ('product-a', 'org-a', 'Backed-up Product', 12)",
+                "INSERT INTO customers VALUES ('customer-a', 'org-a', 'Backed-up Customer')",
+                "INSERT INTO sales_invoices VALUES ('invoice-a', 'org-a', 'customer-a', 'INV-00001', 750)",
+                "INSERT INTO sales_invoice_items VALUES ('item-a', 'org-a', 'invoice-a', 'product-a', 2)",
+                "INSERT INTO license_state VALUES ('license-a', 'org-a', 'backup-license')",
+                "INSERT INTO device_activations VALUES ('device-a', 'org-a', 'backup-device')",
+                "PRAGMA user_version = 11",
+            ] {
+                sqlx::query(statement)
+                    .execute(&mut connection)
+                    .await
+                    .expect("prepare representative backup fixture");
+            }
             connection.close().await.expect("close backup fixture");
 
             create_consistent_database_snapshot(&database_path, &snapshot_path)
                 .await
                 .expect("create consistent SQLite snapshot");
+            assert_eq!(
+                verify_backup_database(&snapshot_path, "org-a")
+                    .await
+                    .expect("verify representative backup"),
+                11
+            );
 
             let options = SqliteConnectOptions::new()
                 .filename(&database_path)
@@ -3741,10 +3829,18 @@ mod database_transaction_tests {
             let mut connection = SqliteConnection::connect_with(&options)
                 .await
                 .expect("open active fixture for mutation");
-            sqlx::query("UPDATE records SET value = 'changed-after-backup' WHERE id = 1")
-                .execute(&mut connection)
-                .await
-                .expect("mutate active fixture after backup");
+            for statement in [
+                "UPDATE products SET name = 'Changed Product', stock = 1 WHERE id = 'product-a'",
+                "DELETE FROM sales_invoice_items WHERE invoice_id = 'invoice-a'",
+                "DELETE FROM sales_invoices WHERE id = 'invoice-a'",
+                "UPDATE license_state SET signed_license_key = 'current-installation-license' WHERE id = 'license-a'",
+                "UPDATE device_activations SET device_id = 'current-installation-device' WHERE id = 'device-a'",
+            ] {
+                sqlx::query(statement)
+                    .execute(&mut connection)
+                    .await
+                    .expect("mutate active fixture after backup");
+            }
             connection.close().await.expect("close mutated fixture");
 
             restore_database_contents(&database_path, &snapshot_path)
@@ -3757,11 +3853,27 @@ mod database_transaction_tests {
             let mut connection = SqliteConnection::connect_with(&options)
                 .await
                 .expect("reopen restored fixture");
-            let restored: (String,) = sqlx::query_as("SELECT value FROM records WHERE id = 1")
-                .fetch_one(&mut connection)
-                .await
-                .expect("read restored row");
-            assert_eq!(restored.0, "backed-up");
+            let restored: (String, f64) =
+                sqlx::query_as("SELECT name, stock FROM products WHERE id = 'product-a'")
+                    .fetch_one(&mut connection)
+                    .await
+                    .expect("read restored row");
+            assert_eq!(restored, ("Backed-up Product".to_string(), 12.0));
+            let relationship_count: (i64,) = sqlx::query_as(
+                "SELECT COUNT(*) FROM sales_invoice_items item JOIN sales_invoices invoice ON invoice.id = item.invoice_id JOIN customers customer ON customer.id = invoice.customer_id WHERE item.id = 'item-a' AND customer.name = 'Backed-up Customer'",
+            )
+            .fetch_one(&mut connection)
+            .await
+            .expect("verify restored invoice relationships");
+            assert_eq!(relationship_count.0, 1);
+            let installation_state: (String, String) = sqlx::query_as(
+                "SELECT license_state.signed_license_key, device_activations.device_id FROM license_state CROSS JOIN device_activations",
+            )
+            .fetch_one(&mut connection)
+            .await
+            .expect("read preserved installation state");
+            assert_eq!(installation_state.0, "current-installation-license");
+            assert_eq!(installation_state.1, "current-installation-device");
             let integrity: (String,) = sqlx::query_as("PRAGMA quick_check")
                 .fetch_one(&mut connection)
                 .await
@@ -3770,6 +3882,24 @@ mod database_transaction_tests {
             connection.close().await.expect("close restored fixture");
         });
 
+        let _ = fs::remove_dir_all(fixture_root);
+    }
+
+    #[test]
+    fn corrupted_backup_database_is_rejected_before_restore() {
+        let fixture_root = std::env::temp_dir().join(format!(
+            "bezgrow-corrupt-backup-{}-{}",
+            std::process::id(),
+            unix_timestamp()
+        ));
+        fs::create_dir_all(&fixture_root).expect("create corrupt backup fixture");
+        let corrupt_path = fixture_root.join("database.sqlite");
+        fs::write(&corrupt_path, b"this is not sqlite").expect("write corrupt backup fixture");
+        tauri::async_runtime::block_on(async {
+            assert!(verify_backup_database(&corrupt_path, "org-a")
+                .await
+                .is_err());
+        });
         let _ = fs::remove_dir_all(fixture_root);
     }
 }

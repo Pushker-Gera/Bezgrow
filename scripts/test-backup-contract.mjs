@@ -36,6 +36,11 @@ assert.match(rust, /DesktopBackupManifest/, "Native backup packages need a manif
 assert.match(rust, /database_checksum_sha256/, "Native backup packages need a database checksum.");
 assert.match(rust, /pre_restore_backup_path/, "Native restore must create a pre-restore backup.");
 assert.match(rust, /BEGIN IMMEDIATE[\s\S]*ROLLBACK[\s\S]*COMMIT/, "Native restore must be transactional.");
+assert.match(rust, /name NOT IN \('schema_migrations', 'license_state', 'device_activations'\)/, "Restore must preserve installation-bound license and device identity.");
+assert.match(rust, /MAX_BACKUP_DATABASE_BYTES/, "Native restore must enforce a database extraction limit.");
+assert.match(rust, /entry\.size\(\) != manifest\.database_bytes/, "Native restore must reject database size mismatches before extraction.");
+assert.match(rust, /verify_backup_database\(&current_database, &organization_id\)/, "Native restore must verify the live database after commit.");
+assert.match(rust, /corrupted_backup_database_is_rejected_before_restore/, "Native restore needs a corrupt-database rejection test.");
 
 assert.match(schema, /CREATE TABLE IF NOT EXISTS backup_manifest/, "Backup manifest table is missing.");
 assert.match(schema, /idx_backup_org_created/, "Backup manifest created-at index is missing.");

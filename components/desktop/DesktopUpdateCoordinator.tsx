@@ -18,7 +18,11 @@ import {
   UPDATE_CHECK_EVENT,
   UPDATE_INSTALL_EVENT,
   autoUpdateDue,
+  clearPendingUpdateRestart,
   clearUpdateDecision,
+  markUpdatePendingRestart,
+  pendingUpdateHasLaunched,
+  readPendingUpdateRestart,
   readUpdateDecision,
   remindLater,
   scheduleUpdate,
@@ -30,6 +34,8 @@ import packageJson from "@/package.json"
 type InstallState = "idle" | "checking" | "preparing" | "downloading" | "installing" | "restarting" | "failed"
 
 const RECENT_EDIT_WINDOW_MS = 2 * 60 * 1000
+const UPDATE_CHECK_INTERVAL_MS = 6 * 60 * 60 * 1000
+const STARTUP_CHECK_DELAY_MS = 5_000
 
 function updateIsUnsafe(lastEditAt: number) {
   const path = window.location.pathname.toLowerCase()
@@ -45,7 +51,8 @@ function updateIsUnsafe(lastEditAt: number) {
 }
 
 function platformLabel() {
-  return /windows/i.test(navigator.userAgent) ? "Windows x64" : "macOS"
+  const architecture = typeof window !== "undefined" && (window as Window & { __BEZGROW_ARCH__?: string }).__BEZGROW_ARCH__ === "arm64" ? "arm64" : "x64"
+  return /windows/i.test(navigator.userAgent) ? `Windows ${architecture}` : `macOS ${architecture}`
 }
 
 export default function DesktopUpdateCoordinator() {
@@ -59,6 +66,7 @@ export default function DesktopUpdateCoordinator() {
   const lastEditAt = useRef(0)
   const checking = useRef(false)
   const installing = useRef(false)
+  const lastCheckedAt = useRef(0)
 
   const latestVersion = latestVersionForCurrentPlatform(manifest)
   const release = releaseForCurrentPlatform(manifest)
@@ -73,7 +81,13 @@ export default function DesktopUpdateCoordinator() {
     try {
       const installedVersion = await getVersion().catch(() => packageJson.version)
       setCurrentVersion(installedVersion)
+      const pendingRestart = readPendingUpdateRestart()
+      if (pendingRestart && pendingUpdateHasLaunched(pendingRestart, installedVersion)) {
+        const reported = await reportDesktopUpdateResult(installedVersion, "success")
+        if (reported) clearPendingUpdateRestart()
+      }
       const nextManifest = await fetchDesktopReleaseManifest(undefined, installedVersion)
+      lastCheckedAt.current = Date.now()
       if (nextManifest && isDesktopUpdateAvailable(nextManifest, installedVersion)) {
         const version = latestVersionForCurrentPlatform(nextManifest)
         const nextDecision = readUpdateDecision(version)
@@ -137,7 +151,7 @@ export default function DesktopUpdateCoordinator() {
         }
       }
       await updater.downloadAndInstall(onDownload, { timeout: 10 * 60_000 })
-      void reportDesktopUpdateResult(currentVersion, "success")
+      markUpdatePendingRestart(updater.version, currentVersion)
       setInstallState("restarting")
       setMessage("Update installed. Bezgrow will restart in 5 seconds; your local data and license remain in place.")
       await new Promise((resolve) => globalThis.setTimeout(resolve, 5_000))
@@ -165,15 +179,27 @@ export default function DesktopUpdateCoordinator() {
       const recordEdit = () => { lastEditAt.current = Date.now() }
       const handleCheck = () => { void checkForUpdate() }
       const handleInstall = () => { void installUpdate(false) }
+      const handleOnline = () => { void checkForUpdate() }
+      const handleVisibility = () => {
+        if (document.visibilityState === "visible" && Date.now() - lastCheckedAt.current >= UPDATE_CHECK_INTERVAL_MS) void checkForUpdate()
+      }
+      const startupTimer = globalThis.setTimeout(handleCheck, STARTUP_CHECK_DELAY_MS)
+      const periodicTimer = globalThis.setInterval(handleCheck, UPDATE_CHECK_INTERVAL_MS)
       window.addEventListener("input", recordEdit, true)
       window.addEventListener("change", recordEdit, true)
+      window.addEventListener("online", handleOnline)
+      document.addEventListener("visibilitychange", handleVisibility)
       window.addEventListener(UPDATE_CHECK_EVENT, handleCheck)
       window.addEventListener(UPDATE_INSTALL_EVENT, handleInstall)
       cleanup = () => {
         window.removeEventListener("input", recordEdit, true)
         window.removeEventListener("change", recordEdit, true)
+        window.removeEventListener("online", handleOnline)
+        document.removeEventListener("visibilitychange", handleVisibility)
         window.removeEventListener(UPDATE_CHECK_EVENT, handleCheck)
         window.removeEventListener(UPDATE_INSTALL_EVENT, handleInstall)
+        globalThis.clearTimeout(startupTimer)
+        globalThis.clearInterval(periodicTimer)
       }
     })
     return () => {

@@ -9,7 +9,7 @@ interface ShippingLabelProps {
     customerPhone: string
     customerAddress: string
 
-    orderNumber: string
+    invoiceNumber: string
 
     trackingNumber: string
 
@@ -24,7 +24,7 @@ export default function ShippingLabel({
     customerPhone,
     customerAddress,
 
-    orderNumber,
+    invoiceNumber,
 
     trackingNumber,
 
@@ -84,11 +84,11 @@ export default function ShippingLabel({
                 <div className="flex items-center justify-between">
 
                     <span className="text-sm text-gray-500">
-                        Order Number
+                        Invoice Number
                     </span>
 
                     <span className="font-semibold">
-                        {orderNumber}
+                        {invoiceNumber}
                     </span>
 
                 </div>

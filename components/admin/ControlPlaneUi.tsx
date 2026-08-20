@@ -123,7 +123,16 @@ export function useAdminList<T extends Record<string, unknown>>(
   }, [debouncedSearch, endpoint, filterKey, online, page, reloadToken])
 
   const reload = useCallback(() => setReloadToken((value) => value + 1), [])
-  return { data, loading, error, search, setSearch, page, setPage, total, metadata, reload }
+  const prepend = useCallback((row: T) => {
+    setData((current) => [row, ...current.filter((item) => item.id !== row.id)].slice(0, 25))
+    setTotal((current) => current + (data.some((item) => item.id === row.id) ? 0 : 1))
+  }, [data])
+  const upsert = useCallback((row: T) => {
+    setData((current) => current.some((item) => item.id === row.id)
+      ? current.map((item) => item.id === row.id ? row : item)
+      : [row, ...current].slice(0, 25))
+  }, [])
+  return { data, loading, error, search, setSearch, page, setPage, total, metadata, reload, prepend, upsert }
 }
 
 export async function adminMutation<T = Record<string, unknown>>(

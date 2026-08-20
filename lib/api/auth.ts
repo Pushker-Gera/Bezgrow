@@ -8,7 +8,6 @@ import {
 } from "@/lib/admin/schema-readiness"
 import { checkRateLimit, rateLimitKey } from "@/lib/security/rate-limit"
 import { adminSupabase } from "@/lib/supabase/admin"
-import { createServerSupabase } from "@/lib/supabase/server"
 import {
   PLATFORM_ADMIN_DEVICE_DENIED,
   verifyPlatformAdminDeviceRequest,
@@ -94,11 +93,7 @@ export async function getAuthenticatedUser(request: Request): Promise<User | nul
     const { data, error } = await adminSupabase.auth.getUser(token)
     if (!error && data.user) return data.user
   }
-
-  const supabase = await createServerSupabase()
-  const { data, error } = await supabase.auth.getUser()
-  if (error || !data.user) return null
-  return data.user
+  return null
 }
 
 export async function requireAdmin(request: Request): Promise<
@@ -130,11 +125,15 @@ export async function requireAdmin(request: Request): Promise<
     return { ok: false, status: 401, error: "Authentication required." }
   }
 
-  const { data: profile, error: profileError } = await adminSupabase
-    .from("profiles")
-    .select("id, role, is_suspended")
-    .eq("id", user.id)
-    .maybeSingle()
+  const [profileResult, device] = await Promise.all([
+    adminSupabase
+      .from("profiles")
+      .select("id, role, is_suspended")
+      .eq("id", user.id)
+      .maybeSingle(),
+    verifyPlatformAdminDeviceRequest(request, { adminUserId: user.id }),
+  ])
+  const { data: profile, error: profileError } = profileResult
 
   const isAdmin = isConfiguredAdmin(user.email, profile?.role)
 
@@ -146,7 +145,6 @@ export async function requireAdmin(request: Request): Promise<
     return { ok: false, status: 403, error: "Admin account is suspended." }
   }
 
-  const device = await verifyPlatformAdminDeviceRequest(request, { adminUserId: user.id })
   if (!device.ok) return device
 
   return {

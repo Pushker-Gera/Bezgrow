@@ -615,7 +615,7 @@ export default function InvoicesPage() {
           </div>
         </section>
 
-        <section className="grid grid-cols-1 gap-6 2xl:grid-cols-[1fr,420px]">
+        <section>
           <div className="overflow-hidden rounded-lg border border-white/10 bg-gradient-to-br from-zinc-950/95 to-black shadow-[0_0_80px_rgba(0,0,0,0.4)] sm:rounded-[36px]">
             <div className="flex flex-col gap-4 border-b border-white/10 p-4 md:flex-row md:items-center md:justify-between sm:p-6">
               <div>
@@ -651,124 +651,62 @@ export default function InvoicesPage() {
               </div>
             ) : (
               <>
-              <div className="space-y-3 p-4 lg:hidden">
-                {visibleInvoices.map((invoice) => (
-                  <article key={invoice.id} className="rounded-lg border border-white/10 bg-white/[0.045] p-4 shadow-xl">
-                    <div className="flex items-start justify-between gap-3">
-                      <div className="min-w-0">
-                        <h3 className="truncate text-base font-black text-white">{stringFrom(invoice, ["invoice_number"]) || "Invoice"}</h3>
-                        <p className="mt-1 truncate text-xs text-neutral-500">{invoice.customerName} | {formatDate(invoice.created_at)}</p>
-                      </div>
-                      <p className="shrink-0 text-right text-lg font-black text-cyan-200">{money(invoice.amount)}</p>
-                    </div>
-
-                    <div className="mt-4 grid grid-cols-2 gap-3 text-sm">
-                      <div className="rounded-lg border border-white/10 bg-black/30 p-3">
-                        <p className="text-xs text-neutral-500">Payment</p>
-                        <p className={`mt-2 inline-flex rounded-full border px-3 py-1 text-xs font-bold capitalize ${statusClass(invoice.statusLabel)}`}>
-                          {savingId === invoice.id ? "Saving..." : invoice.statusLabel}
-                        </p>
-                      </div>
-                      <div className="rounded-lg border border-white/10 bg-black/30 p-3">
-                        <p className="text-xs text-neutral-500">Due</p>
-                        <p className={`mt-1 font-semibold capitalize ${invoice.dueState === "overdue" ? "text-red-300" : invoice.dueState === "due-soon" ? "text-amber-300" : "text-neutral-100"}`}>
-                          {invoice.dueState.replace("-", " ")}
-                        </p>
-                      </div>
-                      <div className="rounded-lg border border-white/10 bg-black/30 p-3">
-                        <p className="text-xs text-neutral-500">Items</p>
-                        <p className="mt-1 font-black text-white">{invoice.itemCount} lines</p>
-                      </div>
-                      <div className="rounded-lg border border-white/10 bg-black/30 p-3">
-                        <p className="text-xs text-neutral-500">Tax</p>
-                        <p className="mt-1 font-black text-sky-200">{money(invoice.tax)}</p>
-                      </div>
-                    </div>
-
-                    <div className="mt-4">
-                      <SelectShell
-                        label="Payment status"
-                        value={invoice.statusLabel}
-                        onChange={(value) => void updatePaymentStatus(invoice.id, value)}
-                      >
-                        <option value="unpaid">Unpaid</option>
-                        <option value="partial">Partial</option>
-                        <option value="paid">Paid</option>
-                        <option value="cancelled">Cancelled</option>
-                      </SelectShell>
-                    </div>
-
-                    <div className="mt-4 grid grid-cols-2 gap-2">
-                      <Link href={`/dashboard/invoices/${invoice.id}`} className="flex min-h-11 items-center justify-center rounded-lg border border-white/10 bg-white/[0.05] text-sm font-bold text-neutral-100">
-                        View
-                      </Link>
-                      <Link href={`/dashboard/invoices/${invoice.id}/print`} className="flex min-h-11 items-center justify-center rounded-lg bg-white text-sm font-black text-black">
-                        Print
-                      </Link>
-                    </div>
-                  </article>
-                ))}
-              </div>
-
-              <div className="hidden overflow-x-auto lg:block">
-                <table className="w-full min-w-[1080px]">
-                  <thead className="border-b border-white/10 bg-white/[0.03]">
+              <div className="overflow-x-auto">
+                <table className="w-full min-w-[1120px] text-sm">
+                  <thead className="sticky top-0 z-10 border-b border-white/10 bg-zinc-950">
                     <tr className="text-left text-xs uppercase tracking-[0.18em] text-neutral-500">
-                      <th className="px-6 py-4">Invoice</th>
-                      <th className="px-6 py-4">Customer</th>
-                      <th className="px-6 py-4">Status</th>
-                      <th className="px-6 py-4">Items</th>
-                      <th className="px-6 py-4">Due</th>
-                      <th className="px-6 py-4 text-right">Amount</th>
-                      <th className="px-6 py-4 text-right">Actions</th>
+                      <th className="px-4 py-3">Invoice #</th>
+                      <th className="px-4 py-3">Date</th>
+                      <th className="px-4 py-3">Customer</th>
+                      <th className="px-4 py-3">Status</th>
+                      <th className="px-4 py-3 text-right">Total</th>
+                      <th className="px-4 py-3 text-right">Paid</th>
+                      <th className="px-4 py-3 text-right">Due</th>
+                      <th className="px-4 py-3 text-right">Actions</th>
                     </tr>
                   </thead>
                   <tbody>
                     {visibleInvoices.map((invoice) => (
                       <tr key={invoice.id} className="border-b border-white/5 transition-colors duration-300 hover:bg-cyan-500/[0.035]">
-                        <td className="px-6 py-5">
+                        <td className="px-4 py-3">
                           <p className="font-bold text-white">{stringFrom(invoice, ["invoice_number"]) || "Invoice"}</p>
-                          <p className="mt-1 text-xs text-neutral-500">{formatDate(invoice.created_at)}</p>
                         </td>
-                        <td className="px-6 py-5">
+                        <td className="whitespace-nowrap px-4 py-3 text-neutral-300">
+                          {formatDate(stringFrom(invoice, ["invoice_date", "date", "created_at"]))}
+                        </td>
+                        <td className="px-4 py-3">
                           <p className="font-semibold text-white">{invoice.customerName}</p>
-                          <p className="mt-1 text-xs text-neutral-500">{stringFrom(invoice, ["payment_method"]) || "No method"}</p>
                         </td>
-                        <td className="px-6 py-5">
-                          <SelectShell
-                            label="Payment status"
+                        <td className="px-4 py-3">
+                          <span className={`inline-flex rounded-full border px-3 py-1 text-xs font-semibold capitalize ${statusClass(invoice.statusLabel)}`}>
+                            {savingId === invoice.id ? "Saving..." : invoice.statusLabel}
+                          </span>
+                        </td>
+                        <td className="px-4 py-3 text-right font-bold text-cyan-100">{money(invoice.amount)}</td>
+                        <td className="px-4 py-3 text-right text-emerald-200">
+                          {money(numberFrom(invoice, ["paid_amount"]) || (invoice.statusLabel === "paid" ? invoice.amount : 0))}
+                        </td>
+                        <td className="px-4 py-3 text-right text-amber-200">
+                          {money(numberFrom(invoice, ["outstanding_amount"]) || Math.max(0, invoice.amount - (numberFrom(invoice, ["paid_amount"]) || (invoice.statusLabel === "paid" ? invoice.amount : 0))))}
+                        </td>
+                        <td className="px-4 py-3">
+                          <div className="flex items-center justify-end gap-2">
+                            <select
+                            aria-label={`Update payment status for ${stringFrom(invoice, ["invoice_number"]) || "invoice"}`}
                             value={invoice.statusLabel}
-                            onChange={(value) => void updatePaymentStatus(invoice.id, value)}
+                            disabled={savingId === invoice.id}
+                            onChange={(event) => void updatePaymentStatus(invoice.id, event.target.value)}
+                            className="h-9 rounded-lg border border-white/10 bg-black px-2 text-xs font-semibold text-white outline-none focus:border-cyan-300/60 disabled:opacity-50"
                           >
                             <option value="unpaid">Unpaid</option>
                             <option value="partial">Partial</option>
                             <option value="paid">Paid</option>
                             <option value="cancelled">Cancelled</option>
-                          </SelectShell>
-                          <p className={`mt-2 inline-flex rounded-full border px-3 py-1 text-xs font-semibold capitalize ${statusClass(invoice.statusLabel)}`}>
-                            {savingId === invoice.id ? "Saving..." : invoice.statusLabel}
-                          </p>
-                        </td>
-                        <td className="px-6 py-5 text-sm text-neutral-300">
-                          <p>{invoice.itemCount} lines</p>
-                          <p className="mt-1 text-xs text-neutral-500">{invoice.totalQuantity} units</p>
-                        </td>
-                        <td className="px-6 py-5">
-                          <p className="text-sm text-white">{formatDate(stringFrom(invoice, ["due_date"]))}</p>
-                          <p className={`mt-1 text-xs capitalize ${invoice.dueState === "overdue" ? "text-red-300" : invoice.dueState === "due-soon" ? "text-amber-300" : "text-neutral-500"}`}>
-                            {invoice.dueState.replace("-", " ")}
-                          </p>
-                        </td>
-                        <td className="px-6 py-5 text-right">
-                          <p className="text-xl font-black text-cyan-200">{money(invoice.amount)}</p>
-                          <p className="mt-1 text-xs text-neutral-500">Tax {money(invoice.tax)}</p>
-                        </td>
-                        <td className="px-6 py-5">
-                          <div className="flex justify-end gap-2">
-                            <Link href={`/dashboard/invoices/${invoice.id}`} className="rounded-xl border border-white/10 px-4 py-2 text-sm font-semibold text-white hover:border-cyan-400/30">
+                          </select>
+                            <Link href={`/dashboard/invoices/${invoice.id}`} className="rounded-lg border border-white/10 px-3 py-2 text-xs font-semibold text-white hover:border-cyan-400/30">
                               View
                             </Link>
-                            <Link href={`/dashboard/invoices/${invoice.id}/print`} className="rounded-xl bg-white px-4 py-2 text-sm font-bold text-black hover:bg-cyan-100">
+                            <Link href={`/dashboard/invoices/${invoice.id}/print`} className="rounded-lg bg-white px-3 py-2 text-xs font-bold text-black hover:bg-cyan-100">
                               Print
                             </Link>
                           </div>
@@ -782,44 +720,6 @@ export default function InvoicesPage() {
             )}
           </div>
 
-          <aside className="space-y-6">
-            <div className="rounded-[36px] border border-cyan-400/20 bg-cyan-500/10 p-7 shadow-[0_0_60px_rgba(34,211,238,0.12)]">
-              <h3 className="text-2xl font-black">Billing Tools</h3>
-              <div className="mt-6 space-y-4 text-sm text-neutral-300">
-                {[
-                  "Invoice creation with product and stock integration",
-                  "GST/tax visibility and export-ready registers",
-                  "Payment status workflow for unpaid, partial, paid, cancelled",
-                  "A4, half-A4, and thermal print routes",
-                  "Customer ledger and collection risk tracking",
-                  "CSV export for accountants and operations teams",
-                ].map((feature) => (
-                  <div key={feature} className="rounded-2xl border border-white/10 bg-black/30 p-4">
-                    {feature}
-                  </div>
-                ))}
-              </div>
-            </div>
-
-            <div className="rounded-[36px] border border-white/10 bg-white/[0.035] p-7 backdrop-blur-2xl">
-              <h3 className="text-2xl font-black">Billing Readiness</h3>
-              <div className="mt-6 space-y-4">
-                {[
-                  ["Payment collection", analytics.collectionRate >= 70],
-                  ["Tax ledger", analytics.tax > 0],
-                  ["Customer mapping", customers.length > 0],
-                  ["Invoice engine", analytics.invoiceCount > 0],
-                ].map(([label, ready]) => (
-                  <div key={String(label)} className="flex items-center justify-between rounded-2xl border border-white/10 bg-black/30 px-4 py-4">
-                    <span className="text-sm font-semibold text-white">{label}</span>
-                    <span className={`rounded-full px-3 py-1 text-xs font-bold ${ready ? "bg-emerald-500/15 text-emerald-200" : "bg-amber-500/15 text-amber-200"}`}>
-                      {ready ? "Ready" : "Needs data"}
-                    </span>
-                  </div>
-                ))}
-              </div>
-            </div>
-          </aside>
         </section>
       </main>
       {exportKind && organizationId && (

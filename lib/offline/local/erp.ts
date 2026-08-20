@@ -216,23 +216,48 @@ function updateBatchesForStock(batches: DataRow[], items: DataRow[], stockSign: 
   for (const item of items) {
     const productId = localString(item.product_id)
     const batchNo = localString(item.batch_no)
-    if (!productId || !batchNo) continue
+    if (!productId) continue
     const warehouseId = localString(item.warehouse_id, "default")
+    const itemQuantity = Math.max(0, localNumber(item.quantity))
+
+    if (!batchNo && stockSign < 0) {
+      let remaining = itemQuantity
+      const fifoLots = nextBatches
+        .filter((row) => row.product_id === productId && localNumber(row.quantity) > 0)
+        .sort((left, right) =>
+          localString(left.purchase_date, localString(left.created_at, "9999")).localeCompare(
+            localString(right.purchase_date, localString(right.created_at, "9999"))
+          )
+        )
+      for (const lot of fifoLots) {
+        if (remaining <= 0) break
+        const consumed = Math.min(remaining, localNumber(lot.quantity))
+        remaining -= consumed
+        nextBatches = upsertRow(nextBatches, {
+          ...lot,
+          quantity: Math.max(0, localNumber(lot.quantity) - consumed),
+          sync_status: "pending_update",
+          updated_at: now,
+        })
+      }
+      continue
+    }
+
     const current = nextBatches.find(
-      (row) => row.product_id === productId && localString(row.batch_no) === batchNo && localString(row.warehouse_id, "default") === warehouseId
+      (row) => Boolean(batchNo) && row.product_id === productId && localString(row.batch_no) === batchNo && localString(row.warehouse_id, "default") === warehouseId
     )
     const previousQuantity = localNumber(current?.quantity)
-    const nextQuantity = money(previousQuantity + localNumber(item.quantity) * stockSign)
-    if (nextQuantity < -0.0001) throw new Error(`Batch ${batchNo} cannot go below zero stock.`)
+    const nextQuantity = money(previousQuantity + itemQuantity * stockSign)
+    if (nextQuantity < -0.0001) throw new Error(`Batch ${batchNo || "lot"} cannot go below zero stock.`)
     const batch = {
       ...current,
       id: localString(current?.id) || createOfflineId("stock-batch"),
       organization_id: organizationId,
       product_id: productId,
       warehouse_id: localString(item.warehouse_id) || null,
-      batch_no: batchNo,
-      expiry_date: localString(item.expiry_date),
-      purchase_date: now.slice(0, 10),
+      batch_no: batchNo || null,
+      expiry_date: localString(item.expiry_date) || current?.expiry_date || null,
+      purchase_date: localString(item.purchase_date) || current?.purchase_date || null,
       quantity: Math.max(0, nextQuantity),
       purchase_rate: item.unit_cost ?? current?.purchase_rate ?? null,
       mrp: item.mrp ?? current?.mrp ?? null,
@@ -861,14 +886,27 @@ export async function createInventoryMovement(organizationId: string, input: Dat
   }
   const nextStock = money(previousStock + delta)
   if (nextStock < -0.0001) throw new Error("Stock cannot go below zero.")
+  const explicitPurchaseRate = input.purchase_rate === null || input.purchase_rate === undefined || input.purchase_rate === ""
+    ? null
+    : localNumber(input.purchase_rate, Number.NaN)
+  const nextPurchaseRate =
+    delta > 0 && explicitPurchaseRate !== null && Number.isFinite(explicitPurchaseRate) && explicitPurchaseRate >= 0
+      ? previousStock > 0
+        ? (previousStock * Math.max(0, localNumber(product.purchase_rate)) + delta * explicitPurchaseRate) / nextStock
+        : explicitPurchaseRate
+      : product.purchase_rate
+  const isTransfer = type === "transfer" || type === "stock_transfer"
+  const targetWarehouseId = input.target_warehouse_id || input.warehouse_id || null
+  const sourceWarehouseId = input.source_warehouse_id || product.warehouse_id || null
   const nextProducts = products.map((row) =>
     row.id === productId
       ? {
           ...row,
           stock: nextStock,
-          warehouse_id: input.target_warehouse_id || input.warehouse_id || row.warehouse_id || null,
+          warehouse_id: isTransfer ? targetWarehouseId || row.warehouse_id || null : input.warehouse_id || row.warehouse_id || null,
           batch_no: input.batch_no || row.batch_no || null,
           expiry_date: input.expiry_date || row.expiry_date || null,
+          purchase_rate: nextPurchaseRate,
           sync_status: "pending_update",
           updated_at: now,
         }
@@ -880,7 +918,7 @@ export async function createInventoryMovement(organizationId: string, input: Dat
       organization_id: organizationId,
       product_id: productId,
       product_name: product.name || "",
-      warehouse_id: input.warehouse_id || input.target_warehouse_id || null,
+      warehouse_id: isTransfer ? sourceWarehouseId : input.warehouse_id || input.target_warehouse_id || null,
       type,
       quantity: delta,
       previous_stock: previousStock,
@@ -895,10 +933,10 @@ export async function createInventoryMovement(organizationId: string, input: Dat
       updated_at: now,
     },
   ]
-  if (type === "transfer" || type === "stock_transfer") {
+  if (isTransfer) {
     movementRows[0].quantity = -quantity
     movementRows[0].new_stock = previousStock
-    movementRows.push({ ...movementRows[0], id: createOfflineId("stock-movement"), warehouse_id: input.target_warehouse_id || null, quantity, reason: "Stock transfer received" })
+    movementRows.push({ ...movementRows[0], id: createOfflineId("stock-movement"), warehouse_id: targetWarehouseId, quantity, reason: "Stock transfer received" })
   }
 
   const batchInput = {
@@ -906,12 +944,13 @@ export async function createInventoryMovement(organizationId: string, input: Dat
     warehouse_id: input.warehouse_id || input.target_warehouse_id || null,
     batch_no: input.batch_no || null,
     expiry_date: input.expiry_date || null,
+    purchase_date: input.purchase_date || null,
     quantity,
-    unit_cost: input.purchase_rate || product.purchase_rate || null,
+    unit_cost: explicitPurchaseRate ?? product.purchase_rate ?? null,
     mrp: input.mrp || product.mrp || null,
     barcode: input.barcode || product.barcode || null,
   }
-  const nextBatches = input.batch_no && delta !== 0 ? updateBatchesForStock(batches, [batchInput], delta > 0 ? 1 : -1, organizationId, now) : batches
+  const nextBatches = delta !== 0 ? updateBatchesForStock(batches, [batchInput], delta > 0 ? 1 : -1, organizationId, now) : batches
 
   await writeCollections(organizationId, [
     { collection: "products", value: nextProducts },
