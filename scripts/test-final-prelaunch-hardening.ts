@@ -26,6 +26,8 @@ const products = read("app/dashboard/products/page.tsx")
 const settings = read("app/dashboard/settings/page.tsx")
 
 assert.match(inventory, /label: "Inventory Cost"/)
+assert.match(inventory, /label: "Inventory Value"/, "Inventory Cost must not replace the existing selling-value metric")
+assert.match(inventory, /inventoryCost: calculateInventoryCost\(\[product\], cachedBatches\)/)
 assert.match(inventory, /purchase_date: mode === "add" \? purchaseDate \|\| null : null/)
 assert.match(inventory, /purchase_rate: mode === "add" \? parsedPurchaseRate : null/)
 assert.doesNotMatch(localErp, /purchase_date: now\.slice\(0, 10\)/, "Optional purchase dates must not be silently fabricated")

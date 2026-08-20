@@ -38,6 +38,7 @@ type InventoryProduct = ProductRow & {
     currentStock: number
     soldQuantity: number
     inventoryValue: number
+    inventoryCost: number
     warehouseName: string
 }
 
@@ -89,6 +90,7 @@ type InventoryStats = {
     soldUnits: number
     totalInvoices: number
     invoiceRevenue: number
+    inventoryValue: number
     inventoryCost: number
 }
 
@@ -127,6 +129,7 @@ const emptyStats: InventoryStats = {
     soldUnits: 0,
     totalInvoices: 0,
     invoiceRevenue: 0,
+    inventoryValue: 0,
     inventoryCost: 0,
 }
 
@@ -220,13 +223,14 @@ export default function InventoryPage() {
                 })
                 .reduce((sum, item) => sum + Number(item.quantity || 0), 0)
             const currentStock = Number(product.stock || 0)
-            const unitCost = Number(product.purchase_rate || 0)
+            const unitValue = Number(product.sale_rate || product.price || product.purchase_rate || 0)
 
             return {
                 ...product,
                 currentStock,
                 soldQuantity,
-                inventoryValue: currentStock * unitCost,
+                inventoryValue: currentStock * unitValue,
+                inventoryCost: calculateInventoryCost([product], cachedBatches),
                 warehouseName:
                     warehouseNameById.get(product.warehouse_id || "") ||
                     product.warehouse ||
@@ -243,6 +247,10 @@ export default function InventoryPage() {
         )
         const soldUnits = invoiceItems.reduce(
             (sum, item) => sum + Number(item.quantity || 0),
+            0
+        )
+        const inventoryValue = normalizedProducts.reduce(
+            (sum, product) => sum + product.inventoryValue,
             0
         )
         const inventoryCost = calculateInventoryCost(productRows, cachedBatches)
@@ -292,6 +300,7 @@ export default function InventoryPage() {
             soldUnits,
             totalInvoices: invoiceRows.length,
             invoiceRevenue,
+            inventoryValue,
             inventoryCost,
         })
         setWarehouseStats(
@@ -522,6 +531,7 @@ export default function InventoryPage() {
             soldQuantity: product.soldQuantity,
             warehouse: product.warehouseName,
             inventoryValue: product.inventoryValue,
+            inventoryCost: product.inventoryCost,
             expiryDate: product.expiry_date || "",
         }))
         try {
@@ -534,7 +544,8 @@ export default function InventoryPage() {
                 { header: "Minimum Stock", value: "minimumStock" },
                 { header: "Sold Quantity", value: "soldQuantity" },
                 { header: "Warehouse", value: "warehouse" },
-                { header: "Inventory Cost", value: "inventoryValue" },
+                { header: "Inventory Value", value: "inventoryValue" },
+                { header: "Inventory Cost", value: "inventoryCost" },
                 { header: "Expiry Date", value: "expiryDate" },
             ], rows)
             if (result) setNotice(`Inventory exported to ${result.path || result.filename}.`)
@@ -642,11 +653,18 @@ export default function InventoryPage() {
             meta: `${stats.totalInvoices} billed invoices`,
         },
         {
+            label: "Inventory Value",
+            value: "",
+            moneyValue: stats.inventoryValue,
+            accent: "from-violet-200 to-purple-500",
+            meta: "Current stock at selling value",
+        },
+        {
             label: "Inventory Cost",
             value: "",
             moneyValue: stats.inventoryCost,
             accent: "from-emerald-200 to-green-500",
-            meta: `${money(stats.invoiceRevenue)} invoice revenue`,
+            meta: "Current stock at purchase cost",
         },
     ]
 
@@ -854,7 +872,11 @@ export default function InventoryPage() {
                                             </div>
                                             <div className="rounded-lg border border-white/10 bg-black/30 p-3">
                                                 <p className="text-xs text-neutral-500">Value</p>
-                                                <p className="mt-1 font-black text-emerald-200">{money(product.inventoryValue)}</p>
+                                                <p className="mt-1 font-black text-violet-200">{money(product.inventoryValue)}</p>
+                                            </div>
+                                            <div className="rounded-lg border border-white/10 bg-black/30 p-3">
+                                                <p className="text-xs text-neutral-500">Cost</p>
+                                                <p className="mt-1 font-black text-emerald-200">{money(product.inventoryCost)}</p>
                                             </div>
                                         </div>
                                     </article>
@@ -863,7 +885,7 @@ export default function InventoryPage() {
                         </div>
 
                         <div className="mt-4 hidden overflow-x-auto lg:block">
-                            <table className="w-full min-w-[980px] border-separate border-spacing-y-2 text-sm">
+                            <table className="w-full min-w-[1080px] border-separate border-spacing-y-2 text-sm">
                                 <thead className="text-left text-xs uppercase tracking-[0.16em] text-neutral-500">
                                     <tr>
                                         <th className="px-3 py-2">Product</th>
@@ -872,6 +894,7 @@ export default function InventoryPage() {
                                         <th className="px-3 py-2">Minimum</th>
                                         <th className="px-3 py-2">Sold</th>
                                         <th className="px-3 py-2">Warehouse</th>
+                                        <th className="px-3 py-2">Value</th>
                                         <th className="px-3 py-2">Cost</th>
                                         <th className="px-3 py-2">Expiry</th>
                                     </tr>
@@ -879,7 +902,7 @@ export default function InventoryPage() {
                                 <tbody>
                                     {filteredProducts.length === 0 && (
                                         <tr>
-                                            <td colSpan={8} className="rounded-lg border border-white/10 bg-white/[0.03] py-12 text-center text-neutral-500">
+                                            <td colSpan={9} className="rounded-lg border border-white/10 bg-white/[0.03] py-12 text-center text-neutral-500">
                                                 No inventory products found.
                                             </td>
                                         </tr>
@@ -920,8 +943,11 @@ export default function InventoryPage() {
                                                 <td className="px-3 py-4 text-neutral-300">
                                                     {product.warehouseName}
                                                 </td>
-                                                <td className="px-3 py-4 font-semibold text-emerald-200">
+                                                <td className="px-3 py-4 font-semibold text-violet-200">
                                                     {money(product.inventoryValue)}
+                                                </td>
+                                                <td className="px-3 py-4 font-semibold text-emerald-200">
+                                                    {money(product.inventoryCost)}
                                                 </td>
                                                 <td className="rounded-r-lg px-3 py-4 text-neutral-400">
                                                     {formatDate(product.expiry_date)}
