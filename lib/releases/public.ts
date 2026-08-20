@@ -136,6 +136,9 @@ export type PublicDesktopReleaseAvailability = {
 const downloadsDirectory = join(process.cwd(), "public", "downloads")
 const desktopManifestPath = join(downloadsDirectory, "desktop-release.json")
 const RELEASE_METADATA_TIMEOUT_MS = 8_000
+const RELEASE_SELECT_BASE = "id,version,build_number,platform,architecture,release_channel,release_status,active,rollout_percentage,minimum_supported_version,release_notes,mandatory,published_at,created_at,build_commit,build_timestamp,release_artifacts(file_url,file_size,sha256,validation_status,validation_error,signature_status,notarization_status,code_signing_status,validated_at,artifact_type,file_name)"
+const RELEASE_SELECT_LEGACY = "id,version,build_number,platform,architecture,release_channel,release_status,active,rollout_percentage,minimum_supported_version,release_notes,mandatory,published_at,created_at,release_artifacts(file_url,file_size,sha256,validation_status,validation_error,signature_status,notarization_status,code_signing_status,validated_at,artifact_type,file_name)"
+const RELEASE_SELECT_WITH_UPDATER = "id,version,build_number,platform,architecture,release_channel,release_status,active,rollout_percentage,minimum_supported_version,release_notes,mandatory,published_at,created_at,build_commit,build_timestamp,release_artifacts(file_url,file_size,sha256,validation_status,validation_error,signature_status,notarization_status,code_signing_status,validated_at,artifact_type,file_name,updater_url,updater_size,updater_sha256,update_signature,updater_signature_status)"
 
 function withMetadataTimeout<T>(operation: PromiseLike<T>) {
   return new Promise<T>((resolve, reject) => {
@@ -617,11 +620,23 @@ export async function getDesktopReleaseAvailability(): Promise<PublicDesktopRele
   let rows: ReleaseRow[] = []
   let controlPlaneError: string | null = null
   try {
-    const result = await withMetadataTimeout(adminSupabase
+    const query = (columns: string) => adminSupabase
       .from("desktop_releases")
-      .select("id,version,build_number,platform,architecture,release_channel,release_status,active,rollout_percentage,minimum_supported_version,release_notes,mandatory,published_at,created_at,build_commit,build_timestamp,release_artifacts(file_url,file_size,sha256,validation_status,validation_error,signature_status,notarization_status,code_signing_status,validated_at,artifact_type,file_name,updater_url,updater_size,updater_sha256,update_signature,updater_signature_status)")
+      .select(columns)
       .order("created_at", { ascending: false })
-      .limit(64))
+      .limit(64)
+    let result = await withMetadataTimeout(query(RELEASE_SELECT_WITH_UPDATER))
+    if (result.error && ["42703", "PGRST204"].includes(result.error.code)) {
+      // Updater columns are additive. Older control-plane schemas can still
+      // provide authoritative installer metadata for the assisted path.
+      result = await withMetadataTimeout(query(RELEASE_SELECT_BASE))
+    }
+    if (result.error && ["42703", "PGRST204"].includes(result.error.code)) {
+      // Build provenance is mandatory in checked-in public metadata, but the
+      // control-plane migration may lag the website deployment. In that case
+      // control-plane rows supplement, rather than replace, the verified file.
+      result = await withMetadataTimeout(query(RELEASE_SELECT_LEGACY))
+    }
     if (result.error) {
       controlPlaneError = "The release control plane is temporarily unavailable; integrity-verified fallback metadata remains active."
       console.error("[public-release-availability]", {
@@ -629,7 +644,7 @@ export async function getDesktopReleaseAvailability(): Promise<PublicDesktopRele
         message: result.error.message,
       })
     } else {
-      rows = (result.data || []) as ReleaseRow[]
+      rows = (result.data || []) as unknown as ReleaseRow[]
     }
   } catch (error) {
     controlPlaneError =

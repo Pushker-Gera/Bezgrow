@@ -3,6 +3,7 @@ import "server-only"
 import { createHash } from "node:crypto"
 import { z } from "zod"
 import { authenticateDeviceReport } from "@/lib/device/report-auth"
+import { getDesktopReleaseAvailability } from "@/lib/releases/public"
 import { adminSupabase } from "@/lib/supabase/admin"
 
 export const dynamic = "force-dynamic"
@@ -22,6 +23,38 @@ const checkinSchema = z.object({
   update_check_result: z.enum(["success", "failed", "no_update", "update_available"]).optional(),
   diagnostics_available: z.boolean().default(false),
 }).strict()
+
+type CheckinReleaseArtifact = {
+  file_url?: string | null
+  file_size?: number | null
+  sha256?: string | null
+  validation_status?: string | null
+  signature_status?: string | null
+  notarization_status?: string | null
+  code_signing_status?: string | null
+  validated_at?: string | null
+  artifact_type?: string | null
+  file_name?: string | null
+  updater_url?: string | null
+  updater_size?: number | null
+  updater_sha256?: string | null
+  update_signature?: string | null
+  updater_signature_status?: string | null
+}
+
+type CheckinRelease = {
+  id: string
+  version: string
+  build_number: string
+  mandatory: boolean
+  mandatory_after?: string | null
+  rollout_percentage: number
+  minimum_supported_version?: string | null
+  release_notes?: string | null
+  published_at?: string | null
+  release_channel?: string | null
+  release_artifacts?: CheckinReleaseArtifact[]
+}
 
 function compareVersions(left: string, right: string) {
   const parts = (value: string) => value.split(/[.-]/).slice(0, 3).map((part) => Number.parseInt(part, 10) || 0)
@@ -226,9 +259,9 @@ export async function POST(request: Request) {
     }
     if (!registeredDevice) throw new Error("Device registration did not return a device record.")
 
-    const releaseResult = await adminSupabase
+    const releaseQuery = (columns: string) => adminSupabase
       .from("desktop_releases")
-      .select("id,version,build_number,mandatory,mandatory_after,rollout_percentage,minimum_supported_version,release_notes,published_at,release_channel,release_artifacts(file_url,file_size,sha256,validation_status,signature_status,notarization_status,code_signing_status,validated_at,artifact_type,file_name,updater_url,updater_size,updater_sha256,update_signature,updater_signature_status)")
+      .select(columns)
       .eq("platform", input.platform)
       .eq("architecture", storageArchitecture)
       .in("release_channel", [...new Set([input.release_channel, "stable", "manual", "internal"])])
@@ -236,8 +269,16 @@ export async function POST(request: Request) {
       .eq("active", true)
       .order("published_at", { ascending: false })
       .limit(5)
+    let releaseResult = await releaseQuery("id,version,build_number,mandatory,mandatory_after,rollout_percentage,minimum_supported_version,release_notes,published_at,release_channel,release_artifacts(file_url,file_size,sha256,validation_status,signature_status,notarization_status,code_signing_status,validated_at,artifact_type,file_name,updater_url,updater_size,updater_sha256,update_signature,updater_signature_status)")
+    if (releaseResult.error && ["42703", "PGRST204"].includes(releaseResult.error.code)) {
+      releaseResult = await releaseQuery("id,version,build_number,mandatory,mandatory_after,rollout_percentage,minimum_supported_version,release_notes,published_at,release_channel,release_artifacts(file_url,file_size,sha256,validation_status,signature_status,notarization_status,code_signing_status,validated_at,artifact_type,file_name)")
+    }
+    if (releaseResult.error && ["42703", "PGRST204"].includes(releaseResult.error.code)) {
+      releaseResult = await releaseQuery("id,version,build_number,mandatory,rollout_percentage,minimum_supported_version,release_notes,published_at,release_channel,release_artifacts(file_url,file_size,sha256,validation_status,signature_status,notarization_status,code_signing_status,validated_at,artifact_type,file_name)")
+    }
     if (releaseResult.error) throw releaseResult.error
-    const eligibleRelease = (releaseResult.data || []).find((release) => {
+    const releaseRows = (releaseResult.data || []) as unknown as CheckinRelease[]
+    const eligibleRelease = releaseRows.find((release) => {
       const validArtifacts = Array.isArray(release.release_artifacts)
         ? release.release_artifacts.filter(
             (entry) =>
@@ -257,7 +298,7 @@ export async function POST(request: Request) {
         Boolean(artifact)
       )
     }) || null
-    const update = eligibleRelease
+    let update: CheckinRelease | null = eligibleRelease
       ? {
           ...eligibleRelease,
           release_artifacts: Array.isArray(eligibleRelease.release_artifacts)
@@ -284,6 +325,57 @@ export async function POST(request: Request) {
             ),
         }
       : null
+
+    if (!update) {
+      const publicAvailability = await getDesktopReleaseAvailability()
+      const publicInstaller = input.platform === "macos"
+        ? publicAvailability.mac.installer
+        : publicAvailability.windows.installer
+      const installerArchitecture = publicInstaller?.architecture === "x86_64"
+        ? "x64"
+        : publicInstaller?.architecture
+      if (
+        publicInstaller?.available &&
+        publicInstaller.version &&
+        publicInstaller.downloadUrl &&
+        publicInstaller.size &&
+        publicInstaller.sha256 &&
+        installerArchitecture === storageArchitecture &&
+        compareVersions(publicInstaller.version, input.app_version) > 0
+      ) {
+        update = {
+          id: `public-${input.platform}-${storageArchitecture}-${publicInstaller.version}`,
+          version: publicInstaller.version,
+          build_number: publicInstaller.buildNumber || "public-manifest",
+          mandatory: publicInstaller.mandatory,
+          mandatory_after: null,
+          rollout_percentage: 100,
+          minimum_supported_version: publicInstaller.minimumSupportedVersion,
+          release_notes: publicInstaller.releaseNotes,
+          published_at: publicInstaller.releaseDate || publicInstaller.generatedAt,
+          release_channel: publicInstaller.releaseChannel,
+          release_artifacts: [{
+            file_url: publicInstaller.downloadUrl,
+            file_size: publicInstaller.size,
+            sha256: publicInstaller.sha256,
+            validation_status: "valid",
+            signature_status: publicInstaller.signed ? "valid" : "invalid",
+            notarization_status: input.platform === "macos"
+              ? publicInstaller.notarized ? "valid" : "invalid"
+              : "not_applicable",
+            code_signing_status: publicInstaller.signed ? "valid" : "invalid",
+            validated_at: publicInstaller.generatedAt,
+            artifact_type: publicInstaller.artifactType,
+            file_name: publicInstaller.filename,
+            updater_url: publicInstaller.updaterUrl,
+            updater_size: publicInstaller.updaterSize,
+            updater_sha256: publicInstaller.updaterSha256,
+            update_signature: publicInstaller.updateSignature,
+            updater_signature_status: publicInstaller.updaterSignatureVerified ? "valid" : "missing",
+          }],
+        }
+      }
+    }
 
     return Response.json(
       {

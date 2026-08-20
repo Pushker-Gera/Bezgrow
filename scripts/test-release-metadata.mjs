@@ -4,10 +4,15 @@ import { existsSync, readFileSync, statSync } from "node:fs"
 
 const manifest = JSON.parse(readFileSync("public/downloads/desktop-release.json", "utf8"))
 const manifestWriter = readFileSync("scripts/write-desktop-release-manifest.mjs", "utf8")
+const publicRelease = readFileSync("lib/releases/public.ts", "utf8")
+const deviceCheckin = readFileSync("app/api/devices/checkin/route.ts", "utf8")
 assert.match(manifest.version, /^\d+\.\d+\.\d+/, "Release manifest version is invalid.")
 for (const field of ["trustState", "releaseMode", "productionSigned", "manualInstallAllowed"]) {
   assert.match(manifestWriter, new RegExp(field), `Manifest writer is missing explicit trust metadata: ${field}`)
 }
+assert.match(publicRelease, /RELEASE_SELECT_WITH_UPDATER[\s\S]*42703[\s\S]*RELEASE_SELECT_BASE/, "Public metadata must retry the base release schema when optional updater columns are not deployed.")
+assert.match(publicRelease, /RELEASE_SELECT_BASE[\s\S]*42703[\s\S]*RELEASE_SELECT_LEGACY/, "Public metadata must tolerate a control plane that predates build-provenance columns.")
+assert.match(deviceCheckin, /releaseQuery[\s\S]*42703[\s\S]*releaseQuery[\s\S]*getDesktopReleaseAvailability/, "Authenticated device check-in must retain verified public-manifest release discovery on a legacy control-plane schema.")
 
 for (const [key, installer] of Object.entries(manifest)) {
   if (!installer || typeof installer !== "object" || Array.isArray(installer)) continue
