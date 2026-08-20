@@ -39,10 +39,10 @@ function readExistingManifest() {
 
 function installerWarning(platform, signed, notarized) {
   if (platform === "macos" && (!signed || !notarized)) {
-    return "Unsigned development distribution. macOS may display a security warning. This build has not yet been Apple notarized.";
+    return "Manual installation build. This version is not yet Apple-notarized. macOS may display a security warning during first launch. The application is fully functional after the operating system permits it to run.";
   }
   if (platform === "windows" && !signed) {
-    return "Unsigned Windows build. Windows SmartScreen may show a warning because an Authenticode certificate has not yet been configured.";
+    return "Manual installation build. This version is not yet digitally signed with a production Windows certificate. Windows SmartScreen may display a warning during installation.";
   }
   return null;
 }
@@ -100,13 +100,26 @@ function buildInstaller(prefix, version, architecture) {
   const releaseChannel =
     readArg(`--${prefix}-channel`) ||
     readArg("--channel") ||
-    (signed && (platform === "windows" || notarized) ? "stable" : "internal");
+    (signed && (platform === "windows" || notarized) ? "stable" : "manual");
   const productionRecommended =
     signed &&
     (platform === "windows" || notarized) &&
     checksumVerified &&
     metadataValid &&
     releaseChannel === "stable";
+  const available = Boolean(size && hash && checksumVerified && metadataValid);
+  const productionSigned = Boolean(signed && (platform === "windows" || notarized));
+  const manualInstallAllowed = available && !productionSigned;
+  const trustState = productionSigned
+    ? "signed-production"
+    : manualInstallAllowed
+      ? "unsigned-manual-install"
+      : "invalid";
+  const releaseMode = productionSigned
+    ? "SIGNED_PRODUCTION_RELEASE"
+    : manualInstallAllowed
+      ? "UNSIGNED_MANUAL_RELEASE"
+      : "INVALID_RELEASE";
   const installerType =
     readArg(`--${prefix}-installer-type`) ||
     (filename.toLowerCase().endsWith(".dmg")
@@ -146,15 +159,20 @@ function buildInstaller(prefix, version, architecture) {
     architecture,
     size,
     sha256: hash || undefined,
-    available: Boolean(size && hash),
+    available,
     signed,
     notarized,
     checksumVerified,
     metadataValid,
     productionRecommended,
+    productionSigned,
+    manualInstallAllowed,
+    trustState,
+    releaseMode,
     warning: installerWarning(platform, signed, notarized),
     blockedReason: size && hash ? null : "Installer size or SHA-256 is missing.",
     releaseChannel,
+    artifactType: installerType,
     generatedAt,
     createdAt: generatedAt,
     releaseNotes: readArg("--release-notes") || undefined,

@@ -17,12 +17,13 @@ on:
           - mac
           - all
       release_channel:
-        description: "auto uses trust status; stable requires platform signing."
+        description: "auto uses trust status; manual publishes verified unsigned artifacts; stable requires platform signing."
         required: true
         default: auto
         type: choice
         options:
           - auto
+          - manual
           - internal
           - stable
       signing:
@@ -49,7 +50,7 @@ on:
         required: false
         type: string
       minimum_supported_version:
-        description: "Oldest installed Bezgrow version supported by the signed updater."
+        description: "Oldest installed Bezgrow version supported by this verified update."
         required: false
         default: "0.1.0"
         type: string
@@ -184,15 +185,19 @@ jobs:
           if [ -n "$TAURI_SIGNING_PRIVATE_KEY" ] && [ -n "$BEZGROW_UPDATER_PUBLIC_KEY" ]; then
             HAS_UPDATER=true
           fi
-          if [ "$HAS_SIGNING" = "true" ] && [ "$HAS_NOTARY" = "true" ] && [ "$HAS_UPDATER" = "true" ]; then
+          if [ "$HAS_SIGNING" = "true" ] && [ "$HAS_NOTARY" = "true" ]; then
             echo "signed=true" >> "$GITHUB_OUTPUT"
             echo "notarized=true" >> "$GITHUB_OUTPUT"
-            echo "updater=true" >> "$GITHUB_OUTPUT"
           else
             echo "signed=false" >> "$GITHUB_OUTPUT"
             echo "notarized=false" >> "$GITHUB_OUTPUT"
-            echo "updater=false" >> "$GITHUB_OUTPUT"
-            echo "Apple or updater signing credentials are incomplete. The DMG will be labelled internal/testing." >> "$GITHUB_STEP_SUMMARY"
+          fi
+          echo "updater=$HAS_UPDATER" >> "$GITHUB_OUTPUT"
+          if [ "$HAS_SIGNING" != "true" ] || [ "$HAS_NOTARY" != "true" ]; then
+            echo "Apple production signing or notarization credentials are incomplete. A genuine manual installation DMG will be built." >> "$GITHUB_STEP_SUMMARY"
+          fi
+          if [ "$HAS_UPDATER" != "true" ]; then
+            echo "Tauri updater signing credentials are unavailable. Update discovery will use the verified assisted-installer path." >> "$GITHUB_STEP_SUMMARY"
           fi
 
       - name: Build Mac installer
@@ -212,9 +217,6 @@ jobs:
               -u APPLE_API_KEY \
               -u APPLE_API_ISSUER \
               -u APPLE_API_KEY_PATH \
-              -u TAURI_SIGNING_PRIVATE_KEY \
-              -u TAURI_SIGNING_PRIVATE_KEY_PASSWORD \
-              -u BEZGROW_UPDATER_PUBLIC_KEY \
               npm run desktop:build:mac
           fi
 
@@ -463,6 +465,7 @@ jobs:
           $hasCertificate = -not [string]::IsNullOrWhiteSpace($env:BEZGROW_WINDOWS_CERTIFICATE_BASE64)
           $hasPassword = -not [string]::IsNullOrWhiteSpace($env:BEZGROW_WINDOWS_CERTIFICATE_PASSWORD)
           $hasUpdater = -not [string]::IsNullOrWhiteSpace($env:TAURI_SIGNING_PRIVATE_KEY) -and -not [string]::IsNullOrWhiteSpace($env:BEZGROW_UPDATER_PUBLIC_KEY)
+          "updater=$($hasUpdater.ToString().ToLowerInvariant())" >> $env:GITHUB_OUTPUT
           if ($hasCertificate -ne $hasPassword) {
             throw "Windows signing configuration is incomplete: both certificate and password are required."
           }
@@ -471,7 +474,7 @@ jobs:
               throw "A stable release cannot explicitly request an unsigned build."
             }
             "status=unsigned" >> $env:GITHUB_OUTPUT
-            "Windows build intentionally requested as unsigned internal/testing." | Out-File $env:GITHUB_STEP_SUMMARY -Append
+            "Windows build intentionally requested as a genuine unsigned manual installation release." | Out-File $env:GITHUB_STEP_SUMMARY -Append
             exit 0
           }
           if (-not $hasCertificate) {
@@ -479,7 +482,7 @@ jobs:
               throw "Windows Authenticode credentials are required for the requested release mode."
             }
             "status=unsigned" >> $env:GITHUB_OUTPUT
-            "Windows Authenticode credentials are unavailable; producing a genuine unsigned internal/testing build." |
+            "Windows Authenticode credentials are unavailable; producing a genuine unsigned manual installation build." |
               Out-File $env:GITHUB_STEP_SUMMARY -Append
             exit 0
           }
@@ -487,10 +490,8 @@ jobs:
             if ($requestedSigning -eq "required" -or $requestedChannel -eq "stable") {
               throw "Stable Windows publication requires the Tauri updater private key and public key."
             }
-            "status=unsigned" >> $env:GITHUB_OUTPUT
-            "Windows updater signing credentials are unavailable; producing an internal/testing build without updater metadata." |
+            "Windows updater signing credentials are unavailable; assisted installer updates will remain available." |
               Out-File $env:GITHUB_STEP_SUMMARY -Append
-            exit 0
           }
 
           $certificatePath = Join-Path $env:RUNNER_TEMP "bezgrow-signing.pfx"
@@ -520,7 +521,7 @@ jobs:
             "--bundles", "msi,nsis",
             "--target", "x86_64-pc-windows-msvc"
           )
-          if ("${{ steps.signing.outputs.status }}" -eq "valid") {
+          if ("${{ steps.signing.outputs.status }}" -eq "valid" -and "${{ steps.signing.outputs.updater }}" -eq "true") {
             $arguments += "--public-windows"
           }
           & node $arguments
@@ -635,9 +636,11 @@ jobs:
                 throw "Authenticode verification failed for $path with status $($signature.Status)."
               }
             }
+          }
+          if ("${{ steps.signing.outputs.updater }}" -eq "true") {
             $nsisSignature = "$($nsis.FullName).sig"
             if (-not (Test-Path -LiteralPath $nsisSignature)) {
-              throw "The signed Windows updater signature is missing: $nsisSignature"
+              throw "The cryptographic Windows updater signature is missing: $nsisSignature"
             }
             $stagedSignature = "$($staged.nsis).sig"
             Copy-Item -LiteralPath $nsisSignature -Destination $stagedSignature
@@ -705,8 +708,7 @@ jobs:
     if: >-
       always() &&
       !cancelled() &&
-      needs.mac.result == 'success' &&
-      needs.windows.result == 'success' &&
+      (needs.mac.result == 'success' || needs.windows.result == 'success') &&
       (github.event_name == 'push' ||
       (inputs.publish == true && inputs.platform == 'all'))
     timeout-minutes: 30
@@ -786,12 +788,12 @@ jobs:
             echo "Stable publication was requested, but one or more artifacts are not platform-trusted."
             exit 1
           fi
-          if [ "$REQUESTED_CHANNEL" = "internal" ]; then
-            CHANNEL="internal"
+          if [ "$REQUESTED_CHANNEL" = "internal" ] || [ "$REQUESTED_CHANNEL" = "manual" ]; then
+            CHANNEL="manual"
           elif [ "$TRUSTED" = "true" ]; then
             CHANNEL="stable"
           else
-            CHANNEL="internal"
+            CHANNEL="manual"
           fi
 
           if [ "${{ github.event_name }}" = "push" ]; then
@@ -801,7 +803,7 @@ jobs:
             TAG="v$VERSION"
             DRAFT="${{ inputs.draft_release }}"
           else
-            TAG="v$VERSION-internal.${{ github.run_number }}"
+            TAG="v$VERSION-manual.${{ github.run_number }}"
             DRAFT="${{ inputs.draft_release }}"
           fi
           if [ "$CHANNEL" = "stable" ]; then PRERELEASE=false; else PRERELEASE=true; fi
@@ -916,7 +918,7 @@ jobs:
             MAC_SIGNED="$(tr -d '\r\n' < release-artifacts/mac/mac-signing-status.txt)"
             MAC_NOTARIZED="$(tr -d '\r\n' < release-artifacts/mac/mac-notarization-status.txt)"
             MAC_BUILD_TIMESTAMP="$(node -p "require('./release-artifacts/mac/mac-build.json').builtAt")"
-            MAC_CHANNEL="internal"
+            MAC_CHANNEL="manual"
             if [ "$MAC_SIGNED" = "true" ] && [ "$MAC_NOTARIZED" = "true" ]; then MAC_CHANNEL="stable"; fi
             MANIFEST_ARGS+=(
               --mac-url "$BASE_URL/$MAC_DMG_NAME"
@@ -946,7 +948,7 @@ jobs:
             WINDOWS_SIGNING="$(tr -d '\r\n' < "$WINDOWS_DIR/windows-signing-status.txt")"
             WINDOWS_BUILD_TIMESTAMP="$(node -p "require('./release-artifacts/windows-x64/windows-build.json').builtAt")"
             WINDOWS_SIGNED=false
-            WINDOWS_CHANNEL="internal"
+            WINDOWS_CHANNEL="manual"
             if [ "$WINDOWS_SIGNING" = "valid" ]; then
               WINDOWS_SIGNED=true
               WINDOWS_CHANNEL="stable"

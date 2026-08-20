@@ -145,8 +145,10 @@ if (existsSync(windowsDirectory)) {
   verifiedPlatforms.push("windows-x64-nsis-msi")
 }
 
-assert(verifiedPlatforms.includes("macos"), "Publication requires a complete verified Mac installer set.")
-assert(verifiedPlatforms.includes("windows-x64-nsis-msi"), "Publication requires genuine Windows x64 NSIS and MSI installer sets from the same workflow.")
+assert(
+  verifiedPlatforms.includes("macos") || verifiedPlatforms.includes("windows-x64-nsis-msi"),
+  "Publication requires at least one complete, genuine, integrity-verified platform installer set."
+)
 console.log(JSON.stringify({
   root,
   version,

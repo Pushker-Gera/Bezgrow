@@ -16,6 +16,7 @@ assert.ok(manifest.version, "Desktop release manifest version is missing.")
 
 const publicReleaseSource = read("lib/releases/public.ts")
 const validator = read("lib/releases/artifact-validation.ts")
+const trustModel = read("lib/releases/trust.ts")
 const desktopReleaseRoute = read("app/api/desktop-release/route.ts")
 const desktopDownloadRoute = read("app/api/downloads/desktop/route.ts")
 const downloadPage = read("app/download/page.tsx")
@@ -33,6 +34,10 @@ for (const field of [
   "checksumVerified",
   "metadataValid",
   "productionRecommended",
+  "productionSigned",
+  "manualInstallAllowed",
+  "trustState",
+  "releaseMode",
   "warning",
   "blockedReason",
 ]) {
@@ -60,10 +65,12 @@ assert.match(publicReleaseSource, /checkedInCandidates/, "Local public/downloads
 assert.match(publicReleaseSource, /configuredCandidates/, "Configured installer URLs must be discovered.")
 assert.match(publicReleaseSource, /releaseCandidateVersions/, "The download page must evaluate immutable release versions independently of the website package version.")
 assert.match(publicReleaseSource, /Fail closed on the newest intended version/, "The download page must not fall back to an older complete installer cohort.")
+assert.match(publicReleaseSource, /"stale_metadata"/, "Stale release metadata must have a precise status.")
+assert.match(publicReleaseSource, /metadataService:/, "Control-plane outages must be reported separately from artifact validity.")
 assert.match(
   publicReleaseSource,
-  /mac\.available &&[\s\S]*windows\.available &&[\s\S]*mac\.installer\?\.version === releaseVersion &&[\s\S]*windows\.installer\?\.version === releaseVersion/,
-  "The download page must expose only a complete same-version Mac and Windows release cohort."
+  /return desktopAvailability\(mac, windows, controlPlaneError\)/,
+  "The download page must expose each integrity-verified platform independently."
 )
 assert.match(desktopReleaseRoute, /platforms:/, "Desktop release API must return independent platform records.")
 assert.match(desktopDownloadRoute, /release\.available/, "Download route must gate on integrity availability.")
@@ -73,14 +80,18 @@ assert.doesNotMatch(desktopDownloadRoute, /signed\s*!==\s*true|notarized\s*!==\s
 assert.match(downloadPage, /available:\s*release\.available/, "Download buttons must use independent integrity availability.")
 assert.match(
   validator,
-  /Unsigned development distribution\. macOS may display a security warning\. This build has not yet been Apple notarized\./,
-  "macOS internal-build warning is missing."
+  /Manual installation build\. This version is not yet Apple-notarized\./,
+  "macOS manual-install warning is missing."
 )
 assert.match(
   validator,
-  /Unsigned Windows build\. Windows SmartScreen may show a warning because an Authenticode certificate has not yet been configured\./,
-  "Windows internal-build warning is missing."
+  /Manual installation build\. This version is not yet digitally signed with a production Windows certificate\./,
+  "Windows manual-install warning is missing."
 )
+assert.match(validator, /trustState:\s*"invalid"/, "Invalid artifacts must have an explicit invalid trust state.")
+assert.match(trustModel, /"unsigned-manual-install"/, "Valid unsigned artifacts must have a manual-install trust state.")
+assert.match(validator, /isTrustedBezgrowArtifactUrl/, "Artifact URLs must be restricted to trusted Bezgrow release locations.")
+assert.match(downloadPage, /Manual installation release/, "The download page must label manual installation releases.")
 assert.match(downloadPage, /right-click the Bezgrow app, choose Open/, "macOS right-click Open guidance is missing.")
 assert.match(desktopDownloadRoute, /application\/x-apple-diskimage/, "DMG content type is not explicit.")
 assert.match(desktopDownloadRoute, /Content-Disposition/, "DMG download filename is not explicit.")
@@ -91,7 +102,7 @@ assert.match(downloadPage, /Not notarized/, "The Mac download metadata must show
 assert.match(releaseWorkflow, /runs-on:\s*windows-latest/, "Windows installer must build on windows-latest.")
 assert.match(releaseWorkflow, /verify-release-artifact\.mjs/, "Workflow must validate installer bytes.")
 assert.match(releaseWorkflow, /Compute release checksums/, "Workflow must calculate SHA-256 checksums.")
-assert.match(releaseWorkflow, /internal\/testing/, "Workflow must clearly label unsigned builds as internal/testing.")
+assert.match(releaseWorkflow, /manual installation/i, "Workflow must clearly label unsigned builds as manual installation releases.")
 assert.match(
   releaseWorkflow,
   /security import "\$CERTIFICATE_PATH"[\s\S]*HAS_SIGNING=true/,
@@ -99,8 +110,13 @@ assert.match(
 )
 assert.match(
   releaseWorkflow,
-  /-u APPLE_CERTIFICATE[\s\S]*-u TAURI_SIGNING_PRIVATE_KEY[\s\S]*npm run desktop:build:mac/,
-  "An invalid signing configuration must be removed before the internal Mac fallback build."
+  /-u APPLE_CERTIFICATE[\s\S]*npm run desktop:build:mac/,
+  "An invalid Apple signing configuration must be removed before the manual Mac build."
+)
+assert.doesNotMatch(
+  releaseWorkflow,
+  /-u TAURI_SIGNING_PRIVATE_KEY|-u BEZGROW_UPDATER_PUBLIC_KEY/,
+  "Updater signing credentials must remain independent of Apple signing and notarization."
 )
 assert.match(
   releaseWorkflow,
@@ -111,7 +127,7 @@ assert.doesNotMatch(releaseWorkflow, /Stable publication and public downloads re
 assert.doesNotMatch(releaseWorkflow, /gh release upload[^\n]*--clobber/, "Versioned release assets must never be silently replaced.")
 assert.match(releaseWorkflow, /cmp -s[\s\S]*Immutable release asset/, "Existing release assets must be byte-identical before reuse.")
 assert.match(releaseManifestWriter, /productionRecommended/, "Manifest writer must separate availability from production trust.")
-assert.match(publication, /can only be published as an internal\/testing release/, "Unsigned CI metadata must be restricted to internal/testing.")
+assert.match(publication, /can only be published as a manual installation release/, "Unsigned CI metadata must be explicitly restricted to manual installation.")
 assert.match(publication, /signature_status: installer\.signed === true \? "valid" : "invalid"/, "CI metadata must preserve signing truth.")
 assert.match(
   desktopBuild,

@@ -23,7 +23,7 @@ assert.match(route, /metadata expects[\s\S]*source reports/, "The download endpo
 assert.doesNotMatch(route, /signed\s*!==\s*true|notarized\s*!==\s*true/, "Trust status must not disable downloads.")
 assert.match(page, /<DownloadButton href=\{downloadHref\} available=\{info\.available\}>/, "Button state must follow availability.")
 assert.match(page, /disabled/, "Unavailable platforms must render a disabled button.")
-assert.match(page, /info\.warning/, "Available internal/testing builds must show a warning.")
+assert.match(page, /info\.warning/, "Available manual installation builds must show a warning.")
 assert.match(page, /info\.blockedReason/, "Unavailable platforms must show the exact reason.")
 assert.match(page, /SHA-256:/, "The download page must display the exact installer checksum.")
 assert.match(legacyMacRoute, /X-Bezgrow-Artifact-Redirect.*versioned/s, "The legacy generic Mac URL must redirect to the current versioned artifact.")

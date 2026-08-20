@@ -119,14 +119,15 @@ for (const entry of artifacts) {
   const productionTrusted =
     installer.signed === true &&
     (entry.platform === "windows" || installer.notarized === true)
-  if (!productionTrusted && entry.channel !== "internal") {
+  const manualChannel = ["manual", "internal"].includes(entry.channel)
+  if (!productionTrusted && !manualChannel) {
     throw new Error(
-      `${entry.key} is unsigned or unnotarized and can only be published as an internal/testing release.`
+      `${entry.key} is unsigned or unnotarized and can only be published as a manual installation release.`
     )
   }
   const primaryUpdaterArtifact = ["mac", "macX64", "windows", "windowsArm64"].includes(entry.key)
   if (
-    entry.channel !== "internal" &&
+    !manualChannel &&
     primaryUpdaterArtifact &&
     (!installer.updaterUrl ||
       !installer.updaterSize ||
@@ -136,7 +137,7 @@ for (const entry of artifacts) {
   ) {
     throw new Error(`${entry.key} is missing verified Tauri v2 updater metadata and cannot be published as stable.`)
   }
-  if (entry.channel !== "internal" && primaryUpdaterArtifact && !supportsUpdaterMetadata) {
+  if (!manualChannel && primaryUpdaterArtifact && !supportsUpdaterMetadata) {
     throw new Error("The control plane must apply the updater metadata migration before publishing a stable release.")
   }
 
@@ -242,13 +243,8 @@ for (const entries of grouped.values()) {
   })
 }
 
-if (stagedReleases.length !== grouped.size || stagedReleases.length < 2) {
-  throw new Error("A public desktop release requires staged Mac and Windows release records.")
-}
-
-const stagedPlatforms = new Set(stagedReleases.map((release) => release.identity.platform))
-if (!stagedPlatforms.has("macos") || !stagedPlatforms.has("windows")) {
-  throw new Error("Control-plane publication requires both staged Mac and Windows release records.")
+if (stagedReleases.length !== grouped.size || stagedReleases.length < 1) {
+  throw new Error("A public desktop release requires at least one staged, integrity-verified platform record.")
 }
 
 const publishedAt = new Date().toISOString()

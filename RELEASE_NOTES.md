@@ -7,6 +7,8 @@ Pre-launch desktop hardening release.
 - Added receipt-lot inventory costing, optional purchase and expiry dates, purchase-rate capture, FIFO batch consumption, and exact batch restoration when an invoice is deleted.
 - Replaced tall invoice cards and readiness panels with compact, horizontally scrollable billing tables and focused operational controls.
 - Added a stable Joined Bezgrow date for existing and new local workspaces.
-- Hardened signed desktop updates with startup, periodic, and reconnect checks; strict OS/architecture matching; a 48-hour safe auto-install grace period; and launch-confirmed success reporting.
+- Added explicit `signed-production`, `unsigned-manual-install`, and `invalid` release trust states so platform signing affects OS trust without disabling Bezgrow.
+- Kept Tauri updater signatures independent of Apple Developer ID/notarization and Windows Authenticode. When no signed updater package is available, Update Now uses a Bezgrow-hosted assisted installer flow with strict platform, architecture, size, URL, and SHA-256 verification.
+- Hardened desktop updates with startup, periodic, and reconnect checks; strict OS/architecture matching; a 48-hour safe automatic-update grace period where a signed updater package exists; pre-update SQLite backup; and launch-confirmed success reporting.
 
-Public installers and updater metadata must be produced from the exact release commit by the signed macOS and Windows release workflows. Source version metadata alone does not publish or advertise an installer.
+Public installers and updater metadata must be produced from an exact clean release commit and pass binary, version, architecture, size, URL, and SHA-256 validation. A genuine unsigned artifact may be published as a clearly labelled manual installation release; it must never be represented as production signed or notarized.

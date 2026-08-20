@@ -32,6 +32,7 @@ type InstallerInfo = {
   version?: string | null
   architecture?: string | null
   sha256?: string | null
+  trustState: PublicReleaseAvailability["trustState"]
 }
 
 function formatFileSize(bytes: number) {
@@ -62,7 +63,7 @@ function getInstallerInfo(
       : null,
     sizeLabel,
     release.checksumVerified ? "SHA-256 verified" : null,
-    release.signed ? "Code signed" : "Unsigned",
+    release.trustState === "signed-production" ? "Production signed" : "Manual installation",
     release.platform === "macos"
       ? release.notarized
         ? "Notarized"
@@ -84,6 +85,7 @@ function getInstallerInfo(
     version: release.version,
     architecture: release.architecture,
     sha256: release.sha256,
+    trustState: release.trustState,
     statusLabel: release.available ? statusParts.join(" · ") : release.blockedReason || release.reason,
   }
 }
@@ -168,6 +170,12 @@ export default async function DownloadPage() {
   const macInstaller = getInstallerInfo(availability.mac, macInstallerPath)
   const windowsInstaller = getInstallerInfo(availability.windows, windowsInstallerPath)
   const installersReady = macInstaller.available || windowsInstaller.available
+  const manualRelease = [macInstaller, windowsInstaller].some(
+    (installer) => installer.available && installer.trustState === "unsigned-manual-install"
+  )
+  const signedRelease = installersReady && [macInstaller, windowsInstaller]
+    .filter((installer) => installer.available)
+    .every((installer) => installer.trustState === "signed-production")
   const releaseNotes = [
     availability.mac.releaseNotes,
     availability.windows.releaseNotes,
@@ -193,6 +201,28 @@ export default async function DownloadPage() {
               ? `Available desktop release ${releaseManifest.version}`
               : "No validated desktop installer available"}
           </div>
+
+          {installersReady && (
+            <div className={`mt-4 rounded-2xl border px-4 py-3 text-sm font-bold leading-6 ${
+              signedRelease
+                ? "border-emerald-300/25 bg-emerald-300/10 text-emerald-100"
+                : "border-amber-300/25 bg-amber-300/10 text-amber-100"
+            }`}>
+              <p>{signedRelease ? "Production signed release" : "Manual installation release"}</p>
+              {manualRelease && (
+                <p className="mt-1 font-semibold">
+                  Bezgrow is fully functional, but this build has not yet completed platform code-signing/notarization. macOS or Windows may display a security warning during installation.
+                </p>
+              )}
+              {signedRelease && <p className="mt-1 font-semibold">Verified production release.</p>}
+            </div>
+          )}
+
+          {availability.metadataService.status === "degraded" && installersReady && (
+            <div className="mt-4 rounded-2xl border border-white/10 bg-white/[0.04] px-4 py-3 text-xs font-semibold leading-5 text-white/60">
+              Live release control-plane data is temporarily unavailable. Downloads remain available from the integrity-verified release record.
+            </div>
+          )}
 
           {!installersReady && (
             <div className="mt-6 break-words rounded-2xl border border-amber-300/25 bg-amber-300/10 px-4 py-3 text-sm font-bold text-amber-100 [overflow-wrap:anywhere]">

@@ -12,6 +12,7 @@
     "allow-desktop-database-diagnostics",
     "allow-desktop-database-backup",
     "allow-desktop-prepare-update",
+    "allow-desktop-download-verified-release",
     "allow-desktop-cancel-update-preparation",
     "allow-desktop-restart-after-update",
     "allow-desktop-execute",

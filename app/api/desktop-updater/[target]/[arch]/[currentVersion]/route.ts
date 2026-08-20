@@ -43,7 +43,15 @@ function trustedUpdaterUrl(value: unknown) {
       try { return new URL(process.env.NEXT_PUBLIC_SITE_URL || "https://www.bezgrow.com").hostname }
       catch { return "www.bezgrow.com" }
     })()
-    return parsed.hostname === configuredHost || parsed.hostname === "bezgrow.com" || parsed.hostname.endsWith(".bezgrow.com") || parsed.hostname === "github.com" || parsed.hostname === "objects.githubusercontent.com"
+    const host = parsed.hostname.toLowerCase()
+    const trustedBezgrowHost =
+      host === configuredHost.toLowerCase() ||
+      host === "bezgrow.com" ||
+      host.endsWith(".bezgrow.com")
+    const trustedGithubRelease =
+      host === "github.com" &&
+      parsed.pathname.startsWith("/Pushker-Gera/Bezgrow/releases/download/")
+    return trustedBezgrowHost || trustedGithubRelease
   } catch {
     return false
   }
@@ -66,7 +74,7 @@ export async function GET(_request: Request, context: RouteContext) {
     .select("id,version,release_notes,published_at,minimum_supported_version,mandatory,mandatory_after,release_artifacts(updater_url,updater_size,updater_sha256,update_signature,updater_signature_status,validation_status,signature_status,notarization_status,code_signing_status)")
     .eq("platform", platform)
     .eq("architecture", architecture)
-    .eq("release_channel", "stable")
+    .in("release_channel", ["stable", "manual", "internal"])
     .eq("release_status", "published")
     .eq("active", true)
     .eq("rollout_percentage", 100)
@@ -86,15 +94,12 @@ export async function GET(_request: Request, context: RouteContext) {
     return (
       newerThan(candidate.version, currentVersion) &&
       artifact?.validation_status === "valid" &&
-      artifact.signature_status === "valid" &&
-      artifact.code_signing_status === "valid" &&
       artifact.updater_signature_status === "valid" &&
       trustedUpdaterUrl(artifact.updater_url) &&
       typeof artifact.updater_sha256 === "string" && /^[a-f0-9]{64}$/i.test(artifact.updater_sha256) &&
       typeof artifact.updater_size === "number" && artifact.updater_size > 0 && artifact.updater_size <= 3 * 1024 * 1024 * 1024 &&
       typeof artifact.update_signature === "string" && artifact.update_signature.length >= 80 &&
-      validPublicationDate(candidate.published_at) &&
-      (platform === "windows" || artifact.notarization_status === "valid")
+      validPublicationDate(candidate.published_at)
     )
   })
   if (!release) return noUpdate()
@@ -102,6 +107,10 @@ export async function GET(_request: Request, context: RouteContext) {
     ? release.release_artifacts.find((entry) => entry.updater_signature_status === "valid" && entry.updater_url)
     : null
   if (!artifact?.updater_url || !artifact.update_signature) return noUpdate()
+  const productionSigned =
+    artifact.signature_status === "valid" &&
+    artifact.code_signing_status === "valid" &&
+    (platform === "windows" || artifact.notarization_status === "valid")
 
   return Response.json(
     {
@@ -119,6 +128,10 @@ export async function GET(_request: Request, context: RouteContext) {
       mandatory_after: release.mandatory_after,
       restart_required: true,
       publication_status: "published",
+      trust_state: productionSigned ? "signed-production" : "unsigned-manual-install",
+      production_signed: productionSigned,
+      manual_install_allowed: !productionSigned,
+      updater_signature_verified: true,
     },
     { headers: { "Cache-Control": "no-store, max-age=0", "Content-Type": "application/json" } }
   )

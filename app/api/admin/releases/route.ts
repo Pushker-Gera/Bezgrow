@@ -54,6 +54,7 @@ const releaseActionSchema = z.object({
     "retire",
     "archive",
     "verify_artifact",
+    "mark_manual",
     "mark_internal",
     "mark_stable",
   ]),
@@ -70,6 +71,8 @@ type ReleaseRow = {
   release_channel: string
   release_status: string
   active: boolean
+  build_commit?: string | null
+  build_timestamp?: string | null
   release_artifacts?: Array<{
     id: string
     file_url: string
@@ -97,11 +100,12 @@ function publicationError(release: ReleaseRow) {
     artifact.signature_status === "valid" &&
     artifact.code_signing_status === "valid" &&
     (release.platform === "windows" || artifact.notarization_status === "valid")
-  if (!productionTrusted && release.release_channel !== "internal") {
-    return "Unsigned or unnotarized builds can only be published on the internal channel."
+  const manualChannel = ["manual", "internal"].includes(release.release_channel)
+  if (!productionTrusted && !manualChannel) {
+    return "Unsigned or unnotarized builds can only be published as manual installation releases."
   }
   if (
-    release.release_channel !== "internal" &&
+    !manualChannel &&
     (!artifact.updater_url ||
       !artifact.updater_size ||
       !artifact.updater_sha256 ||
@@ -142,6 +146,8 @@ async function verifyArtifact(
       notarized:
         release.platform === "macos" && artifact.notarization_status === "valid",
       releaseChannel: release.release_channel,
+      buildCommit: release.build_commit,
+      buildTimestamp: release.build_timestamp,
     },
     { cache: false }
   )
@@ -293,7 +299,7 @@ export async function GET(request: Request) {
       data: rows,
       pagination: { page: list.page, limit: list.limit, total: result.count || 0 },
       publicationPolicy:
-        "Validated internal/testing artifacts may be downloaded with trust warnings. Stable production releases additionally require code signing and macOS notarization.",
+        "Validated manual installation artifacts may be downloaded with trust warnings. Stable production releases additionally require code signing and macOS notarization.",
     })
   } catch (error) {
     return unexpectedAdminError(context, error, "Releases failed to load.")
@@ -443,6 +449,7 @@ export async function PATCH(request: Request) {
       updates.rollout_percentage = input.rollout_percentage
     }
     if (input.action === "mark_internal") updates.release_channel = "internal"
+    if (input.action === "mark_manual") updates.release_channel = "manual"
     if (input.action === "mark_stable") updates.release_channel = "stable"
 
     const result = await adminSupabase.from("desktop_releases").update(updates).eq("id", input.id).select("*").single()
@@ -457,6 +464,7 @@ export async function PATCH(request: Request) {
       retire: "RELEASE_RETIRED",
       archive: "RELEASE_ARCHIVED",
       mark_internal: "RELEASE_MARKED_INTERNAL",
+      mark_manual: "RELEASE_MARKED_MANUAL",
       mark_stable: "RELEASE_MARKED_STABLE",
     }
     await writeAdminAudit(context, {

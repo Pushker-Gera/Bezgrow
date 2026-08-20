@@ -15,7 +15,7 @@ type WindowsRelease = {
   releaseChannel?: string
   checksumVerified?: boolean
   installerType?: string
-  architecture?: "x86_64" | "arm64"
+  architecture?: "x64" | "x86_64" | "arm64"
   platform?: "windows" | "macos"
   updaterUrl?: string
   updaterSignature?: string
@@ -24,6 +24,14 @@ type WindowsRelease = {
   publicationStatus?: string
   releaseDate?: string
   mandatoryAfter?: string | null
+  trustState?: "signed-production" | "unsigned-manual-install" | "invalid"
+  releaseMode?: "SIGNED_PRODUCTION_RELEASE" | "UNSIGNED_MANUAL_RELEASE" | "INVALID_RELEASE"
+  productionSigned?: boolean
+  manualInstallAllowed?: boolean
+  metadataValid?: boolean
+  buildCommit?: string
+  filename?: string
+  updaterSignatureVerified?: boolean
 }
 
 type MacRelease = WindowsRelease & {
@@ -152,9 +160,9 @@ export function verifiedInstallerRouteForCurrentPlatform() {
 function releaseMatchesTarget(release: WindowsRelease | MacRelease | null | undefined, platform: "mac" | "windows", architecture: "x64" | "arm64") {
   if (!release) return null
   const expectedPlatform = platform === "mac" ? "macos" : "windows"
-  const expectedArchitecture = architecture === "x64" ? "x86_64" : "arm64"
+  const expectedArchitectures = architecture === "x64" ? ["x64", "x86_64"] : ["arm64"]
   if (release.platform && release.platform !== expectedPlatform) return null
-  if (release.architecture && release.architecture !== expectedArchitecture) return null
+  if (release.architecture && !expectedArchitectures.includes(release.architecture)) return null
   return release
 }
 
@@ -191,10 +199,33 @@ export function latestVersionForCurrentPlatform(manifest: DesktopReleaseManifest
 export function isDesktopUpdateAvailable(manifest: DesktopReleaseManifest | null, currentVersion: string) {
   const latestVersion = latestVersionForCurrentPlatform(manifest)
   const release = releaseForCurrentPlatform(manifest)
-  const trusted =
-    release?.signed === true &&
-    (currentPlatform() !== "mac" || ("notarized" in release && release.notarized === true))
-  return Boolean(latestVersion && trusted && releaseHref(release) && compareVersions(latestVersion, currentVersion) > 0)
+  const installable =
+    release?.trustState === "signed-production" ||
+    (release?.trustState === "unsigned-manual-install" && release.manualInstallAllowed === true)
+  return Boolean(
+    latestVersion &&
+      installable &&
+      release?.metadataValid === true &&
+      release.checksumVerified === true &&
+      typeof release.sha256 === "string" &&
+      /^[a-f0-9]{64}$/i.test(release.sha256) &&
+      typeof release.size === "number" &&
+      release.size > 0 &&
+      releaseHref(release) &&
+      compareVersions(latestVersion, currentVersion) > 0
+  )
+}
+
+export function automaticUpdaterAvailable(release: WindowsRelease | MacRelease | null | undefined) {
+  return Boolean(
+    release?.updaterSignatureVerified === true &&
+      release.updaterUrl &&
+      release.updaterSignature &&
+      release.updaterSha256 &&
+      /^[a-f0-9]{64}$/i.test(release.updaterSha256) &&
+      release.updaterSize &&
+      release.updaterSize > 0
+  )
 }
 
 export function installerHrefForCurrentPlatform(manifest: DesktopReleaseManifest | null) {
@@ -273,6 +304,9 @@ async function authenticatedDeviceRelease(currentVersion: string, signal?: Abort
         updater_size?: number | null
         updater_sha256?: string | null
         update_signature?: string | null
+        updater_signature_status?: string | null
+        artifact_type?: string | null
+        file_name?: string | null
       }>
     } | null
   } | null
@@ -287,12 +321,17 @@ async function authenticatedDeviceRelease(currentVersion: string, signal?: Abort
 
   const release = payload.eligibleRelease
   const artifact = release.release_artifacts?.[0]
-  const trusted =
+  const integrityValid =
     artifact?.validation_status === "valid" &&
+    typeof artifact.sha256 === "string" &&
+    /^[a-f0-9]{64}$/i.test(artifact.sha256) &&
+    typeof artifact.file_size === "number" &&
+    artifact.file_size > 0
+  if (!release.version || !artifact?.file_url || !integrityValid) return null
+  const productionSigned =
     artifact.signature_status === "valid" &&
     artifact.code_signing_status === "valid" &&
     (platform !== "macos" || artifact.notarization_status === "valid")
-  if (!release.version || !artifact?.file_url || !artifact.file_size || !artifact.sha256 || !trusted) return null
   const installer: WindowsRelease = {
     downloadUrl: artifact.file_url,
     version: release.version,
@@ -309,9 +348,17 @@ async function authenticatedDeviceRelease(currentVersion: string, signal?: Abort
     updaterSignature: artifact.update_signature || undefined,
     updaterSize: artifact.updater_size || undefined,
     updaterSha256: artifact.updater_sha256 || undefined,
+    updaterSignatureVerified: artifact.updater_signature_status === "valid",
     publicationStatus: "published",
     releaseDate: release.published_at || undefined,
     mandatoryAfter: release.mandatory_after || null,
+    trustState: productionSigned ? "signed-production" : "unsigned-manual-install",
+    releaseMode: productionSigned ? "SIGNED_PRODUCTION_RELEASE" : "UNSIGNED_MANUAL_RELEASE",
+    productionSigned,
+    manualInstallAllowed: !productionSigned,
+    metadataValid: true,
+    checksumVerified: true,
+    filename: artifact.file_name || undefined,
   }
   const manifest: DesktopReleaseManifest = {
     version: release.version,

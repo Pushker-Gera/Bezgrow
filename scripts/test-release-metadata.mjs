@@ -3,7 +3,11 @@ import { createHash } from "node:crypto"
 import { existsSync, readFileSync, statSync } from "node:fs"
 
 const manifest = JSON.parse(readFileSync("public/downloads/desktop-release.json", "utf8"))
+const manifestWriter = readFileSync("scripts/write-desktop-release-manifest.mjs", "utf8")
 assert.match(manifest.version, /^\d+\.\d+\.\d+/, "Release manifest version is invalid.")
+for (const field of ["trustState", "releaseMode", "productionSigned", "manualInstallAllowed"]) {
+  assert.match(manifestWriter, new RegExp(field), `Manifest writer is missing explicit trust metadata: ${field}`)
+}
 
 for (const [key, installer] of Object.entries(manifest)) {
   if (!installer || typeof installer !== "object" || Array.isArray(installer)) continue
@@ -45,7 +49,7 @@ for (const [key, installer] of Object.entries(manifest)) {
     )
   }
   if (!installer.signed || (installer.platform === "macos" && !installer.notarized)) {
-    assert.equal(installer.releaseChannel, "internal", `${key} unsigned build must be internal/testing.`)
+    assert.ok(["manual", "internal"].includes(installer.releaseChannel), `${key} unsigned build must be an explicit manual release.`)
     assert.equal(installer.productionRecommended, false, `${key} unsigned build must not be production-recommended.`)
     if (installer.platform === "windows") {
       assert.match(

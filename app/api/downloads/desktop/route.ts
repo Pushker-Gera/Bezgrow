@@ -28,7 +28,9 @@ async function binaryInstallerResponse(
   buildCommit: string,
   buildTimestamp: string,
   signed: boolean,
-  notarized: boolean
+  notarized: boolean,
+  architecture: string,
+  trustState: string
 ) {
   const upstream = await fetch(new URL(href, request.url), {
     method: "GET",
@@ -80,6 +82,8 @@ async function binaryInstallerResponse(
   headers.set("X-Bezgrow-Artifact-Built-At", buildTimestamp)
   headers.set("X-Bezgrow-Code-Signed", String(signed))
   headers.set("X-Bezgrow-Apple-Notarized", String(notarized))
+  headers.set("X-Bezgrow-Artifact-Architecture", architecture)
+  headers.set("X-Bezgrow-Release-Trust", trustState)
 
   return new NextResponse(upstream.body, { status: 200, headers })
 }
@@ -119,6 +123,8 @@ export async function GET(request: Request) {
     installer.buildCommit || "",
     installer.buildTimestamp || "",
     installer.signed,
-    installer.notarized
+    installer.notarized,
+    installer.architecture || "",
+    installer.trustState
   )
 }

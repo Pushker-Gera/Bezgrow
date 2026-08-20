@@ -39,6 +39,11 @@ type ArtifactRow = {
   validation_error?: string | null
   artifact_type?: string | null
   file_name?: string | null
+  updater_url?: string | null
+  updater_size?: number | null
+  updater_sha256?: string | null
+  update_signature?: string | null
+  updater_signature_status?: string | null
 }
 
 type ReleaseRow = {
@@ -76,6 +81,14 @@ type RawInstaller = {
   buildCommit?: string
   buildTimestamp?: string
   releaseChannel?: string
+  artifactType?: string
+  updaterUrl?: string
+  updaterSize?: number
+  updaterSha256?: string
+  updateSignature?: string
+  updaterSignatureVerified?: boolean
+  publicationStatus?: string
+  releaseDate?: string
 }
 
 type RawManifest = {
@@ -100,6 +113,7 @@ export type PublicReleaseAvailabilityStatus =
   | "checksum_mismatch"
   | "artifact_invalid"
   | "platform_mismatch"
+  | "stale_metadata"
   | "rollout_restricted"
 
 export type PublicReleaseAvailability = ValidatedInstaller & {
@@ -112,10 +126,35 @@ export type PublicDesktopReleaseAvailability = {
   manifest: PublicDesktopReleaseManifest | null
   mac: PublicReleaseAvailability
   windows: PublicReleaseAvailability
+  metadataService: {
+    status: "available" | "degraded"
+    source: "control-plane-and-verified-fallback" | "verified-fallback"
+    message: string
+  }
 }
 
 const downloadsDirectory = join(process.cwd(), "public", "downloads")
 const desktopManifestPath = join(downloadsDirectory, "desktop-release.json")
+const RELEASE_METADATA_TIMEOUT_MS = 8_000
+
+function withMetadataTimeout<T>(operation: PromiseLike<T>) {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(
+      () => reject(new Error("Release control-plane lookup timed out.")),
+      RELEASE_METADATA_TIMEOUT_MS
+    )
+    Promise.resolve(operation).then(
+      (value) => {
+        clearTimeout(timer)
+        resolve(value)
+      },
+      (error) => {
+        clearTimeout(timer)
+        reject(error)
+      }
+    )
+  })
+}
 
 function readJson<T>(path: string): T | null {
   if (!existsSync(path)) return null
@@ -168,8 +207,16 @@ function candidateFromManifest(
       installer.releaseChannel ||
       (installer.signed === true && (platform === "windows" || installer.notarized === true)
         ? "stable"
-        : "internal"),
+        : "manual"),
     releaseNotes: releaseNotes.join("\n\n") || null,
+    artifactType: installer.artifactType || null,
+    updaterUrl: installer.updaterUrl || null,
+    updaterSize: installer.updaterSize || null,
+    updaterSha256: installer.updaterSha256 || null,
+    updateSignature: installer.updateSignature || null,
+    updaterSignatureVerified: installer.updaterSignatureVerified === true,
+    publicationStatus: installer.publicationStatus || null,
+    releaseDate: installer.releaseDate || null,
   }
 }
 
@@ -219,7 +266,7 @@ function checkedInCandidates(platform: InstallerPlatform) {
         filename,
         signed: false,
         notarized: false,
-        releaseChannel: "internal",
+        releaseChannel: "manual",
         releaseNotes: notes.join("\n\n") || null,
       })
     }
@@ -255,7 +302,7 @@ function configuredCandidates(platform: InstallerPlatform) {
       notarized:
         platform === "macos" &&
         /^(1|true|yes)$/i.test(process.env.BEZGROW_MAC_INSTALLER_NOTARIZED || ""),
-      releaseChannel: process.env[`BEZGROW_${prefix}_INSTALLER_CHANNEL`]?.trim() || "internal",
+      releaseChannel: process.env[`BEZGROW_${prefix}_INSTALLER_CHANNEL`]?.trim() || "manual",
       generatedAt: new Date().toISOString(),
       buildCommit: process.env[`BEZGROW_${prefix}_INSTALLER_COMMIT`]?.trim() || null,
       buildTimestamp: process.env[`BEZGROW_${prefix}_INSTALLER_BUILT_AT`]?.trim() || null,
@@ -264,7 +311,12 @@ function configuredCandidates(platform: InstallerPlatform) {
 }
 
 function controlPlaneCandidate(release: ReleaseRow): InstallerCandidate | null {
-  const artifact = release.release_artifacts?.[0]
+  const artifact =
+    release.release_artifacts?.find((entry) =>
+      release.platform === "macos"
+        ? entry.artifact_type === "dmg"
+        : entry.artifact_type === "nsis"
+    ) || release.release_artifacts?.[0]
   if (!artifact?.file_url) return null
   return {
     platform: release.platform,
@@ -286,6 +338,14 @@ function controlPlaneCandidate(release: ReleaseRow): InstallerCandidate | null {
     buildNumber: release.build_number,
     mandatory: release.mandatory,
     minimumSupportedVersion: release.minimum_supported_version,
+    artifactType: artifact.artifact_type || null,
+    updaterUrl: artifact.updater_url || null,
+    updaterSize: artifact.updater_size || null,
+    updaterSha256: artifact.updater_sha256 || null,
+    updateSignature: artifact.update_signature || null,
+    updaterSignatureVerified: artifact.updater_signature_status === "valid",
+    publicationStatus: release.release_status || null,
+    releaseDate: release.published_at || null,
   }
 }
 
@@ -340,6 +400,10 @@ function missingAvailability(
     checksumVerified: false,
     metadataValid: false,
     productionRecommended: false,
+    productionSigned: false,
+    manualInstallAllowed: false,
+    trustState: "invalid",
+    releaseMode: "INVALID_RELEASE",
     warning: null,
     blockedReason: reason,
     releaseChannel: "internal",
@@ -350,6 +414,14 @@ function missingAvailability(
     buildNumber: null,
     mandatory: false,
     minimumSupportedVersion: null,
+    artifactType: null,
+    updaterUrl: null,
+    updaterSize: null,
+    updaterSha256: null,
+    updateSignature: null,
+    updaterSignatureVerified: false,
+    publicationStatus: null,
+    releaseDate: null,
     installer: null,
   }
 }
@@ -367,11 +439,14 @@ async function availabilityForPlatform(
     .map(controlPlaneCandidate)
     .filter((candidate): candidate is InstallerCandidate => Boolean(candidate))
   const checkedCandidates = checkedInCandidates(platform)
-  const candidates = deduplicateCandidates([
+  const allCandidates = deduplicateCandidates([
     ...checkedCandidates,
     ...controlCandidates,
     ...configuredCandidates(platform),
-  ]).filter((candidate) => !requestedVersion || candidate.version === requestedVersion)
+  ])
+  const candidates = allCandidates.filter(
+    (candidate) => !requestedVersion || candidate.version === requestedVersion
+  )
 
   if (candidates.length === 0) {
     if (platformRows.length > 0) {
@@ -391,10 +466,17 @@ async function availabilityForPlatform(
         "unpublished"
       )
     }
+    const staleVersions = [...new Set(allCandidates.map((candidate) => candidate.version).filter(Boolean))]
+    if (requestedVersion && staleVersions.length > 0) {
+      return missingAvailability(
+        platform,
+        `${platform === "macos" ? "macOS" : "Windows"} release metadata is stale (${staleVersions.join(", ")}); no integrity-verified ${requestedVersion} artifact is available.`,
+        "stale_metadata"
+      )
+    }
     return missingAvailability(
       platform,
-      controlPlaneError ||
-        `No genuine ${platform === "macos" ? "macOS" : "Windows"} installer for Bezgrow ${requestedVersion || "current"} was found in local downloads, release metadata, or configured URLs.`
+      `No genuine ${platform === "macos" ? "macOS" : "Windows"} installer for Bezgrow ${requestedVersion || "current"} was found in verified release metadata${controlPlaneError ? "; the control-plane lookup is also temporarily unavailable" : ""}.`
     )
   }
 
@@ -469,7 +551,8 @@ function releaseCandidateVersions(rows: ReleaseRow[]) {
 
 function desktopAvailability(
   mac: PublicReleaseAvailability,
-  windows: PublicReleaseAvailability
+  windows: PublicReleaseAvailability,
+  controlPlaneError: string | null
 ): PublicDesktopReleaseAvailability {
   const manifest: PublicDesktopReleaseManifest = {
     generatedAt: new Date(0).toISOString(),
@@ -506,20 +589,14 @@ function desktopAvailability(
         : null,
     mac,
     windows,
+    metadataService: {
+      status: controlPlaneError ? "degraded" : "available",
+      source: controlPlaneError ? "verified-fallback" : "control-plane-and-verified-fallback",
+      message: controlPlaneError
+        ? controlPlaneError
+        : "Release metadata loaded successfully.",
+    },
   }
-}
-
-function incompleteCohortAvailability(
-  platform: InstallerPlatform,
-  version: string,
-  counterpart: PublicReleaseAvailability
-) {
-  const counterpartName = platform === "macos" ? "Windows" : "macOS"
-  return missingAvailability(
-    platform,
-    `Bezgrow ${version} remains unpublished because its ${counterpartName} installer has not passed integrity validation: ${counterpart.reason}`,
-    counterpart.status
-  )
 }
 
 function manifestKey(installer: PublicInstallerRelease) {
@@ -540,13 +617,13 @@ export async function getDesktopReleaseAvailability(): Promise<PublicDesktopRele
   let rows: ReleaseRow[] = []
   let controlPlaneError: string | null = null
   try {
-    const result = await adminSupabase
+    const result = await withMetadataTimeout(adminSupabase
       .from("desktop_releases")
-      .select("id,version,build_number,platform,architecture,release_channel,release_status,active,rollout_percentage,minimum_supported_version,release_notes,mandatory,published_at,created_at,build_commit,build_timestamp,release_artifacts(file_url,file_size,sha256,validation_status,validation_error,signature_status,notarization_status,code_signing_status,validated_at,artifact_type,file_name)")
+      .select("id,version,build_number,platform,architecture,release_channel,release_status,active,rollout_percentage,minimum_supported_version,release_notes,mandatory,published_at,created_at,build_commit,build_timestamp,release_artifacts(file_url,file_size,sha256,validation_status,validation_error,signature_status,notarization_status,code_signing_status,validated_at,artifact_type,file_name,updater_url,updater_size,updater_sha256,update_signature,updater_signature_status)")
       .order("created_at", { ascending: false })
-      .limit(64)
+      .limit(64))
     if (result.error) {
-      controlPlaneError = "Release metadata service could not be loaded."
+      controlPlaneError = "The release control plane is temporarily unavailable; integrity-verified fallback metadata remains active."
       console.error("[public-release-availability]", {
         code: result.error.code,
         message: result.error.message,
@@ -555,7 +632,10 @@ export async function getDesktopReleaseAvailability(): Promise<PublicDesktopRele
       rows = (result.data || []) as ReleaseRow[]
     }
   } catch (error) {
-    controlPlaneError = "Release metadata service could not be loaded."
+    controlPlaneError =
+      error instanceof Error && /timed out/i.test(error.message)
+        ? "The release control plane timed out; integrity-verified fallback metadata remains active."
+        : "The release control plane is temporarily unavailable; integrity-verified fallback metadata remains active."
     console.error("[public-release-availability]", {
       message: error instanceof Error ? error.message : "Unknown release metadata error",
     })
@@ -569,18 +649,7 @@ export async function getDesktopReleaseAvailability(): Promise<PublicDesktopRele
     availabilityForPlatform("macos", rows, controlPlaneError, releaseVersion),
     availabilityForPlatform("windows", rows, controlPlaneError, releaseVersion),
   ])
-  if (
-    mac.available &&
-    windows.available &&
-    mac.installer?.version === releaseVersion &&
-    windows.installer?.version === releaseVersion
-  ) {
-    return desktopAvailability(mac, windows)
-  }
-  return desktopAvailability(
-    mac.available ? incompleteCohortAvailability("macos", releaseVersion, windows) : mac,
-    windows.available ? incompleteCohortAvailability("windows", releaseVersion, mac) : windows
-  )
+  return desktopAvailability(mac, windows, controlPlaneError)
 }
 
 export async function getPublicDesktopReleaseManifest(): Promise<PublicDesktopReleaseManifest | null> {

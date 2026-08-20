@@ -16,6 +16,7 @@ export async function GET() {
       mac: availability.mac,
       windows: availability.windows,
     },
+    metadataService: availability.metadataService,
   }, {
     headers: {
       "Cache-Control": "private, no-store, max-age=0, must-revalidate",

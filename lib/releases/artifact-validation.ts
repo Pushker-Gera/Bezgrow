@@ -5,9 +5,15 @@ import { createReadStream } from "node:fs"
 import { open, stat } from "node:fs/promises"
 import { basename, extname, resolve, sep } from "node:path"
 import { isPublicHttpsUrl } from "@/lib/security/public-url"
+import {
+  classifyReleaseTrust,
+  type ReleaseMode,
+  type ReleaseTrustState,
+} from "@/lib/releases/trust"
 
 export type InstallerPlatform = "macos" | "windows"
 export type InstallerArchitecture = "arm64" | "x64" | "x86_64"
+export type { ReleaseMode, ReleaseTrustState } from "@/lib/releases/trust"
 
 export type InstallerCandidate = {
   platform: InstallerPlatform
@@ -28,6 +34,14 @@ export type InstallerCandidate = {
   buildNumber?: string | null
   mandatory?: boolean
   minimumSupportedVersion?: string | null
+  artifactType?: string | null
+  updaterUrl?: string | null
+  updaterSize?: number | null
+  updaterSha256?: string | null
+  updateSignature?: string | null
+  updaterSignatureVerified?: boolean | null
+  publicationStatus?: string | null
+  releaseDate?: string | null
 }
 
 export type ValidatedInstaller = {
@@ -45,6 +59,10 @@ export type ValidatedInstaller = {
   checksumVerified: boolean
   metadataValid: boolean
   productionRecommended: boolean
+  productionSigned: boolean
+  manualInstallAllowed: boolean
+  trustState: ReleaseTrustState
+  releaseMode: ReleaseMode
   warning: string | null
   blockedReason: string | null
   releaseChannel: string
@@ -55,6 +73,14 @@ export type ValidatedInstaller = {
   buildNumber: string | null
   mandatory: boolean
   minimumSupportedVersion: string | null
+  artifactType: string | null
+  updaterUrl: string | null
+  updaterSize: number | null
+  updaterSha256: string | null
+  updateSignature: string | null
+  updaterSignatureVerified: boolean
+  publicationStatus: string | null
+  releaseDate: string | null
 }
 
 type ArtifactBytes = {
@@ -78,6 +104,42 @@ const HEADER_BYTES = 4096
 const LOCAL_CACHE_MS = 30_000
 const REMOTE_CACHE_MS = 5 * 60_000
 const validationCache = new Map<string, { expiresAt: number; result: Promise<ValidatedInstaller> }>()
+
+function trustedBezgrowHostname(hostname: string) {
+  const normalized = hostname.toLowerCase()
+  let configuredHost = "www.bezgrow.com"
+  try {
+    configuredHost = new URL(process.env.NEXT_PUBLIC_SITE_URL || "https://www.bezgrow.com").hostname.toLowerCase()
+  } catch {
+    // Keep the production default when configuration is malformed.
+  }
+  return normalized === configuredHost || normalized === "bezgrow.com" || normalized.endsWith(".bezgrow.com")
+}
+
+function trustedGithubReleasePath(url: URL) {
+  return (
+    url.hostname.toLowerCase() === "github.com" &&
+    url.pathname.startsWith("/Pushker-Gera/Bezgrow/releases/download/")
+  )
+}
+
+function trustedRedirectAssetHost(hostname: string) {
+  return ["objects.githubusercontent.com", "release-assets.githubusercontent.com"].includes(hostname.toLowerCase())
+}
+
+export function isTrustedBezgrowArtifactUrl(value: string, redirected = false) {
+  try {
+    const url = new URL(value)
+    if (url.protocol !== "https:" || url.username || url.password || (url.port && url.port !== "443")) return false
+    return (
+      trustedBezgrowHostname(url.hostname) ||
+      trustedGithubReleasePath(url) ||
+      (redirected && trustedRedirectAssetHost(url.hostname))
+    )
+  } catch {
+    return false
+  }
+}
 
 const contentTypes: Record<string, string> = {
   ".dmg": "application/x-apple-diskimage",
@@ -229,9 +291,12 @@ async function readLocalArtifact(href: string): Promise<ArtifactBytes> {
 }
 
 async function fetchPublicInstaller(initialUrl: string): Promise<Response> {
+  if (!isTrustedBezgrowArtifactUrl(initialUrl)) {
+    throw new Error("Installer URL is not a trusted Bezgrow release location.")
+  }
   let currentUrl = new URL(initialUrl)
   for (let redirectCount = 0; redirectCount <= 5; redirectCount += 1) {
-    if (!(await isPublicHttpsUrl(currentUrl))) {
+    if (!(await isPublicHttpsUrl(currentUrl)) || !isTrustedBezgrowArtifactUrl(currentUrl.toString(), redirectCount > 0)) {
       throw new Error("Installer URL is not an allowed public HTTPS location.")
     }
     const response = await fetch(currentUrl, {
@@ -323,9 +388,13 @@ function unavailable(candidate: InstallerCandidate, reason: string): ValidatedIn
     checksumVerified: false,
     metadataValid: false,
     productionRecommended: false,
+    productionSigned: false,
+    manualInstallAllowed: false,
+    trustState: "invalid",
+    releaseMode: "INVALID_RELEASE",
     warning: null,
     blockedReason: reason,
-    releaseChannel: candidate.releaseChannel || "internal",
+    releaseChannel: candidate.releaseChannel || "manual",
     generatedAt: candidate.generatedAt || null,
     buildCommit: candidate.buildCommit || null,
     buildTimestamp: candidate.buildTimestamp || null,
@@ -333,6 +402,14 @@ function unavailable(candidate: InstallerCandidate, reason: string): ValidatedIn
     buildNumber: candidate.buildNumber || null,
     mandatory: Boolean(candidate.mandatory),
     minimumSupportedVersion: candidate.minimumSupportedVersion || null,
+    artifactType: candidate.artifactType || null,
+    updaterUrl: candidate.updaterUrl || null,
+    updaterSize: candidate.updaterSize || null,
+    updaterSha256: candidate.updaterSha256?.toLowerCase() || null,
+    updateSignature: candidate.updateSignature || null,
+    updaterSignatureVerified: candidate.updaterSignatureVerified === true,
+    publicationStatus: candidate.publicationStatus || null,
+    releaseDate: candidate.releaseDate || null,
   }
 }
 
@@ -435,7 +512,7 @@ async function validateUncached(candidate: InstallerCandidate): Promise<Validate
       commitLike(candidate.buildCommit) &&
       timestampLike(candidate.buildTimestamp)
   )
-  const releaseChannel = candidate.releaseChannel || (signed && (candidate.platform === "windows" || notarized) ? "stable" : "internal")
+  const releaseChannel = candidate.releaseChannel || (signed && (candidate.platform === "windows" || notarized) ? "stable" : "manual")
   const productionRecommended = Boolean(
     signed &&
       (candidate.platform === "windows" || notarized) &&
@@ -444,11 +521,22 @@ async function validateUncached(candidate: InstallerCandidate): Promise<Validate
       releaseChannel === "stable"
   )
   const available = checksumVerified && metadataValid
+  const {
+    productionSigned,
+    manualInstallAllowed,
+    trustState,
+    releaseMode,
+  } = classifyReleaseTrust({
+    available,
+    platform: candidate.platform,
+    signed,
+    notarized,
+  })
   const warning =
     candidate.platform === "macos" && (!signed || !notarized)
-      ? "Unsigned development distribution. macOS may display a security warning. This build has not yet been Apple notarized."
+      ? "Manual installation build. This version is not yet Apple-notarized. macOS may display a security warning during first launch. The application is fully functional after the operating system permits it to run."
       : candidate.platform === "windows" && !signed
-        ? "Unsigned Windows build. Windows SmartScreen may show a warning because an Authenticode certificate has not yet been configured."
+        ? "Manual installation build. This version is not yet digitally signed with a production Windows certificate. Windows SmartScreen may display a warning during installation."
         : !metadataValid
           ? "Installer is available, but some release metadata is incomplete."
           : null
@@ -471,6 +559,10 @@ async function validateUncached(candidate: InstallerCandidate): Promise<Validate
     checksumVerified,
     metadataValid,
     productionRecommended,
+    productionSigned,
+    manualInstallAllowed,
+    trustState,
+    releaseMode,
     warning,
     blockedReason: available
       ? null
@@ -483,6 +575,14 @@ async function validateUncached(candidate: InstallerCandidate): Promise<Validate
     buildNumber: candidate.buildNumber || null,
     mandatory: Boolean(candidate.mandatory),
     minimumSupportedVersion: candidate.minimumSupportedVersion || null,
+    artifactType: candidate.artifactType || extension.slice(1),
+    updaterUrl: candidate.updaterUrl || null,
+    updaterSize: candidate.updaterSize || null,
+    updaterSha256: candidate.updaterSha256?.toLowerCase() || null,
+    updateSignature: candidate.updateSignature || null,
+    updaterSignatureVerified: candidate.updaterSignatureVerified === true,
+    publicationStatus: candidate.publicationStatus || null,
+    releaseDate: candidate.releaseDate || null,
   }
 }
 

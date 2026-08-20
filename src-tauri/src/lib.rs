@@ -1197,6 +1197,30 @@ struct DesktopUpdatePreflight {
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
+struct VerifiedReleaseDownloadRequest {
+    url: String,
+    version: String,
+    platform: String,
+    architecture: String,
+    filename: String,
+    size: u64,
+    sha256: String,
+    trust_state: String,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct VerifiedReleaseDownload {
+    path: String,
+    filename: String,
+    bytes: u64,
+    sha256: String,
+    version: String,
+    trust_state: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct DesktopSqlStatement {
     query: String,
     #[serde(default)]
@@ -3214,6 +3238,264 @@ async fn desktop_prepare_update<R: tauri::Runtime>(
     result
 }
 
+fn normalized_release_architecture(value: &str) -> Option<&'static str> {
+    match value.to_ascii_lowercase().as_str() {
+        "arm64" | "aarch64" => Some("arm64"),
+        "x64" | "x86_64" | "amd64" => Some("x64"),
+        _ => None,
+    }
+}
+
+fn current_release_architecture() -> &'static str {
+    if cfg!(target_arch = "aarch64") {
+        "arm64"
+    } else {
+        "x64"
+    }
+}
+
+fn current_release_platform() -> &'static str {
+    if cfg!(target_os = "windows") {
+        "windows"
+    } else if cfg!(target_os = "macos") {
+        "macos"
+    } else {
+        "unsupported"
+    }
+}
+
+fn validate_verified_release_request(
+    release: &VerifiedReleaseDownloadRequest,
+) -> Result<tauri::Url, String> {
+    if !release
+        .version
+        .bytes()
+        .all(|byte| byte.is_ascii_digit() || byte == b'.')
+        || release.version.split('.').count() != 3
+    {
+        return Err("The release version is invalid.".to_string());
+    }
+    if release.platform != current_release_platform() {
+        return Err("The release platform does not match this Bezgrow installation.".to_string());
+    }
+    if normalized_release_architecture(&release.architecture)
+        != Some(current_release_architecture())
+    {
+        return Err("The release architecture does not match this device.".to_string());
+    }
+    if release.size < 1024 * 1024 || release.size > 2 * 1024 * 1024 * 1024 {
+        return Err("The release size is outside the permitted installer range.".to_string());
+    }
+    if release.sha256.len() != 64 || !release.sha256.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        return Err("The release SHA-256 is invalid.".to_string());
+    }
+    if !matches!(
+        release.trust_state.as_str(),
+        "signed-production" | "unsigned-manual-install"
+    ) {
+        return Err("The release trust state is not installable.".to_string());
+    }
+
+    let filename_path = Path::new(&release.filename);
+    if filename_path.file_name().and_then(|value| value.to_str()) != Some(release.filename.as_str())
+        || release.filename.contains('/')
+        || release.filename.contains('\\')
+        || !release
+            .filename
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || b"-_.() ".contains(&byte))
+    {
+        return Err("The release filename is unsafe.".to_string());
+    }
+    let lower_filename = release.filename.to_ascii_lowercase();
+    let allowed_extension = if release.platform == "macos" {
+        lower_filename.ends_with(".dmg")
+    } else {
+        lower_filename.ends_with(".exe")
+            || lower_filename.ends_with(".msi")
+            || lower_filename.ends_with(".msix")
+    };
+    if !allowed_extension || !release.filename.contains(&release.version) {
+        return Err("The release filename does not match its platform or version.".to_string());
+    }
+
+    let parsed =
+        tauri::Url::parse(&release.url).map_err(|error| format!("Invalid release URL: {error}"))?;
+    let host = parsed.host_str().unwrap_or_default().to_ascii_lowercase();
+    let trusted_host = host == "bezgrow.com" || host.ends_with(".bezgrow.com");
+    if parsed.scheme() != "https"
+        || parsed.username() != ""
+        || parsed.password().is_some()
+        || parsed.port().is_some_and(|port| port != 443)
+        || !trusted_host
+        || parsed.path() != "/api/downloads/desktop"
+    {
+        return Err(
+            "The assisted update URL is not the trusted Bezgrow release endpoint.".to_string(),
+        );
+    }
+    let expected_platform = if release.platform == "macos" {
+        ["mac", "macos"].as_slice()
+    } else {
+        ["windows"].as_slice()
+    };
+    let requested_platform = parsed
+        .query_pairs()
+        .find(|(key, _)| key == "platform")
+        .map(|(_, value)| value.into_owned())
+        .unwrap_or_default();
+    if !expected_platform.contains(&requested_platform.as_str()) {
+        return Err("The assisted update URL targets the wrong platform.".to_string());
+    }
+    Ok(parsed)
+}
+
+#[tauri::command]
+async fn desktop_download_verified_release<R: tauri::Runtime>(
+    app: tauri::AppHandle<R>,
+    release: VerifiedReleaseDownloadRequest,
+) -> Result<VerifiedReleaseDownload, String> {
+    if !app
+        .state::<DesktopOperationState>()
+        .update_preparing
+        .load(Ordering::SeqCst)
+    {
+        return Err("A database-safe update has not been prepared.".to_string());
+    }
+    let url = validate_verified_release_request(&release)?;
+    let update_directory = managed_data_directory(&app, "Updates")?;
+    fs::create_dir_all(&update_directory)
+        .map_err(|error| format!("Unable to create the verified update folder: {error}"))?;
+    #[cfg(target_os = "macos")]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&update_directory, fs::Permissions::from_mode(0o700))
+            .map_err(|error| format!("Unable to secure the verified update folder: {error}"))?;
+    }
+
+    let unique_name = format!("{}-{}", unix_timestamp(), release.filename);
+    let final_path = update_directory.join(unique_name);
+    let partial_path = final_path.with_extension(format!(
+        "{}.part",
+        final_path
+            .extension()
+            .and_then(|value| value.to_str())
+            .unwrap_or("download")
+    ));
+    let result = async {
+        let client = reqwest::Client::builder()
+            .redirect(reqwest::redirect::Policy::none())
+            .timeout(Duration::from_secs(15 * 60))
+            .build()
+            .map_err(|error| format!("Unable to initialize the verified downloader: {error}"))?;
+        let mut response = client
+            .get(url)
+            .header(
+                reqwest::header::ACCEPT,
+                "application/octet-stream, application/x-apple-diskimage, application/vnd.microsoft.portable-executable, application/x-msi, application/msix",
+            )
+            .send()
+            .await
+            .map_err(|error| format!("Unable to download the verified Bezgrow installer: {error}"))?;
+        if !response.status().is_success() {
+            return Err(format!(
+                "The Bezgrow release endpoint returned HTTP {}.",
+                response.status()
+            ));
+        }
+        let headers = response.headers();
+        let header_value = |name: &'static str| {
+            headers
+                .get(name)
+                .and_then(|value| value.to_str().ok())
+                .unwrap_or_default()
+        };
+        if header_value("x-bezgrow-artifact-version") != release.version
+            || header_value("x-bezgrow-artifact-sha256")
+                .to_ascii_lowercase()
+                != release.sha256.to_ascii_lowercase()
+            || normalized_release_architecture(header_value("x-bezgrow-artifact-architecture"))
+                != normalized_release_architecture(&release.architecture)
+            || header_value("x-bezgrow-release-trust") != release.trust_state
+        {
+            return Err("The downloaded installer identity does not match release metadata.".to_string());
+        }
+        if response.content_length().is_some_and(|size| size != release.size) {
+            return Err("The downloaded installer size does not match release metadata.".to_string());
+        }
+        let content_type = header_value("content-type").to_ascii_lowercase();
+        if content_type.starts_with("text/")
+            || content_type.contains("text/html")
+            || content_type.contains("application/json")
+        {
+            return Err("The release endpoint returned text instead of installer bytes.".to_string());
+        }
+
+        let mut output = OpenOptions::new()
+            .create_new(true)
+            .write(true)
+            .open(&partial_path)
+            .map_err(|error| format!("Unable to create the verified installer file: {error}"))?;
+        let mut digest = Sha256::new();
+        let mut bytes = 0_u64;
+        while let Some(chunk) = response
+            .chunk()
+            .await
+            .map_err(|error| format!("The verified installer download was interrupted: {error}"))?
+        {
+            bytes = bytes.saturating_add(chunk.len() as u64);
+            if bytes > release.size || bytes > 2 * 1024 * 1024 * 1024 {
+                return Err("The installer exceeded its verified release size.".to_string());
+            }
+            digest.update(&chunk);
+            output
+                .write_all(&chunk)
+                .map_err(|error| format!("Unable to save the verified installer: {error}"))?;
+        }
+        output
+            .sync_all()
+            .map_err(|error| format!("Unable to finish the verified installer file: {error}"))?;
+        if bytes != release.size {
+            return Err(format!(
+                "The installer download is incomplete: expected {} bytes but received {bytes}.",
+                release.size
+            ));
+        }
+        let actual_sha256 = format!("{:x}", digest.finalize());
+        if actual_sha256 != release.sha256.to_ascii_lowercase() {
+            return Err("The installer SHA-256 does not match trusted release metadata.".to_string());
+        }
+        fs::rename(&partial_path, &final_path)
+            .map_err(|error| format!("Unable to finalize the verified installer: {error}"))?;
+        Ok(VerifiedReleaseDownload {
+            path: final_path.to_string_lossy().to_string(),
+            filename: release.filename.clone(),
+            bytes,
+            sha256: actual_sha256,
+            version: release.version.clone(),
+            trust_state: release.trust_state.clone(),
+        })
+    }
+    .await;
+    if result.is_err() {
+        let _ = fs::remove_file(&partial_path);
+    }
+    if let Ok(download) = &result {
+        append_startup_log_handle(
+            &app,
+            format!(
+                "Verified assisted update downloaded: version={}, file={}, bytes={}, sha256={}, trust={}",
+                download.version,
+                download.filename,
+                download.bytes,
+                download.sha256,
+                download.trust_state
+            ),
+        );
+    }
+    result
+}
+
 #[tauri::command]
 fn desktop_cancel_update_preparation<R: tauri::Runtime>(app: tauri::AppHandle<R>) {
     app.state::<DesktopOperationState>()
@@ -4163,7 +4445,34 @@ fn decode_chunked_http_body(mut body: &[u8]) -> Option<Vec<u8>> {
 
 #[cfg(test)]
 mod runtime_lifecycle_tests {
-    use super::decode_chunked_http_body;
+    use super::{
+        current_release_architecture, current_release_platform, decode_chunked_http_body,
+        validate_verified_release_request, VerifiedReleaseDownloadRequest,
+    };
+
+    fn valid_release_request() -> VerifiedReleaseDownloadRequest {
+        let platform = current_release_platform();
+        let platform_query = if platform == "windows" {
+            "windows"
+        } else {
+            "mac"
+        };
+        let extension = if platform == "windows" { "exe" } else { "dmg" };
+        VerifiedReleaseDownloadRequest {
+            url: format!("https://www.bezgrow.com/api/downloads/desktop?platform={platform_query}"),
+            version: "0.1.14".to_string(),
+            platform: platform.to_string(),
+            architecture: current_release_architecture().to_string(),
+            filename: format!(
+                "Bezgrow-0.1.14-{}.{}",
+                current_release_architecture(),
+                extension
+            ),
+            size: 80 * 1024 * 1024,
+            sha256: "a".repeat(64),
+            trust_state: "unsigned-manual-install".to_string(),
+        }
+    }
 
     #[test]
     fn authenticated_health_chunked_body_is_decoded() {
@@ -4177,6 +4486,41 @@ mod runtime_lifecycle_tests {
     #[test]
     fn malformed_health_chunk_is_rejected() {
         assert!(decode_chunked_http_body(b"20\r\nshort\r\n0\r\n\r\n").is_none());
+    }
+
+    #[test]
+    fn assisted_update_accepts_only_the_verified_bezgrow_endpoint() {
+        if current_release_platform() == "unsupported" {
+            return;
+        }
+        let mut release = valid_release_request();
+        assert!(validate_verified_release_request(&release).is_ok());
+        release.url = "https://example.com/api/downloads/desktop?platform=mac".to_string();
+        assert!(validate_verified_release_request(&release)
+            .unwrap_err()
+            .contains("trusted Bezgrow release endpoint"));
+    }
+
+    #[test]
+    fn assisted_update_rejects_wrong_architecture_and_invalid_trust() {
+        if current_release_platform() == "unsupported" {
+            return;
+        }
+        let mut release = valid_release_request();
+        release.architecture = if current_release_architecture() == "arm64" {
+            "x64".to_string()
+        } else {
+            "arm64".to_string()
+        };
+        assert!(validate_verified_release_request(&release)
+            .unwrap_err()
+            .contains("architecture"));
+
+        let mut release = valid_release_request();
+        release.trust_state = "invalid".to_string();
+        assert!(validate_verified_release_request(&release)
+            .unwrap_err()
+            .contains("trust state"));
     }
 }
 
@@ -5125,6 +5469,7 @@ pub fn run() {
             desktop_database_diagnostics,
             desktop_database_backup,
             desktop_prepare_update,
+            desktop_download_verified_release,
             desktop_cancel_update_preparation,
             desktop_restart_after_update,
             desktop_execute,

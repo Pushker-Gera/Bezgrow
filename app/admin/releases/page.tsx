@@ -21,7 +21,7 @@ const initialRelease = {
   build_number: "",
   platform: "macos",
   architecture: "arm64",
-  release_channel: "internal",
+  release_channel: "manual",
   artifact_type: "dmg",
   file_url: "",
   file_size: "",
@@ -100,11 +100,11 @@ export default function ReleasesPage() {
       <AdminPageHeader
         eyebrow="Desktop distribution"
         title="Releases and updates"
-        description="Register and validate each platform independently. Stable publication requires a real installer plus a SHA-256 checked, Minisign-verified Tauri updater artifact, code signing, and macOS notarization."
+        description="Register and validate each platform independently. Manual installation releases require real integrity-verified artifacts; stable publication additionally requires a Minisign-verified Tauri updater artifact, code signing, and macOS notarization."
         action={<button type="button" onClick={() => setCreateOpen(true)} className="h-12 rounded-2xl bg-cyan-300 px-5 text-sm font-black text-black">Create draft release</button>}
       />
       <AdminNotice tone="warning">
-        Integrity validation is always required. Stable releases cannot publish until installer trust and updater signature checks pass; unsigned or unnotarized builds remain internal/testing only.
+        Integrity validation is always required. Valid unsigned or unnotarized builds may publish explicitly as manual installation releases; stable production releases still require platform trust and updater signature checks.
       </AdminNotice>
       {notice && <AdminNotice tone="success">{notice}</AdminNotice>}
       {actionError && <AdminNotice tone="danger">{actionError}</AdminNotice>}
@@ -135,7 +135,7 @@ export default function ReleasesPage() {
           {
             key: "version",
             label: "Release",
-            render: (row) => <div><p className="font-black text-white">v{displayValue(row.version)} ({displayValue(row.build_number)})</p><p className="mt-1 text-xs text-neutral-500">{displayValue(row.platform)} · {displayValue(row.architecture)} · {row.release_channel === "internal" ? "internal/testing" : displayValue(row.release_channel)}</p><p className="mt-1 text-xs text-neutral-600">Minimum: {displayValue(row.minimum_supported_version, "Not configured")}</p></div>,
+            render: (row) => <div><p className="font-black text-white">v{displayValue(row.version)} ({displayValue(row.build_number)})</p><p className="mt-1 text-xs text-neutral-500">{displayValue(row.platform)} · {displayValue(row.architecture)} · {["manual", "internal"].includes(String(row.release_channel)) ? "manual installation" : displayValue(row.release_channel)}</p><p className="mt-1 text-xs text-neutral-600">Minimum: {displayValue(row.minimum_supported_version, "Not configured")}</p></div>,
           },
           {
             key: "artifact",
@@ -171,8 +171,8 @@ export default function ReleasesPage() {
                   {row.release_status === "draft" && <button type="button" onClick={() => void runAction(row, "publish")} className="rounded-lg border border-emerald-400/25 px-2.5 py-1.5 text-xs font-bold text-emerald-100">Publish</button>}
                   {row.release_status === "published" && <button type="button" onClick={() => void runAction(row, "unpublish")} className="rounded-lg border border-amber-400/25 px-2.5 py-1.5 text-xs font-bold text-amber-100">Unpublish</button>}
                   {row.release_status === "paused" && <button type="button" onClick={() => void runAction(row, "resume")} className="rounded-lg border border-emerald-400/25 px-2.5 py-1.5 text-xs font-bold text-emerald-100">Resume</button>}
-                  {row.release_channel !== "internal" && <button type="button" onClick={() => void runAction(row, "mark_internal")} className="rounded-lg border border-amber-400/25 px-2.5 py-1.5 text-xs font-bold text-amber-100">Mark internal/testing</button>}
-                  {row.release_channel === "internal" && <button type="button" onClick={() => void runAction(row, "mark_stable")} className="rounded-lg border border-white/10 px-2.5 py-1.5 text-xs font-bold">Mark stable</button>}
+                  {!["manual", "internal"].includes(String(row.release_channel)) && <button type="button" onClick={() => void runAction(row, "mark_manual")} className="rounded-lg border border-amber-400/25 px-2.5 py-1.5 text-xs font-bold text-amber-100">Mark manual installation</button>}
+                  {["manual", "internal"].includes(String(row.release_channel)) && <button type="button" onClick={() => void runAction(row, "mark_stable")} className="rounded-lg border border-white/10 px-2.5 py-1.5 text-xs font-bold">Mark stable</button>}
                   <button type="button" onClick={() => void runAction(row, "set_rollout")} className="rounded-lg border border-white/10 px-2.5 py-1.5 text-xs font-bold">Rollout %</button>
                   <button type="button" onClick={() => void runAction(row, "mark_mandatory")} className="rounded-lg border border-white/10 px-2.5 py-1.5 text-xs font-bold">{row.mandatory ? "Make optional" : "Mark mandatory"}</button>
                   {row.release_status !== "retired" && <button type="button" onClick={() => void runAction(row, "archive")} className="rounded-lg border border-red-400/20 px-2.5 py-1.5 text-xs font-bold text-red-200">Archive</button>}
@@ -208,7 +208,7 @@ export default function ReleasesPage() {
             {[
               ["platform", "Platform", ["macos", "windows"]],
               ["architecture", "Architecture", ["arm64", "x64"]],
-              ["release_channel", "Channel", ["stable", "beta", "internal"]],
+              ["release_channel", "Channel", ["stable", "beta", "manual", "internal"]],
             ].map(([key, label, options]) => (
               <label key={String(key)} className="text-sm font-bold text-neutral-300">
                 {String(label)}

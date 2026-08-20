@@ -4,6 +4,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { check, type DownloadEvent } from "@tauri-apps/plugin-updater"
 import { getVersion } from "@tauri-apps/api/app"
 import {
+  absoluteInstallerUrl,
+  automaticUpdaterAvailable,
   fetchDesktopReleaseManifest,
   formatUpdateSize,
   isDesktopUpdateAvailable,
@@ -11,6 +13,7 @@ import {
   normalizeReleaseNotes,
   reportDesktopUpdateResult,
   releaseForCurrentPlatform,
+  verifiedInstallerRouteForCurrentPlatform,
   type DesktopReleaseManifest,
 } from "@/lib/app-updates"
 import { invokeTauri, isTauriRuntimeAsync } from "@/lib/desktop/tauri"
@@ -32,6 +35,15 @@ import {
 import packageJson from "@/package.json"
 
 type InstallState = "idle" | "checking" | "preparing" | "downloading" | "installing" | "restarting" | "failed"
+
+type VerifiedReleaseDownload = {
+  path: string
+  filename: string
+  bytes: number
+  sha256: string
+  version: string
+  trustState: "signed-production" | "unsigned-manual-install"
+}
 
 const RECENT_EDIT_WINDOW_MS = 2 * 60 * 1000
 const UPDATE_CHECK_INTERVAL_MS = 6 * 60 * 60 * 1000
@@ -70,6 +82,7 @@ export default function DesktopUpdateCoordinator() {
 
   const latestVersion = latestVersionForCurrentPlatform(manifest)
   const release = releaseForCurrentPlatform(manifest)
+  const automaticDelivery = automaticUpdaterAvailable(release)
   const notes = useMemo(() => normalizeReleaseNotes(manifest), [manifest])
   const available = Boolean(latestVersion && isDesktopUpdateAvailable(manifest, currentVersion))
   const visible = Boolean(available && decision && Date.now() >= decision.nextPromptAt)
@@ -83,8 +96,8 @@ export default function DesktopUpdateCoordinator() {
       setCurrentVersion(installedVersion)
       const pendingRestart = readPendingUpdateRestart()
       if (pendingRestart && pendingUpdateHasLaunched(pendingRestart, installedVersion)) {
-        const reported = await reportDesktopUpdateResult(installedVersion, "success")
-        if (reported) clearPendingUpdateRestart()
+        clearPendingUpdateRestart()
+        void reportDesktopUpdateResult(installedVersion, "success")
       }
       const nextManifest = await fetchDesktopReleaseManifest(undefined, installedVersion)
       lastCheckedAt.current = Date.now()
@@ -120,44 +133,92 @@ export default function DesktopUpdateCoordinator() {
     }
 
     installing.current = true
+    const assistedDelivery = !automaticUpdaterAvailable(release)
     let prepared = false
     let updater: Awaited<ReturnType<typeof check>> = null
+    let assistedInstallerLaunched = false
     try {
       setInstallState("preparing")
       setMessage("Checking SQLite integrity and creating a pre-update backup…")
       await invokeTauri("desktop_prepare_update", { unsavedWork: false })
       prepared = true
 
-      setInstallState("checking")
-      updater = await check({ timeout: 20_000 })
-      if (!updater) throw new Error("No signed compatible update is available for this device.")
-      if (latestVersion && updater.version !== latestVersion) {
-        throw new Error(`The signed updater returned ${updater.version}, but release metadata advertises ${latestVersion}.`)
-      }
+      if (automaticUpdaterAvailable(release)) {
+        setInstallState("checking")
+        updater = await check({ timeout: 20_000 })
+        if (!updater) throw new Error("No cryptographically signed compatible updater package is available for this device.")
+        if (latestVersion && updater.version !== latestVersion) {
+          throw new Error(`The verified updater returned ${updater.version}, but release metadata advertises ${latestVersion}.`)
+        }
 
-      let downloaded = 0
-      let total = release?.updaterSize || release?.size || 0
-      const onDownload = (event: DownloadEvent) => {
-        if (event.event === "Started") total = event.data.contentLength || total
-        if (event.event === "Progress") downloaded += event.data.chunkLength
-        if (event.event === "Started" || event.event === "Progress") {
-          setInstallState("downloading")
-          setProgress(total > 0 ? Math.min(100, Math.round((downloaded / total) * 100)) : 0)
-          setMessage(total > 0 ? `Downloading verified update… ${Math.min(100, Math.round((downloaded / total) * 100))}%` : "Downloading verified update…")
+        let downloaded = 0
+        let total = release?.updaterSize || release?.size || 0
+        const onDownload = (event: DownloadEvent) => {
+          if (event.event === "Started") total = event.data.contentLength || total
+          if (event.event === "Progress") downloaded += event.data.chunkLength
+          if (event.event === "Started" || event.event === "Progress") {
+            setInstallState("downloading")
+            setProgress(total > 0 ? Math.min(100, Math.round((downloaded / total) * 100)) : 0)
+            setMessage(total > 0 ? `Downloading verified update… ${Math.min(100, Math.round((downloaded / total) * 100))}%` : "Downloading verified update…")
+          }
+          if (event.event === "Finished") {
+            setInstallState("installing")
+            setMessage("Bezgrow updater signature verified. Installing the update…")
+          }
         }
-        if (event.event === "Finished") {
-          setInstallState("installing")
-          setMessage("Signature verified. Installing the update…")
+        await updater.downloadAndInstall(onDownload, { timeout: 10 * 60_000 })
+        markUpdatePendingRestart(updater.version, currentVersion)
+        setInstallState("restarting")
+        setMessage("Update installed. Bezgrow will restart in 5 seconds; your local data and licence remain in place.")
+        await new Promise((resolve) => globalThis.setTimeout(resolve, 5_000))
+        await invokeTauri("desktop_restart_after_update")
+      } else {
+        if (
+          !release ||
+          !latestVersion ||
+          !release.filename ||
+          !release.size ||
+          !release.sha256 ||
+          !release.platform ||
+          !release.architecture ||
+          !release.trustState ||
+          release.trustState === "invalid"
+        ) {
+          throw new Error("The assisted installer metadata is incomplete.")
         }
+        setInstallState("downloading")
+        setMessage("Downloading the installer and verifying its platform, architecture, size, and SHA-256…")
+        const downloaded = await invokeTauri<VerifiedReleaseDownload>(
+          "desktop_download_verified_release",
+          {
+            release: {
+              url: absoluteInstallerUrl(verifiedInstallerRouteForCurrentPlatform()),
+              version: latestVersion,
+              platform: release.platform,
+              architecture: release.architecture,
+              filename: release.filename,
+              size: release.size,
+              sha256: release.sha256,
+              trustState: release.trustState,
+            },
+          }
+        )
+        if (downloaded.version !== latestVersion || downloaded.sha256 !== release.sha256.toLowerCase()) {
+          throw new Error("The verified installer identity changed before launch.")
+        }
+        markUpdatePendingRestart(latestVersion, currentVersion)
+        setInstallState("installing")
+        setMessage("Installer verified. Your operating system may ask you to approve this manual installation build.")
+        await invokeTauri("desktop_open_file", { path: downloaded.path })
+        assistedInstallerLaunched = true
+        setInstallState("restarting")
+        setMessage("The verified installer is open. Bezgrow will close so installation can continue; reopen it after installation.")
+        await new Promise((resolve) => globalThis.setTimeout(resolve, 1_500))
+        await invokeTauri("desktop_exit")
       }
-      await updater.downloadAndInstall(onDownload, { timeout: 10 * 60_000 })
-      markUpdatePendingRestart(updater.version, currentVersion)
-      setInstallState("restarting")
-      setMessage("Update installed. Bezgrow will restart in 5 seconds; your local data and license remain in place.")
-      await new Promise((resolve) => globalThis.setTimeout(resolve, 5_000))
-      await invokeTauri("desktop_restart_after_update")
     } catch (error) {
       if (prepared) await invokeTauri("desktop_cancel_update_preparation").catch(() => undefined)
+      if (assistedDelivery && !assistedInstallerLaunched) clearPendingUpdateRestart()
       const errorMessage = error instanceof Error ? error.message : "The update could not be installed."
       setInstallState("failed")
       if (!/waiting|unsaved|operation in progress/i.test(errorMessage)) {
@@ -168,7 +229,7 @@ export default function DesktopUpdateCoordinator() {
       await updater?.close().catch(() => undefined)
       installing.current = false
     }
-  }, [currentVersion, latestVersion, release?.size, release?.updaterSize])
+  }, [currentVersion, latestVersion, release])
 
   useEffect(() => {
     let cleanup: (() => void) | undefined
@@ -209,14 +270,14 @@ export default function DesktopUpdateCoordinator() {
   }, [checkForUpdate, installUpdate])
 
   useEffect(() => {
-    if (!available || !decision || !navigator.onLine || !autoUpdateDue(decision)) return
+    if (!available || !automaticDelivery || !decision || !navigator.onLine || !autoUpdateDue(decision)) return
     if (decision.lastAttemptAt && Date.now() - decision.lastAttemptAt < 60 * 60 * 1000) return
     const nextDecision = { ...decision, lastAttemptAt: Date.now() }
     writeUpdateDecision(nextDecision)
     setDecision(nextDecision)
     const timer = globalThis.setTimeout(() => void installUpdate(true), 15_000)
     return () => globalThis.clearTimeout(timer)
-  }, [available, decision, installUpdate])
+  }, [automaticDelivery, available, decision, installUpdate])
 
   if (!visible || !manifest || !decision) return null
 
@@ -227,12 +288,16 @@ export default function DesktopUpdateCoordinator() {
     <aside className="fixed inset-x-3 bottom-3 z-[1000] mx-auto max-w-3xl rounded-2xl border border-cyan-300/30 bg-neutral-950/95 p-4 text-white shadow-2xl backdrop-blur-xl" role="status" aria-live="polite">
       <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
         <div className="min-w-0">
-          <p className="text-xs font-black uppercase tracking-[0.16em] text-cyan-200">Signed Bezgrow update available</p>
+          <p className="text-xs font-black uppercase tracking-[0.16em] text-cyan-200">Verified Bezgrow update available</p>
           <h2 className="mt-1 text-lg font-black">Version {latestVersion}</h2>
           <p className="mt-1 text-sm text-neutral-300">
             Current {currentVersion} · {platformLabel()}{size ? ` · ${size}` : ""} · Restart required
           </p>
-          <p className="mt-1 text-xs text-neutral-400">The update downloads only while online and installs only after database checks, a backup, and an idle-work check.</p>
+          <p className="mt-1 text-xs text-neutral-400">
+            {automaticDelivery
+              ? "The cryptographically signed updater package installs only after database checks, a backup, and an idle-work check."
+              : "This manual installation release is downloaded and SHA-256 verified after database checks and a backup. Your operating system may ask for approval."}
+          </p>
           {notes.length > 0 && <ul className="mt-2 max-h-24 space-y-1 overflow-auto text-sm text-neutral-200">{notes.map((note) => <li key={note}>• {note}</li>)}</ul>}
           {message && <p className={`mt-2 text-sm font-semibold ${installState === "failed" ? "text-red-200" : "text-cyan-100"}`}>{message}</p>}
           {installState === "downloading" && <progress className="mt-2 h-2 w-full" max={100} value={progress} aria-label="Update download progress" />}

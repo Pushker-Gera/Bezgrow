@@ -124,10 +124,11 @@ if (preparedBuildIdentity) {
 function releaseTrustMetadata({ platform, filename, signed, notarized = false, productionTrusted = false }) {
   const warning =
     platform === "macos" && (!signed || !notarized)
-      ? "Unsigned development distribution. macOS may display a security warning. This build has not yet been Apple notarized."
+      ? "Manual installation build. This version is not yet Apple-notarized. macOS may display a security warning during first launch. The application is fully functional after the operating system permits it to run."
       : platform === "windows" && !signed
-        ? "Unsigned Windows build. Windows SmartScreen may show a warning because an Authenticode certificate has not yet been configured."
+        ? "Manual installation build. This version is not yet digitally signed with a production Windows certificate. Windows SmartScreen may display a warning during installation."
         : null;
+  const productionSigned = Boolean(signed && (platform === "windows" || notarized));
   return {
     filename,
     platform,
@@ -138,9 +139,13 @@ function releaseTrustMetadata({ platform, filename, signed, notarized = false, p
     checksumVerified: true,
     metadataValid: true,
     productionRecommended: productionTrusted,
+    productionSigned,
+    manualInstallAllowed: !productionSigned,
+    trustState: productionSigned ? "signed-production" : "unsigned-manual-install",
+    releaseMode: productionSigned ? "SIGNED_PRODUCTION_RELEASE" : "UNSIGNED_MANUAL_RELEASE",
     warning,
     blockedReason: null,
-    releaseChannel: productionTrusted ? "stable" : "internal",
+    releaseChannel: productionTrusted ? "stable" : "manual",
     buildCommit,
     buildTimestamp,
   };

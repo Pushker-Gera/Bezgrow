@@ -228,36 +228,53 @@ export async function POST(request: Request) {
 
     const releaseResult = await adminSupabase
       .from("desktop_releases")
-      .select("id,version,build_number,mandatory,mandatory_after,rollout_percentage,minimum_supported_version,release_notes,published_at,release_channel,release_artifacts(file_url,file_size,sha256,validation_status,signature_status,notarization_status,code_signing_status,validated_at,updater_url,updater_size,updater_sha256,update_signature,updater_signature_status)")
+      .select("id,version,build_number,mandatory,mandatory_after,rollout_percentage,minimum_supported_version,release_notes,published_at,release_channel,release_artifacts(file_url,file_size,sha256,validation_status,signature_status,notarization_status,code_signing_status,validated_at,artifact_type,file_name,updater_url,updater_size,updater_sha256,update_signature,updater_signature_status)")
       .eq("platform", input.platform)
       .eq("architecture", storageArchitecture)
-      .eq("release_channel", input.release_channel)
+      .in("release_channel", [...new Set([input.release_channel, "stable", "manual", "internal"])])
       .eq("release_status", "published")
       .eq("active", true)
       .order("published_at", { ascending: false })
       .limit(5)
     if (releaseResult.error) throw releaseResult.error
     const eligibleRelease = (releaseResult.data || []).find((release) => {
-      const artifact = Array.isArray(release.release_artifacts)
-        ? release.release_artifacts.find((entry) => entry.updater_signature_status === "valid" && entry.updater_url)
-        : null
+      const validArtifacts = Array.isArray(release.release_artifacts)
+        ? release.release_artifacts.filter(
+            (entry) =>
+              entry.validation_status === "valid" &&
+              entry.file_url &&
+              entry.file_size &&
+              /^[a-f0-9]{64}$/i.test(entry.sha256 || "")
+          )
+        : []
+      const artifact =
+        validArtifacts.find(
+          (entry) => entry.updater_signature_status === "valid" && entry.updater_url
+        ) || validArtifacts[0]
       return (
         compareVersions(release.version, input.app_version) > 0 &&
         (release.mandatory || isInRollout(input.device_id, release.id, release.rollout_percentage)) &&
-        artifact?.validation_status === "valid" &&
-        artifact.signature_status === "valid" &&
-        artifact.code_signing_status === "valid" &&
-        artifact.updater_signature_status === "valid" &&
-        (input.platform !== "macos" || artifact.notarization_status === "valid")
+        Boolean(artifact)
       )
     }) || null
     const update = eligibleRelease
       ? {
           ...eligibleRelease,
           release_artifacts: Array.isArray(eligibleRelease.release_artifacts)
-            ? eligibleRelease.release_artifacts.filter(
-                (artifact) => artifact.updater_signature_status === "valid" && artifact.updater_url
-              ).slice(0, 1)
+            ? eligibleRelease.release_artifacts
+                .filter(
+                  (artifact) =>
+                    artifact.validation_status === "valid" &&
+                    artifact.file_url &&
+                    artifact.file_size &&
+                    /^[a-f0-9]{64}$/i.test(artifact.sha256 || "")
+                )
+                .sort(
+                  (left, right) =>
+                    Number(right.updater_signature_status === "valid" && Boolean(right.updater_url)) -
+                    Number(left.updater_signature_status === "valid" && Boolean(left.updater_url))
+                )
+                .slice(0, 1)
             : [],
           mandatory:
             eligibleRelease.mandatory ||

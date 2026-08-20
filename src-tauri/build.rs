@@ -24,6 +24,7 @@ fn main() {
         "desktop_database_diagnostics",
         "desktop_database_backup",
         "desktop_prepare_update",
+        "desktop_download_verified_release",
         "desktop_cancel_update_preparation",
         "desktop_restart_after_update",
         "desktop_execute",

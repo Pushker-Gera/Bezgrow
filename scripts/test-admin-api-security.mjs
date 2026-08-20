@@ -83,7 +83,7 @@ assert.match(publicUrl, /lookup\(url\.hostname/, "Artifact verification must res
 assert.match(publicUrl, /addresses\.every\(\(\{ address \}\) => !isPrivateAddress\(address\)\)/, "Artifact verification must reject DNS results that resolve to private addresses.")
 assert.match(artifactValidation, /redirect:\s*"manual"/, "Artifact verification must not follow unchecked redirects.")
 assert.match(releaseRoute, /validation_status !== "valid"/, "Invalid artifacts must not publish.")
-assert.match(releaseRoute, /release\.release_channel !== "internal"/, "Unsigned releases must be restricted to internal/testing.")
+assert.match(releaseRoute, /const manualChannel = \["manual", "internal"\]\.includes/, "Unsigned releases must be restricted to explicit manual channels.")
 assert.match(releaseRoute, /artifact\.code_signing_status === "valid"/, "Stable releases must require code signing.")
 assert.match(releaseRoute, /artifact\.notarization_status === "valid"/, "Stable macOS releases must require notarization.")
 
