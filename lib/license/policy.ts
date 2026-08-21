@@ -16,10 +16,15 @@ export type StoredLicenseRow = Record<string, unknown> & {
 
 export type LicensePolicyStatus =
   | "valid"
-  | "missing"
+  | "offline_valid_cached"
+  | "grace_period"
+  | "not_activated"
   | "expired"
+  | "revoked"
+  | "cancelled"
+  | "invalid"
   | "tampered"
-  | "wrong_device"
+  | "device_mismatch"
   | "clock_rollback"
 
 export type LicensePolicyResult = {
@@ -171,7 +176,7 @@ export function isLicenseRestrictedEndpoint(pathname: string, method: string) {
 
 export function evaluateStoredLicense(
   rows: StoredLicenseRow[],
-  options: { now?: Date; deviceId?: string | null } = {}
+  options: { now?: Date; deviceId?: string | null; connectivity?: "online" | "offline" | "unknown" } = {}
 ): LicensePolicyResult {
   const now = options.now || new Date()
   const license = newestLicense(rows)
@@ -179,7 +184,7 @@ export function evaluateStoredLicense(
   if (!license) {
     return {
       allowed: false,
-      status: "missing",
+      status: "not_activated",
       reason: "Activation required. Enter a valid Bezgrow license to use write actions.",
       license: null,
       allowedFeatures: [],
@@ -193,14 +198,54 @@ export function evaluateStoredLicense(
   if (deviceId && licenseDeviceId && deviceId !== licenseDeviceId) {
     return {
       allowed: false,
-      status: "wrong_device",
+      status: "device_mismatch",
       reason: "This license was issued for another device.",
       license,
       allowedFeatures,
     }
   }
 
-  if (status === "tampered" || status === "revoked" || status === "invalid") {
+  if (status === "device_mismatch") {
+    return {
+      allowed: false,
+      status: "device_mismatch",
+      reason: "This licence is no longer authorized for this device.",
+      license,
+      allowedFeatures,
+    }
+  }
+
+  if (status === "revoked") {
+    return {
+      allowed: false,
+      status: "revoked",
+      reason: "Bezgrow licence revoked. Reactivation or a replacement licence is required.",
+      license,
+      allowedFeatures,
+    }
+  }
+
+  if (status === "cancelled" || status === "canceled" || status === "suspended") {
+    return {
+      allowed: false,
+      status: "cancelled",
+      reason: "Bezgrow licence cancelled. Renew or reactivate the licence to continue write actions.",
+      license,
+      allowedFeatures,
+    }
+  }
+
+  if (status === "invalid" || status === "replaced") {
+    return {
+      allowed: false,
+      status: "invalid",
+      reason: status === "replaced" ? "This licence key has been replaced." : "Licence validation failed. Reactivation is required.",
+      license,
+      allowedFeatures,
+    }
+  }
+
+  if (status === "tampered") {
     return {
       allowed: false,
       status: "tampered",
@@ -249,7 +294,7 @@ export function evaluateStoredLicense(
   if (status && status !== "active" && status !== "trial" && status !== "grace") {
     return {
       allowed: false,
-      status: "tampered",
+      status: "invalid",
       reason: "License status is invalid.",
       license,
       expiresAt: expiry.toISOString(),
@@ -258,10 +303,15 @@ export function evaluateStoredLicense(
     }
   }
 
+  const inGrace = now.getTime() > expiry.getTime()
   return {
     allowed: true,
-    status: "valid",
-    reason: now.getTime() > expiry.getTime() ? "License is inside the grace period." : "License is valid.",
+    status: inGrace ? "grace_period" : options.connectivity === "offline" ? "offline_valid_cached" : "valid",
+    reason: inGrace
+      ? "License is inside the grace period."
+      : options.connectivity === "offline"
+        ? "Offline-valid cached licence. Signed expiry and device binding were verified locally."
+        : "License is valid.",
     license,
     expiresAt: expiry.toISOString(),
     graceUntil: graceUntil.toISOString(),

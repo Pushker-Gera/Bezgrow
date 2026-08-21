@@ -2,7 +2,6 @@ import { spawnSync } from "node:child_process"
 import { mkdtempSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import path from "node:path"
-// @ts-expect-error node:sqlite ships with Node 22; the project keeps Node 20 declaration files for Next compatibility.
 import { DatabaseSync } from "node:sqlite"
 import { LOCAL_DB_VERSION, localMigrations } from "../lib/offline/local/schema"
 

@@ -91,7 +91,14 @@ export async function POST(request: Request) {
   })
   if (!auth.ok) {
     return Response.json(
-      { success: false, error: auth.error, requestId: auth.requestId },
+      {
+        success: false,
+        error: auth.error,
+        requestId: auth.requestId,
+        code: auth.code || "device_report_rejected",
+        licenseStatus: auth.licenseStatus || null,
+        authoritative: Boolean(auth.licenseStatus),
+      },
       { status: auth.status, headers: { "Cache-Control": "no-store", "X-Request-Id": auth.requestId } }
     )
   }

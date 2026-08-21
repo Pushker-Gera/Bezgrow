@@ -37,6 +37,14 @@ type ListResponse<T> = {
   pagination?: {
     total?: number
   }
+  summary?: {
+    totalCustomers?: number
+    totalRevenue?: number
+    totalOutstanding?: number
+    activeCount?: number
+    inactiveCount?: number
+    gstCount?: number
+  }
   error?: string
 }
 
@@ -164,6 +172,7 @@ export default function CustomersPage() {
   const [gstFilter, setGstFilter] = useState("all")
   const [currentPage, setCurrentPage] = useState(1)
   const [serverTotal, setServerTotal] = useState(0)
+  const [customerSummary, setCustomerSummary] = useState<NonNullable<ListResponse<Customer>["summary"]>>({})
   const [form, setForm] = useState<CustomerForm>(emptyForm)
   const [showFormModal, setShowFormModal] = useState(false)
   const [editCustomer, setEditCustomer] = useState<Customer | null>(null)
@@ -230,6 +239,7 @@ export default function CustomersPage() {
       if (statusFilter === "inactive") nextCustomers = nextCustomers.filter((customer) => !customer.is_active)
       setCustomers(nextCustomers)
       setServerTotal(customersResult.pagination?.total ?? nextCustomers.length)
+      setCustomerSummary(customersResult.summary || {})
       setNotice("")
     } catch (error) {
       if (request.signal.aborted) return
@@ -238,11 +248,22 @@ export default function CustomersPage() {
         return
       }
 
-      let cachedCustomers = await getOfflineData<Customer[]>(orgId, "customers", [])
+      let cachedCustomers = (await getOfflineData<Customer[]>(orgId, "customers", [])).filter((customer) => !customer.deleted_at)
+      const term = debouncedSearch.trim().toLowerCase()
+      if (term) {
+        cachedCustomers = cachedCustomers.filter((customer) =>
+          [customer.name, customer.phone, customer.email, customer.gst_number].join(" ").toLowerCase().includes(term)
+        )
+      }
       if (statusFilter === "active") cachedCustomers = cachedCustomers.filter((customer) => customer.is_active)
       if (statusFilter === "inactive") cachedCustomers = cachedCustomers.filter((customer) => !customer.is_active)
-      setCustomers(cachedCustomers)
+      if (typeFilter !== "all") cachedCustomers = cachedCustomers.filter((customer) => (customer.customer_type || "retail") === typeFilter)
+      if (gstFilter === "gst") cachedCustomers = cachedCustomers.filter((customer) => Boolean(customer.gst_number))
+      if (gstFilter === "nonGst") cachedCustomers = cachedCustomers.filter((customer) => !customer.gst_number)
+      const pageStart = (currentPage - 1) * pageSize
+      setCustomers(cachedCustomers.slice(pageStart, pageStart + pageSize))
       setServerTotal(cachedCustomers.length)
+      setCustomerSummary({})
       setNotice(
         shouldSaveOffline(error)
           ? offlineFallbackMessage("Offline mode: showing cached customers.", "Connection failed. Showing cached customers.")
@@ -537,26 +558,30 @@ export default function CustomersPage() {
   const totalPages = Math.max(1, Math.ceil(serverTotal / pageSize))
 
   const metrics = useMemo(() => {
-    const totalCustomers = customersWithLedger.length
-    const activeCustomers = customersWithLedger.filter((customer) => customer.is_active).length
-    const gstCustomers = customersWithLedger.filter((customer) => customer.gst_number).length
-    const totalRevenue = customersWithLedger.reduce(
+    const pageTotalCustomers = customersWithLedger.length
+    const pageActiveCustomers = customersWithLedger.filter((customer) => customer.is_active).length
+    const pageGstCustomers = customersWithLedger.filter((customer) => customer.gst_number).length
+    const pageTotalRevenue = customersWithLedger.reduce(
       (sum, customer) => sum + customer.invoiceRevenue,
       0
     )
+    const totalCustomers = Number(customerSummary.totalCustomers ?? serverTotal ?? pageTotalCustomers)
+    const activeCustomers = Number(customerSummary.activeCount ?? pageActiveCustomers)
+    const gstCustomers = Number(customerSummary.gstCount ?? pageGstCustomers)
+    const totalRevenue = Number(customerSummary.totalRevenue ?? pageTotalRevenue)
     const averageRevenue = totalCustomers > 0 ? totalRevenue / totalCustomers : 0
     const repeatCustomers = customersWithLedger.filter((customer) => customer.invoiceCount > 1).length
 
     return {
       totalCustomers,
       activeCustomers,
-      inactiveCustomers: totalCustomers - activeCustomers,
+      inactiveCustomers: Number(customerSummary.inactiveCount ?? Math.max(0, totalCustomers - activeCustomers)),
       gstCustomers,
       totalRevenue,
       averageRevenue,
       repeatCustomers,
     }
-  }, [customersWithLedger])
+  }, [customerSummary, customersWithLedger, serverTotal])
 
   async function exportCustomers() {
     if (filteredCustomers.length === 0) {

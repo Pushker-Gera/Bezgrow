@@ -9,6 +9,7 @@ const schema = read("lib/offline/local/schema.ts");
 const service = read("lib/offline/local/service.ts");
 const bootstrap = read("lib/offline/bootstrap.ts");
 const repositories = read("lib/offline/local/repositories.ts");
+const localApi = read("lib/offline/local/api.ts");
 
 const requiredIndexes = [
   "idx_products_org_name",
@@ -49,5 +50,14 @@ for (const query of ["queryNormalizedProducts", "queryNormalizedCustomers", "que
 }
 assert.match(repositories, /LIMIT \? OFFSET \?/, "Desktop list queries must be bounded in SQLite.");
 assert.match(repositories, /COUNT\(\*\) AS total/, "Desktop pagination totals must come from SQLite.");
+assert.match(schema, /trg_products_nonnegative_stock_update/, "Concurrent invoice writes need a database-level nonnegative stock guard.");
+assert.match(repositories, /invoice_id IN \(SELECT id FROM invoice_page\)/, "Invoice item aggregation must be limited to the current page.");
+assert.match(repositories, /queryNormalizedDashboardSummary/, "Dashboard totals must be aggregated by SQLite.");
+assert.match(repositories, /queryNormalizedAnalyticsReport/, "Report charts must be aggregated by SQLite.");
+assert.match(schema, /idx_movements_org_reference_active/, "Invoice reversal lookups must be indexed by their bounded reference.");
+assert.match(repositories, /deleteNormalizedInvoiceAtomic/, "Invoice reversal must use a single normalized SQLite transaction.");
+assert.match(localApi, /readNormalizedInvoiceDeletionContext/, "Invoice deletion must load only the selected invoice context.");
+const deletionBody = localApi.slice(localApi.indexOf("async function deleteInvoice"), localApi.indexOf("function normalizedCommercialItems"));
+assert.doesNotMatch(deletionBody, /readCollection/, "Invoice deletion must not load complete historical collections.");
 
 console.log("performance-contract-ok");

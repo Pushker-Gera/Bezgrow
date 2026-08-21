@@ -4460,11 +4460,11 @@ mod runtime_lifecycle_tests {
         let extension = if platform == "windows" { "exe" } else { "dmg" };
         VerifiedReleaseDownloadRequest {
             url: format!("https://www.bezgrow.com/api/downloads/desktop?platform={platform_query}"),
-            version: "0.1.14".to_string(),
+            version: "0.1.15".to_string(),
             platform: platform.to_string(),
             architecture: current_release_architecture().to_string(),
             filename: format!(
-                "Bezgrow-0.1.14-{}.{}",
+                "Bezgrow-0.1.15-{}.{}",
                 current_release_architecture(),
                 extension
             ),

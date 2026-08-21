@@ -97,6 +97,11 @@ type ProductsListResponse = {
     pagination?: {
         total?: number
     }
+    summary?: Partial<Analytics>
+    facets?: {
+        categories?: string[]
+        suppliers?: string[]
+    }
     error?: string
 }
 
@@ -294,6 +299,7 @@ export default function ProductsPage() {
     const [sortAsc, setSortAsc] = useState(false)
     const [currentPage, setCurrentPage] = useState(1)
     const [serverTotal, setServerTotal] = useState(0)
+    const [facets, setFacets] = useState<{ categories: string[]; suppliers: string[] }>({ categories: [], suppliers: [] })
     const [showFormModal, setShowFormModal] = useState(false)
     const [editProduct, setEditProduct] = useState<ProductRow | null>(null)
     const [viewProduct, setViewProduct] = useState<ProductRow | null>(null)
@@ -373,7 +379,11 @@ export default function ProductsPage() {
                 await putOfflineData(orgId, "products", rows)
                 await putOfflineData(orgId, "inventory_items", rows)
             }
-            setAnalytics(buildAnalytics(rows))
+            setAnalytics({ ...buildAnalytics(rows), ...(payload.summary || {}) })
+            setFacets({
+                categories: payload.facets?.categories || [],
+                suppliers: payload.facets?.suppliers || [],
+            })
             writeCachedProducts(rows)
             setProducts(rows)
             setServerTotal(payload.pagination?.total ?? rows.length)
@@ -385,11 +395,29 @@ export default function ProductsPage() {
                 return
             }
 
-            const cachedProducts = await getOfflineData<ProductRow[]>(orgId, "products", [])
-            setAnalytics(buildAnalytics(cachedProducts))
-            setProducts(cachedProducts)
+            const allCachedProducts = (await getOfflineData<ProductRow[]>(orgId, "products", [])).filter((product) => !product.deleted_at)
+            const term = debouncedSearch.trim().toLowerCase()
+            const cachedProducts = allCachedProducts.filter((product) => {
+                const text = [product.name, product.sku, product.barcode, product.batch_no, product.hsn_code, product.category, product.supplier]
+                    .join(" ")
+                    .toLowerCase()
+                if (term && !text.includes(term)) return false
+                if (selectedCategory !== "all" && product.category !== selectedCategory) return false
+                if (selectedSupplier !== "all" && product.supplier !== selectedSupplier) return false
+                if (stockStatusFilter === "inStock" && Number(product.stock || 0) <= 0) return false
+                if (stockStatusFilter === "outOfStock" && Number(product.stock || 0) > 0) return false
+                return true
+            })
+            const pageStart = (currentPage - 1) * itemsPerPage
+            const pageProducts = cachedProducts.slice(pageStart, pageStart + itemsPerPage)
+            setAnalytics(buildAnalytics(allCachedProducts))
+            setProducts(pageProducts)
             setServerTotal(cachedProducts.length)
-            writeCachedProducts(cachedProducts)
+            setFacets({
+                categories: Array.from(new Set(allCachedProducts.map((product) => product.category).filter(Boolean))) as string[],
+                suppliers: Array.from(new Set(allCachedProducts.map((product) => product.supplier).filter(Boolean))) as string[],
+            })
+            writeCachedProducts(pageProducts)
             setNotice(
                 shouldSaveOffline(error)
                     ? offlineFallbackMessage("Offline mode: showing cached products.", "Connection failed. Showing cached products.")
@@ -738,13 +766,13 @@ export default function ProductsPage() {
     }, [debouncedSearch, currentPage, organizationId, selectedCategory, selectedSupplier, stockStatusFilter])
 
     const categories = useMemo(
-        () => Array.from(new Set(products.map((product) => product.category).filter(Boolean))) as string[],
-        [products]
+        () => facets.categories.length ? facets.categories : Array.from(new Set(products.map((product) => product.category).filter(Boolean))) as string[],
+        [facets.categories, products]
     )
 
     const suppliers = useMemo(
-        () => Array.from(new Set(products.map((product) => product.supplier).filter(Boolean))) as string[],
-        [products]
+        () => facets.suppliers.length ? facets.suppliers : Array.from(new Set(products.map((product) => product.supplier).filter(Boolean))) as string[],
+        [facets.suppliers, products]
     )
 
     const filteredProducts = useMemo(() => {

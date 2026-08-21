@@ -52,8 +52,9 @@ assert.doesNotMatch(repositories, /INSERT INTO offline_sync_queue/, "Local mutat
 assert.match(repositories, /organization_id: undefined,[\s\S]*id: text\(input, \["id"\], organizationId\)/, "Tenant-root organization writes must not target a nonexistent organization_id column.")
 assert.match(repositories, /previousImporterCompleted[\s\S]*normalized_legacy_import_complete/, "Completed legacy imports must not rerun after application upgrades.")
 assert.match(localApi, /action` is a legacy compatibility argument[\s\S]*void action[\s\S]*putNormalizedCollectionsInTransaction\(organizationId, updates\)/, "Legacy mutation intent must be ignored after the final SQLite commit.")
-assert.match(localApi, /largestExistingSequence \+ 1/, "Invoice numbering must advance past the largest stored invoice even when the organization counter is stale.")
-assert.match(localApi, /next_invoice_number: invoiceSequence \+ 1/, "A successful invoice must persist the sequence after the number actually assigned.")
+assert.match(schema, /SET next_invoice_number = MAX\(/, "The migration must repair stale invoice counters from existing invoice history once.")
+assert.match(repositories, /const nextSequence = Math\.max\(1, Number\(organization\?\.next_invoice_number/, "Normal invoice numbering must use the repaired constant-time organization counter.")
+assert.match(repositories, /next_invoice_number = MAX\(COALESCE\(next_invoice_number, 1\), \?\)[\s\S]*input\.invoiceSequence \+ 1/, "A successful invoice must persist the sequence after the number actually assigned.")
 assert.match(localErp, /Legacy cloud-sync intent is ignored[\s\S]*void action[\s\S]*putNormalizedCollectionsInTransaction\(organizationId, updates\)/, "Professional ERP transactions must also stop at SQLite.")
 
 // Validation, rollback-sensitive invoice correction, and workspace isolation.
@@ -62,9 +63,9 @@ assert.match(service, /sqlite_unique_constraint/, "Operation diagnostics must cl
 assert.match(localApi, /Opening stock must be a valid number/, "Invalid opening stock must fail before mutation.")
 assert.match(localApi, /Enter a valid customer email address/, "Customer email validation must not be reported as database startup failure.")
 assert.match(localApi, /deleted and stock restored/, "Invoice correction must create an explicit stock-restoration movement.")
-assert.match(localApi, /sync_status: "pending_delete"/, "Invoice correction must retain an offline deletion tombstone instead of leaving pending local rows active.")
+assert.match(repositories, /sync_status = 'pending_delete'/, "Invoice correction must retain an offline deletion tombstone instead of leaving pending local rows active.")
 assert.match(localApi, /alreadyRestoredByProduct[\s\S]*Math\.max\(0, quantity -/, "Invoice correction retries must never restore the same product stock twice.")
-assert.match(localApi, /last_purchase_at: remainingCustomerInvoices/, "Invoice correction must recompute the customer's last purchase from remaining invoices.")
+assert.match(localApi, /lastPurchaseAt: context\.latestCustomerInvoice/, "Invoice correction must recompute the customer's last purchase from a bounded remaining-invoice query.")
 assert.match(repositories, /WHERE organization_id = \? AND deleted_at IS NULL/, "Business rows must be scoped to the selected workspace.")
 assert.match(repositories, /queryNormalizedProducts[\s\S]*LIMIT \? OFFSET \?/, "Product list must be bounded in SQLite.")
 assert.match(repositories, /queryNormalizedCustomers[\s\S]*LIMIT \? OFFSET \?/, "Customer list must be bounded in SQLite.")

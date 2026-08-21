@@ -33,6 +33,9 @@ type DeviceCheckinResponse = {
   success?: boolean
   requestId?: string
   error?: string
+  code?: string
+  licenseStatus?: string | null
+  authoritative?: boolean
 }
 
 function nowIso() {
@@ -437,13 +440,69 @@ export async function reportActivatedDevice(
       reported: false,
       status: "rejected" as const,
       requestId: result?.requestId || null,
+      authoritativeStatus: result?.authoritative ? normalizeAuthoritativeStatus(result.licenseStatus) : null,
+      code: result?.code || null,
     }
   }
   return {
     reported: true,
     status: "reported" as const,
     requestId: result.requestId || null,
+    authoritativeStatus: normalizeAuthoritativeStatus(result.licenseStatus),
+    code: result.code || null,
   }
+}
+
+function normalizeAuthoritativeStatus(value: unknown) {
+  const status = stringValue(value).toLowerCase()
+  if (["active", "trial", "grace"].includes(status)) return status
+  if (status === "expiring") return "active"
+  if (status === "grace_period") return "grace"
+  if (["cancelled", "canceled", "suspended"].includes(status)) return "cancelled"
+  if (["expired", "revoked", "invalid", "replaced", "device_mismatch"].includes(status)) {
+    return status
+  }
+  return null
+}
+
+async function persistAuthoritativeLicenseStatus(licenseId: string, status: string, businessId: string) {
+  const targets = [...new Set([businessId, workspaceOrganizationId(), "global"].filter(Boolean))]
+  const verifiedAt = nowIso()
+  for (const organizationId of targets) {
+    const rows = await getOfflineData<DataRow[]>(organizationId, "license", []).catch(() => [])
+    if (!rows.some((row) => row.id === licenseId)) continue
+    await putOfflineData(
+      organizationId,
+      "license",
+      rows.map((row) => row.id === licenseId
+        ? { ...row, status, last_verified_at: verifiedAt, last_seen_at: verifiedAt, updated_at: verifiedAt }
+        : row)
+    )
+    await logLicenseEvent(
+      organizationId,
+      `LICENSE_CONTROL_PLANE_${status.toUpperCase()}`,
+      `Control-plane revalidation reported licence status ${status}.`,
+      licenseId
+    )
+  }
+}
+
+export async function revalidateLocalLicenseWithControlPlane(
+  organizationId = workspaceOrganizationId() || "global"
+) {
+  const snapshot = await localLicenseSnapshot(organizationId)
+  if (!snapshot.license) return { check: { reported: false, status: "not_activated" as const }, snapshot }
+  if (typeof navigator === "undefined" || !navigator.onLine) {
+    return { check: { reported: false, status: "offline" as const }, snapshot }
+  }
+  const licenseKey = stringValue(snapshot.license.license_key) || await readDesktopSecret(LICENSE_SECRET_KEY) || ""
+  if (!licenseKey) return { check: { reported: false, status: "missing_key" as const }, snapshot }
+  const parsed = parseLicenseInput(licenseKey)
+  const check = await reportActivatedDevice(parsed)
+  if ("authoritativeStatus" in check && check.authoritativeStatus) {
+    await persistAuthoritativeLicenseStatus(parsed.payload.license_id, check.authoritativeStatus, parsed.payload.business_id)
+  }
+  return { check, snapshot: await localLicenseSnapshot(organizationId) }
 }
 
 export async function activateOfflineLicense(input: unknown) {
@@ -485,12 +544,21 @@ export async function activateOfflineLicense(input: unknown) {
   // Online reporting is deliberately best-effort and runs only after the
   // signed license has been accepted and persisted locally. A network or
   // control-plane failure can never roll back or block offline ERP access.
-  await reportActivatedDevice(parsed).catch((error) => {
+  const activationCheck = await reportActivatedDevice(parsed).catch((error) => {
     console.warn("[offline/license] device check-in failed after local activation", {
       message: error instanceof Error ? error.message : "unknown",
     })
     return null
   })
+  if (activationCheck && "authoritativeStatus" in activationCheck && activationCheck.authoritativeStatus) {
+    await persistAuthoritativeLicenseStatus(
+      parsed.payload.license_id,
+      activationCheck.authoritativeStatus,
+      parsed.payload.business_id
+    )
+    const revalidated = await getLocalLicenseStatus(parsed.payload.business_id)
+    if (!revalidated.allowed) throw new Error(revalidated.reason)
+  }
   return {
     license: parsed.payload,
     status: "active",
@@ -512,13 +580,17 @@ async function touchLicense(organizationId: string, result: LicensePolicyResult)
 
 export async function getLocalLicenseStatus(organizationId = workspaceOrganizationId() || "global") {
   const deviceId = await getOrCreateDeviceId()
-  let rows = await verifyStoredLicenseRows(await readLicenseRows(organizationId), { publicKey: PUBLIC_KEY, deviceId })
-  let status = evaluateStoredLicense(rows, { deviceId })
-  if (!status.allowed) {
+  const storedRows = await readLicenseRows(organizationId)
+  let rows = await verifyStoredLicenseRows(storedRows, { publicKey: PUBLIC_KEY, deviceId })
+  const connectivity = typeof navigator !== "undefined" && navigator.onLine === false ? "offline" : "unknown"
+  let status = evaluateStoredLicense(rows, { deviceId, connectivity })
+  const authoritativeLocalStatus = stringValue(status.license?.status).toLowerCase()
+  const canRestoreFromSecret = !["revoked", "cancelled", "canceled", "replaced", "invalid"].includes(authoritativeLocalStatus)
+  if (!status.allowed && canRestoreFromSecret) {
     const restoredRows = await restoreLicenseRowsFromDesktopSecret(deviceId)
     if (restoredRows.length) {
       rows = await verifyStoredLicenseRows([...restoredRows, ...rows], { publicKey: PUBLIC_KEY, deviceId })
-      status = evaluateStoredLicense(rows, { deviceId })
+      status = evaluateStoredLicense(rows, { deviceId, connectivity })
     }
   }
   return status

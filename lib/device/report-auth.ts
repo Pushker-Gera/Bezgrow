@@ -52,7 +52,7 @@ export async function authenticateDeviceReport(
   input: { licenseKey: string; deviceId: string }
 ): Promise<
   | { ok: true; context: DeviceReportAuth }
-  | { ok: false; status: number; error: string; requestId: string }
+  | { ok: false; status: number; error: string; requestId: string; code?: string; licenseStatus?: string }
 > {
   const requestId = crypto.randomUUID()
   if (!trustedReportOrigin(request)) {
@@ -88,31 +88,49 @@ export async function authenticateDeviceReport(
       .select("*")
       .eq("id", parsed.payload.license_id)
       .maybeSingle()
-    if (licenseResult.error || !licenseResult.data) {
+    if (licenseResult.error) {
+      await recordFailure(request, requestId, input.deviceId, "license_lookup_unavailable")
+      return { ok: false, status: 503, error: "License verification is temporarily unavailable.", requestId }
+    }
+    if (!licenseResult.data) {
       await recordFailure(request, requestId, input.deviceId, "license_not_registered")
-      return { ok: false, status: 403, error: "License is not registered with the platform.", requestId }
+      return {
+        ok: false,
+        status: 403,
+        error: "License is not registered with the platform.",
+        requestId,
+        code: "license_invalid",
+        licenseStatus: "invalid",
+      }
     }
     if (licenseResult.data.signed_license_key !== parsed.licenseKey) {
       await recordFailure(request, requestId, input.deviceId, "stale_or_replaced_key")
-      return { ok: false, status: 403, error: "This license key has been replaced.", requestId }
+      return { ok: false, status: 403, error: "This license key has been replaced.", requestId, code: "license_replaced", licenseStatus: "replaced" }
     }
     if (licenseResult.data.device_id !== input.deviceId) {
       await recordFailure(request, requestId, input.deviceId, "registered_device_mismatch")
-      return { ok: false, status: 403, error: "License device registration does not match.", requestId }
+      return {
+        ok: false,
+        status: 403,
+        error: "License device registration does not match.",
+        requestId,
+        code: "device_mismatch",
+        licenseStatus: "device_mismatch",
+      }
     }
     if (
       licenseResult.data.subject_business_id &&
       licenseResult.data.subject_business_id !== parsed.payload.business_id
     ) {
       await recordFailure(request, requestId, input.deviceId, "registered_business_mismatch")
-      return { ok: false, status: 403, error: "License business registration does not match.", requestId }
+      return { ok: false, status: 403, error: "License business registration does not match.", requestId, code: "license_invalid", licenseStatus: "invalid" }
     }
     if (
       licenseResult.data.subject_customer_id &&
       licenseResult.data.subject_customer_id !== parsed.payload.customer_id
     ) {
       await recordFailure(request, requestId, input.deviceId, "registered_customer_mismatch")
-      return { ok: false, status: 403, error: "License customer registration does not match.", requestId }
+      return { ok: false, status: 403, error: "License customer registration does not match.", requestId, code: "license_invalid", licenseStatus: "invalid" }
     }
     if (
       licenseResult.data.platform &&
@@ -120,12 +138,19 @@ export async function authenticateDeviceReport(
       licenseResult.data.platform !== parsed.payload.platform
     ) {
       await recordFailure(request, requestId, input.deviceId, "registered_platform_mismatch")
-      return { ok: false, status: 403, error: "License platform registration does not match.", requestId }
+      return { ok: false, status: 403, error: "License platform registration does not match.", requestId, code: "license_invalid", licenseStatus: "invalid" }
     }
     const effectiveStatus = effectiveLicenseStatus(licenseResult.data)
     if (!["active", "trial", "expiring", "grace_period"].includes(effectiveStatus)) {
       await recordFailure(request, requestId, input.deviceId, effectiveStatus)
-      return { ok: false, status: 403, error: `License is ${effectiveStatus.replaceAll("_", " ")}.`, requestId }
+      return {
+        ok: false,
+        status: 403,
+        error: `License is ${effectiveStatus.replaceAll("_", " ")}.`,
+        requestId,
+        code: "license_inactive",
+        licenseStatus: effectiveStatus,
+      }
     }
 
     const deviceResult = await adminSupabase
@@ -151,7 +176,14 @@ export async function authenticateDeviceReport(
       }
     }
     if (deviceResult.data && ["revoked", "replaced"].includes(deviceResult.data.device_status)) {
-      return { ok: false, status: 403, error: `Device is ${deviceResult.data.device_status}.`, requestId }
+      return {
+        ok: false,
+        status: 403,
+        error: `Device is ${deviceResult.data.device_status}.`,
+        requestId,
+        code: "device_inactive",
+        licenseStatus: deviceResult.data.device_status === "revoked" ? "revoked" : "replaced",
+      }
     }
 
     return {

@@ -37,7 +37,7 @@ for (const table of ["database_health", "license_state", "device_activations", "
 
 const indexes = schema.match(/CREATE INDEX IF NOT EXISTS/g) || [];
 assert.ok(indexes.length >= 40, `Expected broad offline indexes; found ${indexes.length}.`);
-assert.match(schema, /LOCAL_DB_VERSION\s*=\s*11/, "Local DB version should reflect the current normalized schema.");
+assert.match(schema, /LOCAL_DB_VERSION\s*=\s*14/, "Local DB version should reflect the current normalized schema.");
 
 assert.match(dashboardLayout, /LocalDatabaseRecovery/, "Dashboard must render the local database recovery screen.");
 assert.match(dashboardLayout, /getLocalDatabaseService\(\)\.ensureReady\(\)/, "Dashboard must await the authoritative startup manager.");

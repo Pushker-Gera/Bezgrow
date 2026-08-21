@@ -2,7 +2,6 @@ import assert from "node:assert/strict"
 import { mkdtempSync, readFileSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import path from "node:path"
-// @ts-expect-error node:sqlite ships with Node 22; the project keeps Node 20 declarations for Next compatibility.
 import { DatabaseSync } from "node:sqlite"
 import { PDFDocument, PDFName, PDFNumber, PDFRawStream } from "pdf-lib"
 import { defaultPrintSettings } from "../components/print/settings/defaults"
@@ -94,9 +93,19 @@ function verifyStatePersistence() {
       database.prepare("INSERT OR REPLACE INTO schema_migrations (version, name) VALUES (?, ?)").run(migration.version, migration.name)
       database.exec(`PRAGMA user_version = ${migration.version}`)
     }
-    database.prepare("INSERT INTO organizations (id, name) VALUES (?, ?)").run("state-test-org", "State Test")
+    database.prepare("INSERT INTO organizations (id, name, invoice_prefix, next_invoice_number) VALUES (?, ?, 'INV', 1)").run("state-test-org", "State Test")
     database.prepare("INSERT INTO customers (id, organization_id, name, state, state_code) VALUES (?, ?, ?, ?, ?)")
       .run("state-test-customer", "state-test-org", "Local Customer", "Haryana", "06")
+    database.prepare("INSERT INTO sales_invoices (id, organization_id, customer_id, invoice_number) VALUES (?, ?, ?, ?)")
+      .run("state-test-invoice", "state-test-org", "state-test-customer", "INV-00123")
+    const counterRepair = localMigrations.find((migration) => migration.version === 14)?.sql[0]
+    assert.ok(counterRepair, "Invoice-counter repair migration must exist.")
+    database.exec(counterRepair)
+    assert.equal(
+      database.prepare("SELECT next_invoice_number FROM organizations WHERE id = ?").get("state-test-org")?.next_invoice_number,
+      124,
+      "The one-time migration must repair a stale invoice sequence without a recurring history scan.",
+    )
     database.close()
     database = new DatabaseSync(databasePath)
     const restored = database.prepare("SELECT state, state_code FROM customers WHERE id = ?").get("state-test-customer") as { state?: string; state_code?: string }

@@ -1,6 +1,6 @@
 "use client"
 
-export const LOCAL_DB_VERSION = 11
+export const LOCAL_DB_VERSION = 14
 export const LOCAL_DB_URL = "sqlite:bezgrow-offline.db"
 
 export const normalizedTables = [
@@ -1126,6 +1126,72 @@ export const localMigrations: Array<{ version: number; name: string; sql: string
        )
        WHERE joined_at IS NULL OR trim(joined_at) = ''`,
       "CREATE INDEX IF NOT EXISTS idx_organizations_joined_at ON organizations (joined_at)",
+    ],
+  },
+  {
+    version: 12,
+    name: "large_dataset_query_indexes",
+    sql: [
+      "CREATE INDEX IF NOT EXISTS idx_products_org_batch_active ON products (organization_id, batch_no COLLATE NOCASE, deleted_at)",
+      "CREATE INDEX IF NOT EXISTS idx_products_org_hsn_active ON products (organization_id, hsn_code COLLATE NOCASE, deleted_at)",
+      "CREATE INDEX IF NOT EXISTS idx_products_org_warehouse_active ON products (organization_id, warehouse, deleted_at)",
+      "CREATE INDEX IF NOT EXISTS idx_customers_org_phone_active ON customers (organization_id, phone, deleted_at)",
+      "CREATE INDEX IF NOT EXISTS idx_sales_invoices_org_date_active ON sales_invoices (organization_id, deleted_at, invoice_date DESC, invoice_number DESC)",
+      `UPDATE sales_invoices
+       SET offline_client_id = NULL
+       WHERE offline_client_id IS NOT NULL AND trim(offline_client_id) <> ''
+         AND rowid NOT IN (
+           SELECT MIN(rowid) FROM sales_invoices
+           WHERE offline_client_id IS NOT NULL AND trim(offline_client_id) <> ''
+           GROUP BY organization_id, offline_client_id
+         )`,
+      "CREATE UNIQUE INDEX IF NOT EXISTS idx_sales_invoices_org_client_idempotency ON sales_invoices (organization_id, offline_client_id) WHERE offline_client_id IS NOT NULL AND trim(offline_client_id) <> ''",
+      "CREATE INDEX IF NOT EXISTS idx_movements_org_batch_created ON stock_movements (organization_id, batch_id, created_at DESC)",
+    ],
+  },
+  {
+    version: 13,
+    name: "atomic_nonnegative_stock_guard",
+    sql: [
+      `CREATE TRIGGER IF NOT EXISTS trg_products_nonnegative_stock_update
+       BEFORE UPDATE OF stock ON products
+       FOR EACH ROW WHEN NEW.stock < 0
+       BEGIN
+         SELECT RAISE(ABORT, 'insufficient_product_stock');
+       END`,
+      `CREATE TRIGGER IF NOT EXISTS trg_products_nonnegative_stock_insert
+       BEFORE INSERT ON products
+       FOR EACH ROW WHEN NEW.stock < 0
+       BEGIN
+         SELECT RAISE(ABORT, 'insufficient_product_stock');
+      END`,
+    ],
+  },
+  {
+    version: 14,
+    name: "bounded_invoice_reversal_indexes",
+    sql: [
+      `UPDATE organizations
+       SET next_invoice_number = MAX(
+         COALESCE(next_invoice_number, 1),
+         COALESCE((
+           SELECT MAX(CASE
+             WHEN invoice.invoice_number GLOB
+               (CASE WHEN trim(COALESCE(organizations.invoice_prefix, '')) = '' THEN 'INV' ELSE trim(organizations.invoice_prefix) END) || '-[0-9]*'
+             THEN CAST(substr(
+               invoice.invoice_number,
+               length(CASE WHEN trim(COALESCE(organizations.invoice_prefix, '')) = '' THEN 'INV' ELSE trim(organizations.invoice_prefix) END) + 2
+             ) AS INTEGER)
+             ELSE 0
+           END)
+           FROM sales_invoices invoice
+           WHERE invoice.organization_id = organizations.id AND invoice.deleted_at IS NULL
+         ), 0) + 1
+       )`,
+      "CREATE INDEX IF NOT EXISTS idx_movements_org_reference_active ON stock_movements (organization_id, reference_type, reference_id, deleted_at)",
+      "CREATE INDEX IF NOT EXISTS idx_ledger_org_document_active ON ledger_entries (organization_id, document_id, deleted_at)",
+      "CREATE INDEX IF NOT EXISTS idx_payments_org_document_active ON payments (organization_id, document_id, deleted_at)",
+      "CREATE INDEX IF NOT EXISTS idx_sales_invoices_org_customer_active_date ON sales_invoices (organization_id, customer_id, deleted_at, invoice_date DESC, created_at DESC)",
     ],
   },
 ]

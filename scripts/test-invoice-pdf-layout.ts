@@ -2,6 +2,7 @@ import assert from "node:assert/strict"
 import { mkdirSync, writeFileSync } from "node:fs"
 import { pathToFileURL } from "node:url"
 import { PDFDocument } from "pdf-lib"
+import sharp from "sharp"
 import { createInvoicePdf } from "../lib/pdf-invoice"
 import { defaultPrintSettings } from "../components/print/settings/defaults"
 import type { PrintFormat, PrintInvoice } from "../components/print/types"
@@ -133,7 +134,7 @@ async function run() {
   const fixtureDirectory = process.env.BEZGROW_PRINT_EVIDENCE_DIR || "tmp/pdfs/bezgrow-invoice-layout-qa"
   const keepFixtures = process.env.BEZGROW_KEEP_PDF_FIXTURES === "1"
   if (keepFixtures) mkdirSync(fixtureDirectory, { recursive: true })
-  for (const itemCount of [1, 5, 10, 20]) {
+  for (const itemCount of [1, 10, 30, 50, 100]) {
     for (const gst of [true, false]) {
       for (const expected of formats) {
         const bytes = await createInvoicePdf(
@@ -169,7 +170,36 @@ async function run() {
       }
     }
   }
-  const longA4 = await PDFDocument.load(await createInvoicePdf(invoice(90, true), {
+  const logoVariants = [
+    { label: "wide", logoUrl: logo, showLogo: true },
+    {
+      label: "square",
+      logoUrl: `data:image/png;base64,${(await sharp({ create: { width: 360, height: 360, channels: 4, background: "#087f5b" } }).png().toBuffer()).toString("base64")}`,
+      showLogo: true,
+    },
+    {
+      label: "tall",
+      logoUrl: `data:image/png;base64,${(await sharp({ create: { width: 180, height: 720, channels: 4, background: "#087f5b" } }).png().toBuffer()).toString("base64")}`,
+      showLogo: true,
+    },
+    { label: "none", logoUrl: "", showLogo: false },
+  ]
+  for (const variant of logoVariants) {
+    const variantInvoice = invoice(10, true)
+    variantInvoice.enterprise.logoUrl = variant.logoUrl
+    const bytes = await createInvoicePdf(
+      variantInvoice,
+      { ...defaultPrintSettings, thermalWidth: "80mm", showLogo: variant.showLogo, showQr: true, showBarcode: true },
+      "thermal",
+    )
+    const document = await PDFDocument.load(bytes)
+    assert.equal(document.getPageCount(), 1, `thermal/${variant.label} logo should remain on one continuous page`)
+    assert.ok(document.getPage(0).node.Contents(), `thermal/${variant.label} logo produced a blank page`)
+    if (keepFixtures) writeFileSync(`${fixtureDirectory}/thermal-80-10-items-${variant.label}-logo.pdf`, bytes)
+    results.push(`thermal-logo:${variant.label}=1page`)
+  }
+
+  const longA4 = await PDFDocument.load(await createInvoicePdf(invoice(100, true), {
     ...defaultPrintSettings,
     showLogo: true,
     showQr: true,

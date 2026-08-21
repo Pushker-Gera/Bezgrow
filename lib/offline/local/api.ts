@@ -23,10 +23,18 @@ import {
 } from "@/lib/offline/local/erp"
 import { assertLocalWriteAllowed, localLicenseSnapshot, restoreLicensedWorkspaceContext } from "@/lib/offline/local/license"
 import {
+  createNormalizedInvoiceAtomic,
+  deleteNormalizedInvoiceAtomic,
   putNormalizedCollectionsInTransaction,
+  queryNormalizedAnalyticsReport,
+  queryNormalizedBillingSummary,
   queryNormalizedCustomers,
+  queryNormalizedDashboardSummary,
   queryNormalizedInvoices,
   queryNormalizedProducts,
+  readNormalizedInvoiceCreationContext,
+  readNormalizedInvoiceDeletionContext,
+  updateNormalizedInvoicePaymentStatus,
   type NormalizedListPage,
   type NormalizedListQuery,
 } from "@/lib/offline/local/repositories"
@@ -115,31 +123,6 @@ function fail(message: string, status = 400) {
 
 function isLicenseError(message: string) {
   return /activation required|license|another device|reactivation/i.test(message)
-}
-
-function sumRows(rows: DataRow[], fields: string[]) {
-  return rows.reduce((sum, row) => {
-    for (const field of fields) {
-      const value = row[field]
-      if (value !== null && value !== undefined && value !== "") return sum + Number(value || 0)
-    }
-    return sum
-  }, 0)
-}
-
-function paymentStatus(row: DataRow) {
-  return localString(row.payment_status || row.status).toLowerCase()
-}
-
-function createdAt(row: DataRow) {
-  return localString(row.created_at || row.date || row.invoice_date)
-}
-
-function isThisMonth(value: string) {
-  if (!value) return false
-  const date = new Date(value)
-  const now = new Date()
-  return date.getFullYear() === now.getFullYear() && date.getMonth() === now.getMonth()
 }
 
 function csvResponse(filename: string, rows: DataRow[]) {
@@ -273,6 +256,8 @@ function localListResponse(collection: "products" | "customers" | "invoices", ur
       search: query.search,
       total: page.total,
     },
+    ...(page.summary ? { summary: page.summary } : {}),
+    ...(page.facets ? { facets: page.facets } : {}),
   }
   console.info("[desktop-local-list]", {
     adapter: "sqlite-normalized-repository",
@@ -555,29 +540,6 @@ async function listInvoices(url: URL, organizationId: string) {
   return localListResponse("invoices", url, organizationId, await queryNormalizedInvoices(organizationId, normalizedListQuery(url)))
 }
 
-function nextInvoiceSequence(organization: DataRow | null, existing: DataRow[]) {
-  const prefix = localString(organization?.invoice_prefix, "INV")
-  const largestExistingSequence = existing.reduce((largest, invoice) => {
-    const invoiceNumber = localString(invoice.invoice_number)
-    const prefixWithSeparator = `${prefix}-`
-    if (!invoiceNumber.startsWith(prefixWithSeparator)) return largest
-    const suffix = invoiceNumber.slice(prefixWithSeparator.length)
-    if (!/^\d+$/.test(suffix)) return largest
-    return Math.max(largest, Number(suffix))
-  }, 0)
-
-  return Math.max(
-    1,
-    largestExistingSequence + 1,
-    localNumber(organization?.next_invoice_number, 1)
-  )
-}
-
-function nextInvoiceNumber(organization: DataRow | null, existing: DataRow[]) {
-  const prefix = localString(organization?.invoice_prefix, "INV")
-  return `${prefix}-${String(nextInvoiceSequence(organization, existing)).padStart(5, "0")}`
-}
-
 function nextLocalDocumentNumber(prefix: string, rows: DataRow[], key: string) {
   const today = nowIso().slice(0, 10).replace(/-/g, "")
   const count = rows.filter((row) => localString(row[key]).startsWith(`${prefix}-${today}`)).length + 1
@@ -650,20 +612,24 @@ async function createInvoice(body: DataRow, organizationId: string) {
   const items = Array.isArray(body.items) ? (body.items as DataRow[]) : []
   if (!items.length) return fail("Invalid invoice.", 422)
 
-  const [customers, products, invoices, invoiceItems, movements, batches, ledgerEntries, receipts, payments, organizationRows] = await Promise.all([
-    readCollection<DataRow>(organizationId, "customers"),
-    readCollection<DataRow>(organizationId, "products"),
-    readCollection<DataRow>(organizationId, "invoices"),
-    readCollection<DataRow>(organizationId, "invoice_items"),
-    readCollection<DataRow>(organizationId, "stock_movements"),
-    readCollection<DataRow>(organizationId, "stock_batches"),
-    readCollection<DataRow>(organizationId, "ledger_entries"),
-    readCollection<DataRow>(organizationId, "payment_receipts"),
-    readCollection<DataRow>(organizationId, "payments"),
-    getOfflineData<DataRow | null>(organizationId, "organization", null),
-  ])
-  const organization = Array.isArray(organizationRows) ? organizationRows[0] : organizationRows
-  const customer = customers.find((row) => row.id === body.customer_id)
+  const offlineClientId = localString(body.offline_client_id) || createOfflineId("invoice-client")
+  const productIds = items.map((item) => localString(item.product_id)).filter(Boolean)
+  const context = await readNormalizedInvoiceCreationContext(
+    organizationId,
+    localString(body.customer_id),
+    productIds,
+    offlineClientId
+  )
+  if (context.existing) {
+    return ok({
+      invoice_id: context.existing.id,
+      invoice_number: context.existing.invoice_number,
+      idempotent: true,
+    })
+  }
+  const products = context.products
+  const batches = context.batches
+  const customer = context.customer
   if (!customer) return fail("Customer was not found.", 404)
 
   const quantityByProduct = new Map<string, number>()
@@ -679,9 +645,8 @@ async function createInvoice(body: DataRow, organizationId: string) {
   }
 
   const invoiceId = createOfflineId("invoice")
-  const offlineClientId = localString(body.offline_client_id) || createOfflineId("invoice-client")
-  const invoiceSequence = nextInvoiceSequence(organization, invoices)
-  const invoiceNumber = nextInvoiceNumber(organization, invoices)
+  const invoiceSequence = context.invoiceSequence
+  const invoiceNumber = context.invoiceNumber
   const totalAmount = localNumber(body.total_amount)
   const paidAmount = Math.min(totalAmount, localNumber(body.paid_amount, body.payment_status === "paid" ? totalAmount : 0))
   const outstandingAmount = Math.max(0, totalAmount - paidAmount)
@@ -728,10 +693,6 @@ async function createInvoice(body: DataRow, organizationId: string) {
       updated_at: now,
     }
   })
-  const nextProducts = products.map((product) => {
-    const quantity = quantityByProduct.get(String(product.id || "")) || 0
-    return quantity > 0 ? { ...product, stock: localNumber(product.stock) - quantity, sync_status: "pending_update", updated_at: now } : product
-  })
   let consumedBatches: ReturnType<typeof consumeInvoiceBatches>
   try {
     consumedBatches = consumeInvoiceBatches(batches, items, now)
@@ -739,8 +700,7 @@ async function createInvoice(body: DataRow, organizationId: string) {
     return fail(error instanceof Error ? error.message : "The selected stock batch is unavailable.", 409)
   }
   const runningStock = new Map(products.map((product) => [String(product.id || ""), localNumber(product.stock)]))
-  const nextMovements = [
-    ...consumedBatches.allocations.map(({ productId, batchId, warehouseId, quantity }) => {
+  const nextMovements = consumedBatches.allocations.map(({ productId, batchId, warehouseId, quantity }) => {
       const product = products.find((row) => row.id === productId)
       const previousStock = runningStock.get(productId) ?? localNumber(product?.stock)
       const newStock = previousStock - quantity
@@ -764,9 +724,7 @@ async function createInvoice(body: DataRow, organizationId: string) {
         created_at: now,
         updated_at: now,
       }
-    }),
-    ...movements,
-  ]
+    })
   const receiptId = paidAmount > 0 ? createOfflineId("receipt") : ""
   const nextLedger = [
     {
@@ -823,7 +781,7 @@ async function createInvoice(body: DataRow, organizationId: string) {
           {
             id: createOfflineId("ledger"),
             organization_id: organizationId,
-            account_type: body.payment_method === "bank" ? "bank" : "cash",
+            account_type: ["bank", "bank_transfer"].includes(localString(body.payment_method)) ? "bank" : "cash",
             account_id: null,
             document_type: "payment_receipt",
             document_id: receiptId,
@@ -852,11 +810,9 @@ async function createInvoice(body: DataRow, organizationId: string) {
           },
         ]
       : []),
-    ...ledgerEntries,
   ]
-  const nextReceipts = paidAmount > 0
-    ? [
-        {
+  const receipt = paidAmount > 0
+    ? {
           id: receiptId,
           organization_id: organizationId,
           customer_id: body.customer_id,
@@ -869,14 +825,11 @@ async function createInvoice(body: DataRow, organizationId: string) {
           sync_status: "pending_create",
           created_at: now,
           updated_at: now,
-        },
-        ...receipts,
-      ]
-    : receipts
-  const nextPayments =
+        }
+    : null
+  const payment =
     paidAmount > 0
-      ? [
-          {
+      ? {
             id: createOfflineId("payment"),
             organization_id: organizationId,
             party_type: "customer",
@@ -892,48 +845,36 @@ async function createInvoice(body: DataRow, organizationId: string) {
             sync_status: "pending_create",
             created_at: now,
             updated_at: now,
-          },
-          ...payments,
-        ]
-      : payments
-  const nextCustomers = customers.map((row) =>
-    row.id === body.customer_id
-      ? {
-          ...row,
-          total_sales: localNumber(row.total_sales) + totalAmount,
-          current_balance: localNumber(row.current_balance) + outstandingAmount,
-          last_purchase_at: now,
-          sync_status: "pending_update",
-          updated_at: now,
-        }
-      : row
-  )
-  const nextOrganization = organization
-    ? { ...organization, next_invoice_number: invoiceSequence + 1, updated_at: now }
-    : null
+          }
+      : null
+  const batchDeltas = consumedBatches.nextBatches.flatMap((batch) => {
+    const previous = batches.find((candidate) => candidate.id === batch.id)
+    const quantity = Math.max(0, localNumber(previous?.quantity) - localNumber(batch.quantity))
+    return batch.id && quantity > 0 ? [{ batchId: String(batch.id), quantity, updatedAt: now }] : []
+  })
 
-  await writeCollections(
+  await createNormalizedInvoiceAtomic({
     organizationId,
-    [
-      { collection: "products", value: nextProducts },
-      { collection: "inventory_items", value: nextProducts },
-      { collection: "invoices", value: [invoiceRecord, ...invoices] },
-      { collection: "invoice_items", value: [...nextItems, ...invoiceItems] },
-      { collection: "stock_batches", value: consumedBatches.nextBatches },
-      { collection: "stock_movements", value: nextMovements },
-      { collection: "ledger_entries", value: nextLedger },
-      { collection: "payment_receipts", value: nextReceipts },
-      { collection: "payments", value: nextPayments },
-      { collection: "customers", value: nextCustomers },
-      ...(nextOrganization ? [{ collection: "organization" as OfflineCollection, value: nextOrganization }] : []),
-    ],
-    pendingAction(offlineClientId, "create_invoice", organizationId, {
-      offlineClientId,
-      localInvoiceId: invoiceId,
-      invoice: body,
-      items: items.map((item) => ({ ...item, stock_at_queue: products.find((product) => product.id === item.product_id)?.stock || 0 })),
-    })
-  )
+    invoice: invoiceRecord,
+    items: nextItems,
+    productDeltas: Array.from(quantityByProduct.entries()).map(([productId, quantity]) => ({ productId, quantity, updatedAt: now })),
+    inventoryDeltas: consumedBatches.allocations.map(({ productId, warehouseId, batchId, quantity }) => ({
+      productId,
+      warehouseId: warehouseId || localString(products.find((product) => product.id === productId)?.warehouse_id) || null,
+      batchId,
+      quantity,
+      updatedAt: now,
+    })),
+    batchDeltas,
+    movements: nextMovements,
+    ledgerEntries: nextLedger,
+    receipt,
+    payment,
+    customerId: localString(body.customer_id),
+    customerSalesDelta: totalAmount,
+    customerBalanceDelta: outstandingAmount,
+    invoiceSequence,
+  })
 
   return ok({ invoice_id: invoiceId, invoice_number: invoiceNumber })
 }
@@ -943,17 +884,8 @@ async function updateInvoiceStatus(body: DataRow, organizationId: string) {
   const paymentStatus = localString(body.payment_status || body.status)
   if (!invoiceId || !paymentStatus) return fail("Invalid invoice status update.", 422)
   const now = nowIso()
-  const invoices = await readCollection<DataRow>(organizationId, "invoices")
-  const nextInvoices = invoices.map((invoice) =>
-    invoice.id === invoiceId
-      ? { ...invoice, payment_status: paymentStatus, status: paymentStatus, sync_status: "pending_update", updated_at: now }
-      : invoice
-  )
-  await writeCollections(
-    organizationId,
-    [{ collection: "invoices", value: nextInvoices }],
-    pendingAction(createOfflineId("invoice-status-action"), "update_invoice_status", organizationId, { invoiceId, paymentStatus })
-  )
+  const updated = await updateNormalizedInvoicePaymentStatus(organizationId, invoiceId, paymentStatus, now)
+  if (!updated) return fail("Invoice was not found.", 404)
   return ok({ invoiceId, payment_status: paymentStatus })
 }
 
@@ -961,20 +893,9 @@ async function deleteInvoice(body: DataRow, organizationId: string) {
   const invoiceId = localString(body.invoice_id)
   if (!invoiceId || body.confirmation !== "DELETE") return fail("Type DELETE to confirm invoice deletion.", 422)
   const now = nowIso()
-  const [invoices, invoiceItems, products, movements, batches, ledgerEntries, receipts, payments, customers] = await Promise.all([
-    readCollection<DataRow>(organizationId, "invoices"),
-    readCollection<DataRow>(organizationId, "invoice_items"),
-    readCollection<DataRow>(organizationId, "products"),
-    readCollection<DataRow>(organizationId, "stock_movements"),
-    readCollection<DataRow>(organizationId, "stock_batches"),
-    readCollection<DataRow>(organizationId, "ledger_entries"),
-    readCollection<DataRow>(organizationId, "payment_receipts"),
-    readCollection<DataRow>(organizationId, "payments"),
-    readCollection<DataRow>(organizationId, "customers"),
-  ])
-  const invoice = invoices.find((row) => row.id === invoiceId)
-  if (!invoice) return fail("Invoice was not found.", 404)
-  const items = invoiceItems.filter((item) => item.invoice_id === invoiceId)
+  const context = await readNormalizedInvoiceDeletionContext(organizationId, invoiceId)
+  if (!context) return fail("Invoice was not found.", 404)
+  const { invoice, items, movements, products } = context
   const invoiceQuantityByProduct = new Map<string, number>()
   for (const item of items) {
     const productId = localString(item.product_id)
@@ -987,7 +908,7 @@ async function deleteInvoice(body: DataRow, organizationId: string) {
   }
   const alreadyRestoredByProduct = new Map<string, number>()
   for (const movement of movements) {
-    if (movement.reference_type !== "invoice_delete" || movement.reference_id !== invoiceId) continue
+    if (localString(movement.reference_type) !== "invoice_delete") continue
     const productId = localString(movement.product_id)
     if (productId) {
       alreadyRestoredByProduct.set(
@@ -1002,15 +923,9 @@ async function deleteInvoice(body: DataRow, organizationId: string) {
       Math.max(0, quantity - (alreadyRestoredByProduct.get(productId) || 0)),
     ])
   )
-  const nextProducts = products.map((product) => {
-    const restoreQuantity = restoreQuantityByProduct.get(String(product.id || "")) || 0
-    return restoreQuantity > 0
-      ? { ...product, stock: localNumber(product.stock) + restoreQuantity, sync_status: "pending_update", updated_at: now }
-      : product
-  })
   const restoredByBatch = new Map<string, number>()
   for (const movement of movements) {
-    if (movement.reference_type !== "invoice_delete" || movement.reference_id !== invoiceId) continue
+    if (localString(movement.reference_type) !== "invoice_delete") continue
     const batchId = localString(movement.batch_id)
     if (batchId) restoredByBatch.set(batchId, (restoredByBatch.get(batchId) || 0) + Math.max(0, localNumber(movement.quantity)))
   }
@@ -1019,7 +934,10 @@ async function deleteInvoice(body: DataRow, organizationId: string) {
   for (const [productId, restoreQuantity] of restoreQuantityByProduct.entries()) {
     let remaining = restoreQuantity
     const saleMovements = movements.filter(
-      (movement) => movement.reference_type === "invoice" && movement.reference_id === invoiceId && movement.product_id === productId && localNumber(movement.quantity) < 0
+      (movement) =>
+        localString(movement.reference_type) === "invoice" &&
+        localString(movement.product_id) === productId &&
+        localNumber(movement.quantity) < 0
     )
     for (const movement of saleMovements) {
       if (remaining <= 0) break
@@ -1034,12 +952,6 @@ async function deleteInvoice(body: DataRow, organizationId: string) {
     }
     if (remaining > 0) restoreAllocations.push({ productId, batchId: null, warehouseId: null, quantity: remaining })
   }
-  const nextBatches = batches.map((batch) => {
-    const quantity = batchRestoreById.get(String(batch.id || "")) || 0
-    return quantity > 0
-      ? { ...batch, quantity: localNumber(batch.quantity) + quantity, sync_status: "pending_update", updated_at: now }
-      : batch
-  })
   const runningRestoreStock = new Map(products.map((product) => [String(product.id || ""), localNumber(product.stock)]))
   const restoreMovements = restoreAllocations.map(({ productId, batchId, warehouseId, quantity }) => {
       const product = products.find((row) => row.id === productId)
@@ -1066,56 +978,35 @@ async function deleteInvoice(body: DataRow, organizationId: string) {
         updated_at: now,
       }
     })
-  const receiptIds = new Set(receipts.filter((row) => row.invoice_id === invoiceId).map((row) => row.id))
   const outstandingAmount = localNumber(invoice.outstanding_amount, Math.max(0, localNumber(invoice.grand_total, localNumber(invoice.total_amount, localNumber(invoice.total))) - localNumber(invoice.paid_amount)))
   const invoiceTotal = localNumber(invoice.grand_total, localNumber(invoice.total_amount, localNumber(invoice.total)))
-  const tombstone = (row: DataRow) => ({
-    ...row,
-    deleted_at: now,
-    sync_status: "pending_delete",
-    updated_at: now,
-  })
-  const remainingCustomerInvoices = invoices
-    .filter((row) => row.id !== invoiceId && row.customer_id === invoice.customer_id)
-    .sort((left, right) =>
-      localString(right.invoice_date, localString(right.created_at)).localeCompare(
-        localString(left.invoice_date, localString(left.created_at))
-      )
-    )
-  const nextCustomers = customers.map((customer) =>
-    customer.id === invoice.customer_id
-      ? {
-          ...customer,
-          total_sales: Math.max(0, localNumber(customer.total_sales) - invoiceTotal),
-          current_balance: Math.max(0, localNumber(customer.current_balance) - outstandingAmount),
-          last_purchase_at: remainingCustomerInvoices[0]?.invoice_date || remainingCustomerInvoices[0]?.created_at || null,
-          sync_status: "pending_update",
-          updated_at: now,
-        }
-      : customer
-  )
 
-  await writeCollections(
+  await deleteNormalizedInvoiceAtomic({
     organizationId,
-    [
-      { collection: "products", value: nextProducts },
-      { collection: "inventory_items", value: nextProducts },
-      { collection: "invoices", value: invoices.map((row) => (row.id === invoiceId ? tombstone(row) : row)) },
-      { collection: "invoice_items", value: invoiceItems.map((row) => (row.invoice_id === invoiceId ? tombstone(row) : row)) },
-      { collection: "stock_batches", value: nextBatches },
-      { collection: "stock_movements", value: [...restoreMovements, ...movements] },
-      {
-        collection: "ledger_entries",
-        value: ledgerEntries.map((row) =>
-          row.document_id === invoiceId || receiptIds.has(row.document_id as string) ? tombstone(row) : row
-        ),
-      },
-      { collection: "payment_receipts", value: receipts.map((row) => (row.invoice_id === invoiceId ? tombstone(row) : row)) },
-      { collection: "payments", value: payments.map((row) => (row.document_id === invoiceId ? tombstone(row) : row)) },
-      { collection: "customers", value: nextCustomers },
-    ],
-    pendingAction(createOfflineId("invoice-delete-action"), "delete_invoice", organizationId, { invoiceId })
-  )
+    invoiceId,
+    customerId: localString(invoice.customer_id) || null,
+    invoiceTotal,
+    outstandingAmount,
+    lastPurchaseAt: context.latestCustomerInvoice
+      ? localString(
+          context.latestCustomerInvoice.invoice_date,
+          localString(context.latestCustomerInvoice.date, localString(context.latestCustomerInvoice.created_at))
+        ) || null
+      : null,
+    productDeltas: Array.from(restoreQuantityByProduct.entries()).flatMap(([productId, quantity]) =>
+      quantity > 0 ? [{ productId, quantity, updatedAt: now }] : []
+    ),
+    inventoryDeltas: restoreAllocations.map(({ productId, warehouseId, batchId, quantity }) => ({
+      productId,
+      warehouseId: warehouseId || localString(products.find((product) => product.id === productId)?.warehouse_id) || null,
+      batchId,
+      quantity,
+      updatedAt: now,
+    })),
+    batchDeltas: Array.from(batchRestoreById.entries()).map(([batchId, quantity]) => ({ batchId, quantity, updatedAt: now })),
+    restoreMovements,
+    deletedAt: now,
+  })
   return ok({ invoiceId, restoredItems: items.length })
 }
 
@@ -1511,6 +1402,9 @@ async function professionalInventoryMovement(body: DataRow, organizationId: stri
 }
 
 async function localReport(url: URL, organizationId: string) {
+  if (url.searchParams.get("type") === "analytics-dashboard") {
+    return jsonResponse({ success: true, report: await queryNormalizedAnalyticsReport(organizationId) })
+  }
   const report = await getOfflineReport(organizationId, url.searchParams.get("type") || "dashboard", {
     start: url.searchParams.get("start"),
     end: url.searchParams.get("end"),
@@ -1553,41 +1447,7 @@ async function localWorkspaceBootstrap() {
 
 async function dashboardSummary(organizationId: string) {
   const workspace = getCachedWorkspaceBootstrap()
-  const [productsRaw, invoicesRaw, customersRaw, warehousesRaw, movementsRaw] = await Promise.all([
-    readCollection<DataRow>(organizationId, "products"),
-    readCollection<DataRow>(organizationId, "invoices"),
-    readCollection<DataRow>(organizationId, "customers"),
-    readCollection<DataRow>(organizationId, "warehouses"),
-    readCollection<DataRow>(organizationId, "stock_movements"),
-  ])
-
-  const products = filterDeleted(productsRaw)
-  const invoices = filterDeleted(invoicesRaw)
-  const customers = filterDeleted(customersRaw)
-  const warehouses = filterDeleted(warehousesRaw)
-  const today = new Date().toISOString().slice(0, 10)
-  const weekLabels = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
-  const totalRevenue = sumRows(invoices, ["grand_total", "total_amount", "total"])
-  const todayRevenue = sumRows(invoices.filter((invoice) => createdAt(invoice).startsWith(today)), ["grand_total", "total_amount", "total"])
-  const paidRevenue = sumRows(invoices.filter((invoice) => ["paid", "completed", "success"].includes(paymentStatus(invoice))), ["grand_total", "total_amount", "total"])
-  const pendingInvoices = invoices.filter((invoice) => ["unpaid", "pending", "overdue", ""].includes(paymentStatus(invoice))).length
-  const lowStockProducts = products.filter((product) => localNumber(product.stock) <= localNumber(product.min_stock, 5))
-  const outOfStockProducts = products.filter((product) => localNumber(product.stock) <= 0)
-  const inventoryValue = products.reduce((sum, product) => sum + localNumber(product.stock) * localNumber(product.sale_rate || product.price || product.mrp || product.purchase_rate), 0)
-  const costValue = products.reduce((sum, product) => sum + localNumber(product.stock) * localNumber(product.purchase_rate), 0)
-  const inventoryHealth = products.length ? Math.round(((products.length - lowStockProducts.length) / products.length) * 100) : 100
-  const collectionRate = totalRevenue > 0 ? Math.round((paidRevenue / totalRevenue) * 100) : 0
-  const erpHealth = Math.max(0, Math.min(100, Math.round(inventoryHealth * 0.45 + collectionRate * 0.4 + (pendingInvoices === 0 ? 15 : Math.max(0, 15 - pendingInvoices * 2)))))
-  const weeklyRevenue = weekLabels.map((label) => ({ label, value: 0 }))
-
-  invoices.forEach((invoice) => {
-    const value = createdAt(invoice)
-    if (!value) return
-    const day = new Date(value).getDay()
-    const index = [6, 0, 1, 2, 3, 4, 5][day]
-    weeklyRevenue[index].value += sumRows([invoice], ["grand_total", "total_amount", "total"])
-  })
-
+  const summary = await queryNormalizedDashboardSummary(organizationId)
   return jsonResponse({
     workspace: {
       organizationId,
@@ -1597,100 +1457,13 @@ async function dashboardSummary(organizationId: string) {
       locale: workspace?.locale || workspace?.organization?.locale || "en-IN",
       features: workspace?.features || [],
     },
-    metrics: {
-      totalRevenue,
-      todayRevenue,
-      paidRevenue,
-      pendingInvoices,
-      productCount: products.length,
-      lowStockCount: lowStockProducts.length,
-      outOfStockCount: outOfStockProducts.length,
-      inventoryValue,
-      costValue,
-      potentialProfit: inventoryValue - costValue,
-      inventoryHealth,
-      collectionRate,
-      erpHealth,
-      customerCount: customers.length,
-      warehouseCount: warehouses.length,
-      invoiceCount: invoices.length,
-      weeklyRevenue,
-    },
-    recentProducts: sortRows(products, "created_at", "desc").slice(0, 5),
-    lowStockProducts: lowStockProducts.slice(0, 5),
-    recentInvoices: sortRows(invoices, "created_at", "desc").slice(0, 5),
-    recentMovements: sortRows(movementsRaw, "created_at", "desc").slice(0, 12),
+    ...summary,
     warnings: [],
   })
 }
 
 async function billingSummary(organizationId: string) {
-  const [invoicesRaw, customersRaw, productsRaw] = await Promise.all([
-    readCollection<DataRow>(organizationId, "invoices"),
-    readCollection<DataRow>(organizationId, "customers"),
-    readCollection<DataRow>(organizationId, "products"),
-  ])
-  const invoices = sortRows(filterDeleted(invoicesRaw), "created_at", "desc")
-  const customers = filterDeleted(customersRaw)
-  const products = filterDeleted(productsRaw)
-  const customerMap = new Map(customers.map((customer) => [customer.id, customer]))
-  const enrichedInvoices = invoices.map((invoice) => {
-    const customer = customerMap.get(invoice.customer_id as string)
-    return {
-      ...invoice,
-      customer_name: invoice.customer_name || customer?.name || null,
-      customer_phone: invoice.customer_phone || customer?.phone || null,
-      customer_email: invoice.customer_email || customer?.email || null,
-    }
-  })
-  const paid = enrichedInvoices.filter((invoice) => ["paid", "completed", "success"].includes(paymentStatus(invoice)))
-  const unpaid = enrichedInvoices.filter((invoice) => ["unpaid", "pending", "overdue", ""].includes(paymentStatus(invoice)))
-  const partial = enrichedInvoices.filter((invoice) => paymentStatus(invoice) === "partial")
-  const open = enrichedInvoices.filter((invoice) => ["unpaid", "pending", "overdue", "partial", ""].includes(paymentStatus(invoice)))
-  const weeklyRevenue = Array.from({ length: 7 }, (_, index) => {
-    const date = new Date()
-    date.setDate(date.getDate() - (6 - index))
-    const dayKey = date.toDateString()
-    return {
-      label: date.toLocaleDateString(undefined, { weekday: "short" }),
-      total: enrichedInvoices
-        .filter((invoice) => {
-          const value = createdAt(invoice)
-          return value && new Date(value).toDateString() === dayKey
-        })
-        .reduce((sum, invoice) => sum + sumRows([invoice], ["grand_total", "total_amount", "total"]), 0),
-    }
-  })
-  const inventoryValue = products.reduce((sum, product) => sum + localNumber(product.stock) * localNumber(product.sale_rate || product.price || product.mrp), 0)
-  const lowStock = products.filter((product) => localNumber(product.stock) <= localNumber(product.min_stock, 5))
-  const revenue = sumRows(enrichedInvoices, ["grand_total", "total_amount", "total"])
-  const paidRevenue = sumRows(paid, ["grand_total", "total_amount", "total"])
-
-  return jsonResponse({
-    currency: "INR",
-    locale: "en-IN",
-    timezone: "Asia/Kolkata",
-    metrics: {
-      invoiceCount: enrichedInvoices.length,
-      revenue,
-      monthlyRevenue: enrichedInvoices.filter((invoice) => isThisMonth(createdAt(invoice))).reduce((sum, invoice) => sum + sumRows([invoice], ["grand_total", "total_amount", "total"]), 0),
-      paidRevenue,
-      outstanding: open.reduce((sum, invoice) => sum + sumRows([invoice], ["grand_total", "total_amount", "total"]), 0),
-      tax: enrichedInvoices.reduce((sum, invoice) => sum + sumRows([invoice], ["tax_amount", "tax_total"]), 0),
-      inventoryValue,
-      averageInvoice: enrichedInvoices.length ? revenue / enrichedInvoices.length : 0,
-      collectionRate: revenue ? Math.round((paidRevenue / revenue) * 100) : 0,
-      openInvoices: open.length,
-      paidCount: paid.length,
-      unpaidCount: unpaid.length,
-      partialCount: partial.length,
-      lowStockCount: lowStock.length,
-      customerCount: customers.length,
-      productCount: products.length,
-    },
-    weeklyRevenue,
-    recentInvoices: enrichedInvoices.slice(0, 10),
-  })
+  return jsonResponse(await queryNormalizedBillingSummary(organizationId))
 }
 
 async function updateOrganization(body: DataRow, organizationId: string) {

@@ -3,7 +3,8 @@
 import Link from "next/link"
 import { useRouter } from "next/navigation"
 import type { ReactNode } from "react"
-import { useCallback, useEffect, useMemo, useState } from "react"
+import { useCallback, useEffect, useMemo, useRef, useState } from "react"
+import { useDebounce } from "use-debounce"
 import { apiFetch } from "@/lib/api/client-fetch"
 import { loadStoredPrintSettings } from "@/components/print/settings/defaults"
 import { getOrganizationId } from "@/lib/getOrganization"
@@ -176,6 +177,9 @@ export default function CreateInvoicePage() {
   const [trackingNumber, setTrackingNumber] = useState("")
   const [items, setItems] = useState<InvoiceItem[]>([newItem()])
   const [productSearch, setProductSearch] = useState("")
+  const [debouncedProductSearch] = useDebounce(productSearch, 180)
+  const [debouncedCustomerSearch] = useDebounce(customerSearch, 180)
+  const [activeProductSuggestion, setActiveProductSuggestion] = useState(-1)
   const [barcodeInput, setBarcodeInput] = useState("")
   const [scanQuantity, setScanQuantity] = useState(1)
   const [sendSmsMessage, setSendSmsMessage] = useState(true)
@@ -183,6 +187,7 @@ export default function CreateInvoicePage() {
   const [organizationId, setOrganizationId] = useState("")
   const [loading, setLoading] = useState(false)
   const [notice, setNotice] = useState<Notice>(null)
+  const submitIdRef = useRef("")
 
   const hasShippingLabels = features.includes("shipping_labels")
   const hasBatchTracking = features.includes("batch_tracking")
@@ -211,11 +216,11 @@ export default function CreateInvoicePage() {
     await Promise.all([fetchCustomers(orgId), fetchProducts(orgId)])
   }
 
-  async function fetchCustomers(orgId = organizationId) {
+  async function fetchCustomers(orgId = organizationId, search = "") {
     if (!orgId) return
 
     try {
-      const response = await apiFetch("/api/customers/list?limit=100", {
+      const response = await apiFetch(`/api/customers/list?${new URLSearchParams({ limit: "50", sort: "name", direction: "asc", search }).toString()}`, {
         credentials: "include",
         cache: "no-store",
       })
@@ -223,7 +228,10 @@ export default function CreateInvoicePage() {
 
       if (!response.ok) throw new Error(payload.error || "Customers failed to load.")
       const nextCustomers = (payload.data || []).filter((customer) => customer.name)
-      setCustomers(nextCustomers)
+      setCustomers((current) => {
+        const retained = current.filter((customer) => customer.id === selectedCustomer)
+        return Array.from(new Map([...retained, ...nextCustomers].map((customer) => [customer.id, customer])).values())
+      })
       if (response.headers.get("X-Bezgrow-Data-Source") !== "sqlite") {
         await putOfflineData(orgId, "customers", nextCustomers)
       }
@@ -243,18 +251,23 @@ export default function CreateInvoicePage() {
     }
   }
 
-  async function fetchProducts(orgId = organizationId) {
+  async function fetchProducts(orgId = organizationId, search = "") {
     if (!orgId) return
 
     try {
-      const response = await apiFetch("/api/products/list?limit=100&sort=name&direction=asc", {
+      const response = await apiFetch(`/api/products/list?${new URLSearchParams({ limit: "50", sort: "name", direction: "asc", search }).toString()}`, {
         credentials: "include",
         cache: "no-store",
       })
       const payload = (await response.json()) as ListResponse<Product>
 
       if (!response.ok) throw new Error(payload.error || "Products failed to load.")
-      setProducts(payload.data || [])
+      const nextProducts = payload.data || []
+      setProducts((current) => {
+        const selectedIds = new Set(items.map((item) => item.product_id).filter(Boolean))
+        const retained = current.filter((product) => selectedIds.has(product.id))
+        return Array.from(new Map([...retained, ...nextProducts].map((product) => [product.id, product])).values())
+      })
       if (response.headers.get("X-Bezgrow-Data-Source") !== "sqlite") {
         await putOfflineData(orgId, "products", payload.data || [])
         await putOfflineData(orgId, "inventory_items", payload.data || [])
@@ -290,10 +303,25 @@ export default function CreateInvoicePage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
+  useEffect(() => {
+    if (!organizationId) return
+    void fetchProducts(organizationId, debouncedProductSearch.trim())
+    setActiveProductSuggestion(-1)
+    // Indexed SQLite lookup follows the debounced billing search term.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [debouncedProductSearch, organizationId])
+
+  useEffect(() => {
+    if (!organizationId) return
+    void fetchCustomers(organizationId, debouncedCustomerSearch.trim())
+    // Indexed SQLite lookup follows the debounced customer search term.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [debouncedCustomerSearch, organizationId])
+
   const productsMap = useMemo(() => new Map(products.map((product) => [product.id, product])), [products])
   const visibleCustomers = useMemo(() => {
     const term = customerSearch.trim().toLowerCase()
-    if (!term) return customers.slice(0, 80)
+    if (!term) return customers.slice(0, 50)
 
     return customers
       .filter((customer) =>
@@ -303,11 +331,11 @@ export default function CreateInvoicePage() {
           .toLowerCase()
           .includes(term)
       )
-      .slice(0, 80)
+      .slice(0, 50)
   }, [customerSearch, customers])
   const visibleProducts = useMemo(() => {
     const term = productSearch.trim().toLowerCase()
-    if (!term) return products.slice(0, 100)
+    if (!term) return products.slice(0, 50)
 
     return products
       .filter((product) =>
@@ -317,7 +345,7 @@ export default function CreateInvoicePage() {
           .toLowerCase()
           .includes(term)
       )
-      .slice(0, 100)
+      .slice(0, 50)
   }, [productSearch, products])
   const selectedCustomerRecord = useMemo(
     () => customers.find((customer) => customer.id === selectedCustomer) || null,
@@ -419,6 +447,7 @@ export default function CreateInvoicePage() {
   }
 
   const resetInvoiceForm = useCallback(() => {
+    submitIdRef.current = ""
     setSelectedCustomer("")
     setCustomerSearch("")
     setInvoiceMode("gst")
@@ -512,11 +541,15 @@ export default function CreateInvoicePage() {
     return `/dashboard/invoices/${invoiceId}/print?share=whatsapp`
   }
 
-  async function saveInvoiceOffline(invoicePayload: InvoicePayload, invoiceItems: InvoiceItemPayload[], printAfterSave: boolean) {
+  async function saveInvoiceOffline(
+    invoicePayload: InvoicePayload,
+    invoiceItems: InvoiceItemPayload[],
+    printAfterSave: boolean,
+    offlineClientId: string
+  ) {
     if (!organizationId) throw new Error("No saved business is available for offline billing.")
 
     const now = new Date().toISOString()
-    const offlineClientId = createOfflineId("invoice-client")
     const localInvoiceId = createOfflineId("invoice")
     const invoiceNumber = offlineInvoiceNumber()
     const currentProducts = await getOfflineData<Product[]>(organizationId, "products", products)
@@ -672,6 +705,8 @@ export default function CreateInvoicePage() {
     setLoading(true)
     setNotice(null)
     setSmsBillLink("")
+    if (!submitIdRef.current) submitIdRef.current = createOfflineId("invoice-client")
+    const offlineClientId = submitIdRef.current
 
     const invoicePayload: InvoicePayload = {
       customer_id: selectedCustomer,
@@ -725,6 +760,7 @@ export default function CreateInvoicePage() {
         },
         body: JSON.stringify({
           ...invoicePayload,
+          offline_client_id: offlineClientId,
           items: invoiceItems,
         }),
       })
@@ -742,7 +778,7 @@ export default function CreateInvoicePage() {
         return
       }
 
-      await saveInvoiceOffline(invoicePayload, invoiceItems, printAfterSave)
+      await saveInvoiceOffline(invoicePayload, invoiceItems, printAfterSave, offlineClientId)
       return
     }
 
@@ -1000,10 +1036,56 @@ export default function CreateInvoicePage() {
                   <input
                     value={productSearch}
                     onChange={(event) => setProductSearch(event.target.value)}
+                    onKeyDown={(event) => {
+                      if (!visibleProducts.length) return
+                      if (event.key === "ArrowDown") {
+                        event.preventDefault()
+                        setActiveProductSuggestion((current) => Math.min(current + 1, visibleProducts.length - 1))
+                      } else if (event.key === "ArrowUp") {
+                        event.preventDefault()
+                        setActiveProductSuggestion((current) => Math.max(current - 1, 0))
+                      } else if (event.key === "Enter") {
+                        event.preventDefault()
+                        const product = visibleProducts[Math.max(0, activeProductSuggestion)]
+                        if (product) {
+                          addProductByScan(product)
+                          setProductSearch("")
+                          setActiveProductSuggestion(-1)
+                        }
+                      } else if (event.key === "Escape") {
+                        setProductSearch("")
+                        setActiveProductSuggestion(-1)
+                      }
+                    }}
+                    role="combobox"
+                    aria-expanded={Boolean(productSearch.trim() && visibleProducts.length)}
+                    aria-controls="product-search-suggestions"
                     placeholder="Search product, Batch No., HSN, barcode, or category"
                     className={inputClass()}
                   />
                 </FieldLabel>
+                {productSearch.trim() && visibleProducts.length > 0 && (
+                  <div id="product-search-suggestions" role="listbox" className="mt-2 max-h-72 overflow-y-auto rounded-2xl border border-white/10 bg-zinc-950 p-2 shadow-2xl">
+                    {visibleProducts.map((product, index) => (
+                      <button
+                        key={product.id}
+                        type="button"
+                        role="option"
+                        aria-selected={index === activeProductSuggestion}
+                        onMouseEnter={() => setActiveProductSuggestion(index)}
+                        onClick={() => {
+                          addProductByScan(product)
+                          setProductSearch("")
+                          setActiveProductSuggestion(-1)
+                        }}
+                        className={`flex min-h-12 w-full items-center justify-between rounded-xl px-4 py-3 text-left text-sm ${index === activeProductSuggestion ? "bg-cyan-400 text-black" : "text-white hover:bg-white/10"}`}
+                      >
+                        <span className="font-bold">{product.name}</span>
+                        <span className="ml-4 shrink-0 text-xs opacity-70">{product.stock || 0} stock</span>
+                      </button>
+                    ))}
+                  </div>
+                )}
               </div>
 
               <div className="mt-6 rounded-lg border border-cyan-400/20 bg-cyan-500/10 p-4 sm:rounded-[28px] sm:p-5">

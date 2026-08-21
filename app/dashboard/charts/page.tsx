@@ -21,35 +21,55 @@ import {
 import { apiFetch } from "@/lib/api/client-fetch"
 import { getOrganizationId } from "@/lib/getOrganization"
 
-type AnyRow = Record<string, unknown>
-
-type ProductRow = {
-    id: string
-    name: string | null
-    category: string | null
-    stock: number | null
-    min_stock: number | null
-    sale_rate: number | null
-    purchase_rate: number | null
-    price: number | null
-    expiry_date: string | null
+type AnalyticsReport = {
+    metrics: {
+        totalRevenue: number
+        inventoryValue: number
+        costValue: number
+        potentialProfit: number
+        productCount: number
+        customerCount: number
+        invoiceCount: number
+        paidRevenue: number
+        paidCount: number
+        unpaidCount: number
+        lowStockCount: number
+        expiredCount: number
+        expiringSoonCount: number
+        collectionRate: number
+        stockHealth: number
+    }
+    weeklyRevenue: Array<{ label: string; revenue: number }>
+    categories: Array<{ name: string; stock: number; value: number }>
+    productProfit: Array<{ name: string; profit: number; stock: number }>
 }
 
-type AnalyticsState = {
-    products: ProductRow[]
-    invoices: AnyRow[]
-    customers: AnyRow[]
-}
-
-type ListResponse<T> = {
-    data?: T[]
+type AnalyticsResponse = {
+    report?: AnalyticsReport
     error?: string
 }
 
-const emptyState: AnalyticsState = {
-    products: [],
-    invoices: [],
-    customers: [],
+const emptyReport: AnalyticsReport = {
+    metrics: {
+        totalRevenue: 0,
+        inventoryValue: 0,
+        costValue: 0,
+        potentialProfit: 0,
+        productCount: 0,
+        customerCount: 0,
+        invoiceCount: 0,
+        paidRevenue: 0,
+        paidCount: 0,
+        unpaidCount: 0,
+        lowStockCount: 0,
+        expiredCount: 0,
+        expiringSoonCount: 0,
+        collectionRate: 0,
+        stockHealth: 0,
+    },
+    weeklyRevenue: [],
+    categories: [],
+    productProfit: [],
 }
 
 const chartColors = ["#38bdf8", "#34d399", "#fbbf24", "#fb7185", "#a78bfa"]
@@ -60,7 +80,6 @@ const statusColors: Record<string, string> = {
     "Expiring Soon": "#fbbf24",
     Expired: "#fb7185",
 }
-const weekLabels = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
 const darkTooltipProps = {
     contentStyle: {
         background: "#050606",
@@ -85,44 +104,12 @@ function pieLabel({ name, percent }: PieLabelRenderProps) {
     return percentage >= 5 ? `${String(name || "")}: ${percentage}%` : ""
 }
 
-function numberFrom(row: AnyRow, fields: string[]) {
-    for (const field of fields) {
-        const value = row[field]
-        if (value !== null && value !== undefined && value !== "") {
-            return Number(value || 0)
-        }
-    }
-
-    return 0
-}
-
-function stringFrom(row: AnyRow, fields: string[]) {
-    for (const field of fields) {
-        const value = row[field]
-        if (typeof value === "string" && value.trim()) return value
-    }
-
-    return ""
-}
-
 function money(value: number) {
     return `Rs ${Math.round(value).toLocaleString()}`
 }
 
-function isExpired(product: ProductRow) {
-    return Boolean(product.expiry_date && new Date(product.expiry_date) < new Date())
-}
-
-function isExpiringSoon(product: ProductRow) {
-    if (!product.expiry_date) return false
-    const expiry = new Date(product.expiry_date)
-    const now = new Date()
-    const future = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000)
-    return expiry > now && expiry < future
-}
-
 export default function AnalyticsPage() {
-    const [state, setState] = useState<AnalyticsState>(emptyState)
+    const [report, setReport] = useState<AnalyticsReport>(emptyReport)
     const [loading, setLoading] = useState(true)
     const [notice, setNotice] = useState("")
 
@@ -138,30 +125,14 @@ export default function AnalyticsPage() {
                 return
             }
 
-            const [productsResponse, invoicesResponse, customersResponse] = await Promise.all([
-                apiFetch(`/api/products/list?${new URLSearchParams({ organization_id: orgId, limit: "500", sort: "created_at", direction: "desc" }).toString()}`, { cache: "no-store", signal: controller.signal }),
-                apiFetch(`/api/invoices/list?${new URLSearchParams({ organization_id: orgId, limit: "500", sort: "created_at", direction: "desc" }).toString()}`, { cache: "no-store", signal: controller.signal }),
-                apiFetch(`/api/customers/list?${new URLSearchParams({ organization_id: orgId, limit: "500", sort: "created_at", direction: "desc" }).toString()}`, { cache: "no-store", signal: controller.signal }),
-            ])
-
-            const [productsResult, invoicesResult, customersResult] = await Promise.all([
-                productsResponse.json() as Promise<ListResponse<ProductRow>>,
-                invoicesResponse.json() as Promise<ListResponse<AnyRow>>,
-                customersResponse.json() as Promise<ListResponse<AnyRow>>,
-            ])
-
-            const firstError =
-                (!productsResponse.ok && productsResult.error) ||
-                (!invoicesResponse.ok && invoicesResult.error) ||
-                (!customersResponse.ok && customersResult.error)
-
-            if (firstError) setNotice(firstError)
-
-            setState({
-                products: productsResult.data || [],
-                invoices: invoicesResult.data || [],
-                customers: customersResult.data || [],
+            const response = await apiFetch(`/api/reports/local?${new URLSearchParams({ organization_id: orgId, type: "analytics-dashboard" }).toString()}`, {
+                cache: "no-store",
+                signal: controller.signal,
             })
+            const result = (await response.json()) as AnalyticsResponse
+            if (!response.ok || !result.report) throw new Error(result.error || "Reports failed to load.")
+            setReport(result.report)
+            setNotice("")
         } catch (error) {
             setNotice(error instanceof DOMException && error.name === "AbortError"
                 ? "Reports did not finish loading within 15 seconds. Retry after checking the local database in Settings → Desktop Diagnostics."
@@ -177,101 +148,26 @@ export default function AnalyticsPage() {
     }, [])
 
     const analytics = useMemo(() => {
-        const totalRevenue = state.invoices.reduce(
-            (sum, invoice) => sum + numberFrom(invoice, ["grand_total", "total_amount", "total"]),
-            0
-        )
-        const inventoryValue = state.products.reduce((sum, product) => {
-            const rate = Number(product.sale_rate || product.price || product.purchase_rate || 0)
-            return sum + Number(product.stock || 0) * rate
-        }, 0)
-        const costValue = state.products.reduce((sum, product) => {
-            return sum + Number(product.stock || 0) * Number(product.purchase_rate || 0)
-        }, 0)
-        const lowStock = state.products.filter(
-            (product) => Number(product.stock || 0) <= Number(product.min_stock ?? 5)
-        )
-        const expired = state.products.filter(isExpired)
-        const expiringSoon = state.products.filter(isExpiringSoon)
-        const paidInvoices = state.invoices.filter((invoice) =>
-            ["paid", "completed", "success"].includes(
-                stringFrom(invoice, ["payment_status", "status"]).toLowerCase()
-            )
-        )
-        const unpaidInvoices = state.invoices.filter((invoice) => {
-            const status = stringFrom(invoice, ["payment_status", "status"]).toLowerCase()
-            return status !== "paid" && status !== "completed" && status !== "success" && status !== "cancelled"
-        })
-
-        const weeklyRevenue = weekLabels.map((label) => ({ label, revenue: 0 }))
-        state.invoices.forEach((invoice) => {
-            const createdAt = stringFrom(invoice, ["created_at"])
-            if (!createdAt) return
-            const day = new Date(createdAt).getDay()
-            const index = [6, 0, 1, 2, 3, 4, 5][day]
-            weeklyRevenue[index].revenue += numberFrom(invoice, ["grand_total", "total_amount", "total"])
-        })
-
-        const categoryMap = new Map<string, { name: string; stock: number; value: number }>()
-        state.products.forEach((product) => {
-            const category = product.category || "General"
-            const current = categoryMap.get(category) || { name: category, stock: 0, value: 0 }
-            const stock = Number(product.stock || 0)
-            const rate = Number(product.sale_rate || product.price || 0)
-            current.stock += stock
-            current.value += stock * rate
-            categoryMap.set(category, current)
-        })
-
-        const productProfit = [...state.products]
-            .map((product) => ({
-                name: product.name || "Product",
-                profit: Number(product.sale_rate || product.price || 0) - Number(product.purchase_rate || 0),
-                stock: Number(product.stock || 0),
-            }))
-            .sort((a, b) => b.profit - a.profit)
-            .slice(0, 8)
-
+        const metrics = report.metrics
         return {
-            totalRevenue,
-            inventoryValue,
-            costValue,
-            potentialProfit: inventoryValue - costValue,
-            lowStock,
-            expired,
-            expiringSoon,
-            paidInvoices,
-            unpaidInvoices,
-            weeklyRevenue,
-            categories: Array.from(categoryMap.values()).sort((a, b) => b.value - a.value).slice(0, 6),
-            productProfit,
+            ...metrics,
+            weeklyRevenue: report.weeklyRevenue,
+            categories: report.categories,
+            productProfit: report.productProfit,
             stockPie: [
-                { name: "Healthy", value: Math.max(0, state.products.length - lowStock.length) },
-                { name: "Low Stock", value: lowStock.length },
+                { name: "Healthy", value: Math.max(0, metrics.productCount - metrics.lowStockCount) },
+                { name: "Low Stock", value: metrics.lowStockCount },
             ],
             expiryPie: [
-                { name: "Valid", value: Math.max(0, state.products.length - expired.length - expiringSoon.length) },
-                { name: "Expiring Soon", value: expiringSoon.length },
-                { name: "Expired", value: expired.length },
+                { name: "Valid", value: Math.max(0, metrics.productCount - metrics.expiredCount - metrics.expiringSoonCount) },
+                { name: "Expiring Soon", value: metrics.expiringSoonCount },
+                { name: "Expired", value: metrics.expiredCount },
             ],
         }
-    }, [state])
+    }, [report])
 
-    const collectionRate =
-        analytics.totalRevenue > 0
-            ? Math.round(
-                (analytics.paidInvoices.reduce(
-                    (sum, invoice) => sum + numberFrom(invoice, ["grand_total", "total_amount", "total"]),
-                    0
-                ) /
-                    analytics.totalRevenue) *
-                100
-            )
-            : 0
-    const stockHealth =
-        state.products.length > 0
-            ? Math.round(((state.products.length - analytics.lowStock.length) / state.products.length) * 100)
-            : 0
+    const collectionRate = analytics.collectionRate
+    const stockHealth = analytics.stockHealth
     const hasWeeklyRevenue = analytics.weeklyRevenue.some((item) => item.revenue > 0)
     const hasStockPie = analytics.stockPie.some((item) => item.value > 0)
     const hasCategoryValue = analytics.categories.some((item) => item.value > 0)
@@ -305,7 +201,7 @@ export default function AnalyticsPage() {
                             {[
                                 [`${collectionRate}%`, "collection"],
                                 [`${stockHealth}%`, "stock health"],
-                                [state.customers.length.toLocaleString(), "customers"],
+                                [analytics.customerCount.toLocaleString(), "customers"],
                             ].map(([value, label]) => (
                                 <div key={label} className="rounded-lg border border-white/10 bg-white/[0.04] p-5">
                                     <p className="text-3xl font-black">{value}</p>
@@ -333,8 +229,8 @@ export default function AnalyticsPage() {
                                 { label: "Revenue", value: analytics.totalRevenue, color: "text-emerald-200", money: true },
                                 { label: "Inventory Value", value: analytics.inventoryValue, color: "text-sky-200", money: true },
                                 { label: "Potential Profit", value: analytics.potentialProfit, color: "text-amber-200", money: true },
-                                { label: "Customers", value: state.customers.length, color: "text-white", money: false },
-                                { label: "Expiry Risk", value: analytics.expired.length + analytics.expiringSoon.length, color: "text-red-200", money: false },
+                                { label: "Customers", value: analytics.customerCount, color: "text-white", money: false },
+                                { label: "Expiry Risk", value: analytics.expiredCount + analytics.expiringSoonCount, color: "text-red-200", money: false },
                             ].map(({ label, value, color, money: isMoney }) => (
                                 <div key={label} className="min-w-0 overflow-hidden rounded-lg border border-white/10 bg-black/70 p-5 shadow-xl">
                                     <p className="text-xs uppercase tracking-[0.18em] text-neutral-500">{label}</p>
@@ -446,9 +342,9 @@ export default function AnalyticsPage() {
                                     {[
                                         ["Private Business Data", "Reports show the current business only"],
                                         ["Revenue Totals", "Invoices are counted consistently across billing views"],
-                                        ["Inventory Intelligence", `${analytics.lowStock.length} low-stock products`],
-                                        ["Customer Records", `${state.customers.length} customer accounts`],
-                                        ["Payment Review", `${analytics.unpaidInvoices.length} unpaid or partially paid invoices`],
+                                        ["Inventory Intelligence", `${analytics.lowStockCount} low-stock products`],
+                                        ["Customer Records", `${analytics.customerCount} customer accounts`],
+                                        ["Payment Review", `${analytics.unpaidCount} unpaid or partially paid invoices`],
                                         ["Daily Review", "Check revenue, stock risk, and unpaid work before closing"],
                                     ].map(([title, body]) => (
                                         <div key={title} className="rounded-lg border border-white/10 bg-white/[0.04] p-4">

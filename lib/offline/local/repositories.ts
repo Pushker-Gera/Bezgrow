@@ -25,6 +25,8 @@ export type NormalizedListQuery = {
 export type NormalizedListPage = {
   data: DataRow[]
   total: number
+  summary?: Record<string, number>
+  facets?: Record<string, string[]>
 }
 
 type FieldValue = {
@@ -1286,17 +1288,339 @@ export async function putNormalizedCollectionsInTransaction(
   })
 }
 
+export async function readNormalizedInvoiceCreationContext(
+  organizationId: string,
+  customerId: string,
+  productIds: string[],
+  offlineClientId: string
+) {
+  const db = await service.requireConnection("read")
+  const uniqueProductIds = [...new Set(productIds.filter(Boolean))]
+  const placeholders = uniqueProductIds.map(() => "?").join(", ")
+  const [existingRows, organizationRows, customerRows, products, batches] = await Promise.all([
+    offlineClientId
+      ? db.select<DataRow>(
+          "SELECT id, invoice_number FROM sales_invoices WHERE organization_id = ? AND offline_client_id = ? LIMIT 1",
+          [organizationId, offlineClientId]
+        )
+      : Promise.resolve([]),
+    db.select<DataRow>("SELECT id, invoice_prefix, next_invoice_number FROM organizations WHERE id = ? LIMIT 1", [organizationId]),
+    db.select<DataRow>("SELECT * FROM customers WHERE organization_id = ? AND id = ? AND deleted_at IS NULL LIMIT 1", [organizationId, customerId]),
+    uniqueProductIds.length
+      ? db.select<DataRow>(
+          `SELECT * FROM products WHERE organization_id = ? AND deleted_at IS NULL AND id IN (${placeholders})`,
+          [organizationId, ...uniqueProductIds]
+        )
+      : Promise.resolve([]),
+    uniqueProductIds.length
+      ? db.select<DataRow>(
+          `SELECT * FROM stock_batches WHERE organization_id = ? AND deleted_at IS NULL AND product_id IN (${placeholders}) ORDER BY purchase_date ASC, created_at ASC, id ASC`,
+          [organizationId, ...uniqueProductIds]
+        )
+      : Promise.resolve([]),
+  ])
+  const organization = organizationRows[0] || null
+  const prefix = text(organization || {}, ["invoice_prefix"], "INV") || "INV"
+  const nextSequence = Math.max(1, Number(organization?.next_invoice_number || 1))
+  return {
+    existing: existingRows[0] || null,
+    organization,
+    customer: customerRows[0] || null,
+    products,
+    batches,
+    invoiceSequence: nextSequence,
+    invoiceNumber: `${prefix}-${String(nextSequence).padStart(5, "0")}`,
+  }
+}
+
+export async function readNormalizedInvoiceDeletionContext(organizationId: string, invoiceId: string) {
+  const db = await service.requireConnection("read")
+  const [invoice] = await db.select<DataRow>(
+    "SELECT * FROM sales_invoices WHERE organization_id = ? AND id = ? AND deleted_at IS NULL LIMIT 1",
+    [organizationId, invoiceId]
+  )
+  if (!invoice) return null
+
+  const [items, movements, products, latestCustomerInvoice] = await Promise.all([
+    db.select<DataRow>(
+      "SELECT * FROM sales_invoice_items WHERE organization_id = ? AND invoice_id = ? AND deleted_at IS NULL ORDER BY created_at, id",
+      [organizationId, invoiceId]
+    ),
+    db.select<DataRow>(
+      `SELECT * FROM stock_movements
+       WHERE organization_id = ? AND reference_id = ? AND reference_type IN ('invoice', 'invoice_delete') AND deleted_at IS NULL
+       ORDER BY created_at, id`,
+      [organizationId, invoiceId]
+    ),
+    db.select<DataRow>(
+      `SELECT * FROM products
+       WHERE organization_id = ? AND deleted_at IS NULL
+         AND id IN (SELECT product_id FROM sales_invoice_items WHERE organization_id = ? AND invoice_id = ? AND deleted_at IS NULL)`,
+      [organizationId, organizationId, invoiceId]
+    ),
+    invoice.customer_id
+      ? db.select<DataRow>(
+          `SELECT invoice_date, date, created_at FROM sales_invoices
+           WHERE organization_id = ? AND customer_id = ? AND id <> ? AND deleted_at IS NULL
+           ORDER BY COALESCE(invoice_date, date, created_at) DESC, id DESC LIMIT 1`,
+          [organizationId, invoice.customer_id as SqlValue, invoiceId]
+        )
+      : Promise.resolve([]),
+  ])
+  return { invoice, items, movements, products, latestCustomerInvoice: latestCustomerInvoice[0] || null }
+}
+
+export type NormalizedInvoiceAtomicInput = {
+  organizationId: string
+  invoice: DataRow
+  items: DataRow[]
+  productDeltas: Array<{ productId: string; quantity: number; updatedAt: string }>
+  inventoryDeltas: Array<{ productId: string; warehouseId: string | null; batchId: string | null; quantity: number; updatedAt: string }>
+  batchDeltas: Array<{ batchId: string; quantity: number; updatedAt: string }>
+  movements: DataRow[]
+  ledgerEntries: DataRow[]
+  receipt?: DataRow | null
+  payment?: DataRow | null
+  customerId: string
+  customerSalesDelta: number
+  customerBalanceDelta: number
+  invoiceSequence: number
+}
+
+export type NormalizedInvoiceDeletionInput = {
+  organizationId: string
+  invoiceId: string
+  customerId: string | null
+  invoiceTotal: number
+  outstandingAmount: number
+  lastPurchaseAt: string | null
+  productDeltas: Array<{ productId: string; quantity: number; updatedAt: string }>
+  inventoryDeltas: Array<{ productId: string; warehouseId: string | null; batchId: string | null; quantity: number; updatedAt: string }>
+  batchDeltas: Array<{ batchId: string; quantity: number; updatedAt: string }>
+  restoreMovements: DataRow[]
+  deletedAt: string
+}
+
+export async function createNormalizedInvoiceAtomic(input: NormalizedInvoiceAtomicInput) {
+  await service.transaction(async (db) => {
+    await ensureOrganization(db, input.organizationId)
+    await upsert(db, "sales_invoices", invoiceRow(input.invoice, input.organizationId))
+    for (let index = 0; index < input.items.length; index += 1) {
+      await upsert(db, "sales_invoice_items", invoiceItemRow(input.items[index], input.organizationId, index))
+    }
+    for (const delta of input.productDeltas) {
+      await db.execute(
+        `UPDATE products
+         SET stock = stock - ?, sync_status = 'pending_update', updated_at = ?
+         WHERE organization_id = ? AND id = ? AND deleted_at IS NULL`,
+        [delta.quantity, delta.updatedAt, input.organizationId, delta.productId]
+      )
+    }
+    for (const delta of input.inventoryDeltas) {
+      await db.execute(
+        `UPDATE inventory_items
+         SET quantity = MAX(0, quantity - ?),
+             available_quantity = MAX(0, available_quantity - ?),
+             sync_status = 'pending_update', updated_at = ?
+         WHERE id = (
+           SELECT id FROM inventory_items
+           WHERE organization_id = ? AND product_id = ? AND deleted_at IS NULL
+           ORDER BY CASE
+             WHEN ? IS NOT NULL AND batch_id = ? THEN 0
+             WHEN ? IS NOT NULL AND warehouse_id = ? THEN 1
+             ELSE 2
+           END, id
+           LIMIT 1
+         )`,
+        [
+          delta.quantity,
+          delta.quantity,
+          delta.updatedAt,
+          input.organizationId,
+          delta.productId,
+          delta.batchId,
+          delta.batchId,
+          delta.warehouseId,
+          delta.warehouseId,
+        ]
+      )
+    }
+    for (const delta of input.batchDeltas) {
+      await db.execute(
+        `UPDATE stock_batches
+         SET quantity = quantity - ?, sync_status = 'pending_update', updated_at = ?
+         WHERE organization_id = ? AND id = ? AND deleted_at IS NULL`,
+        [delta.quantity, delta.updatedAt, input.organizationId, delta.batchId]
+      )
+    }
+    for (let index = 0; index < input.movements.length; index += 1) {
+      await upsert(db, "stock_movements", stockMovementRow(input.movements[index], input.organizationId, index))
+    }
+    for (let index = 0; index < input.ledgerEntries.length; index += 1) {
+      await upsert(db, "ledger_entries", ledgerEntryRow(input.ledgerEntries[index], input.organizationId, index))
+    }
+    if (input.receipt) await upsert(db, "payment_receipts", paymentReceiptRow(input.receipt, input.organizationId))
+    if (input.payment) await upsert(db, "payments", input.payment)
+    await db.execute(
+      `UPDATE customers
+       SET total_sales = COALESCE(total_sales, 0) + ?,
+           current_balance = COALESCE(current_balance, 0) + ?,
+           last_purchase_at = ?, sync_status = 'pending_update', updated_at = ?
+       WHERE organization_id = ? AND id = ? AND deleted_at IS NULL`,
+      [
+        input.customerSalesDelta,
+        input.customerBalanceDelta,
+        input.invoice.updated_at as SqlValue,
+        input.invoice.updated_at as SqlValue,
+        input.organizationId,
+        input.customerId,
+      ]
+    )
+    await db.execute(
+      `UPDATE organizations
+       SET next_invoice_number = MAX(COALESCE(next_invoice_number, 1), ?), updated_at = ?
+       WHERE id = ?`,
+      [input.invoiceSequence + 1, input.invoice.updated_at as SqlValue, input.organizationId]
+    )
+  })
+}
+
+export async function deleteNormalizedInvoiceAtomic(input: NormalizedInvoiceDeletionInput) {
+  await service.transaction(async (db) => {
+    for (const delta of input.productDeltas) {
+      await db.execute(
+        `UPDATE products SET stock = stock + ?, sync_status = 'pending_update', updated_at = ?
+         WHERE organization_id = ? AND id = ? AND deleted_at IS NULL`,
+        [delta.quantity, delta.updatedAt, input.organizationId, delta.productId]
+      )
+    }
+    for (const delta of input.inventoryDeltas) {
+      await db.execute(
+        `UPDATE inventory_items
+         SET quantity = quantity + ?, available_quantity = available_quantity + ?,
+             sync_status = 'pending_update', updated_at = ?
+         WHERE id = (
+           SELECT id FROM inventory_items
+           WHERE organization_id = ? AND product_id = ? AND deleted_at IS NULL
+           ORDER BY CASE
+             WHEN ? IS NOT NULL AND batch_id = ? THEN 0
+             WHEN ? IS NOT NULL AND warehouse_id = ? THEN 1
+             ELSE 2
+           END, id LIMIT 1
+         )`,
+        [
+          delta.quantity,
+          delta.quantity,
+          delta.updatedAt,
+          input.organizationId,
+          delta.productId,
+          delta.batchId,
+          delta.batchId,
+          delta.warehouseId,
+          delta.warehouseId,
+        ]
+      )
+    }
+    for (const delta of input.batchDeltas) {
+      await db.execute(
+        `UPDATE stock_batches SET quantity = quantity + ?, sync_status = 'pending_update', updated_at = ?
+         WHERE organization_id = ? AND id = ? AND deleted_at IS NULL`,
+        [delta.quantity, delta.updatedAt, input.organizationId, delta.batchId]
+      )
+    }
+    for (let index = 0; index < input.restoreMovements.length; index += 1) {
+      await upsert(db, "stock_movements", stockMovementRow(input.restoreMovements[index], input.organizationId, index))
+    }
+    await db.execute(
+      `UPDATE sales_invoices SET deleted_at = ?, sync_status = 'pending_delete', updated_at = ?
+       WHERE organization_id = ? AND id = ? AND deleted_at IS NULL`,
+      [input.deletedAt, input.deletedAt, input.organizationId, input.invoiceId]
+    )
+    await db.execute(
+      `UPDATE sales_invoice_items SET deleted_at = ?, sync_status = 'pending_delete', updated_at = ?
+       WHERE organization_id = ? AND invoice_id = ? AND deleted_at IS NULL`,
+      [input.deletedAt, input.deletedAt, input.organizationId, input.invoiceId]
+    )
+    await db.execute(
+      `UPDATE ledger_entries SET deleted_at = ?, sync_status = 'pending_delete', updated_at = ?
+       WHERE organization_id = ? AND deleted_at IS NULL
+         AND (document_id = ? OR document_id IN (
+           SELECT id FROM payment_receipts WHERE organization_id = ? AND invoice_id = ?
+         ))`,
+      [input.deletedAt, input.deletedAt, input.organizationId, input.invoiceId, input.organizationId, input.invoiceId]
+    )
+    await db.execute(
+      `UPDATE payment_receipts SET deleted_at = ?, sync_status = 'pending_delete', updated_at = ?
+       WHERE organization_id = ? AND invoice_id = ? AND deleted_at IS NULL`,
+      [input.deletedAt, input.deletedAt, input.organizationId, input.invoiceId]
+    )
+    await db.execute(
+      `UPDATE payments SET deleted_at = ?, sync_status = 'pending_delete', updated_at = ?
+       WHERE organization_id = ? AND document_id = ? AND deleted_at IS NULL`,
+      [input.deletedAt, input.deletedAt, input.organizationId, input.invoiceId]
+    )
+    if (input.customerId) {
+      await db.execute(
+        `UPDATE customers
+         SET total_sales = MAX(0, COALESCE(total_sales, 0) - ?),
+             current_balance = MAX(0, COALESCE(current_balance, 0) - ?),
+             last_purchase_at = ?, sync_status = 'pending_update', updated_at = ?
+         WHERE organization_id = ? AND id = ? AND deleted_at IS NULL`,
+        [
+          input.invoiceTotal,
+          input.outstandingAmount,
+          input.lastPurchaseAt,
+          input.deletedAt,
+          input.organizationId,
+          input.customerId,
+        ]
+      )
+    }
+  })
+}
+
+export async function updateNormalizedInvoicePaymentStatus(
+  organizationId: string,
+  invoiceId: string,
+  paymentStatus: string,
+  updatedAt: string
+) {
+  const db = await service.requireConnection("read")
+  const [invoice] = await db.select<DataRow>(
+    `SELECT id, COALESCE(grand_total, total_amount, total, 0) AS invoice_total,
+            COALESCE(paid_amount, 0) AS paid_amount
+     FROM sales_invoices
+     WHERE organization_id = ? AND id = ? AND deleted_at IS NULL
+     LIMIT 1`,
+    [organizationId, invoiceId]
+  )
+  if (!invoice) return false
+
+  const invoiceTotal = Number(invoice.invoice_total || 0)
+  const paidAmount = paymentStatus === "paid"
+    ? invoiceTotal
+    : paymentStatus === "unpaid"
+      ? 0
+      : Math.min(invoiceTotal, Number(invoice.paid_amount || 0))
+  const outstandingAmount = Math.max(0, invoiceTotal - paidAmount)
+  await service.transaction(async (tx) => {
+    await tx.execute(
+      `UPDATE sales_invoices
+       SET payment_status = ?, status = ?, paid_amount = ?, outstanding_amount = ?,
+           sync_status = 'pending_update', updated_at = ?
+       WHERE organization_id = ? AND id = ? AND deleted_at IS NULL`,
+      [paymentStatus, paymentStatus, paidAmount, outstandingAmount, updatedAt, organizationId, invoiceId]
+    )
+  })
+  return true
+}
+
 function listDirection(direction: NormalizedListQuery["direction"]) {
   return direction === "asc" ? "ASC" : "DESC"
 }
 
 function likeTerm(value: string) {
   return `%${value.trim()}%`
-}
-
-async function countRows(db: SqlExecutor, sql: string, values: SqlValue[]) {
-  const [row] = await db.select<{ total: number }>(sql, values)
-  return Number(row?.total || 0)
 }
 
 export async function queryNormalizedProducts(organizationId: string, query: NormalizedListQuery): Promise<NormalizedListPage> {
@@ -1336,9 +1660,26 @@ export async function queryNormalizedProducts(organizationId: string, query: Nor
   }
   const orderBy = sortColumns[query.sort] || sortColumns.created_at
   const whereSql = where.join(" AND ")
-  const total = await countRows(db, `SELECT COUNT(*) AS total FROM products p WHERE ${whereSql}`, values)
+  const [summaryRow] = await db.select<Record<string, number>>(
+    `SELECT
+       COUNT(*) AS totalProducts,
+       SUM(CASE WHEN COALESCE(p.stock, 0) <= COALESCE(p.min_stock, 5) THEN 1 ELSE 0 END) AS lowStockCount,
+       SUM(CASE WHEN COALESCE(p.stock, 0) <= 0 THEN 1 ELSE 0 END) AS outOfStockCount,
+       SUM(CASE WHEN p.expiry_date IS NOT NULL AND date(p.expiry_date) < date('now') THEN 1 ELSE 0 END) AS expiredCount,
+       SUM(CASE WHEN p.expiry_date IS NOT NULL AND date(p.expiry_date) BETWEEN date('now') AND date('now', '+30 days') THEN 1 ELSE 0 END) AS expiringSoonCount,
+       COALESCE(SUM(COALESCE(p.stock, 0) * COALESCE(NULLIF(p.sale_rate, 0), NULLIF(p.price, 0), p.mrp, 0)), 0) AS totalInventoryValue,
+       COALESCE(SUM(COALESCE(p.stock, 0) * COALESCE(p.purchase_rate, 0)), 0) AS totalCostValue,
+       COUNT(DISTINCT COALESCE(NULLIF(trim(p.category), ''), p.category_id)) AS categoriesCount,
+       COUNT(DISTINCT COALESCE(NULLIF(trim(p.supplier), ''), p.supplier_id)) AS suppliersCount,
+       COUNT(DISTINCT COALESCE(NULLIF(trim(p.warehouse), ''), p.warehouse_id)) AS warehousesCount
+     FROM products p
+     WHERE ${whereSql}`,
+    values
+  )
+  const total = Number(summaryRow?.totalProducts || 0)
   const offset = (query.page - 1) * query.limit
-  const data = await db.select<DataRow>(
+  const [data, categories, suppliers] = await Promise.all([
+    db.select<DataRow>(
     `SELECT
        p.*,
        COALESCE(c.name, p.category) AS category_label,
@@ -1356,8 +1697,33 @@ export async function queryNormalizedProducts(organizationId: string, query: Nor
      ORDER BY ${orderBy} ${listDirection(query.direction)}, p.id ${listDirection(query.direction)}
      LIMIT ? OFFSET ?`,
     [...values, query.limit, offset]
-  )
-  return { data, total }
+    ),
+    db.select<{ value: string }>(
+      "SELECT DISTINCT category AS value FROM products WHERE organization_id = ? AND deleted_at IS NULL AND category IS NOT NULL AND trim(category) <> '' ORDER BY category COLLATE NOCASE LIMIT 250",
+      [organizationId]
+    ),
+    db.select<{ value: string }>(
+      "SELECT DISTINCT supplier AS value FROM products WHERE organization_id = ? AND deleted_at IS NULL AND supplier IS NOT NULL AND trim(supplier) <> '' ORDER BY supplier COLLATE NOCASE LIMIT 250",
+      [organizationId]
+    ),
+  ])
+  const totalInventoryValue = Number(summaryRow?.totalInventoryValue || 0)
+  const totalCostValue = Number(summaryRow?.totalCostValue || 0)
+  return {
+    data,
+    total,
+    summary: {
+      ...summaryRow,
+      totalProducts: total,
+      totalInventoryValue,
+      totalCostValue,
+      totalPotentialProfit: totalInventoryValue - totalCostValue,
+    },
+    facets: {
+      categories: categories.map((row) => row.value),
+      suppliers: suppliers.map((row) => row.value),
+    },
+  }
 }
 
 export async function queryNormalizedCustomers(organizationId: string, query: NormalizedListQuery): Promise<NormalizedListPage> {
@@ -1389,30 +1755,71 @@ export async function queryNormalizedCustomers(organizationId: string, query: No
   }
   const orderBy = sortColumns[query.sort] || sortColumns.created_at
   const whereSql = where.join(" AND ")
-  const total = await countRows(db, `SELECT COUNT(*) AS total FROM customers c WHERE ${whereSql}`, values)
-  const offset = (query.page - 1) * query.limit
-  const data = await db.select<DataRow>(
+  const [summaryRow] = await db.select<Record<string, number>>(
     `SELECT
-       c.*,
-       COALESCE(inv.invoice_count, 0) AS invoice_count,
-       CASE WHEN COALESCE(inv.invoice_count, 0) > 0 THEN COALESCE(inv.invoice_revenue, 0) ELSE COALESCE(c.total_sales, 0) END AS total_sales,
-       COALESCE(inv.last_purchase_at, c.last_purchase_at) AS last_purchase_at
+       COUNT(*) AS totalCustomers,
+       COALESCE(SUM(c.total_sales), 0) AS totalRevenue,
+       COALESCE(SUM(MAX(c.current_balance, 0)), 0) AS totalOutstanding,
+       SUM(CASE WHEN c.is_active = 1 THEN 1 ELSE 0 END) AS activeCount,
+       SUM(CASE WHEN c.is_active = 0 THEN 1 ELSE 0 END) AS inactiveCount,
+       SUM(CASE WHEN COALESCE(NULLIF(trim(c.gst_number), ''), NULLIF(trim(c.tax_id), '')) IS NOT NULL THEN 1 ELSE 0 END) AS gstCount
      FROM customers c
-     LEFT JOIN (
-       SELECT customer_id,
-              COUNT(*) AS invoice_count,
-              SUM(COALESCE(grand_total, total_amount, total, 0)) AS invoice_revenue,
-              MAX(created_at) AS last_purchase_at
-       FROM sales_invoices
-       WHERE organization_id = ? AND deleted_at IS NULL
-       GROUP BY customer_id
-     ) inv ON inv.customer_id = c.id
-     WHERE ${whereSql}
-     ORDER BY ${orderBy} ${listDirection(query.direction)}, c.id ${listDirection(query.direction)}
-     LIMIT ? OFFSET ?`,
-    [organizationId, ...values, query.limit, offset]
+     WHERE ${whereSql}`,
+    values
   )
-  return { data, total }
+  const total = Number(summaryRow?.totalCustomers || 0)
+  const offset = (query.page - 1) * query.limit
+  const metricSort = ["total_sales", "last_purchase_at", "invoice_count"].includes(query.sort)
+  const data = metricSort
+    ? await db.select<DataRow>(
+        `SELECT
+           c.*,
+           COALESCE(inv.invoice_count, 0) AS invoice_count,
+           CASE WHEN COALESCE(inv.invoice_count, 0) > 0 THEN COALESCE(inv.invoice_revenue, 0) ELSE COALESCE(c.total_sales, 0) END AS total_sales,
+           COALESCE(inv.last_purchase_at, c.last_purchase_at) AS last_purchase_at
+         FROM customers c
+         LEFT JOIN (
+           SELECT customer_id,
+                  COUNT(*) AS invoice_count,
+                  SUM(COALESCE(grand_total, total_amount, total, 0)) AS invoice_revenue,
+                  MAX(created_at) AS last_purchase_at
+           FROM sales_invoices
+           WHERE organization_id = ? AND deleted_at IS NULL
+           GROUP BY customer_id
+         ) inv ON inv.customer_id = c.id
+         WHERE ${whereSql}
+         ORDER BY ${orderBy} ${listDirection(query.direction)}, c.id ${listDirection(query.direction)}
+         LIMIT ? OFFSET ?`,
+        [organizationId, ...values, query.limit, offset]
+      )
+    : await db.select<DataRow>(
+        `WITH customer_page AS (
+           SELECT c.*
+           FROM customers c
+           WHERE ${whereSql}
+           ORDER BY ${orderBy} ${listDirection(query.direction)}, c.id ${listDirection(query.direction)}
+           LIMIT ? OFFSET ?
+         ), invoice_metrics AS (
+           SELECT invoice.customer_id,
+                  COUNT(*) AS invoice_count,
+                  SUM(COALESCE(invoice.grand_total, invoice.total_amount, invoice.total, 0)) AS invoice_revenue,
+                  MAX(invoice.created_at) AS last_purchase_at
+           FROM sales_invoices invoice
+           WHERE invoice.organization_id = ? AND invoice.deleted_at IS NULL
+             AND invoice.customer_id IN (SELECT id FROM customer_page)
+           GROUP BY invoice.customer_id
+         )
+         SELECT
+           page.*,
+           COALESCE(metrics.invoice_count, 0) AS invoice_count,
+           CASE WHEN COALESCE(metrics.invoice_count, 0) > 0 THEN COALESCE(metrics.invoice_revenue, 0) ELSE COALESCE(page.total_sales, 0) END AS total_sales,
+           COALESCE(metrics.last_purchase_at, page.last_purchase_at) AS last_purchase_at
+         FROM customer_page page
+         LEFT JOIN invoice_metrics metrics ON metrics.customer_id = page.id
+         ORDER BY ${query.sort === "name" ? "page.name COLLATE NOCASE" : query.sort === "updated_at" ? "datetime(page.updated_at)" : "datetime(page.created_at)"} ${listDirection(query.direction)}, page.id ${listDirection(query.direction)}`,
+        [...values, query.limit, offset, organizationId]
+      )
+  return { data, total, summary: { ...summaryRow, totalCustomers: total } }
 }
 
 export async function queryNormalizedInvoices(organizationId: string, query: NormalizedListQuery): Promise<NormalizedListPage> {
@@ -1451,7 +1858,7 @@ export async function queryNormalizedInvoices(organizationId: string, query: Nor
     invoice_date: "i.invoice_date",
     date: "i.date",
     invoice_number: "i.invoice_number COLLATE NOCASE",
-    customer_name: "customer_name COLLATE NOCASE",
+    customer_name: "COALESCE(i.customer_name, c.name) COLLATE NOCASE",
     total_amount: "i.total_amount",
     grand_total: "i.grand_total",
     paid_amount: "i.paid_amount",
@@ -1461,44 +1868,345 @@ export async function queryNormalizedInvoices(organizationId: string, query: Nor
   }
   const orderBy = sortColumns[query.sort] || sortColumns.created_at
   const whereSql = where.join(" AND ")
-  const countValues = [...values]
-  const total = await countRows(
-    db,
-    `SELECT COUNT(*) AS total
+  const [summaryRow] = await db.select<Record<string, number>>(
+    `SELECT
+       COUNT(*) AS invoiceCount,
+       COALESCE(SUM(COALESCE(i.grand_total, i.total_amount, i.total, 0)), 0) AS revenue,
+       COALESCE(SUM(COALESCE(i.tax_amount, i.tax_total, 0)), 0) AS tax,
+       COALESCE(SUM(COALESCE(NULLIF(i.paid_amount, 0), CASE WHEN lower(COALESCE(i.payment_status, i.status, '')) IN ('paid', 'completed', 'success') THEN COALESCE(i.grand_total, i.total_amount, i.total, 0) ELSE 0 END)), 0) AS paidRevenue,
+       COALESCE(SUM(CASE
+         WHEN lower(COALESCE(i.payment_status, i.status, 'unpaid')) IN ('paid', 'completed', 'success') THEN 0
+         ELSE COALESCE(NULLIF(i.outstanding_amount, 0), MAX(0, COALESCE(i.grand_total, i.total_amount, i.total, 0) - COALESCE(i.paid_amount, 0)))
+       END), 0) AS outstanding,
+       SUM(CASE WHEN lower(COALESCE(i.payment_status, i.status, 'unpaid')) IN ('paid', 'completed', 'success') THEN 1 ELSE 0 END) AS paidCount,
+       SUM(CASE WHEN lower(COALESCE(i.payment_status, i.status, 'unpaid')) = 'partial' THEN 1 ELSE 0 END) AS partialCount,
+       SUM(CASE WHEN lower(COALESCE(i.payment_status, i.status, 'unpaid')) IN ('unpaid', 'pending', 'overdue', '') THEN 1 ELSE 0 END) AS unpaidCount,
+       SUM(CASE WHEN date(i.due_date) < date('now') AND lower(COALESCE(i.payment_status, i.status, 'unpaid')) NOT IN ('paid', 'completed', 'success', 'cancelled') THEN 1 ELSE 0 END) AS overdueCount,
+       SUM(CASE WHEN date(COALESCE(i.invoice_date, i.date, i.created_at)) = date('now') THEN 1 ELSE 0 END) AS todayCount
      FROM sales_invoices i
      LEFT JOIN customers c ON c.id = i.customer_id AND c.organization_id = i.organization_id
      WHERE ${whereSql}`,
-    countValues
+    values
   )
+  const total = Number(summaryRow?.invoiceCount || 0)
   const offset = (query.page - 1) * query.limit
   const data = await db.select<DataRow>(
-    `SELECT
-       i.*,
-       COALESCE(i.customer_name, c.name) AS customer_name,
-       c.phone AS customer_phone,
-       c.email AS customer_email,
-       COALESCE(items.item_count, 0) AS item_count,
-       COALESCE(items.total_quantity, 0) AS total_quantity,
-       COALESCE(items.item_tax, 0) AS item_tax,
-       COALESCE(items.item_total, 0) AS item_total
-     FROM sales_invoices i
-     LEFT JOIN customers c ON c.id = i.customer_id AND c.organization_id = i.organization_id
-     LEFT JOIN (
-       SELECT invoice_id,
+    `WITH invoice_page AS (
+       SELECT
+         i.*,
+         COALESCE(i.customer_name, c.name) AS resolved_customer_name,
+         c.phone AS customer_phone,
+         c.email AS customer_email
+       FROM sales_invoices i
+       LEFT JOIN customers c ON c.id = i.customer_id AND c.organization_id = i.organization_id
+       WHERE ${whereSql}
+       ORDER BY ${orderBy} ${listDirection(query.direction)}, i.id ${listDirection(query.direction)}
+       LIMIT ? OFFSET ?
+     ), item_metrics AS (
+       SELECT item.invoice_id,
               COUNT(*) AS item_count,
-              SUM(COALESCE(quantity, 0)) AS total_quantity,
-              SUM(COALESCE(gst_amount, 0)) AS item_tax,
-              SUM(COALESCE(line_total, 0)) AS item_total
-       FROM sales_invoice_items
-       WHERE organization_id = ? AND deleted_at IS NULL
-       GROUP BY invoice_id
-     ) items ON items.invoice_id = i.id
-     WHERE ${whereSql}
-     ORDER BY ${orderBy} ${listDirection(query.direction)}, i.id ${listDirection(query.direction)}
-     LIMIT ? OFFSET ?`,
-    [organizationId, ...values, query.limit, offset]
+              SUM(COALESCE(item.quantity, 0)) AS total_quantity,
+              SUM(COALESCE(item.gst_amount, 0)) AS item_tax,
+              SUM(COALESCE(item.line_total, 0)) AS item_total
+       FROM sales_invoice_items item
+       WHERE item.organization_id = ? AND item.deleted_at IS NULL
+         AND item.invoice_id IN (SELECT id FROM invoice_page)
+       GROUP BY item.invoice_id
+     )
+     SELECT
+       page.*,
+       page.resolved_customer_name AS customer_name,
+       COALESCE(metrics.item_count, 0) AS item_count,
+       COALESCE(metrics.total_quantity, 0) AS total_quantity,
+       COALESCE(metrics.item_tax, 0) AS item_tax,
+       COALESCE(metrics.item_total, 0) AS item_total
+     FROM invoice_page page
+     LEFT JOIN item_metrics metrics ON metrics.invoice_id = page.id
+     ORDER BY ${query.sort === "invoice_number" ? "page.invoice_number COLLATE NOCASE" : query.sort === "customer_name" ? "page.resolved_customer_name COLLATE NOCASE" : query.sort === "invoice_date" ? "page.invoice_date" : query.sort === "date" ? "page.date" : query.sort === "updated_at" ? "datetime(page.updated_at)" : query.sort === "total_amount" ? "page.total_amount" : query.sort === "grand_total" ? "page.grand_total" : query.sort === "paid_amount" ? "page.paid_amount" : query.sort === "outstanding_amount" ? "page.outstanding_amount" : query.sort === "payment_status" ? "page.payment_status" : query.sort === "status" ? "page.status" : "datetime(page.created_at)"} ${listDirection(query.direction)}, page.id ${listDirection(query.direction)}`,
+    [...values, query.limit, offset, organizationId]
   )
-  return { data, total }
+  const revenue = Number(summaryRow?.revenue || 0)
+  const paidRevenue = Number(summaryRow?.paidRevenue || 0)
+  return {
+    data: data.map((row) => {
+      const output = { ...row }
+      delete output.resolved_customer_name
+      return output
+    }),
+    total,
+    summary: {
+      ...summaryRow,
+      invoiceCount: total,
+      revenue,
+      paidRevenue,
+      averageInvoice: total ? revenue / total : 0,
+      collectionRate: revenue ? Math.round((paidRevenue / revenue) * 100) : 0,
+    },
+  }
+}
+
+export async function queryNormalizedDashboardSummary(organizationId: string) {
+  const db = await service.requireConnection("read")
+  const [invoiceRows, productRows, customerRows, warehouseRows, weeklyRevenue, recentProducts, lowStockProducts, recentInvoices, recentMovements] = await Promise.all([
+    db.select<DataRow>(
+      `SELECT
+         COUNT(*) AS invoiceCount,
+         COALESCE(SUM(COALESCE(grand_total, total_amount, total, 0)), 0) AS totalRevenue,
+         COALESCE(SUM(CASE WHEN date(COALESCE(invoice_date, date, created_at)) = date('now', 'localtime') THEN COALESCE(grand_total, total_amount, total, 0) ELSE 0 END), 0) AS todayRevenue,
+         COALESCE(SUM(COALESCE(NULLIF(paid_amount, 0), CASE WHEN lower(COALESCE(payment_status, status, '')) IN ('paid', 'completed', 'success') THEN COALESCE(grand_total, total_amount, total, 0) ELSE 0 END)), 0) AS paidRevenue,
+         SUM(CASE WHEN lower(COALESCE(payment_status, status, 'unpaid')) IN ('unpaid', 'pending', 'overdue', 'partial', '') THEN 1 ELSE 0 END) AS pendingInvoices
+       FROM sales_invoices
+       WHERE organization_id = ? AND deleted_at IS NULL`,
+      [organizationId]
+    ),
+    db.select<DataRow>(
+      `SELECT
+         COUNT(*) AS productCount,
+         SUM(CASE WHEN COALESCE(stock, 0) <= COALESCE(min_stock, 5) THEN 1 ELSE 0 END) AS lowStockCount,
+         SUM(CASE WHEN COALESCE(stock, 0) <= 0 THEN 1 ELSE 0 END) AS outOfStockCount,
+         COALESCE(SUM(COALESCE(stock, 0) * COALESCE(NULLIF(sale_rate, 0), NULLIF(price, 0), mrp, purchase_rate, 0)), 0) AS inventoryValue,
+         COALESCE(SUM(COALESCE(stock, 0) * COALESCE(purchase_rate, 0)), 0) AS costValue
+       FROM products
+       WHERE organization_id = ? AND deleted_at IS NULL`,
+      [organizationId]
+    ),
+    db.select<DataRow>("SELECT COUNT(*) AS customerCount FROM customers WHERE organization_id = ? AND deleted_at IS NULL", [organizationId]),
+    db.select<DataRow>("SELECT COUNT(*) AS warehouseCount FROM warehouses WHERE organization_id = ? AND deleted_at IS NULL", [organizationId]),
+    db.select<DataRow>(
+      `SELECT strftime('%w', COALESCE(invoice_date, date, created_at)) AS weekday,
+              COALESCE(SUM(COALESCE(grand_total, total_amount, total, 0)), 0) AS value
+       FROM sales_invoices
+       WHERE organization_id = ? AND deleted_at IS NULL
+         AND date(COALESCE(invoice_date, date, created_at)) >= date('now', 'localtime', '-6 days')
+       GROUP BY weekday`,
+      [organizationId]
+    ),
+    db.select<DataRow>("SELECT * FROM products WHERE organization_id = ? AND deleted_at IS NULL ORDER BY created_at DESC, id DESC LIMIT 5", [organizationId]),
+    db.select<DataRow>("SELECT * FROM products WHERE organization_id = ? AND deleted_at IS NULL AND COALESCE(stock, 0) <= COALESCE(min_stock, 5) ORDER BY stock ASC, updated_at DESC LIMIT 5", [organizationId]),
+    db.select<DataRow>(
+      `SELECT invoice.*, COALESCE(invoice.customer_name, customer.name) AS customer_name,
+              customer.phone AS customer_phone, customer.email AS customer_email
+       FROM sales_invoices invoice
+       LEFT JOIN customers customer ON customer.id = invoice.customer_id AND customer.organization_id = invoice.organization_id
+       WHERE invoice.organization_id = ? AND invoice.deleted_at IS NULL
+       ORDER BY invoice.created_at DESC, invoice.id DESC LIMIT 5`,
+      [organizationId]
+    ),
+    db.select<DataRow>("SELECT * FROM stock_movements WHERE organization_id = ? AND deleted_at IS NULL ORDER BY created_at DESC, id DESC LIMIT 12", [organizationId]),
+  ])
+  const invoices = invoiceRows[0] || {}
+  const products = productRows[0] || {}
+  const invoiceCount = Number(invoices.invoiceCount || 0)
+  const productCount = Number(products.productCount || 0)
+  const totalRevenue = Number(invoices.totalRevenue || 0)
+  const paidRevenue = Number(invoices.paidRevenue || 0)
+  const lowStockCount = Number(products.lowStockCount || 0)
+  const pendingInvoices = Number(invoices.pendingInvoices || 0)
+  const inventoryHealth = productCount ? Math.round(((productCount - lowStockCount) / productCount) * 100) : 100
+  const collectionRate = totalRevenue ? Math.round((paidRevenue / totalRevenue) * 100) : 0
+  const erpHealth = Math.max(0, Math.min(100, Math.round(inventoryHealth * 0.45 + collectionRate * 0.4 + (pendingInvoices === 0 ? 15 : Math.max(0, 15 - pendingInvoices * 2)))))
+  const byWeekday = new Map(weeklyRevenue.map((row) => [Number(row.weekday), Number(row.value || 0)]))
+  const weekLabels = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
+
+  return {
+    metrics: {
+      totalRevenue,
+      todayRevenue: Number(invoices.todayRevenue || 0),
+      paidRevenue,
+      pendingInvoices,
+      productCount,
+      lowStockCount,
+      outOfStockCount: Number(products.outOfStockCount || 0),
+      inventoryValue: Number(products.inventoryValue || 0),
+      costValue: Number(products.costValue || 0),
+      potentialProfit: Number(products.inventoryValue || 0) - Number(products.costValue || 0),
+      inventoryHealth,
+      collectionRate,
+      erpHealth,
+      customerCount: Number(customerRows[0]?.customerCount || 0),
+      warehouseCount: Number(warehouseRows[0]?.warehouseCount || 0),
+      invoiceCount,
+      weeklyRevenue: weekLabels.map((label, index) => ({ label, value: byWeekday.get(index === 6 ? 0 : index + 1) || 0 })),
+    },
+    recentProducts,
+    lowStockProducts,
+    recentInvoices,
+    recentMovements,
+  }
+}
+
+export async function queryNormalizedBillingSummary(organizationId: string) {
+  const db = await service.requireConnection("read")
+  const [invoiceRows, productRows, customerRows, weeklyRevenue, recentInvoices] = await Promise.all([
+    db.select<DataRow>(
+      `SELECT
+         COUNT(*) AS invoiceCount,
+         COALESCE(SUM(COALESCE(grand_total, total_amount, total, 0)), 0) AS revenue,
+         COALESCE(SUM(CASE WHEN strftime('%Y-%m', COALESCE(invoice_date, date, created_at)) = strftime('%Y-%m', 'now', 'localtime') THEN COALESCE(grand_total, total_amount, total, 0) ELSE 0 END), 0) AS monthlyRevenue,
+         COALESCE(SUM(COALESCE(NULLIF(paid_amount, 0), CASE WHEN lower(COALESCE(payment_status, status, '')) IN ('paid', 'completed', 'success') THEN COALESCE(grand_total, total_amount, total, 0) ELSE 0 END)), 0) AS paidRevenue,
+         COALESCE(SUM(CASE WHEN lower(COALESCE(payment_status, status, 'unpaid')) NOT IN ('paid', 'completed', 'success', 'cancelled') THEN COALESCE(NULLIF(outstanding_amount, 0), MAX(0, COALESCE(grand_total, total_amount, total, 0) - COALESCE(paid_amount, 0))) ELSE 0 END), 0) AS outstanding,
+         COALESCE(SUM(COALESCE(tax_amount, tax_total, 0)), 0) AS tax,
+         SUM(CASE WHEN lower(COALESCE(payment_status, status, 'unpaid')) IN ('paid', 'completed', 'success') THEN 1 ELSE 0 END) AS paidCount,
+         SUM(CASE WHEN lower(COALESCE(payment_status, status, 'unpaid')) IN ('unpaid', 'pending', 'overdue', '') THEN 1 ELSE 0 END) AS unpaidCount,
+         SUM(CASE WHEN lower(COALESCE(payment_status, status, 'unpaid')) = 'partial' THEN 1 ELSE 0 END) AS partialCount,
+         SUM(CASE WHEN lower(COALESCE(payment_status, status, 'unpaid')) NOT IN ('paid', 'completed', 'success', 'cancelled') THEN 1 ELSE 0 END) AS openInvoices
+       FROM sales_invoices
+       WHERE organization_id = ? AND deleted_at IS NULL`,
+      [organizationId]
+    ),
+    db.select<DataRow>(
+      `SELECT COUNT(*) AS productCount,
+              SUM(CASE WHEN COALESCE(stock, 0) <= COALESCE(min_stock, 5) THEN 1 ELSE 0 END) AS lowStockCount,
+              COALESCE(SUM(COALESCE(stock, 0) * COALESCE(NULLIF(sale_rate, 0), NULLIF(price, 0), mrp, 0)), 0) AS inventoryValue
+       FROM products WHERE organization_id = ? AND deleted_at IS NULL`,
+      [organizationId]
+    ),
+    db.select<DataRow>("SELECT COUNT(*) AS customerCount FROM customers WHERE organization_id = ? AND deleted_at IS NULL", [organizationId]),
+    db.select<DataRow>(
+      `SELECT date(COALESCE(invoice_date, date, created_at)) AS day,
+              COALESCE(SUM(COALESCE(grand_total, total_amount, total, 0)), 0) AS total
+       FROM sales_invoices
+       WHERE organization_id = ? AND deleted_at IS NULL
+         AND date(COALESCE(invoice_date, date, created_at)) >= date('now', 'localtime', '-6 days')
+       GROUP BY day ORDER BY day ASC`,
+      [organizationId]
+    ),
+    db.select<DataRow>(
+      `SELECT invoice.*, COALESCE(invoice.customer_name, customer.name) AS customer_name,
+              customer.phone AS customer_phone, customer.email AS customer_email
+       FROM sales_invoices invoice
+       LEFT JOIN customers customer ON customer.id = invoice.customer_id AND customer.organization_id = invoice.organization_id
+       WHERE invoice.organization_id = ? AND invoice.deleted_at IS NULL
+       ORDER BY invoice.created_at DESC, invoice.id DESC LIMIT 10`,
+      [organizationId]
+    ),
+  ])
+  const invoice = invoiceRows[0] || {}
+  const product = productRows[0] || {}
+  const invoiceCount = Number(invoice.invoiceCount || 0)
+  const revenue = Number(invoice.revenue || 0)
+  const paidRevenue = Number(invoice.paidRevenue || 0)
+  const dayTotals = new Map(weeklyRevenue.map((row) => [String(row.day), Number(row.total || 0)]))
+  const week = Array.from({ length: 7 }, (_, index) => {
+    const date = new Date()
+    date.setHours(12, 0, 0, 0)
+    date.setDate(date.getDate() - (6 - index))
+    const key = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`
+    return { label: date.toLocaleDateString(undefined, { weekday: "short" }), total: dayTotals.get(key) || 0 }
+  })
+  return {
+    currency: "INR",
+    locale: "en-IN",
+    timezone: "Asia/Kolkata",
+    metrics: {
+      invoiceCount,
+      revenue,
+      monthlyRevenue: Number(invoice.monthlyRevenue || 0),
+      paidRevenue,
+      outstanding: Number(invoice.outstanding || 0),
+      tax: Number(invoice.tax || 0),
+      inventoryValue: Number(product.inventoryValue || 0),
+      averageInvoice: invoiceCount ? revenue / invoiceCount : 0,
+      collectionRate: revenue ? Math.round((paidRevenue / revenue) * 100) : 0,
+      openInvoices: Number(invoice.openInvoices || 0),
+      paidCount: Number(invoice.paidCount || 0),
+      unpaidCount: Number(invoice.unpaidCount || 0),
+      partialCount: Number(invoice.partialCount || 0),
+      lowStockCount: Number(product.lowStockCount || 0),
+      customerCount: Number(customerRows[0]?.customerCount || 0),
+      productCount: Number(product.productCount || 0),
+    },
+    weeklyRevenue: week,
+    recentInvoices,
+  }
+}
+
+export async function queryNormalizedAnalyticsReport(organizationId: string) {
+  const db = await service.requireConnection("read")
+  const [invoiceRows, productRows, customerRows, weeklyRevenue, categories, productProfit] = await Promise.all([
+    db.select<DataRow>(
+      `SELECT COUNT(*) AS invoiceCount,
+              COALESCE(SUM(COALESCE(grand_total, total_amount, total, 0)), 0) AS totalRevenue,
+              COALESCE(SUM(COALESCE(NULLIF(paid_amount, 0), CASE WHEN lower(COALESCE(payment_status, status, '')) IN ('paid', 'completed', 'success') THEN COALESCE(grand_total, total_amount, total, 0) ELSE 0 END)), 0) AS paidRevenue,
+              SUM(CASE WHEN lower(COALESCE(payment_status, status, 'unpaid')) IN ('paid', 'completed', 'success') THEN 1 ELSE 0 END) AS paidCount,
+              SUM(CASE WHEN lower(COALESCE(payment_status, status, 'unpaid')) NOT IN ('paid', 'completed', 'success', 'cancelled') THEN 1 ELSE 0 END) AS unpaidCount
+       FROM sales_invoices WHERE organization_id = ? AND deleted_at IS NULL`,
+      [organizationId]
+    ),
+    db.select<DataRow>(
+      `SELECT COUNT(*) AS productCount,
+              COALESCE(SUM(COALESCE(stock, 0) * COALESCE(NULLIF(sale_rate, 0), NULLIF(price, 0), purchase_rate, 0)), 0) AS inventoryValue,
+              COALESCE(SUM(COALESCE(stock, 0) * COALESCE(purchase_rate, 0)), 0) AS costValue,
+              SUM(CASE WHEN COALESCE(stock, 0) <= COALESCE(min_stock, 5) THEN 1 ELSE 0 END) AS lowStockCount,
+              SUM(CASE WHEN expiry_date IS NOT NULL AND date(expiry_date) < date('now', 'localtime') THEN 1 ELSE 0 END) AS expiredCount,
+              SUM(CASE WHEN expiry_date IS NOT NULL AND date(expiry_date) BETWEEN date('now', 'localtime') AND date('now', 'localtime', '+30 days') THEN 1 ELSE 0 END) AS expiringSoonCount
+       FROM products WHERE organization_id = ? AND deleted_at IS NULL`,
+      [organizationId]
+    ),
+    db.select<DataRow>("SELECT COUNT(*) AS customerCount FROM customers WHERE organization_id = ? AND deleted_at IS NULL", [organizationId]),
+    db.select<DataRow>(
+      `SELECT date(COALESCE(invoice_date, date, created_at)) AS day,
+              COALESCE(SUM(COALESCE(grand_total, total_amount, total, 0)), 0) AS revenue
+       FROM sales_invoices
+       WHERE organization_id = ? AND deleted_at IS NULL
+         AND date(COALESCE(invoice_date, date, created_at)) >= date('now', 'localtime', '-6 days')
+       GROUP BY day ORDER BY day`,
+      [organizationId]
+    ),
+    db.select<DataRow>(
+      `SELECT COALESCE(NULLIF(trim(category), ''), 'General') AS name,
+              COALESCE(SUM(stock), 0) AS stock,
+              COALESCE(SUM(COALESCE(stock, 0) * COALESCE(NULLIF(sale_rate, 0), NULLIF(price, 0), 0)), 0) AS value
+       FROM products WHERE organization_id = ? AND deleted_at IS NULL
+       GROUP BY name ORDER BY value DESC LIMIT 6`,
+      [organizationId]
+    ),
+    db.select<DataRow>(
+      `SELECT COALESCE(NULLIF(trim(name), ''), 'Product') AS name,
+              COALESCE(NULLIF(sale_rate, 0), price, 0) - COALESCE(purchase_rate, 0) AS profit,
+              COALESCE(stock, 0) AS stock
+       FROM products WHERE organization_id = ? AND deleted_at IS NULL
+       ORDER BY profit DESC, id LIMIT 8`,
+      [organizationId]
+    ),
+  ])
+  const invoice = invoiceRows[0] || {}
+  const product = productRows[0] || {}
+  const productCount = Number(product.productCount || 0)
+  const inventoryValue = Number(product.inventoryValue || 0)
+  const costValue = Number(product.costValue || 0)
+  const totalRevenue = Number(invoice.totalRevenue || 0)
+  const paidRevenue = Number(invoice.paidRevenue || 0)
+  const dayTotals = new Map(weeklyRevenue.map((row) => [String(row.day), Number(row.revenue || 0)]))
+  const week = Array.from({ length: 7 }, (_, index) => {
+    const date = new Date()
+    date.setHours(12, 0, 0, 0)
+    date.setDate(date.getDate() - (6 - index))
+    const key = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`
+    return { label: date.toLocaleDateString(undefined, { weekday: "short" }), revenue: dayTotals.get(key) || 0 }
+  })
+  return {
+    metrics: {
+      totalRevenue,
+      inventoryValue,
+      costValue,
+      potentialProfit: inventoryValue - costValue,
+      productCount,
+      customerCount: Number(customerRows[0]?.customerCount || 0),
+      invoiceCount: Number(invoice.invoiceCount || 0),
+      paidRevenue,
+      paidCount: Number(invoice.paidCount || 0),
+      unpaidCount: Number(invoice.unpaidCount || 0),
+      lowStockCount: Number(product.lowStockCount || 0),
+      expiredCount: Number(product.expiredCount || 0),
+      expiringSoonCount: Number(product.expiringSoonCount || 0),
+      collectionRate: totalRevenue ? Math.round((paidRevenue / totalRevenue) * 100) : 0,
+      stockHealth: productCount ? Math.round(((productCount - Number(product.lowStockCount || 0)) / productCount) * 100) : 0,
+    },
+    weeklyRevenue: week,
+    categories,
+    productProfit,
+  }
 }
 
 export async function getNormalizedCollection(organizationId: string, collection: OfflineCollection) {

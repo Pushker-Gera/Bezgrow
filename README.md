@@ -167,7 +167,7 @@ APPLE_TEAM_ID="TEAMID" \
 npm run desktop:build:mac:public
 ```
 
-Alternatively provide `APPLE_CERTIFICATE`/`APPLE_CERTIFICATE_PASSWORD` plus App Store Connect API notarization variables (`APPLE_API_KEY`, `APPLE_API_ISSUER`, `APPLE_API_KEY_PATH`). The public build mode enables hardened runtime, requires signing/notarization credentials, verifies the DMG with Gatekeeper, copies it under an immutable version-and-architecture filename such as `public/downloads/Bezgrow-0.1.14-arm64.dmg`, and writes checksum-pinned release metadata.
+Alternatively provide `APPLE_CERTIFICATE`/`APPLE_CERTIFICATE_PASSWORD` plus App Store Connect API notarization variables (`APPLE_API_KEY`, `APPLE_API_ISSUER`, `APPLE_API_KEY_PATH`). The public build mode enables hardened runtime, requires signing/notarization credentials, verifies the DMG with Gatekeeper, copies it under an immutable version-and-architecture filename such as `public/downloads/Bezgrow-0.1.15-arm64.dmg`, and writes checksum-pinned release metadata.
 
 The permanent release path is the manual GitHub Actions workflow **Desktop Release**. Configure these repository secrets before running it:
 
@@ -186,7 +186,7 @@ The workflow builds the Mac DMG on macOS and Windows NSIS/MSI installers on `win
 
 The release trust states are `signed-production`, `unsigned-manual-install`, and `invalid`. The internal release mode for a valid unsigned artifact is `UNSIGNED_MANUAL_RELEASE`. Tauri updater signatures are evaluated independently of Apple and Windows platform signatures. When a cryptographically verified Tauri updater package is present, the normal in-app updater can install it. Otherwise Update Now downloads the installer only from Bezgrow's trusted release endpoint, verifies version, platform, architecture, size, and SHA-256 natively, opens the installer through the normal OS path, and closes Bezgrow cleanly. It does not alter Gatekeeper, SIP, SmartScreen, Defender, quarantine attributes, or machine-wide security policy.
 
-Windows installers must be built on Windows. From a Windows machine, run `npm run desktop:build:windows` to generate artifacts under `src-tauri/target/release/bundle/`, or run `npm run desktop:build:windows:public` to copy versioned artifacts such as `Bezgrow-Setup-0.1.14-x64.exe` and `Bezgrow-0.1.14-x64.msi` and write release metadata. From macOS, use the **Desktop Release** GitHub Actions workflow; macOS cannot produce the Windows `.exe`/`.msi` installer for this Tauri app. Installer binaries are ignored by git; do not commit `.dmg`, `.exe`, or `.msi` files directly.
+Windows installers must be built on Windows. From a Windows machine, run `npm run desktop:build:windows` to generate artifacts under `src-tauri/target/release/bundle/`, or run `npm run desktop:build:windows:public` to copy versioned artifacts such as `Bezgrow-Setup-0.1.15-x64.exe` and `Bezgrow-0.1.15-x64.msi` and write release metadata. From macOS, use the **Desktop Release** GitHub Actions workflow; macOS cannot produce the Windows `.exe`/`.msi` installer for this Tauri app. Installer binaries are ignored by git; do not commit `.dmg`, `.exe`, or `.msi` files directly.
 
 ### Offline-first desktop behavior
 

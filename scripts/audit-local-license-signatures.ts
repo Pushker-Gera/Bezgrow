@@ -1,6 +1,3 @@
-// Node 22 provides this built-in module; the project intentionally keeps the
-// older Node type package used by Next.js.
-// @ts-expect-error node:sqlite is not declared by @types/node 20.
 import { DatabaseSync } from "node:sqlite"
 import process from "node:process"
 import { normalizeLicenseEnvKey, parseLicenseInput } from "../lib/license/codec"

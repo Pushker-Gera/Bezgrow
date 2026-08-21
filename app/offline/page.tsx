@@ -139,17 +139,34 @@ export default function OfflinePage() {
   const valid = status?.allowed
   const expiryText = status?.expiresAt ? new Date(status.expiresAt).toLocaleDateString() : "Not activated"
   const statusText = valid
-    ? status?.reason?.toLowerCase().includes("grace")
-      ? "Trial Active"
-      : "Licence Active"
+    ? status?.status === "grace_period"
+      ? "Licence Grace Period"
+      : status?.status === "offline_valid_cached"
+        ? "Offline Licence Valid"
+        : "Licence Active"
     : status?.status === "expired"
       ? "Licence Expired"
-      : status?.status === "missing"
-        ? "Activation Required"
-        : "Update Licence Required"
+      : status?.status === "revoked"
+        ? "Licence Revoked"
+        : status?.status === "cancelled"
+          ? "Licence Cancelled"
+          : status?.status === "device_mismatch"
+            ? "Device Mismatch"
+            : status?.status === "tampered"
+              ? "Licence Tampered"
+              : status?.status === "clock_rollback"
+                ? "System Clock Check Required"
+                : status?.status === "invalid"
+                  ? "Licence Invalid"
+                  : status?.status === "not_activated"
+                    ? "Activation Required"
+                    : "Update Licence Required"
+  const inactive = ["revoked", "cancelled", "invalid", "device_mismatch", "tampered", "clock_rollback"].includes(status?.status || "")
   const heading = valid
     ? postLogout ? "Licence ready on this device." : "This device is licensed."
-    : status?.status === "expired" ? "Update Bezgrow licence." : "Bezgrow licence activation."
+    : inactive
+      ? "Bezgrow Licence Inactive"
+      : status?.status === "expired" ? "Update Bezgrow licence." : "Bezgrow licence activation."
 
   if (checkingLocalDatabase) return <LocalDatabaseRecovery checking />
   if (localDatabaseError) return <LocalDatabaseRecovery errorMessage={localDatabaseError} />

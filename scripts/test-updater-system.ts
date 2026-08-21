@@ -38,6 +38,7 @@ assert.equal(reminded.firstSeenAt, firstSeen)
 const scheduled = scheduleUpdate("0.1.8", firstSeen + 60_000)
 assert.equal(autoUpdateDue(scheduled, firstSeen + 60_000), true)
 assert.equal(compareVersions("0.1.14", "0.1.13"), 1)
+assert.equal(compareVersions("0.1.15", "0.1.14"), 1)
 assert.equal(compareVersions("1.0.0-beta.1", "1.0.0"), -1)
 
 const platformManifest: DesktopReleaseManifest = {
@@ -53,10 +54,10 @@ assert.equal(releaseForPlatform(platformManifest, "windows", "arm64"), platformM
 assert.equal(releaseForPlatform({ windows: platformManifest.windows }, "windows", "arm64"), null, "Windows arm64 must never fall back to x64")
 assert.equal(releaseForPlatform({ mac: platformManifest.mac }, "mac", "x64"), null, "Intel macOS must never receive arm64")
 
-const pendingRestart = markUpdatePendingRestart("0.1.14", "0.1.13", firstSeen)
+const pendingRestart = markUpdatePendingRestart("0.1.15", "0.1.14", firstSeen)
 assert.deepEqual(readPendingUpdateRestart(), pendingRestart)
-assert.equal(pendingUpdateHasLaunched(pendingRestart, "0.1.13"), false)
-assert.equal(pendingUpdateHasLaunched(pendingRestart, "0.1.14"), true)
+assert.equal(pendingUpdateHasLaunched(pendingRestart, "0.1.14"), false)
+assert.equal(pendingUpdateHasLaunched(pendingRestart, "0.1.15"), true)
 clearPendingUpdateRestart()
 assert.equal(readPendingUpdateRestart(), null)
 

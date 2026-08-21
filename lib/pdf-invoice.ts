@@ -1007,14 +1007,17 @@ function renderThermalInvoice(context: PdfContext, invoice: PrintInvoice) {
   const width = page.getWidth()
   drawWatermark(context, page, invoice)
   const margin = settings.thermalWidth === "58mm" ? 10 : 14
+  const nameSize = fontSize(settings, settings.thermalWidth === "58mm" ? 10 : 12)
   let y = page.getHeight() - 16
   if (settings.showLogo && logo) {
     const logoWidth = width - margin * 2
     drawContainedImage(page, logo, margin, y - 42, logoWidth, 40)
-    y -= 49
+    // PDF text is positioned on its baseline. Account for the full cap height
+    // plus an 8pt (~11px) visual gap so tall logos cannot touch the name while
+    // contained square/wide logos keep the receipt compact.
+    y -= 42 + nameSize + 8
   }
   const businessName = safeText(invoice.enterprise.name)
-  const nameSize = fontSize(settings, settings.thermalWidth === "58mm" ? 10 : 12)
   const nameLines = wrapText(businessName, bold, nameSize, width - margin * 2, 3)
   nameLines.forEach((line, index) => {
     drawText(page, bold, line, Math.max(margin, (width - bold.widthOfTextAtSize(line, nameSize)) / 2), y - index * (nameSize + 2), nameSize, ink(settings), width - margin * 2)

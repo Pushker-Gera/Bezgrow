@@ -146,6 +146,15 @@ async function main() {
     const activated = await activateLikeDesktop(generated.licenseKey);
     assert.equal(activated.parsed.payload.device_id, DEVICE_ID);
     assert.equal(activated.status.allowed, true);
+    assert.equal(activated.status.status, "valid");
+
+    const offlineCached = policy.evaluateStoredLicense([activated.row], {
+      deviceId: DEVICE_ID,
+      now: new Date("2026-07-09T00:00:00.000Z"),
+      connectivity: "offline",
+    });
+    assert.equal(offlineCached.allowed, true);
+    assert.equal(offlineCached.status, "offline_valid_cached");
 
     const lineBroken = generated.licenseKey.replace(/(.{24})/g, "$1\n  ");
     const activatedFromPasted = await activateLikeDesktop(lineBroken);
@@ -165,20 +174,57 @@ async function main() {
     const grace = signPayload(basePayload({ expiry_date: "2026-07-08", grace_period_days: 7 }));
     const graceActivation = await activateLikeDesktop(grace.licenseKey, DEVICE_ID, new Date("2026-07-09T00:00:00.000Z"));
     assert.equal(graceActivation.status.allowed, true);
+    assert.equal(graceActivation.status.status, "grace_period");
     assert.match(graceActivation.status.reason, /grace period/i);
 
     const renewed = signPayload(basePayload({ expiry_date: "2100-12-31", issued_at: "2026-07-10T00:00:00.000Z" }));
     const renewedActivation = await activateLikeDesktop(renewed.licenseKey);
     assert.equal(renewedActivation.status.allowed, true);
 
-    for (const blockedStatus of ["suspended", "revoked", "replaced"]) {
+    const expectedBlockedStatuses = {
+      suspended: "cancelled",
+      cancelled: "cancelled",
+      revoked: "revoked",
+      replaced: "invalid",
+      invalid: "invalid",
+      tampered: "tampered",
+      device_mismatch: "device_mismatch",
+    };
+    for (const [blockedStatus, expectedStatus] of Object.entries(expectedBlockedStatuses)) {
       const blockedRow = { ...activated.row, status: blockedStatus };
       const blocked = policy.evaluateStoredLicense([blockedRow], {
         deviceId: DEVICE_ID,
         now: new Date("2026-07-09T00:00:00.000Z"),
       });
       assert.equal(blocked.allowed, false, `${blockedStatus} license must reject writes.`);
+      assert.equal(blocked.status, expectedStatus, `${blockedStatus} must keep its explicit policy meaning.`);
     }
+
+    const wrongClock = policy.evaluateStoredLicense([
+      { ...activated.row, last_verified_at: "2026-07-09T12:00:01.000Z" },
+    ], {
+      deviceId: DEVICE_ID,
+      now: new Date("2026-07-09T00:00:00.000Z"),
+    });
+    assert.equal(wrongClock.allowed, false);
+    assert.equal(wrongClock.status, "clock_rollback");
+
+    const missing = policy.evaluateStoredLicense([], { deviceId: DEVICE_ID });
+    assert.equal(missing.allowed, false);
+    assert.equal(missing.status, "not_activated");
+
+    const malformedExpiry = policy.evaluateStoredLicense([
+      { ...activated.row, expiry_date: "not-a-date", expires_at: "not-a-date" },
+    ], { deviceId: DEVICE_ID });
+    assert.equal(malformedExpiry.allowed, false);
+    assert.equal(malformedExpiry.status, "tampered");
+
+    const wrongDevicePolicy = policy.evaluateStoredLicense([activated.row], {
+      deviceId: "BZG-SECOND-DEVICE-00000000",
+      now: new Date("2026-07-09T00:00:00.000Z"),
+    });
+    assert.equal(wrongDevicePolicy.allowed, false, "The signed one-device limit must reject a second device.");
+    assert.equal(wrongDevicePolicy.status, "device_mismatch");
 
     assert.equal(policy.isLicenseRestrictedCollection("products"), true);
     assert.equal(policy.isLicenseRestrictedCollection("customers"), true);

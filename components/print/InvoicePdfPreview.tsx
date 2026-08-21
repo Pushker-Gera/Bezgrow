@@ -38,6 +38,7 @@ export function InvoicePdfPreview({
 
     let active = true
     let loadingTask: ReturnType<PdfJsModule["getDocument"]> | null = null
+    let pdfDocument: Awaited<ReturnType<PdfJsModule["getDocument"]>["promise"]> | null = null
     const renderTasks: Array<{ cancel: () => void }> = []
     root.replaceChildren()
 
@@ -48,7 +49,7 @@ export function InvoicePdfPreview({
         // PDF.js transfers typed arrays to its worker, so it receives a copy;
         // the authoritative artifact bytes remain intact for Save/Print/Share.
         loadingTask = pdfjs.getDocument({ data: artifact.bytes.slice() })
-        const pdfDocument = await loadingTask.promise
+        pdfDocument = await loadingTask.promise
         if (!active) return
         if (pdfDocument.numPages !== artifact.pageCount) {
           throw new Error("The PDF preview page count does not match the validated invoice document.")
@@ -90,6 +91,12 @@ export function InvoicePdfPreview({
     return () => {
       active = false
       renderTasks.forEach((task) => task.cancel())
+      root.querySelectorAll("canvas").forEach((canvas) => {
+        canvas.width = 0
+        canvas.height = 0
+      })
+      root.replaceChildren()
+      pdfDocument?.cleanup()
       void loadingTask?.destroy()
     }
   }, [artifact])

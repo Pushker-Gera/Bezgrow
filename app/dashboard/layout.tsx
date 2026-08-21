@@ -12,7 +12,7 @@ import LocalDatabaseRecovery from "@/components/offline/LocalDatabaseRecovery"
 import { clearDesktopSession } from "@/lib/desktop/session"
 import { isTauriRuntimeAsync } from "@/lib/desktop/tauri"
 import { getLocalDatabaseService } from "@/lib/offline/local/service"
-import { localLicenseSnapshot, restoreLicensedWorkspaceContext } from "@/lib/offline/local/license"
+import { localLicenseSnapshot, restoreLicensedWorkspaceContext, revalidateLocalLicenseWithControlPlane } from "@/lib/offline/local/license"
 import { clearWorkspaceBootstrapCache } from "@/lib/workspaceBootstrapClient"
 
 const navItems = [
@@ -141,6 +141,41 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
             window.removeEventListener("offline", handleOffline)
         }
     }, [])
+
+    useEffect(() => {
+        if (desktopDatabase.status !== "business-ready") return
+        let cancelled = false
+        let checking = false
+
+        const enforceSnapshot = async (remote: boolean) => {
+            if (checking) return
+            checking = true
+            try {
+                const snapshot = remote && navigator.onLine
+                    ? (await revalidateLocalLicenseWithControlPlane()).snapshot
+                    : await localLicenseSnapshot()
+                if (!cancelled && !snapshot.allowed) {
+                    router.replace(`/offline?reason=license_${snapshot.status}&next=${encodeURIComponent(initialPathRef.current)}`)
+                }
+            } catch (error) {
+                // A transient control-plane failure never disables a locally
+                // valid signed licence. Local expiry remains checked below.
+                console.warn("Licence revalidation warning:", error)
+            } finally {
+                checking = false
+            }
+        }
+
+        const startupTimer = globalThis.setTimeout(() => void enforceSnapshot(online), 2_000)
+        const localExpiryTimer = globalThis.setInterval(() => void enforceSnapshot(false), 60_000)
+        const controlPlaneTimer = globalThis.setInterval(() => void enforceSnapshot(true), 15 * 60_000)
+        return () => {
+            cancelled = true
+            globalThis.clearTimeout(startupTimer)
+            globalThis.clearInterval(localExpiryTimer)
+            globalThis.clearInterval(controlPlaneTimer)
+        }
+    }, [desktopDatabase.status, online, router])
 
     useEffect(() => {
         const prefetchDashboardRoutes = () => {

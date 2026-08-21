@@ -36,7 +36,23 @@ type ListResponse<T> = {
   pagination?: {
     total?: number
   }
+  summary?: Partial<InvoiceSummary>
   error?: string
+}
+
+type InvoiceSummary = {
+  revenue: number
+  paidRevenue: number
+  outstanding: number
+  tax: number
+  invoiceCount: number
+  paidCount: number
+  partialCount: number
+  unpaidCount: number
+  overdueCount: number
+  todayCount: number
+  averageInvoice: number
+  collectionRate: number
 }
 
 type InvoiceWithMetrics = InvoiceRow & {
@@ -140,7 +156,7 @@ function SelectShell({
 export default function InvoicesPage() {
   const [organizationId, setOrganizationId] = useState<string | null>(null)
   const [invoices, setInvoices] = useState<InvoiceRow[]>([])
-  const [allInvoices, setAllInvoices] = useState<InvoiceRow[]>([])
+  const [invoiceSummary, setInvoiceSummary] = useState<Partial<InvoiceSummary>>({})
   const [customers, setCustomers] = useState<CustomerRow[]>([])
   const [items, setItems] = useState<InvoiceItemRow[]>([])
   const [loading, setLoading] = useState(true)
@@ -208,11 +224,10 @@ export default function InvoicesPage() {
         await putOfflineData(orgId, "customers", nextCustomers)
       }
       setInvoices(nextInvoices)
-      const localInvoices = await getOfflineData<InvoiceRow[]>(orgId, "invoices", nextInvoices).catch(() => nextInvoices)
-      setAllInvoices(localInvoices.length ? localInvoices : nextInvoices)
       setCustomers(nextCustomers)
       setItems([])
       setServerTotal(invoiceResult.pagination?.total || nextInvoices.length)
+      setInvoiceSummary(invoiceResult.summary || {})
       if (customerResponse.ok) setNotice("")
     } catch (error) {
       if (request.signal.aborted) return
@@ -226,11 +241,32 @@ export default function InvoicesPage() {
         getOfflineData<CustomerRow[]>(orgId, "customers", []),
         getOfflineData<InvoiceItemRow[]>(orgId, "invoice_items", []),
       ])
-      setInvoices(cachedInvoices)
-      setAllInvoices(cachedInvoices)
-      setCustomers(cachedCustomers)
-      setItems(cachedItems)
-      setServerTotal(cachedInvoices.length)
+      const now = new Date()
+      const monthStart = new Date(now.getFullYear(), now.getMonth(), 1)
+      const weekStart = new Date(now)
+      weekStart.setDate(now.getDate() - 7)
+      const term = debouncedSearch.trim().toLowerCase()
+      const matchingInvoices = cachedInvoices.filter((invoice) => {
+        if (invoice.deleted_at) return false
+        const text = [invoice.invoice_number, invoice.customer_name, invoice.payment_method, invoice.notes].join(" ").toLowerCase()
+        if (term && !text.includes(term)) return false
+        if (statusFilter !== "all" && normalizeStatus(invoice) !== statusFilter) return false
+        if (customerFilter !== "all" && invoice.customer_id !== customerFilter) return false
+        if (riskFilter !== "all" && dueState(invoice) !== riskFilter) return false
+        const created = new Date(String(invoice.created_at || invoice.invoice_date || 0))
+        if (periodFilter === "today" && created.toDateString() !== now.toDateString()) return false
+        if (periodFilter === "week" && created < weekStart) return false
+        if (periodFilter === "month" && created < monthStart) return false
+        return true
+      })
+      const pageStart = (currentPage - 1) * pageSize
+      const pageInvoices = matchingInvoices.slice(pageStart, pageStart + pageSize)
+      const pageIds = new Set(pageInvoices.map((invoice) => invoice.id))
+      setInvoices(pageInvoices)
+      setCustomers(cachedCustomers.filter((customer) => !(customer as CustomerRow & { deleted_at?: string }).deleted_at).slice(0, 100))
+      setItems(cachedItems.filter((item) => item.invoice_id && pageIds.has(item.invoice_id)))
+      setServerTotal(matchingInvoices.length)
+      setInvoiceSummary({})
       setNotice(
         typeof navigator !== "undefined" && !navigator.onLine
           ? "Offline mode: showing cached invoices."
@@ -239,7 +275,7 @@ export default function InvoicesPage() {
     } finally {
       if (billingRequest.current === request) billingRequest.current = null
     }
-  }, [currentPage, customerFilter, debouncedSearch, organizationId, periodFilter, statusFilter])
+  }, [currentPage, customerFilter, debouncedSearch, organizationId, periodFilter, riskFilter, statusFilter])
 
   const initializeInvoices = useCallback(async () => {
     try {
@@ -356,7 +392,7 @@ export default function InvoicesPage() {
   const visibleInvoices = filteredInvoices
 
   const analytics = useMemo(() => {
-    const source = allInvoices.length ? allInvoices : enrichedInvoices
+    const source = enrichedInvoices
     const rows = source.map((invoice) => {
       const amount = numberFrom(invoice, ["grand_total", "total_amount", "total"])
       const status = normalizeStatus(invoice)
@@ -383,7 +419,7 @@ export default function InvoicesPage() {
       ({ invoice }) => invoice.created_at && new Date(invoice.created_at).toDateString() === new Date().toDateString()
     )
 
-    return {
+    const fallback = {
       revenue,
       paidRevenue,
       outstanding,
@@ -397,7 +433,12 @@ export default function InvoicesPage() {
       averageInvoice: rows.length ? revenue / rows.length : 0,
       collectionRate: revenue ? Math.round((paidRevenue / revenue) * 100) : 0,
     }
-  }, [allInvoices, enrichedInvoices, serverTotal])
+    return {
+      ...fallback,
+      ...invoiceSummary,
+      invoiceCount: Number(invoiceSummary.invoiceCount ?? serverTotal ?? fallback.invoiceCount),
+    }
+  }, [enrichedInvoices, invoiceSummary, serverTotal])
 
   async function updatePaymentStatus(invoiceId: string, status: string) {
     if (!organizationId) return
@@ -440,7 +481,6 @@ export default function InvoicesPage() {
         payload: { invoiceId, paymentStatus: status },
       })
       setInvoices(nextInvoices)
-      setAllInvoices(nextInvoices)
       setNotice("Invoice status saved locally.")
       setSavingId(null)
       return
@@ -453,14 +493,8 @@ export default function InvoicesPage() {
           : invoice
       )
     )
-    setAllInvoices((current) =>
-      current.map((invoice) =>
-        invoice.id === invoiceId
-          ? { ...invoice, payment_status: status, status, updated_at: new Date().toISOString() }
-          : invoice
-      )
-    )
     setSavingId(null)
+    void fetchBillingData(organizationId)
   }
 
   return (
