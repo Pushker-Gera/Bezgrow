@@ -60,6 +60,26 @@ If keys are missing, invalid format, or mismatched, `/admin/settings` shows a cl
 
 Supabase migrations after the local-first cutover define only the platform control plane. Historical ERP migrations are legacy schema history and must not be used to restore cloud ERP routes. Before applying the guarded cloud-ERP cleanup migration, create and verify the protected export and confirm all required rows are present in SQLite.
 
+The current Platform Administration schema version is `2026082102`. Starting
+from the complete `2026072701` control plane, apply these additive migrations in
+filename order:
+
+```text
+20260727010000_release_artifact_msix.sql
+20260801090000_desktop_updater_delivery.sql
+20260811000000_device_bound_platform_admin.sql
+20260814090000_desktop_release_build_provenance.sql
+20260821010000_current_admin_control_plane_readiness.sql
+20260821020000_license_control_plane_runtime_compatibility.sql
+```
+
+`20260802000000_retire_cloud_erp.sql` is a separately gated, destructive legacy
+ERP retirement operation. It is not a Platform Administration prerequisite and
+must never be run as part of a control-plane repair. After applying the current
+control-plane migrations, run `npm run test:live-control-plane`; it performs a
+read-only service-role audit of schema readiness, authorization, Licences,
+Devices, Businesses, Releases & Updates, Audit Logs, Backups and settings.
+
 Required Supabase Auth URLs:
 
 - Site URL: `https://bezgrow.com`

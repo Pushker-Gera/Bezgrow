@@ -25,4 +25,8 @@ create index if not exists idx_desktop_releases_provenance
   on public.desktop_releases (version, build_commit, build_timestamp desc)
   where release_status = 'published' and active;
 
+insert into public.admin_control_plane_schema_versions (version, description)
+values (2026081409, 'Immutable desktop release build provenance')
+on conflict (version) do nothing;
+
 commit;

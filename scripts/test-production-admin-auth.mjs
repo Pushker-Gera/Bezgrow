@@ -137,7 +137,7 @@ try {
     controlPlaneVisibility(normalUser.client),
     controlPlaneVisibility(platformAdmin.client),
   ])
-  const schemaStatusResult = await service.rpc("admin_control_plane_schema_status")
+  const schemaStatusResult = await service.rpc("admin_control_plane_current_schema_status")
   if (schemaStatusResult.error) throw schemaStatusResult.error
 
   assert.equal(anonymous.status, 401, "Anonymous admin access must be rejected.")

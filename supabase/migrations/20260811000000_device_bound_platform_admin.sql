@@ -60,6 +60,7 @@ create index if not exists idx_platform_admin_request_nonces_expiry
   on public.platform_admin_request_nonces (expires_at);
 
 alter table public.platform_admin_request_nonces enable row level security;
+alter table public.platform_admin_request_nonces force row level security;
 revoke all on table public.platform_admin_request_nonces from public, anon, authenticated;
 grant select, insert, delete on table public.platform_admin_request_nonces to service_role;
 

@@ -2,7 +2,8 @@ import "server-only"
 
 import { adminSupabase } from "@/lib/supabase/admin"
 
-export const ADMIN_CONTROL_PLANE_SCHEMA_VERSION = 2026072701
+export const ADMIN_CONTROL_PLANE_SCHEMA_VERSION = 2026082102
+export const ADMIN_CONTROL_PLANE_SCHEMA_STATUS_RPC = "admin_control_plane_current_schema_status"
 
 export type AdminControlPlaneSchemaStatus = {
   ready: boolean
@@ -16,7 +17,7 @@ const unavailableStatus: AdminControlPlaneSchemaStatus = {
   expectedVersion: ADMIN_CONTROL_PLANE_SCHEMA_VERSION,
   actualVersion: null,
   missing: {
-    functions: ["public.admin_control_plane_schema_status()"],
+    functions: ["public.admin_control_plane_current_schema_status()"],
   },
 }
 
@@ -57,7 +58,7 @@ export async function verifyAdminControlPlaneSchema(requestId: string) {
   if (schemaRequest) return schemaRequest
 
   schemaRequest = (async () => {
-  const result = await adminSupabase.rpc("admin_control_plane_schema_status")
+  const result = await adminSupabase.rpc(ADMIN_CONTROL_PLANE_SCHEMA_STATUS_RPC)
 
   if (result.error) {
     console.error("[admin-control-plane-schema]", {
@@ -65,7 +66,7 @@ export async function verifyAdminControlPlaneSchema(requestId: string) {
       code: result.error.code,
       message: result.error.message,
       expectedVersion: ADMIN_CONTROL_PLANE_SCHEMA_VERSION,
-      missingObject: "public.admin_control_plane_schema_status()",
+      missingObject: "public.admin_control_plane_current_schema_status()",
     })
     cachedSchemaStatus = { value: unavailableStatus, expiresAt: Date.now() + 5_000 }
     return unavailableStatus

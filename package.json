@@ -25,6 +25,7 @@
     "test:admin-buttons": "node scripts/test-admin-button-coverage.mjs",
     "test:admin-final": "node scripts/test-admin-final-control-plane.mjs",
     "test:production-admin-auth": "node scripts/test-production-admin-auth.mjs",
+    "test:live-control-plane": "node --env-file-if-exists=.env.local scripts/audit-live-control-plane.mjs",
     "test:live-license-generation": "node scripts/test-live-license-generation.mjs",
     "test:admin-browser-session": "node scripts/live-admin-browser-session.mjs",
     "test:admin-api-security": "node scripts/test-admin-api-security.mjs",

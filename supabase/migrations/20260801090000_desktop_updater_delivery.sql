@@ -44,4 +44,8 @@ $$;
 create index if not exists idx_release_artifacts_updater_publication
   on public.release_artifacts (validation_status, updater_signature_status, validated_at desc);
 
+insert into public.admin_control_plane_schema_versions (version, description)
+values (2026080109, 'Cryptographically signed desktop updater delivery metadata')
+on conflict (version) do nothing;
+
 commit;
