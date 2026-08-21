@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react"
 import {
+  automaticUpdaterAvailable,
   appUpdateStatusLabel,
   fetchDesktopReleaseManifest,
   formatUpdateSize,
@@ -33,20 +34,23 @@ export default function AppUpdatesPanel() {
   const [manifest, setManifest] = useState<DesktopReleaseManifest | null>(null)
   const [status, setStatus] = useState<AppUpdateStatus>("idle")
   const [message, setMessage] = useState("")
-  const [postponedVersion, setPostponedVersion] = useState("")
+  const [postponedUntil, setPostponedUntil] = useState<number | null>(null)
 
   const currentVersion = packageJson.version
   const latestVersion = latestVersionForCurrentPlatform(manifest)
   const platformRelease = releaseForCurrentPlatform(manifest)
   const releaseNotes = useMemo(() => normalizeReleaseNotes(manifest), [manifest])
   const updateAvailable = isDesktopUpdateAvailable(manifest, currentVersion)
-  const updatePostponed = Boolean(updateAvailable && postponedVersion === latestVersion)
+  const automaticDelivery = automaticUpdaterAvailable(platformRelease)
   const releaseSize = formatUpdateSize(platformRelease?.size)
 
   useEffect(() => {
-    if (!latestVersion) return
+    if (!latestVersion) {
+      setPostponedUntil(null)
+      return
+    }
     const saved = readUpdateDecision(latestVersion)
-    if (saved.nextPromptAt > Date.now()) setPostponedVersion(latestVersion)
+    setPostponedUntil(saved.nextPromptAt > Date.now() ? saved.nextPromptAt : null)
   }, [latestVersion])
 
   async function checkUpdates() {
@@ -93,15 +97,19 @@ export default function AppUpdatesPanel() {
 
   async function updateNow() {
     setStatus("downloading")
-    setMessage("Preparing the signed in-app update. Bezgrow will first verify SQLite and create a backup.")
+    setMessage(
+      automaticDelivery
+        ? "Preparing the signed in-app update. Bezgrow will first verify SQLite and create a backup."
+        : "Preparing the verified installer update. Bezgrow will first verify SQLite and create a backup.",
+    )
     window.dispatchEvent(new CustomEvent(UPDATE_INSTALL_EVENT))
     setStatus("ready")
   }
 
   function postponeUpdate() {
-    remindLater(latestVersion)
-    setPostponedVersion(latestVersion)
-    setMessage("Update postponed for 6 hours. The first safe opportunity after 48 hours is still enforced.")
+    const decision = remindLater(latestVersion)
+    setPostponedUntil(decision.nextPromptAt)
+    setMessage("Automatic reminders are paused for 6 hours. Update Now remains available here.")
   }
 
   return (
@@ -114,7 +122,7 @@ export default function AppUpdatesPanel() {
           </p>
         </div>
         <span className="w-fit rounded-full border border-cyan-400/20 bg-cyan-500/10 px-4 py-2 text-xs font-black uppercase tracking-[0.16em] text-cyan-100">
-          Signed in-app updater
+          {automaticDelivery ? "Signed in-app updater" : "Verified assisted installer"}
         </span>
       </div>
 
@@ -129,7 +137,7 @@ export default function AppUpdatesPanel() {
         </div>
       </div>
 
-      {updateAvailable && !updatePostponed && (
+      {updateAvailable && (
         <div className="mt-5 rounded-lg border border-cyan-300/25 bg-cyan-300/10 p-4">
           <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
             <div>
@@ -138,9 +146,14 @@ export default function AppUpdatesPanel() {
                 Current version {currentVersion} · Latest version {latestVersion}{releaseSize ? ` · ${releaseSize}` : ""}
               </p>
               <p className="mt-1 text-xs font-bold text-cyan-100/75">
-                Code signing: {platformRelease?.signed ? "verified" : "not verified"} · SHA-256:
-                verified by the Bezgrow download service
+                {automaticDelivery ? "Updater signature: verified" : `Code signing: ${platformRelease?.signed ? "verified" : "not verified"}`} ·
+                SHA-256: verified by the Bezgrow download service
               </p>
+              {postponedUntil && postponedUntil > Date.now() && (
+                <p className="mt-1 text-xs font-semibold text-neutral-300">
+                  Automatic reminder paused until {new Date(postponedUntil).toLocaleString()}. You can still update now.
+                </p>
+              )}
             </div>
             <div className="grid grid-cols-2 gap-2 sm:min-w-64">
               <button type="button" onClick={() => void updateNow()} className="min-h-11 rounded-lg bg-cyan-300 px-4 text-sm font-black text-black">

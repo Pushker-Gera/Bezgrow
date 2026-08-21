@@ -96,11 +96,18 @@ assert.equal(
 )
 
 const nativeSource = readFileSync("src-tauri/src/lib.rs", "utf8")
+const updatePanelSource = readFileSync("components/AppUpdatesPanel.tsx", "utf8")
 assert.match(nativeSource, /desktop_download_verified_release/, "Verified assisted download command is missing.")
 assert.match(nativeSource, /x-bezgrow-artifact-sha256/, "Assisted updates must bind the response to metadata SHA-256.")
 assert.match(nativeSource, /digest\.finalize\(\)/, "Assisted updates must hash the complete downloaded installer.")
 assert.match(nativeSource, /parsed\.path\(\) != "\/api\/downloads\/desktop"/, "Assisted updates must use only the trusted Bezgrow endpoint.")
 assert.doesNotMatch(nativeSource, /xattr|spctl --master-disable|Set-MpPreference/, "Native update code must not weaken OS security.")
+assert.match(updatePanelSource, /Verified assisted installer/, "Unsigned releases must be labelled as verified assisted installers.")
+assert.doesNotMatch(
+  updatePanelSource,
+  /updateAvailable\s*&&\s*!updatePostponed/,
+  "Reminder deferral must not hide the user-requested Update Now action in Settings."
+)
 
 const trackedFeatureFiles = execFileSync("git", ["ls-files", "app", "components", "lib"], {
   encoding: "utf8",
