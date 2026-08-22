@@ -2,8 +2,9 @@
 
 import { createOfflineId, getOfflineData, putOfflineData, type OfflineAction, type OfflineCollection } from "@/lib/offline/db"
 import { isDesktopRuntime } from "@/lib/desktop/tauri"
-import { exportNormalizedBackup, putNormalizedCollectionsInTransaction } from "@/lib/offline/local/repositories"
+import { createNormalizedPaymentAtomic, exportNormalizedBackup, putNormalizedCollectionsInTransaction } from "@/lib/offline/local/repositories"
 import { getLocalDatabaseService } from "@/lib/offline/local/service"
+import { allocateAuthoritativeStock } from "@/lib/inventory-availability"
 
 type DataRow = Record<string, unknown> & { id?: string }
 
@@ -211,7 +212,8 @@ function updateProductsForStock(
   return { nextProducts, movements }
 }
 
-function updateBatchesForStock(batches: DataRow[], items: DataRow[], stockSign: number, organizationId: string, now: string) {
+function updateBatchesForStock(products: DataRow[], batches: DataRow[], items: DataRow[], stockSign: number, organizationId: string, now: string) {
+  if (stockSign < 0) return allocateAuthoritativeStock(products, batches, items, now).nextBatches
   let nextBatches = [...batches]
   for (const item of items) {
     const productId = localString(item.product_id)
@@ -398,7 +400,7 @@ export async function createPurchaseDocument(organizationId: string, input: Data
     const stockResult = updateProductsForStock(products, normalizedItems, sign, now, kind, true)
     nextProducts = stockResult.nextProducts
     nextMovements = [...stockResult.movements.map((movement) => ({ ...movement, reference_no: billNumber, reference_id: documentId })), ...stockMovements]
-    nextBatches = updateBatchesForStock(batches, normalizedItems, sign, organizationId, now)
+    nextBatches = updateBatchesForStock(products, batches, normalizedItems, sign, organizationId, now)
   }
 
   const document = {
@@ -497,6 +499,7 @@ export async function createPurchaseDocument(organizationId: string, input: Data
 }
 
 export async function createPaymentTransaction(organizationId: string, input: DataRow, action?: OfflineAction) {
+  void action
   const now = nowIso()
   const amount = money(localNumber(input.amount))
   if (amount <= 0) throw new Error("Payment amount must be greater than zero.")
@@ -511,47 +514,37 @@ export async function createPaymentTransaction(organizationId: string, input: Da
   const paymentId = createOfflineId("payment")
   const paymentDate = localDate(input.payment_date, now.slice(0, 10))
 
-  const [payments, receipts, invoices, purchases, expenses, customers, suppliers, ledgerEntries] = await Promise.all([
-    readRows(organizationId, "payments"),
+  const [receipts, invoices, purchases, expenses, customers, suppliers] = await Promise.all([
     readRows(organizationId, "payment_receipts"),
     readRows(organizationId, "invoices"),
     readRows(organizationId, "purchase_invoices"),
     readRows(organizationId, "expenses"),
     readRows(organizationId, "customers"),
     readRows(organizationId, "suppliers"),
-    readRows(organizationId, "ledger_entries"),
   ])
-
-  let nextInvoices = invoices
-  let nextPurchases = purchases
-  let nextExpenses = expenses
-  if (documentId && documentType === "sales_invoice") {
-    nextInvoices = invoices.map((invoice) => {
-      if (invoice.id !== documentId) return invoice
-      const paidAmount = money(localNumber(invoice.paid_amount) + amount)
-      const total = localNumber(invoice.grand_total, localNumber(invoice.total_amount, localNumber(invoice.total)))
-      const outstanding = Math.max(0, total - paidAmount)
-      return { ...invoice, paid_amount: paidAmount, outstanding_amount: outstanding, payment_status: statusForPayment(total, paidAmount), status: statusForPayment(total, paidAmount), sync_status: "pending_update", updated_at: now }
-    })
+  const targetDocument = documentId
+    ? documentType === "sales_invoice"
+      ? invoices.find((row) => row.id === documentId && !row.deleted_at)
+      : documentType === "purchase_invoice"
+        ? purchases.find((row) => row.id === documentId && !row.deleted_at)
+        : documentType === "expense"
+          ? expenses.find((row) => row.id === documentId && !row.deleted_at)
+          : null
+    : null
+  if (documentId && !targetDocument) throw new Error("The document being paid was not found.")
+  if (targetDocument) {
+    const total = documentType === "expense"
+      ? localNumber(targetDocument.amount)
+      : localNumber(targetDocument.grand_total, localNumber(targetDocument.total_amount, localNumber(targetDocument.total)))
+    const outstanding = Math.max(0, localNumber(targetDocument.outstanding_amount, total - localNumber(targetDocument.paid_amount)))
+    if (amount > outstanding + 0.0001) throw new Error(`Only ${money(outstanding)} remains outstanding on this document.`)
+    const expectedPartyId = documentType === "sales_invoice" ? localString(targetDocument.customer_id) : localString(targetDocument.supplier_id)
+    if (partyId && expectedPartyId && partyId !== expectedPartyId) throw new Error("The payment party does not match the selected document.")
   }
-  if (documentId && documentType === "purchase_invoice") {
-    nextPurchases = purchases.map((purchase) => {
-      if (purchase.id !== documentId) return purchase
-      const paidAmount = money(localNumber(purchase.paid_amount) + amount)
-      const total = localNumber(purchase.grand_total)
-      const outstanding = Math.max(0, total - paidAmount)
-      return { ...purchase, paid_amount: paidAmount, outstanding_amount: outstanding, status: statusForPayment(total, paidAmount), sync_status: "pending_update", updated_at: now }
-    })
-  }
-  if (documentId && documentType === "expense") {
-    nextExpenses = expenses.map((expense) => {
-      if (expense.id !== documentId) return expense
-      const paidAmount = money(localNumber(expense.paid_amount) + amount)
-      const total = localNumber(expense.amount)
-      const outstanding = Math.max(0, total - paidAmount)
-      return { ...expense, paid_amount: paidAmount, outstanding_amount: outstanding, payment_status: statusForPayment(total, paidAmount), sync_status: "pending_update", updated_at: now }
-    })
-  }
+  if (partyType === "customer" && partyId && !customers.some((row) => row.id === partyId && !row.deleted_at)) throw new Error("Customer was not found.")
+  if (partyType === "supplier" && partyId && !suppliers.some((row) => row.id === partyId && !row.deleted_at)) throw new Error("Supplier was not found.")
+  const financialYearId = localString(input.financial_year_id)
+  if (!financialYearId) throw new Error("The payment accounting period was not resolved.")
 
   const payment = {
     id: paymentId,
@@ -570,12 +563,12 @@ export async function createPaymentTransaction(organizationId: string, input: Da
     sync_status: "pending_create",
     created_at: now,
     updated_at: now,
+    financial_year_id: financialYearId,
   }
 
-  const nextReceipts =
+  const receipt =
     direction === "in" && partyType === "customer"
-      ? [
-          {
+      ? {
             id: createOfflineId("receipt"),
             organization_id: organizationId,
             customer_id: partyId || null,
@@ -585,44 +578,39 @@ export async function createPaymentTransaction(organizationId: string, input: Da
             amount,
             payment_method: paymentMethod,
             reference_no: input.reference_no || null,
-            received_at: now,
+            received_at: `${paymentDate}T12:00:00`,
+            financial_year_id: financialYearId,
             notes: input.notes || null,
             sync_status: "pending_create",
             created_at: now,
             updated_at: now,
-          },
-          ...receipts,
-        ]
-      : receipts
+          }
+      : null
 
   const partyDebit = direction === "out" ? amount : 0
   const partyCredit = direction === "in" ? amount : 0
   const cashDebit = direction === "in" ? amount : 0
   const cashCredit = direction === "out" ? amount : 0
   const description = direction === "in" ? "Receipt" : "Payment"
-  const nextLedger = [
-    ledgerEntry(organizationId, partyType, documentType, paymentId, partyDebit, partyCredit, description, partyId || null, paymentDate),
-    ledgerEntry(organizationId, accountType, documentType, paymentId, cashDebit, cashCredit, description, null, paymentDate),
-    ...ledgerEntries,
+  const paymentLedger = [
+    { ...ledgerEntry(organizationId, partyType, documentType, paymentId, partyDebit, partyCredit, description, partyId || null, paymentDate), financial_year_id: financialYearId },
+    { ...ledgerEntry(organizationId, accountType, documentType, paymentId, cashDebit, cashCredit, description, null, paymentDate), financial_year_id: financialYearId },
   ]
 
-  const nextCustomers = customers.map((customer) =>
-    direction === "in" && customer.id === partyId ? { ...customer, current_balance: money(localNumber(customer.current_balance) - amount), sync_status: "pending_update", updated_at: now } : customer
-  )
-  const nextSuppliers = suppliers.map((supplier) =>
-    direction === "out" && supplier.id === partyId ? { ...supplier, current_balance: money(localNumber(supplier.current_balance) - amount), sync_status: "pending_update", updated_at: now } : supplier
-  )
-
-  await writeCollections(organizationId, [
-    { collection: "payments", value: [payment, ...payments] },
-    { collection: "payment_receipts", value: nextReceipts },
-    { collection: "ledger_entries", value: nextLedger },
-    { collection: "invoices", value: nextInvoices },
-    { collection: "purchase_invoices", value: nextPurchases },
-    { collection: "expenses", value: nextExpenses },
-    { collection: "customers", value: nextCustomers },
-    { collection: "suppliers", value: nextSuppliers },
-  ], action)
+  await createNormalizedPaymentAtomic({
+    organizationId,
+    payment,
+    receipt,
+    ledgerEntries: paymentLedger,
+    documentType,
+    documentId: documentId || null,
+    partyType,
+    partyId: partyId || null,
+    direction,
+    amount,
+    updatedAt: now,
+    financialYearId,
+  })
 
   return { payment_id: paymentId, amount, direction, document_id: documentId || null }
 }
@@ -950,7 +938,7 @@ export async function createInventoryMovement(organizationId: string, input: Dat
     mrp: input.mrp || product.mrp || null,
     barcode: input.barcode || product.barcode || null,
   }
-  const nextBatches = delta !== 0 ? updateBatchesForStock(batches, [batchInput], delta > 0 ? 1 : -1, organizationId, now) : batches
+  const nextBatches = delta !== 0 ? updateBatchesForStock(products, batches, [batchInput], delta > 0 ? 1 : -1, organizationId, now) : batches
 
   await writeCollections(organizationId, [
     { collection: "products", value: nextProducts },
@@ -1380,8 +1368,19 @@ export async function getOfflineReport(
       rows: trialRows,
     }
   }
-  if (type === "stock" || type === "stock_valuation") return { type, items: activeRows(products), stock_value: money(activeRows(products).reduce((sum, row) => sum + localNumber(row.stock) * localNumber(row.purchase_rate, localNumber(row.price)), 0)) }
-  if (type === "stock_ledger") return { type, entries: activeRows(stockMovements).filter((row) => inFinancialYear(row) && inDateRange(row, ["movement_date", "created_at"], options.start, options.end)) }
+  if (type === "stock" || type === "stock_valuation") return {
+    type,
+    scope: "CURRENT_PHYSICAL_STATE",
+    selected_financial_year_id: options.financial_year_id || null,
+    items: activeRows(products),
+    stock_value: money(activeRows(products).reduce((sum, row) => sum + localNumber(row.stock) * localNumber(row.purchase_rate, localNumber(row.price)), 0)),
+  }
+  if (type === "stock_ledger") return {
+    type,
+    scope: options.financial_year_id ? "SELECTED_FINANCIAL_YEAR" : "ALL_PERIODS",
+    selected_financial_year_id: options.financial_year_id || null,
+    entries: activeRows(stockMovements).filter((row) => inFinancialYear(row) && inDateRange(row, ["movement_date", "created_at"], options.start, options.end)),
+  }
   if (type === "low_stock") return { type, items: activeRows(products).filter((row) => localNumber(row.stock) <= localNumber(row.min_stock, 0)) }
   if (type === "outstanding_customers") {
     return { type, customers: scopedCustomers.filter((row) => localNumber(row.current_balance) > 0), total: money(scopedCustomers.reduce((sum, row) => sum + Math.max(0, localNumber(row.current_balance)), 0)) }

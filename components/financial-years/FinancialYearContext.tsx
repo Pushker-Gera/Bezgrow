@@ -3,7 +3,7 @@
 import { createContext, Fragment, useContext, useEffect, useMemo, useState, type ReactNode } from "react"
 import { apiFetch } from "@/lib/api/client-fetch"
 import { selectedFinancialYearStorageKey } from "@/lib/offline/local/financial-years"
-import type { FinancialYear } from "@/lib/financial-years"
+import { isoLocalDate, type FinancialYear } from "@/lib/financial-years"
 
 type FinancialYearContextValue = {
   years: FinancialYear[]
@@ -97,7 +97,7 @@ export function FinancialYearSelector({ compact = false }: { compact?: boolean }
       >
         {years.map((year) => (
           <option key={year.id} value={year.id} className="bg-neutral-950 text-white">
-            {year.label} · {year.is_active ? "Active" : year.status === "CLOSED" ? "Closed" : "Open"}
+            {year.label} · {year.is_active ? "Current active" : year.start_date > isoLocalDate() ? "Future · unavailable" : year.status === "CLOSED" ? "Closed" : year.status === "ARCHIVED" ? "Archived" : "Historical open"}
           </option>
         ))}
       </select>
@@ -110,7 +110,7 @@ export function FinancialYearViewingBanner() {
   if (!selectedYear || selectedYear.id === activeYear?.id) return null
   return (
     <div className="border-b border-amber-400/20 bg-amber-500/10 px-4 py-2 text-center text-xs font-bold text-amber-100">
-      Viewing {selectedYear.label} — {selectedYear.status === "CLOSED" ? "Closed · read-only" : "Historical open year"}
+      Viewing {selectedYear.label} — {selectedYear.start_date > isoLocalDate() ? "Future year unavailable" : selectedYear.status === "CLOSED" ? "Closed · read-only" : "Historical year · new transactions are read-only"}. Period figures use this year; product master and physical stock remain current.
     </div>
   )
 }

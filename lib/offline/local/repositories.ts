@@ -1475,6 +1475,21 @@ export type NormalizedInvoiceDeletionInput = {
   deletedAt: string
 }
 
+export type NormalizedPaymentAtomicInput = {
+  organizationId: string
+  payment: DataRow
+  receipt?: DataRow | null
+  ledgerEntries: DataRow[]
+  documentType: string
+  documentId: string | null
+  partyType: string
+  partyId: string | null
+  direction: string
+  amount: number
+  updatedAt: string
+  financialYearId: string
+}
+
 export async function createNormalizedInvoiceAtomic(input: NormalizedInvoiceAtomicInput) {
   await service.transaction(async (db) => {
     await ensureOrganization(db, input.organizationId)
@@ -1567,6 +1582,107 @@ export async function createNormalizedInvoiceAtomic(input: NormalizedInvoiceAtom
         `UPDATE financial_year_invoice_sequences SET next_number = MAX(next_number, ?), updated_at = ?
          WHERE organization_id = ? AND financial_year_id = ?`,
         [input.invoiceSequence + 1, input.invoice.updated_at as SqlValue, input.organizationId, input.financialYearId]
+      )
+    }
+  })
+}
+
+export async function createNormalizedPaymentAtomic(input: NormalizedPaymentAtomicInput) {
+  await service.transaction(async (db) => {
+    await ensureOrganization(db, input.organizationId)
+    if (input.partyId && input.partyType === "customer") {
+      const party = await db.select<DataRow>(
+        "SELECT id FROM customers WHERE organization_id = ? AND id = ? AND deleted_at IS NULL LIMIT 1",
+        [input.organizationId, input.partyId]
+      )
+      if (!party.length) throw new Error("Customer was not found.")
+    }
+    if (input.partyId && input.partyType === "supplier") {
+      const party = await db.select<DataRow>(
+        "SELECT id FROM suppliers WHERE organization_id = ? AND id = ? AND deleted_at IS NULL LIMIT 1",
+        [input.organizationId, input.partyId]
+      )
+      if (!party.length) throw new Error("Supplier was not found.")
+    }
+    if (input.documentId && ["sales_invoice", "purchase_invoice", "expense"].includes(input.documentType)) {
+      const table = input.documentType === "sales_invoice" ? "sales_invoices" : input.documentType === "purchase_invoice" ? "purchase_invoices" : "expenses"
+      const totalExpression = input.documentType === "expense"
+        ? "COALESCE(amount, 0)"
+        : input.documentType === "purchase_invoice"
+          ? "COALESCE(grand_total, 0)"
+          : "COALESCE(grand_total, total_amount, total, 0)"
+      const partyColumn = input.documentType === "sales_invoice" ? "customer_id" : input.documentType === "purchase_invoice" ? "supplier_id" : "supplier_id"
+      const documents = await db.select<DataRow>(
+        `SELECT ${partyColumn} AS party_id, ${totalExpression} AS total,
+           MAX(0, COALESCE(outstanding_amount, ${totalExpression} - COALESCE(paid_amount, 0))) AS outstanding
+         FROM ${table} WHERE organization_id = ? AND id = ? AND deleted_at IS NULL LIMIT 1`,
+        [input.organizationId, input.documentId]
+      )
+      const document = documents[0]
+      if (!document) throw new Error("The document being paid was not found.")
+      if (input.partyId && document.party_id && String(document.party_id) !== input.partyId) {
+        throw new Error("The payment party does not match the selected document.")
+      }
+      const outstanding = Math.max(0, Number(document.outstanding || 0))
+      if (input.amount > outstanding + 0.0001) {
+        throw new Error(`Only ${Math.round(outstanding * 100) / 100} remains outstanding on this document.`)
+      }
+    }
+    await upsert(db, "payments", { ...input.payment, financial_year_id: input.financialYearId })
+    if (input.receipt) {
+      await upsert(db, "payment_receipts", paymentReceiptRow({ ...input.receipt, financial_year_id: input.financialYearId }, input.organizationId))
+    }
+    for (let index = 0; index < input.ledgerEntries.length; index += 1) {
+      await upsert(db, "ledger_entries", ledgerEntryRow({ ...input.ledgerEntries[index], financial_year_id: input.financialYearId }, input.organizationId, index))
+    }
+
+    if (input.documentId && input.documentType === "sales_invoice") {
+      await db.execute(
+        `UPDATE sales_invoices SET
+           paid_amount = MIN(COALESCE(grand_total, total_amount, total, 0), COALESCE(paid_amount, 0) + ?),
+           outstanding_amount = MAX(0, COALESCE(grand_total, total_amount, total, 0) - (COALESCE(paid_amount, 0) + ?)),
+           payment_status = CASE WHEN COALESCE(paid_amount, 0) + ? >= COALESCE(grand_total, total_amount, total, 0) THEN 'paid' ELSE 'partial' END,
+           status = CASE WHEN COALESCE(paid_amount, 0) + ? >= COALESCE(grand_total, total_amount, total, 0) THEN 'paid' ELSE 'partial' END,
+           sync_status = 'pending_update', updated_at = ?
+         WHERE organization_id = ? AND id = ? AND deleted_at IS NULL`,
+        [input.amount, input.amount, input.amount, input.amount, input.updatedAt, input.organizationId, input.documentId]
+      )
+    }
+    if (input.documentId && input.documentType === "purchase_invoice") {
+      await db.execute(
+        `UPDATE purchase_invoices SET
+           paid_amount = MIN(COALESCE(grand_total, 0), COALESCE(paid_amount, 0) + ?),
+           outstanding_amount = MAX(0, COALESCE(grand_total, 0) - (COALESCE(paid_amount, 0) + ?)),
+           status = CASE WHEN COALESCE(paid_amount, 0) + ? >= COALESCE(grand_total, 0) THEN 'paid' ELSE 'partial' END,
+           sync_status = 'pending_update', updated_at = ?
+         WHERE organization_id = ? AND id = ? AND deleted_at IS NULL`,
+        [input.amount, input.amount, input.amount, input.updatedAt, input.organizationId, input.documentId]
+      )
+    }
+    if (input.documentId && input.documentType === "expense") {
+      await db.execute(
+        `UPDATE expenses SET
+           paid_amount = MIN(COALESCE(amount, 0), COALESCE(paid_amount, 0) + ?),
+           outstanding_amount = MAX(0, COALESCE(amount, 0) - (COALESCE(paid_amount, 0) + ?)),
+           payment_status = CASE WHEN COALESCE(paid_amount, 0) + ? >= COALESCE(amount, 0) THEN 'paid' ELSE 'partial' END,
+           sync_status = 'pending_update', updated_at = ?
+         WHERE organization_id = ? AND id = ? AND deleted_at IS NULL`,
+        [input.amount, input.amount, input.amount, input.updatedAt, input.organizationId, input.documentId]
+      )
+    }
+
+    if (input.direction === "in" && input.partyType === "customer" && input.partyId) {
+      await db.execute(
+        `UPDATE customers SET current_balance = MAX(0, COALESCE(current_balance, 0) - ?), sync_status = 'pending_update', updated_at = ?
+         WHERE organization_id = ? AND id = ? AND deleted_at IS NULL`,
+        [input.amount, input.updatedAt, input.organizationId, input.partyId]
+      )
+    }
+    if (input.direction === "out" && input.partyType === "supplier" && input.partyId) {
+      await db.execute(
+        `UPDATE suppliers SET current_balance = MAX(0, COALESCE(current_balance, 0) - ?), sync_status = 'pending_update', updated_at = ?
+         WHERE organization_id = ? AND id = ? AND deleted_at IS NULL`,
+        [input.amount, input.updatedAt, input.organizationId, input.partyId]
       )
     }
   })
@@ -2170,7 +2286,7 @@ export async function queryNormalizedBillingSummary(organizationId: string, fina
   const financialYearClause = financialYearId ? " AND financial_year_id = ?" : ""
   const aliasedFinancialYearClause = financialYearId ? " AND invoice.financial_year_id = ?" : ""
   const financialYearValues: SqlValue[] = financialYearId ? [organizationId, financialYearId] : [organizationId]
-  const [invoiceRows, productRows, customerRows, weeklyRevenue, recentInvoices] = await Promise.all([
+  const [invoiceRows, productRows, customerRows, weeklyRevenue, recentInvoices, receivableRows] = await Promise.all([
     db.select<DataRow>(
       `SELECT
          COUNT(*) AS invoiceCount,
@@ -2214,6 +2330,23 @@ export async function queryNormalizedBillingSummary(organizationId: string, fina
        ORDER BY invoice.created_at DESC, invoice.id DESC LIMIT 10`,
       financialYearValues
     ),
+    financialYearId
+      ? db.select<DataRow>(
+          `SELECT CASE WHEN fy.is_active = 1 THEN
+             MAX(0,
+               COALESCE((SELECT SUM(amount) FROM financial_year_opening_balances opening WHERE opening.organization_id = fy.organization_id AND opening.financial_year_id = fy.id AND opening.party_type = 'customer' AND opening.balance_type = 'RECEIVABLE'), 0)
+               + COALESCE((SELECT SUM(COALESCE(entry.debit, 0) - COALESCE(entry.credit, 0)) FROM ledger_entries entry WHERE entry.organization_id = fy.organization_id AND entry.financial_year_id = fy.id AND entry.account_type = 'customer' AND entry.deleted_at IS NULL), 0)
+             )
+           ELSE
+             COALESCE((SELECT SUM(MAX(0, COALESCE(invoice.outstanding_amount, COALESCE(invoice.grand_total, invoice.total_amount, invoice.total, 0) - COALESCE(invoice.paid_amount, 0)))) FROM sales_invoices invoice WHERE invoice.organization_id = fy.organization_id AND invoice.financial_year_id = fy.id AND invoice.deleted_at IS NULL), 0)
+           END AS amount
+           FROM financial_years fy WHERE fy.organization_id = ? AND fy.id = ? LIMIT 1`,
+          [organizationId, financialYearId]
+        )
+      : db.select<DataRow>(
+          "SELECT COALESCE(SUM(MAX(current_balance, 0)), 0) AS amount FROM customers WHERE organization_id = ? AND deleted_at IS NULL",
+          [organizationId]
+        ),
   ])
   const invoice = invoiceRows[0] || {}
   const product = productRows[0] || {}
@@ -2237,7 +2370,7 @@ export async function queryNormalizedBillingSummary(organizationId: string, fina
       revenue,
       monthlyRevenue: Number(invoice.monthlyRevenue || 0),
       paidRevenue,
-      outstanding: Number(invoice.outstanding || 0),
+      outstanding: Number(receivableRows[0]?.amount ?? invoice.outstanding ?? 0),
       tax: Number(invoice.tax || 0),
       inventoryValue: Number(product.inventoryValue || 0),
       averageInvoice: invoiceCount ? revenue / invoiceCount : 0,

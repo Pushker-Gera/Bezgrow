@@ -1,6 +1,6 @@
 "use client"
 
-export const LOCAL_DB_VERSION = 15
+export const LOCAL_DB_VERSION = 17
 export const LOCAL_DB_URL = "sqlite:bezgrow-offline.db"
 
 export const normalizedTables = [
@@ -1494,7 +1494,224 @@ export const localMigrations: Array<{ version: number; name: string; sql: string
            COALESCE((SELECT SUM(quantity) FROM financial_year_inventory_openings opening WHERE opening.organization_id = NEW.organization_id AND opening.financial_year_id = NEW.id), 0)
            - COALESCE((SELECT SUM(stock) FROM products product WHERE product.organization_id = NEW.organization_id AND product.deleted_at IS NULL), 0)
          ) > 0.0001
-       BEGIN SELECT RAISE(ABORT, 'financial_year_inventory_opening_mismatch'); END`,
+      BEGIN SELECT RAISE(ABORT, 'financial_year_inventory_opening_mismatch'); END`,
+    ],
+  },
+  {
+    version: 16,
+    name: "financial_year_operational_integrity_repair",
+    sql: [
+      `CREATE TEMP TABLE IF NOT EXISTS fy_v16_repair_targets (
+         organization_id TEXT PRIMARY KEY,
+         expected_financial_year_id TEXT NOT NULL,
+         prior_active_financial_year_id TEXT
+       )`,
+      "DELETE FROM fy_v16_repair_targets",
+      `INSERT INTO fy_v16_repair_targets (organization_id, expected_financial_year_id, prior_active_financial_year_id)
+       SELECT organization.id,
+         'fy:' || organization.id || ':' ||
+           (CAST(strftime('%Y', date('now', 'localtime')) AS INTEGER) - CASE WHEN CAST(strftime('%m', date('now', 'localtime')) AS INTEGER) < 4 THEN 1 ELSE 0 END) || ':4',
+         (SELECT active.id FROM financial_years active WHERE active.organization_id = organization.id AND active.is_active = 1 LIMIT 1)
+       FROM organizations organization
+       WHERE EXISTS (
+         SELECT 1 FROM financial_years active
+         WHERE active.organization_id = organization.id AND active.is_active = 1
+           AND date('now', 'localtime') NOT BETWEEN date(active.start_date) AND date(active.end_date)
+       ) OR EXISTS (
+         SELECT 1 FROM financial_years expected
+         WHERE expected.organization_id = organization.id
+           AND expected.id = 'fy:' || organization.id || ':' ||
+             (CAST(strftime('%Y', date('now', 'localtime')) AS INTEGER) - CASE WHEN CAST(strftime('%m', date('now', 'localtime')) AS INTEGER) < 4 THEN 1 ELSE 0 END) || ':4'
+           AND expected.status = 'OPEN' AND expected.is_active = 0
+           AND NOT EXISTS (SELECT 1 FROM financial_years active WHERE active.organization_id = organization.id AND active.is_active = 1)
+       )`,
+      `UPDATE sales_invoices AS transaction_row
+       SET financial_year_id = (
+         SELECT correct.id FROM financial_years correct
+         WHERE correct.organization_id = transaction_row.organization_id
+           AND date(COALESCE(transaction_row.invoice_date, transaction_row.date, transaction_row.created_at)) BETWEEN date(correct.start_date) AND date(correct.end_date)
+         LIMIT 1
+       )
+       WHERE transaction_row.organization_id IN (SELECT organization_id FROM fy_v16_repair_targets)
+         AND EXISTS (SELECT 1 FROM financial_years bad WHERE bad.id = transaction_row.financial_year_id AND bad.organization_id = transaction_row.organization_id AND date(bad.start_date) > date('now', 'localtime'))
+         AND EXISTS (SELECT 1 FROM financial_years correct WHERE correct.organization_id = transaction_row.organization_id AND date(COALESCE(transaction_row.invoice_date, transaction_row.date, transaction_row.created_at)) BETWEEN date(correct.start_date) AND date(correct.end_date) AND correct.id <> transaction_row.financial_year_id)`,
+      `UPDATE purchase_invoices AS transaction_row
+       SET financial_year_id = (SELECT correct.id FROM financial_years correct WHERE correct.organization_id = transaction_row.organization_id AND date(COALESCE(transaction_row.bill_date, transaction_row.created_at)) BETWEEN date(correct.start_date) AND date(correct.end_date) LIMIT 1)
+       WHERE transaction_row.organization_id IN (SELECT organization_id FROM fy_v16_repair_targets)
+         AND EXISTS (SELECT 1 FROM financial_years bad WHERE bad.id = transaction_row.financial_year_id AND bad.organization_id = transaction_row.organization_id AND date(bad.start_date) > date('now', 'localtime'))
+         AND EXISTS (SELECT 1 FROM financial_years correct WHERE correct.organization_id = transaction_row.organization_id AND date(COALESCE(transaction_row.bill_date, transaction_row.created_at)) BETWEEN date(correct.start_date) AND date(correct.end_date) AND correct.id <> transaction_row.financial_year_id)`,
+      `UPDATE stock_movements AS transaction_row
+       SET financial_year_id = (SELECT correct.id FROM financial_years correct WHERE correct.organization_id = transaction_row.organization_id AND date(COALESCE(transaction_row.movement_date, transaction_row.created_at)) BETWEEN date(correct.start_date) AND date(correct.end_date) LIMIT 1)
+       WHERE transaction_row.organization_id IN (SELECT organization_id FROM fy_v16_repair_targets)
+         AND EXISTS (SELECT 1 FROM financial_years bad WHERE bad.id = transaction_row.financial_year_id AND bad.organization_id = transaction_row.organization_id AND date(bad.start_date) > date('now', 'localtime'))
+         AND EXISTS (SELECT 1 FROM financial_years correct WHERE correct.organization_id = transaction_row.organization_id AND date(COALESCE(transaction_row.movement_date, transaction_row.created_at)) BETWEEN date(correct.start_date) AND date(correct.end_date) AND correct.id <> transaction_row.financial_year_id)`,
+      `UPDATE payments AS transaction_row
+       SET financial_year_id = (SELECT correct.id FROM financial_years correct WHERE correct.organization_id = transaction_row.organization_id AND date(COALESCE(transaction_row.payment_date, transaction_row.created_at)) BETWEEN date(correct.start_date) AND date(correct.end_date) LIMIT 1)
+       WHERE transaction_row.organization_id IN (SELECT organization_id FROM fy_v16_repair_targets)
+         AND EXISTS (SELECT 1 FROM financial_years bad WHERE bad.id = transaction_row.financial_year_id AND bad.organization_id = transaction_row.organization_id AND date(bad.start_date) > date('now', 'localtime'))
+         AND EXISTS (SELECT 1 FROM financial_years correct WHERE correct.organization_id = transaction_row.organization_id AND date(COALESCE(transaction_row.payment_date, transaction_row.created_at)) BETWEEN date(correct.start_date) AND date(correct.end_date) AND correct.id <> transaction_row.financial_year_id)`,
+      `UPDATE payment_receipts AS transaction_row
+       SET financial_year_id = (SELECT correct.id FROM financial_years correct WHERE correct.organization_id = transaction_row.organization_id AND date(COALESCE(transaction_row.received_at, transaction_row.created_at)) BETWEEN date(correct.start_date) AND date(correct.end_date) LIMIT 1)
+       WHERE transaction_row.organization_id IN (SELECT organization_id FROM fy_v16_repair_targets)
+         AND EXISTS (SELECT 1 FROM financial_years bad WHERE bad.id = transaction_row.financial_year_id AND bad.organization_id = transaction_row.organization_id AND date(bad.start_date) > date('now', 'localtime'))
+         AND EXISTS (SELECT 1 FROM financial_years correct WHERE correct.organization_id = transaction_row.organization_id AND date(COALESCE(transaction_row.received_at, transaction_row.created_at)) BETWEEN date(correct.start_date) AND date(correct.end_date) AND correct.id <> transaction_row.financial_year_id)`,
+      `UPDATE ledger_entries AS transaction_row
+       SET financial_year_id = (SELECT correct.id FROM financial_years correct WHERE correct.organization_id = transaction_row.organization_id AND date(COALESCE(transaction_row.entry_date, transaction_row.created_at)) BETWEEN date(correct.start_date) AND date(correct.end_date) LIMIT 1)
+       WHERE transaction_row.organization_id IN (SELECT organization_id FROM fy_v16_repair_targets)
+         AND EXISTS (SELECT 1 FROM financial_years bad WHERE bad.id = transaction_row.financial_year_id AND bad.organization_id = transaction_row.organization_id AND date(bad.start_date) > date('now', 'localtime'))
+         AND EXISTS (SELECT 1 FROM financial_years correct WHERE correct.organization_id = transaction_row.organization_id AND date(COALESCE(transaction_row.entry_date, transaction_row.created_at)) BETWEEN date(correct.start_date) AND date(correct.end_date) AND correct.id <> transaction_row.financial_year_id)`,
+      `CREATE TEMP TABLE IF NOT EXISTS fy_v16_premature_years (id TEXT PRIMARY KEY, organization_id TEXT NOT NULL, label TEXT NOT NULL)`,
+      "DELETE FROM fy_v16_premature_years",
+      `INSERT INTO fy_v16_premature_years (id, organization_id, label)
+       SELECT future.id, future.organization_id, future.label FROM financial_years future
+       WHERE date(future.start_date) > date('now', 'localtime')
+         AND NOT EXISTS (SELECT 1 FROM sales_invoices row WHERE row.organization_id = future.organization_id AND row.financial_year_id = future.id)
+         AND NOT EXISTS (SELECT 1 FROM purchase_invoices row WHERE row.organization_id = future.organization_id AND row.financial_year_id = future.id)
+         AND NOT EXISTS (SELECT 1 FROM stock_movements row WHERE row.organization_id = future.organization_id AND row.financial_year_id = future.id)
+         AND NOT EXISTS (SELECT 1 FROM payments row WHERE row.organization_id = future.organization_id AND row.financial_year_id = future.id)
+         AND NOT EXISTS (SELECT 1 FROM ledger_entries row WHERE row.organization_id = future.organization_id AND row.financial_year_id = future.id)`,
+      `INSERT OR IGNORE INTO local_audit_logs (id, organization_id, action, entity_type, entity_id, description, created_at, updated_at, sync_status)
+       SELECT 'fy-v16-premature:' || premature.id, premature.organization_id, 'financial_year.premature_record_archived', 'financial_year', premature.id,
+         premature.label || ' was created before its start date and had no dated transactions. It was preserved as archived; derived opening snapshots were retained for audit.',
+         datetime('now'), datetime('now'), 'local'
+       FROM fy_v16_premature_years premature`,
+      `UPDATE financial_years SET status = 'ARCHIVED', is_active = 0
+       WHERE id IN (SELECT id FROM fy_v16_premature_years)`,
+      `UPDATE financial_years SET is_active = 0
+       WHERE organization_id IN (SELECT organization_id FROM fy_v16_repair_targets) AND is_active = 1`,
+      `UPDATE financial_years SET is_active = 1, status = 'OPEN', schema_version = MAX(schema_version, 2)
+       WHERE id IN (SELECT expected_financial_year_id FROM fy_v16_repair_targets) AND status = 'OPEN'`,
+      `INSERT OR IGNORE INTO local_audit_logs (id, organization_id, action, entity_type, entity_id, description, created_at, updated_at, sync_status)
+       SELECT 'fy-v16-pointer:' || target.organization_id, target.organization_id, 'financial_year.legacy_state_repaired', 'financial_year', target.expected_financial_year_id,
+         'Operational financial year repaired for local business date ' || date('now', 'localtime') || '. The date-valid current year was restored as active; future records and transactions were preserved and only date-provable assignments were corrected.',
+         datetime('now'), datetime('now'), 'local'
+       FROM fy_v16_repair_targets target`,
+      // A closed invoice remains immutable except for settlement state. This
+      // permits collections after year-end while the payment and ledger rows
+      // are posted to the current operational year.
+      "DROP TRIGGER IF EXISTS trg_fy_guard_sales_invoice_update",
+      `CREATE TRIGGER IF NOT EXISTS trg_fy_guard_sales_invoice_update
+       BEFORE UPDATE ON sales_invoices FOR EACH ROW
+       WHEN OLD.financial_year_id IS NOT NULL
+         AND EXISTS (SELECT 1 FROM financial_years fy WHERE fy.id = OLD.financial_year_id AND fy.organization_id = OLD.organization_id AND fy.status <> 'OPEN')
+         AND (
+           OLD.financial_year_id IS NOT NEW.financial_year_id OR OLD.invoice_date IS NOT NEW.invoice_date OR OLD.date IS NOT NEW.date
+           OR OLD.customer_id IS NOT NEW.customer_id OR OLD.customer_name IS NOT NEW.customer_name
+           OR OLD.invoice_number IS NOT NEW.invoice_number OR OLD.display_invoice_number IS NOT NEW.display_invoice_number
+           OR OLD.invoice_type IS NOT NEW.invoice_type OR OLD.due_date IS NOT NEW.due_date
+           OR OLD.subtotal IS NOT NEW.subtotal OR OLD.discount_amount IS NOT NEW.discount_amount OR OLD.discount_total IS NOT NEW.discount_total
+           OR OLD.taxable_amount IS NOT NEW.taxable_amount OR OLD.tax_amount IS NOT NEW.tax_amount OR OLD.tax_total IS NOT NEW.tax_total
+           OR OLD.total_amount IS NOT NEW.total_amount OR OLD.grand_total IS NOT NEW.grand_total OR OLD.total IS NOT NEW.total
+           OR OLD.payment_method IS NOT NEW.payment_method OR OLD.notes IS NOT NEW.notes
+           OR OLD.shipping_code IS NOT NEW.shipping_code OR OLD.courier_name IS NOT NEW.courier_name OR OLD.tracking_number IS NOT NEW.tracking_number
+           OR OLD.deleted_at IS NOT NEW.deleted_at
+         )
+       BEGIN SELECT RAISE(ABORT, 'financial_year_closed'); END`,
+      "CREATE INDEX IF NOT EXISTS idx_stock_batches_org_product_batch_available ON stock_batches (organization_id, product_id, batch_no COLLATE NOCASE, warehouse_id, deleted_at, purchase_date, created_at)",
+      "CREATE INDEX IF NOT EXISTS idx_inventory_items_org_product_batch_warehouse ON inventory_items (organization_id, product_id, batch_id, warehouse_id, deleted_at)",
+      "CREATE INDEX IF NOT EXISTS idx_payments_org_document_date ON payments (organization_id, document_type, document_id, payment_date DESC, deleted_at)",
+      "CREATE INDEX IF NOT EXISTS idx_receipts_org_invoice_date ON payment_receipts (organization_id, invoice_id, received_at DESC, deleted_at)",
+      "DROP TABLE fy_v16_premature_years",
+      "DROP TABLE fy_v16_repair_targets",
+    ],
+  },
+  {
+    version: 17,
+    name: "invoice_settlement_status_integrity_repair",
+    sql: [
+      // Older builds could leave the text payment label out of sync with the
+      // authoritative paid/outstanding amounts. Repair only rows whose money
+      // arithmetic is already internally consistent; never infer or rewrite a
+      // payment amount during this migration.
+      `CREATE TEMP TABLE IF NOT EXISTS fy_v17_settlement_repairs (
+         organization_id TEXT PRIMARY KEY,
+         sales_invoice_count INTEGER NOT NULL DEFAULT 0,
+         purchase_invoice_count INTEGER NOT NULL DEFAULT 0
+       )`,
+      "DELETE FROM fy_v17_settlement_repairs",
+      `INSERT INTO fy_v17_settlement_repairs (organization_id, sales_invoice_count, purchase_invoice_count)
+       SELECT organization.id,
+         (SELECT COUNT(*) FROM sales_invoices invoice
+          WHERE invoice.organization_id = organization.id AND invoice.deleted_at IS NULL
+            AND COALESCE(invoice.grand_total, invoice.total_amount, invoice.total, 0) >= 0
+            AND COALESCE(invoice.paid_amount, 0) >= 0
+            AND COALESCE(invoice.paid_amount, 0) <= COALESCE(invoice.grand_total, invoice.total_amount, invoice.total, 0) + 0.01
+            AND ABS(COALESCE(invoice.outstanding_amount, 0) - MAX(0, COALESCE(invoice.grand_total, invoice.total_amount, invoice.total, 0) - COALESCE(invoice.paid_amount, 0))) <= 0.01
+            AND lower(COALESCE(invoice.payment_status, '')) IN ('paid', 'partial', 'unpaid', 'pending', 'overdue', '')
+            AND lower(COALESCE(invoice.status, '')) IN ('paid', 'partial', 'unpaid', 'pending', 'overdue', '')
+            AND (
+              lower(COALESCE(invoice.payment_status, '')) <> CASE
+                WHEN COALESCE(invoice.grand_total, invoice.total_amount, invoice.total, 0) <= 0.01 OR COALESCE(invoice.paid_amount, 0) >= COALESCE(invoice.grand_total, invoice.total_amount, invoice.total, 0) - 0.01 THEN 'paid'
+                WHEN COALESCE(invoice.paid_amount, 0) > 0.01 THEN 'partial' ELSE 'unpaid' END
+              OR lower(COALESCE(invoice.status, '')) <> CASE
+                WHEN COALESCE(invoice.grand_total, invoice.total_amount, invoice.total, 0) <= 0.01 OR COALESCE(invoice.paid_amount, 0) >= COALESCE(invoice.grand_total, invoice.total_amount, invoice.total, 0) - 0.01 THEN 'paid'
+                WHEN COALESCE(invoice.paid_amount, 0) > 0.01 THEN 'partial' ELSE 'unpaid' END
+            )),
+         (SELECT COUNT(*) FROM purchase_invoices purchase
+          WHERE purchase.organization_id = organization.id AND purchase.deleted_at IS NULL
+            AND COALESCE(purchase.grand_total, 0) >= 0
+            AND COALESCE(purchase.paid_amount, 0) >= 0
+            AND COALESCE(purchase.paid_amount, 0) <= COALESCE(purchase.grand_total, 0) + 0.01
+            AND ABS(COALESCE(purchase.outstanding_amount, 0) - MAX(0, COALESCE(purchase.grand_total, 0) - COALESCE(purchase.paid_amount, 0))) <= 0.01
+            AND lower(COALESCE(purchase.status, '')) IN ('paid', 'partial', 'unpaid', 'pending', 'overdue', '')
+            AND lower(COALESCE(purchase.status, '')) <> CASE
+              WHEN COALESCE(purchase.grand_total, 0) <= 0.01 OR COALESCE(purchase.paid_amount, 0) >= COALESCE(purchase.grand_total, 0) - 0.01 THEN 'paid'
+              WHEN COALESCE(purchase.paid_amount, 0) > 0.01 THEN 'partial' ELSE 'unpaid' END)
+       FROM organizations organization`,
+      `UPDATE sales_invoices
+       SET payment_status = CASE
+             WHEN COALESCE(grand_total, total_amount, total, 0) <= 0.01 OR COALESCE(paid_amount, 0) >= COALESCE(grand_total, total_amount, total, 0) - 0.01 THEN 'paid'
+             WHEN COALESCE(paid_amount, 0) > 0.01 THEN 'partial' ELSE 'unpaid' END,
+           status = CASE
+             WHEN COALESCE(grand_total, total_amount, total, 0) <= 0.01 OR COALESCE(paid_amount, 0) >= COALESCE(grand_total, total_amount, total, 0) - 0.01 THEN 'paid'
+             WHEN COALESCE(paid_amount, 0) > 0.01 THEN 'partial' ELSE 'unpaid' END,
+           updated_at = datetime('now')
+       WHERE deleted_at IS NULL
+         AND COALESCE(grand_total, total_amount, total, 0) >= 0
+         AND COALESCE(paid_amount, 0) >= 0
+         AND COALESCE(paid_amount, 0) <= COALESCE(grand_total, total_amount, total, 0) + 0.01
+         AND ABS(COALESCE(outstanding_amount, 0) - MAX(0, COALESCE(grand_total, total_amount, total, 0) - COALESCE(paid_amount, 0))) <= 0.01
+         AND lower(COALESCE(payment_status, '')) IN ('paid', 'partial', 'unpaid', 'pending', 'overdue', '')
+         AND lower(COALESCE(status, '')) IN ('paid', 'partial', 'unpaid', 'pending', 'overdue', '')`,
+      // A closed supplier bill follows the same settlement rule as a closed
+      // sales invoice: the historical document remains immutable while a
+      // current-year payment may update only its settlement fields.
+      "DROP TRIGGER IF EXISTS trg_fy_guard_purchase_invoice_update",
+      `CREATE TRIGGER IF NOT EXISTS trg_fy_guard_purchase_invoice_update
+       BEFORE UPDATE ON purchase_invoices FOR EACH ROW
+       WHEN OLD.financial_year_id IS NOT NULL
+         AND EXISTS (SELECT 1 FROM financial_years fy WHERE fy.id = OLD.financial_year_id AND fy.organization_id = OLD.organization_id AND fy.status <> 'OPEN')
+         AND (
+           OLD.financial_year_id IS NOT NEW.financial_year_id OR OLD.bill_date IS NOT NEW.bill_date
+           OR OLD.supplier_id IS NOT NEW.supplier_id OR OLD.supplier_name IS NOT NEW.supplier_name
+           OR OLD.invoice_kind IS NOT NEW.invoice_kind OR OLD.purchase_order_id IS NOT NEW.purchase_order_id
+           OR OLD.return_against_id IS NOT NEW.return_against_id OR OLD.goods_received_id IS NOT NEW.goods_received_id
+           OR OLD.bill_number IS NOT NEW.bill_number OR OLD.due_date IS NOT NEW.due_date
+           OR OLD.subtotal IS NOT NEW.subtotal OR OLD.discount_total IS NOT NEW.discount_total
+           OR OLD.taxable_amount IS NOT NEW.taxable_amount OR OLD.tax_total IS NOT NEW.tax_total
+           OR OLD.grand_total IS NOT NEW.grand_total OR OLD.received_status IS NOT NEW.received_status
+           OR OLD.notes IS NOT NEW.notes OR OLD.deleted_at IS NOT NEW.deleted_at
+         )
+       BEGIN SELECT RAISE(ABORT, 'financial_year_closed'); END`,
+      `UPDATE purchase_invoices
+       SET status = CASE
+             WHEN COALESCE(grand_total, 0) <= 0.01 OR COALESCE(paid_amount, 0) >= COALESCE(grand_total, 0) - 0.01 THEN 'paid'
+             WHEN COALESCE(paid_amount, 0) > 0.01 THEN 'partial' ELSE 'unpaid' END,
+           updated_at = datetime('now')
+       WHERE deleted_at IS NULL
+         AND COALESCE(grand_total, 0) >= 0
+         AND COALESCE(paid_amount, 0) >= 0
+         AND COALESCE(paid_amount, 0) <= COALESCE(grand_total, 0) + 0.01
+         AND ABS(COALESCE(outstanding_amount, 0) - MAX(0, COALESCE(grand_total, 0) - COALESCE(paid_amount, 0))) <= 0.01
+         AND lower(COALESCE(status, '')) IN ('paid', 'partial', 'unpaid', 'pending', 'overdue', '')`,
+      `INSERT OR IGNORE INTO local_audit_logs (id, organization_id, action, entity_type, entity_id, description, created_at, updated_at, sync_status)
+       SELECT 'settlement-v17:' || repair.organization_id, repair.organization_id,
+         'invoice.settlement_status_repaired', 'organization', repair.organization_id,
+         'Reconciled ' || repair.sales_invoice_count || ' sales invoice and ' || repair.purchase_invoice_count || ' purchase invoice payment labels from internally consistent paid and outstanding amounts. Monetary values and payment records were not changed.',
+         datetime('now'), datetime('now'), 'local'
+       FROM fy_v17_settlement_repairs repair
+       WHERE repair.sales_invoice_count > 0 OR repair.purchase_invoice_count > 0`,
+      "DROP TABLE fy_v17_settlement_repairs",
     ],
   },
 ]

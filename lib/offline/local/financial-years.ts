@@ -2,8 +2,12 @@
 
 import { invokeTauri } from "@/lib/desktop/tauri"
 import {
+  assertFinancialYearCanStart,
+  assertOperationalTransactionDate,
   closeConfirmation,
+  FinancialYearDomainError,
   financialYearForDate,
+  financialYearIsCurrent,
   nextFinancialYear,
   normalizeLocalDate,
   reopenConfirmation,
@@ -73,8 +77,8 @@ function normalizeYear(row: DataRow): FinancialYear {
   }
 }
 
-async function ensureCurrentFinancialYear(organizationId: string) {
-  const current = financialYearForDate(organizationId, new Date())
+async function ensureCurrentFinancialYear(organizationId: string, currentDate: string | Date = new Date()) {
+  const current = financialYearForDate(organizationId, currentDate)
   const timestamp = new Date().toISOString()
   await service.transaction(async (tx) => {
     const [organization] = await tx.select<DataRow>("SELECT id, next_invoice_number FROM organizations WHERE id = ? LIMIT 1", [organizationId])
@@ -96,7 +100,54 @@ async function ensureCurrentFinancialYear(organizationId: string) {
   })
 }
 
-export async function listFinancialYears(organizationId: string) {
+async function rawFinancialYears(organizationId: string) {
+  const db = await service.requireConnection("read")
+  return db.select<DataRow>("SELECT * FROM financial_years WHERE organization_id = ? ORDER BY start_date DESC", [organizationId])
+}
+
+export async function reconcileOperationalFinancialYear(organizationId: string, currentDate: string | Date = new Date()) {
+  const today = normalizeLocalDate(currentDate)
+  let rows = await rawFinancialYears(organizationId)
+  if (rows.length === 0) {
+    await ensureCurrentFinancialYear(organizationId, today)
+    rows = await rawFinancialYears(organizationId)
+  }
+
+  const expected = financialYearForDate(organizationId, today)
+  const expectedRow = rows.find((row) => row.id === expected.id)
+  const activeRows = rows.filter((row) => boolInt(row.is_active))
+  const validActive = activeRows.length === 1 && activeRows[0]?.id === expected.id && String(expectedRow?.status || "") === "OPEN"
+  if (validActive) return normalizeYear(expectedRow as DataRow)
+  const canActivateExpected = Boolean(expectedRow && String(expectedRow.status || "OPEN") === "OPEN")
+  if (activeRows.length === 0 && !canActivateExpected) return null
+
+  const changedAt = nowIso()
+  const priorActive = activeRows.map((row) => String(row.label || row.id)).join(", ") || "none"
+  await service.transaction(async (tx) => {
+    await tx.execute("UPDATE financial_years SET is_active = 0 WHERE organization_id = ? AND is_active = 1", [organizationId])
+    if (canActivateExpected) {
+      await tx.execute("UPDATE financial_years SET is_active = 1 WHERE organization_id = ? AND id = ? AND status = 'OPEN'", [organizationId, expected.id])
+    }
+    await tx.execute(
+      `INSERT INTO local_audit_logs (id, organization_id, action, entity_type, entity_id, description, created_at, updated_at, sync_status)
+       VALUES (?, ?, 'financial_year.operational_pointer_reconciled', 'financial_year', ?, ?, ?, ?, 'local')`,
+      [
+        createOfflineId("fy-audit"),
+        organizationId,
+        expected.id,
+        expectedRow
+          ? `Operational financial year reconciled for local business date ${today}. Previous active: ${priorActive}; current: ${expected.label}. No transactions were deleted.`
+          : `Expired or future operational pointer cleared for local business date ${today}. ${expected.label} must be started before new transactions can be entered. Previous active: ${priorActive}.`,
+        changedAt,
+        changedAt,
+      ]
+    )
+  })
+  return canActivateExpected ? normalizeYear({ ...expectedRow, is_active: 1 }) : null
+}
+
+export async function listFinancialYears(organizationId: string, currentDate: string | Date = new Date()) {
+  await reconcileOperationalFinancialYear(organizationId, currentDate)
   let db = await service.requireConnection("read")
   let rows = await db.select<DataRow>(
     `SELECT fy.*,
@@ -107,7 +158,7 @@ export async function listFinancialYears(organizationId: string) {
     [organizationId]
   )
   if (rows.length === 0) {
-    await ensureCurrentFinancialYear(organizationId)
+    await ensureCurrentFinancialYear(organizationId, currentDate)
     db = await service.requireConnection("read")
     rows = await db.select<DataRow>(
       `SELECT fy.*,
@@ -125,7 +176,8 @@ export async function getFinancialYear(organizationId: string, financialYearIdVa
   return row ? normalizeYear(row) : null
 }
 
-export async function getActiveFinancialYear(organizationId: string) {
+export async function getActiveFinancialYear(organizationId: string, currentDate: string | Date = new Date()) {
+  await reconcileOperationalFinancialYear(organizationId, currentDate)
   const db = await service.requireConnection("read")
   const [row] = await db.select<DataRow>("SELECT * FROM financial_years WHERE organization_id = ? AND is_active = 1 LIMIT 1", [organizationId])
   return row ? normalizeYear(row) : null
@@ -141,20 +193,29 @@ export async function financialYearForTransactionDate(organizationId: string, va
   return row ? normalizeYear(row) : null
 }
 
-export async function assertFinancialYearWriteAllowed(organizationId: string, value: string, requestedFinancialYearId?: string | null) {
-  const date = normalizeLocalDate(value)
+export async function assertFinancialYearWriteAllowed(
+  organizationId: string,
+  value: string,
+  requestedFinancialYearId?: string | null,
+  currentDate: string | Date = new Date()
+) {
+  const date = assertOperationalTransactionDate(value, currentDate)
+  await reconcileOperationalFinancialYear(organizationId, currentDate)
   let year = await financialYearForTransactionDate(organizationId, date)
   if (!year) {
     const db = await service.requireConnection("read")
     const [existing] = await db.select<DataRow>("SELECT COUNT(*) AS count FROM financial_years WHERE organization_id = ?", [organizationId])
     if (numeric(existing, "count") === 0) {
-      await ensureCurrentFinancialYear(organizationId)
+      await ensureCurrentFinancialYear(organizationId, currentDate)
       year = await financialYearForTransactionDate(organizationId, date)
     }
   }
   if (!year) {
     const calculated = financialYearForDate(organizationId, date)
     throw new Error(`${calculated.label} has not been created. Create it in Settings → Financial Years before entering this transaction.`)
+  }
+  if (!financialYearIsCurrent(year, currentDate) || !boolInt(year.is_active)) {
+    throw new Error(`${year.label} is not the current operational financial year. Start the current financial year from Settings → Financial Years.`)
   }
   if (requestedFinancialYearId && requestedFinancialYearId !== year.id) {
     throw new Error(`${new Intl.DateTimeFormat("en-IN", { day: "2-digit", month: "short", year: "numeric" }).format(new Date(`${date}T12:00:00`))} belongs to ${year.label}. Switch to that financial year and try again.`)
@@ -176,7 +237,7 @@ export async function financialYearSummary(organizationId: string, financialYear
       // Older closed snapshots can be recomputed from their immutable transactions.
     }
   }
-  const [invoiceRows, masterRows, inventoryRows, batchRows] = await Promise.all([
+  const [invoiceRows, masterRows, balanceRows, inventoryRows, batchRows] = await Promise.all([
     db.select<DataRow>(
       `SELECT COUNT(*) AS invoiceCount,
         COALESCE(SUM(COALESCE(grand_total, total_amount, total, 0)), 0) AS revenue,
@@ -192,22 +253,45 @@ export async function financialYearSummary(organizationId: string, financialYear
         (SELECT COUNT(*) FROM products WHERE organization_id = ? AND deleted_at IS NULL) AS productCount,
         (SELECT COUNT(*) FROM customers WHERE organization_id = ? AND deleted_at IS NULL) AS customerCount,
         (SELECT COUNT(*) FROM suppliers WHERE organization_id = ? AND deleted_at IS NULL) AS supplierCount,
-        (SELECT COUNT(*) FROM warehouses WHERE organization_id = ? AND deleted_at IS NULL) AS warehouseCount,
-        (SELECT COALESCE(SUM(MAX(current_balance, 0)), 0) FROM customers WHERE organization_id = ? AND deleted_at IS NULL) AS outstandingReceivables,
-        (SELECT COALESCE(SUM(MAX(current_balance, 0)), 0) FROM suppliers WHERE organization_id = ? AND deleted_at IS NULL) AS supplierPayables`,
-      [organizationId, organizationId, organizationId, organizationId, organizationId, organizationId]
+        (SELECT COUNT(*) FROM warehouses WHERE organization_id = ? AND deleted_at IS NULL) AS warehouseCount`,
+      [organizationId, organizationId, organizationId, organizationId]
     ),
     db.select<DataRow>(
-      `SELECT COALESCE(SUM(stock), 0) AS closingInventoryQuantity,
-        COALESCE(SUM(stock * COALESCE(NULLIF(sale_rate, 0), NULLIF(price, 0), mrp, purchase_rate, 0)), 0) AS closingInventorySellingValue,
-        COALESCE(SUM(stock * COALESCE(purchase_rate, 0)), 0) AS closingInventoryCost
-       FROM products WHERE organization_id = ? AND deleted_at IS NULL`,
-      [organizationId]
+      `SELECT
+         MAX(0,
+           COALESCE((SELECT SUM(amount) FROM financial_year_opening_balances WHERE organization_id = ? AND financial_year_id = ? AND party_type = 'customer' AND balance_type = 'RECEIVABLE'), 0)
+           + COALESCE((SELECT SUM(COALESCE(debit, 0) - COALESCE(credit, 0)) FROM ledger_entries WHERE organization_id = ? AND financial_year_id = ? AND account_type = 'customer' AND deleted_at IS NULL), 0)
+         ) AS outstandingReceivables,
+         MAX(0,
+           COALESCE((SELECT SUM(amount) FROM financial_year_opening_balances WHERE organization_id = ? AND financial_year_id = ? AND party_type = 'supplier' AND balance_type = 'PAYABLE'), 0)
+           + COALESCE((SELECT SUM(COALESCE(credit, 0) - COALESCE(debit, 0)) FROM ledger_entries WHERE organization_id = ? AND financial_year_id = ? AND account_type = 'supplier' AND deleted_at IS NULL), 0)
+         ) AS supplierPayables`,
+      [organizationId, financialYearIdValue, organizationId, financialYearIdValue, organizationId, financialYearIdValue, organizationId, financialYearIdValue]
+    ),
+    db.select<DataRow>(
+      `WITH movements_after_period AS (
+         SELECT product_id, SUM(quantity) AS quantity
+         FROM stock_movements
+         WHERE organization_id = ? AND deleted_at IS NULL AND date(movement_date) > date(?)
+         GROUP BY product_id
+       ), stock_at_period_end AS (
+         SELECT product.*,
+           MAX(0, COALESCE(product.stock, 0) - COALESCE(movement.quantity, 0)) AS period_stock
+         FROM products product
+         LEFT JOIN movements_after_period movement ON movement.product_id = product.id
+         WHERE product.organization_id = ? AND product.deleted_at IS NULL
+       )
+       SELECT COALESCE(SUM(period_stock), 0) AS closingInventoryQuantity,
+         COALESCE(SUM(period_stock * COALESCE(NULLIF(sale_rate, 0), NULLIF(price, 0), mrp, purchase_rate, 0)), 0) AS closingInventorySellingValue,
+         COALESCE(SUM(period_stock * COALESCE(purchase_rate, 0)), 0) AS closingInventoryCost
+       FROM stock_at_period_end`,
+      [organizationId, year.end_date, organizationId]
     ),
     db.select<DataRow>("SELECT COUNT(*) AS batchCount FROM stock_batches WHERE organization_id = ? AND deleted_at IS NULL AND quantity > 0", [organizationId]),
   ])
   const invoice = invoiceRows[0]
   const master = masterRows[0]
+  const balances = balanceRows[0]
   const inventory = inventoryRows[0]
   return {
     financialYearId: financialYearIdValue,
@@ -217,8 +301,8 @@ export async function financialYearSummary(organizationId: string, financialYear
     gst: numeric(invoice, "gst"),
     paidInvoices: numeric(invoice, "paidInvoices"),
     outstandingInvoices: numeric(invoice, "outstandingInvoices"),
-    outstandingReceivables: numeric(master, "outstandingReceivables"),
-    supplierPayables: numeric(master, "supplierPayables"),
+    outstandingReceivables: numeric(balances, "outstandingReceivables"),
+    supplierPayables: numeric(balances, "supplierPayables"),
     productCount: numeric(master, "productCount"),
     customerCount: numeric(master, "customerCount"),
     supplierCount: numeric(master, "supplierCount"),
@@ -244,18 +328,74 @@ async function inventoryCarryForwardBlockers(organizationId: string) {
   return rows.map((row) => `${String(row.name || "Product")} has batch quantity ${Number(row.batch_quantity)} above physical stock ${Number(row.stock)}.`)
 }
 
-export async function createNextFinancialYear(organizationId: string, sourceFinancialYearId: string) {
+async function financialYearDatedTransactionCount(organizationId: string, financialYearIdValue: string) {
+  const db = await service.requireConnection("read")
+  const [row] = await db.select<DataRow>(
+    `SELECT SUM(entries) AS count FROM (
+       SELECT COUNT(*) AS entries FROM sales_invoices WHERE organization_id = ? AND financial_year_id = ?
+       UNION ALL SELECT COUNT(*) FROM purchase_invoices WHERE organization_id = ? AND financial_year_id = ?
+       UNION ALL SELECT COUNT(*) FROM stock_movements WHERE organization_id = ? AND financial_year_id = ?
+       UNION ALL SELECT COUNT(*) FROM expenses WHERE organization_id = ? AND financial_year_id = ?
+       UNION ALL SELECT COUNT(*) FROM payments WHERE organization_id = ? AND financial_year_id = ?
+       UNION ALL SELECT COUNT(*) FROM payment_receipts WHERE organization_id = ? AND financial_year_id = ?
+       UNION ALL SELECT COUNT(*) FROM ledger_entries WHERE organization_id = ? AND financial_year_id = ?
+       UNION ALL SELECT COUNT(*) FROM accounting_vouchers WHERE organization_id = ? AND financial_year_id = ?
+       UNION ALL SELECT COUNT(*) FROM credit_notes WHERE organization_id = ? AND financial_year_id = ?
+       UNION ALL SELECT COUNT(*) FROM debit_notes WHERE organization_id = ? AND financial_year_id = ?
+       UNION ALL SELECT COUNT(*) FROM delivery_challans WHERE organization_id = ? AND financial_year_id = ?
+       UNION ALL SELECT COUNT(*) FROM quotations WHERE organization_id = ? AND financial_year_id = ?
+       UNION ALL SELECT COUNT(*) FROM orders WHERE organization_id = ? AND financial_year_id = ?
+     )`,
+    Array.from({ length: 13 }, () => [organizationId, financialYearIdValue]).flat()
+  )
+  return numeric(row, "count")
+}
+
+async function createFinancialYearSafetyBackup(label: string) {
+  const backup = await invokeTauri<BackupResult | null>("desktop_database_backup", {
+    reason: `pre-start-${label.replace(/[^0-9A-Za-z-]/g, "-")}`,
+  })
+  if (!backup?.backupPath || !backup.checksumSha256 || backup.bytes <= 0) {
+    throw new Error("A verified local safety backup could not be created. The financial year was not started.")
+  }
+  return backup
+}
+
+export async function createNextFinancialYear(
+  organizationId: string,
+  sourceFinancialYearId: string,
+  currentDate: string | Date = new Date()
+) {
   const source = await getFinancialYear(organizationId, sourceFinancialYearId)
   if (!source) throw new Error("The source financial year was not found.")
   const next = nextFinancialYear(source)
-  if (await getFinancialYear(organizationId, next.id)) throw new Error(`${next.label} already exists.`)
+  assertFinancialYearCanStart(next, currentDate)
+  const operational = financialYearForDate(organizationId, currentDate, next.startMonth)
+  if (operational.id !== next.id) {
+    throw new FinancialYearDomainError(
+      "FINANCIAL_YEAR_NOT_OPERATIONAL",
+      `${next.label} is not the current operational financial year for ${normalizeLocalDate(currentDate)}.`
+    )
+  }
+  const existingNext = await getFinancialYear(organizationId, next.id)
+  const existingTransactions = existingNext ? await financialYearDatedTransactionCount(organizationId, next.id) : 0
+  if (existingNext && existingTransactions > 0) {
+    throw new FinancialYearDomainError(
+      "FINANCIAL_YEAR_REPAIR_REVIEW_REQUIRED",
+      `${next.label} contains ${existingTransactions} preserved transaction records from an earlier invalid activation. They require review before this year can be started.`
+    )
+  }
+  const integrity = await service.integrityReport()
+  if (!integrity.ok) throw new Error("SQLite integrity verification failed. The financial year was not started.")
   const blockers = await inventoryCarryForwardBlockers(organizationId)
   if (blockers.length) throw new Error(`Stock carry-forward cannot continue: ${blockers[0]}`)
   const summary = await financialYearSummary(organizationId, source.id)
+  const backup = await createFinancialYearSafetyBackup(next.label)
   const createdAt = nowIso()
   const snapshot = JSON.stringify({
     sourceFinancialYearId: source.id,
     createdAt,
+    safetyBackup: { path: backup.backupPath, checksumSha256: backup.checksumSha256, bytes: backup.bytes },
     stockBasis: "continuous-physical-inventory-snapshot",
     receivableBasis: "customer-current-balance",
     payableBasis: "supplier-current-balance",
@@ -263,18 +403,32 @@ export async function createNextFinancialYear(organizationId: string, sourceFina
   })
   await service.transaction(async (db) => {
     await db.execute("UPDATE financial_years SET is_active = 0 WHERE organization_id = ? AND is_active = 1", [organizationId])
-    await db.execute(
-      `INSERT INTO financial_years (
-        id, organization_id, label, start_date, end_date, start_month, status, is_active,
-        previous_financial_year_id, invoice_numbering_mode, opening_snapshot_json, created_at, schema_version
-       ) VALUES (?, ?, ?, ?, ?, ?, 'OPEN', 1, ?, ?, ?, ?, 1)`,
-      [next.id, organizationId, next.label, next.startDate, next.endDate, next.startMonth, source.id, source.invoice_numbering_mode, snapshot, createdAt]
-    )
+    if (existingNext) {
+      await db.execute(
+        `UPDATE financial_years SET label = ?, start_date = ?, end_date = ?, start_month = ?, status = 'OPEN', is_active = 1,
+           previous_financial_year_id = ?, invoice_numbering_mode = ?, opening_snapshot_json = ?, close_summary_json = NULL,
+           close_backup_path = NULL, closed_at = NULL, reopened_at = ?, reopen_reason = ?, schema_version = 2
+         WHERE organization_id = ? AND id = ?`,
+        [next.label, next.startDate, next.endDate, next.startMonth, source.id, source.invoice_numbering_mode, snapshot, createdAt, "Rebuilt at the valid financial-year start after premature legacy creation.", organizationId, next.id]
+      )
+      await db.execute("DELETE FROM financial_year_opening_balances WHERE organization_id = ? AND financial_year_id = ?", [organizationId, next.id])
+      await db.execute("DELETE FROM financial_year_inventory_openings WHERE organization_id = ? AND financial_year_id = ?", [organizationId, next.id])
+    } else {
+      await db.execute(
+        `INSERT INTO financial_years (
+          id, organization_id, label, start_date, end_date, start_month, status, is_active,
+          previous_financial_year_id, invoice_numbering_mode, opening_snapshot_json, created_at, schema_version
+         ) VALUES (?, ?, ?, ?, ?, ?, 'OPEN', 1, ?, ?, ?, ?, 2)`,
+        [next.id, organizationId, next.label, next.startDate, next.endDate, next.startMonth, source.id, source.invoice_numbering_mode, snapshot, createdAt]
+      )
+    }
     await db.execute(
       `INSERT INTO financial_year_invoice_sequences (id, organization_id, financial_year_id, prefix, next_number, updated_at)
        SELECT ?, ?, ?, CASE WHEN trim(COALESCE(invoice_prefix, '')) = '' THEN 'INV' ELSE trim(invoice_prefix) END,
          CASE WHEN ? = 'RESTART' THEN 1 ELSE MAX(1, COALESCE(next_invoice_number, 1)) END, ?
-       FROM organizations WHERE id = ?`,
+       FROM organizations WHERE id = ?
+       ON CONFLICT(organization_id, financial_year_id) DO UPDATE SET
+         prefix = excluded.prefix, next_number = excluded.next_number, updated_at = excluded.updated_at`,
       [`fy-seq:${next.id}`, organizationId, next.id, source.invoice_numbering_mode, createdAt, organizationId]
     )
     await db.execute(
@@ -324,8 +478,16 @@ export async function createNextFinancialYear(organizationId: string, sourceFina
     )
     await db.execute(
       `INSERT INTO local_audit_logs (id, organization_id, action, entity_type, entity_id, description, created_at, updated_at, sync_status)
-       VALUES (?, ?, 'financial_year.created', 'financial_year', ?, ?, ?, ?, 'local')`,
-      [createOfflineId("fy-audit"), organizationId, next.id, `${next.label} created from ${source.label}; stock and party balances recorded as opening snapshots.`, createdAt, createdAt]
+       VALUES (?, ?, ?, 'financial_year', ?, ?, ?, ?, 'local')`,
+      [
+        createOfflineId("fy-audit"),
+        organizationId,
+        existingNext ? "financial_year.legacy_start_rebuilt" : "financial_year.created",
+        next.id,
+        `${next.label} ${existingNext ? "rebuilt at its valid start" : "created"} from ${source.label}; verified backup ${backup.checksumSha256}; stock and party balances recorded as opening snapshots.`,
+        createdAt,
+        createdAt,
+      ]
     )
     // This no-op update invokes the database invariant trigger. A mismatch
     // aborts and rolls back the entire creation transaction.
@@ -337,17 +499,35 @@ export async function createNextFinancialYear(organizationId: string, sourceFina
     "SELECT COALESCE(SUM(quantity), 0) AS quantity FROM financial_year_inventory_openings WHERE organization_id = ? AND financial_year_id = ?",
     [organizationId, next.id]
   )
-  if (Math.abs(numeric(opening, "quantity") - summary.closingInventoryQuantity) > 0.0001) {
-    throw new Error("Financial-year inventory verification failed.")
+  return {
+    year: await getFinancialYear(organizationId, next.id),
+    summary,
+    openingInventoryQuantity: numeric(opening, "quantity"),
+    safetyBackup: backup,
+    integrity,
+    rebuiltPrematureRecord: Boolean(existingNext),
   }
-  return { year: await getFinancialYear(organizationId, next.id), summary, openingInventoryQuantity: numeric(opening, "quantity") }
 }
 
 export async function financialYearClosingChecks(organizationId: string, financialYearIdValue: string): Promise<FinancialYearClosingChecks> {
   const db = await service.requireConnection("read")
   const integrity = await service.integrityReport()
-  const [negative, invalidAssignments, invalidInvoiceCalculations, duplicateOpenings, duplicateInventoryOpenings, overlappingYears, activeRows, unpaid] = await Promise.all([
+  const [
+    negative,
+    negativeBatches,
+    invalidAssignments,
+    invalidInvoiceCalculations,
+    duplicateInvoiceNumbers,
+    orphanInvoiceItems,
+    brokenDocumentPayments,
+    duplicateOpenings,
+    duplicateInventoryOpenings,
+    overlappingYears,
+    activeRows,
+    unpaid,
+  ] = await Promise.all([
     db.select<DataRow>("SELECT id FROM products WHERE organization_id = ? AND deleted_at IS NULL AND stock < 0 LIMIT 20", [organizationId]),
+    db.select<DataRow>("SELECT id FROM stock_batches WHERE organization_id = ? AND deleted_at IS NULL AND quantity < 0 LIMIT 20", [organizationId]),
     db.select<DataRow>(
       `SELECT id FROM (
          SELECT invoice.id FROM sales_invoices invoice LEFT JOIN financial_years fy ON fy.id = invoice.financial_year_id AND fy.organization_id = invoice.organization_id
@@ -368,10 +548,51 @@ export async function financialYearClosingChecks(organizationId: string, financi
       [organizationId, organizationId, organizationId, organizationId, organizationId]
     ),
     db.select<DataRow>(
-      `SELECT id FROM sales_invoices WHERE organization_id = ? AND financial_year_id = ? AND deleted_at IS NULL
-       AND (grand_total < 0 OR paid_amount < 0 OR outstanding_amount < 0 OR paid_amount - grand_total > 0.01
-         OR ((paid_amount > 0 OR outstanding_amount > 0) AND ABS(outstanding_amount - MAX(0, grand_total - paid_amount)) > 0.01)) LIMIT 20`,
-      [organizationId, financialYearIdValue]
+      `SELECT id FROM (
+         SELECT id FROM sales_invoices WHERE organization_id = ? AND financial_year_id = ? AND deleted_at IS NULL
+           AND (COALESCE(grand_total, total_amount, total, 0) < 0 OR paid_amount < 0 OR outstanding_amount < 0
+             OR paid_amount - COALESCE(grand_total, total_amount, total, 0) > 0.01
+             OR ABS(outstanding_amount - MAX(0, COALESCE(grand_total, total_amount, total, 0) - paid_amount)) > 0.01
+             OR (lower(COALESCE(payment_status, '')) IN ('paid', 'partial', 'unpaid', 'pending', 'overdue', '')
+               AND lower(COALESCE(status, '')) IN ('paid', 'partial', 'unpaid', 'pending', 'overdue', '')
+               AND (lower(COALESCE(payment_status, '')) <> CASE
+                 WHEN COALESCE(grand_total, total_amount, total, 0) <= 0.01 OR paid_amount >= COALESCE(grand_total, total_amount, total, 0) - 0.01 THEN 'paid'
+                 WHEN paid_amount > 0.01 THEN 'partial' ELSE 'unpaid' END
+               OR lower(COALESCE(status, '')) <> CASE
+                 WHEN COALESCE(grand_total, total_amount, total, 0) <= 0.01 OR paid_amount >= COALESCE(grand_total, total_amount, total, 0) - 0.01 THEN 'paid'
+                 WHEN paid_amount > 0.01 THEN 'partial' ELSE 'unpaid' END)))
+         UNION ALL
+         SELECT id FROM purchase_invoices WHERE organization_id = ? AND financial_year_id = ? AND deleted_at IS NULL
+           AND (grand_total < 0 OR paid_amount < 0 OR outstanding_amount < 0 OR paid_amount - grand_total > 0.01
+             OR ABS(outstanding_amount - MAX(0, grand_total - paid_amount)) > 0.01
+             OR (lower(COALESCE(status, '')) IN ('paid', 'partial', 'unpaid', 'pending', 'overdue', '')
+               AND lower(COALESCE(status, '')) <> CASE
+                 WHEN grand_total <= 0.01 OR paid_amount >= grand_total - 0.01 THEN 'paid'
+                 WHEN paid_amount > 0.01 THEN 'partial' ELSE 'unpaid' END))
+       ) LIMIT 20`,
+      [organizationId, financialYearIdValue, organizationId, financialYearIdValue]
+    ),
+    db.select<DataRow>(
+      `SELECT invoice_number, COUNT(*) AS count FROM sales_invoices
+       WHERE organization_id = ? AND deleted_at IS NULL
+       GROUP BY lower(invoice_number) HAVING COUNT(*) > 1 LIMIT 20`,
+      [organizationId]
+    ),
+    db.select<DataRow>(
+      `SELECT item.id FROM sales_invoice_items item
+       LEFT JOIN sales_invoices invoice ON invoice.id = item.invoice_id AND invoice.organization_id = item.organization_id
+       WHERE item.organization_id = ? AND item.deleted_at IS NULL AND invoice.id IS NULL LIMIT 20`,
+      [organizationId]
+    ),
+    db.select<DataRow>(
+      `SELECT payment.id FROM payments payment
+       WHERE payment.organization_id = ? AND payment.deleted_at IS NULL AND payment.document_id IS NOT NULL
+         AND (
+           (payment.document_type = 'sales_invoice' AND NOT EXISTS (SELECT 1 FROM sales_invoices invoice WHERE invoice.organization_id = payment.organization_id AND invoice.id = payment.document_id))
+           OR (payment.document_type = 'purchase_invoice' AND NOT EXISTS (SELECT 1 FROM purchase_invoices purchase WHERE purchase.organization_id = payment.organization_id AND purchase.id = payment.document_id))
+           OR (payment.document_type = 'expense' AND NOT EXISTS (SELECT 1 FROM expenses expense WHERE expense.organization_id = payment.organization_id AND expense.id = payment.document_id))
+         ) LIMIT 20`,
+      [organizationId]
     ),
     db.select<DataRow>(
       `SELECT party_type, party_id, COUNT(*) AS count FROM financial_year_opening_balances
@@ -396,8 +617,12 @@ export async function financialYearClosingChecks(organizationId: string, financi
   const blockers: string[] = []
   if (!integrity.ok) blockers.push("SQLite quick check or foreign-key integrity failed.")
   if (negative.length) blockers.push(`${negative.length} product records have invalid negative stock.`)
+  if (negativeBatches.length) blockers.push(`${negativeBatches.length} batch records have invalid negative stock.`)
   if (invalidAssignments.length) blockers.push(`${invalidAssignments.length} dated transactions have missing or incorrect financial-year assignments.`)
-  if (invalidInvoiceCalculations.length) blockers.push(`${invalidInvoiceCalculations.length} invoices have unresolved total or outstanding calculations.`)
+  if (invalidInvoiceCalculations.length) blockers.push(`${invalidInvoiceCalculations.length} sales or purchase invoices have unresolved totals, outstanding amounts, or payment labels.`)
+  if (duplicateInvoiceNumbers.length) blockers.push("Duplicate invoice numbers were detected.")
+  if (orphanInvoiceItems.length) blockers.push(`${orphanInvoiceItems.length} orphan invoice items were detected.`)
+  if (brokenDocumentPayments.length) blockers.push(`${brokenDocumentPayments.length} payments refer to missing business documents.`)
   if (duplicateOpenings.length) blockers.push("Duplicate financial-year opening balances were detected.")
   if (duplicateInventoryOpenings.length) blockers.push("Duplicate financial-year inventory openings were detected.")
   if (overlappingYears.length) blockers.push("Overlapping financial-year date ranges were detected.")
@@ -406,10 +631,21 @@ export async function financialYearClosingChecks(organizationId: string, financi
   return { integrity, blockers, warnings }
 }
 
-export async function closeFinancialYear(organizationId: string, financialYearIdValue: string, confirmation: string) {
+export async function closeFinancialYear(
+  organizationId: string,
+  financialYearIdValue: string,
+  confirmation: string,
+  currentDate: string | Date = new Date()
+) {
   const year = await getFinancialYear(organizationId, financialYearIdValue)
   if (!year) throw new Error("Financial year was not found.")
   if (year.status !== "OPEN") throw new Error(`${year.label} is already closed.`)
+  if (year.end_date >= normalizeLocalDate(currentDate)) {
+    throw new FinancialYearDomainError(
+      "FINANCIAL_YEAR_NOT_ENDED",
+      `${year.label} can be closed only after ${year.end_date}. Closing the current operational period early is not allowed.`
+    )
+  }
   if (confirmation.trim().toUpperCase() !== closeConfirmation(year)) throw new Error(`Type ${closeConfirmation(year)} to confirm.`)
   const checks = await financialYearClosingChecks(organizationId, financialYearIdValue)
   if (checks.blockers.length) throw new Error(`Financial year cannot be closed: ${checks.blockers[0]}`)
@@ -432,9 +668,16 @@ export async function closeFinancialYear(organizationId: string, financialYearId
   return { year: await getFinancialYear(organizationId, financialYearIdValue), summary, checks, backup }
 }
 
-export async function reopenFinancialYear(organizationId: string, financialYearIdValue: string, confirmation: string, reason: string) {
+export async function reopenFinancialYear(
+  organizationId: string,
+  financialYearIdValue: string,
+  confirmation: string,
+  reason: string,
+  currentDate: string | Date = new Date()
+) {
   const year = await getFinancialYear(organizationId, financialYearIdValue)
   if (!year) throw new Error("Financial year was not found.")
+  assertFinancialYearCanStart(year, currentDate)
   if (year.status !== "CLOSED") throw new Error(`${year.label} is not closed.`)
   if (confirmation.trim().toUpperCase() !== reopenConfirmation(year)) throw new Error(`Type ${reopenConfirmation(year)} to confirm.`)
   if (reason.trim().length < 10) throw new Error("Enter a clear reason of at least 10 characters for reopening.")
@@ -453,10 +696,16 @@ export async function reopenFinancialYear(organizationId: string, financialYearI
   return { year: await getFinancialYear(organizationId, financialYearIdValue) }
 }
 
-export async function setFinancialYearNumberingMode(organizationId: string, financialYearIdValue: string, mode: InvoiceNumberingMode) {
+export async function setFinancialYearNumberingMode(
+  organizationId: string,
+  financialYearIdValue: string,
+  mode: InvoiceNumberingMode,
+  currentDate: string | Date = new Date()
+) {
   if (!(["CONTINUE", "RESTART"] as const).includes(mode)) throw new Error("Invalid invoice numbering mode.")
   const year = await getFinancialYear(organizationId, financialYearIdValue)
   if (!year) throw new Error("Financial year was not found.")
+  assertFinancialYearCanStart(year, currentDate)
   if (year.status !== "OPEN") throw new Error(`${year.label} is closed. Reopen it before changing its numbering configuration.`)
   const db = await service.requireConnection("read")
   const [invoice] = await db.select<DataRow>("SELECT COUNT(*) AS count FROM sales_invoices WHERE organization_id = ? AND financial_year_id = ? AND deleted_at IS NULL", [organizationId, financialYearIdValue])

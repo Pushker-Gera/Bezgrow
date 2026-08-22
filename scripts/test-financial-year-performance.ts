@@ -9,7 +9,7 @@ const organizationId = "financial-year-scale-business"
 const directory = mkdtempSync(path.join(tmpdir(), "bezgrow-financial-year-scale-"))
 const databasePath = path.join(directory, "financial-year-scale.db")
 const outputPath = process.env.BEZGROW_FY_PERFORMANCE_RESULTS || path.join(tmpdir(), "bezgrow-financial-year-performance.json")
-const dataset = { products: 2_000, customers: 5_000, invoices: 20_000, invoiceItems: 20_000, stockMovements: 20_000, payments: 20_000, batches: 1_000, financialYears: 3 }
+const dataset = { products: 2_000, customers: 5_000, invoices: 20_000, invoiceItems: 40_000, stockMovements: 24_000, payments: 16_666, batches: 4_000, warehouses: 8, financialYears: 3 }
 
 type Measurement = { p50Ms: number; p95Ms: number; worstMs: number; iterations: number }
 
@@ -63,14 +63,21 @@ try {
       .run(`sequence-${startYear}`, organizationId, `fy:${organizationId}:${startYear}:4`)
   }
 
-  const insertProduct = database.prepare("INSERT INTO products(id, organization_id, name, sku, barcode, category, warehouse, stock, min_stock, purchase_rate, sale_rate, mrp, expiry_date) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 5, ?, ?, ?, ?)")
-  const insertBatch = database.prepare("INSERT INTO stock_batches(id, organization_id, product_id, batch_no, expiry_date, quantity, purchase_rate, mrp) VALUES (?, ?, ?, ?, ?, ?, ?, ?)")
+  for (let index = 0; index < dataset.warehouses; index += 1) {
+    database.prepare("INSERT INTO warehouses(id, organization_id, name) VALUES (?, ?, ?)").run(`warehouse-${index}`, organizationId, `Warehouse ${index}`)
+  }
+
+  const insertProduct = database.prepare("INSERT INTO products(id, organization_id, name, sku, barcode, category, warehouse_id, warehouse, stock, min_stock, purchase_rate, sale_rate, mrp, expiry_date) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 5, ?, ?, ?, ?)")
+  const insertBatch = database.prepare("INSERT INTO stock_batches(id, organization_id, product_id, warehouse_id, batch_no, expiry_date, purchase_date, quantity, purchase_rate, mrp) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
   database.exec("BEGIN IMMEDIATE")
   for (let index = 0; index < dataset.products; index += 1) {
     const stock = 100 + (index % 500)
     const cost = 10 + (index % 90)
-    insertProduct.run(`product-${index}`, organizationId, `Product ${String(index).padStart(5, "0")}`, `SKU-${index}`, `890${String(index).padStart(10, "0")}`, `Category ${index % 40}`, `Warehouse ${index % 8}`, stock, cost, cost * 1.3, cost * 1.5, `202${7 + (index % 3)}-${String((index % 12) + 1).padStart(2, "0")}-28`)
-    if (index % 2 === 0) insertBatch.run(`batch-${index}`, organizationId, `product-${index}`, `B-${index}`, `202${7 + (index % 3)}-12-28`, Math.floor(stock / 2), cost, cost * 1.5)
+    const warehouseId = `warehouse-${index % dataset.warehouses}`
+    insertProduct.run(`product-${index}`, organizationId, `Product ${String(index).padStart(5, "0")}`, `SKU-${index}`, `890${String(index).padStart(10, "0")}`, `Category ${index % 40}`, warehouseId, `Warehouse ${index % dataset.warehouses}`, stock, cost, cost * 1.3, cost * 1.5, `202${7 + (index % 3)}-${String((index % 12) + 1).padStart(2, "0")}-28`)
+    for (let lot = 0; lot < 2; lot += 1) {
+      insertBatch.run(`batch-${index}-${lot}`, organizationId, `product-${index}`, `warehouse-${(index + lot) % dataset.warehouses}`, `B-${index}-${lot}`, `202${7 + (index % 3)}-12-28`, `2026-0${lot + 1}-15`, Math.floor(stock / 4), cost, cost * 1.5)
+    }
   }
   database.exec("COMMIT")
 
@@ -85,7 +92,13 @@ try {
   const insertItem = database.prepare("INSERT INTO sales_invoice_items(id, organization_id, invoice_id, product_id, product_name, quantity, unit_price, tax_percent, line_total, gst_amount) VALUES (?, ?, ?, ?, ?, 1, 100, 18, 100, 18)")
   const insertMovement = database.prepare("INSERT INTO stock_movements(id, organization_id, product_id, type, quantity, movement_date, financial_year_id) VALUES (?, ?, ?, 'sale', -1, ?, ?)")
   const insertPayment = database.prepare("INSERT INTO payments(id, organization_id, party_type, party_id, document_type, document_id, amount, direction, payment_date, financial_year_id) VALUES (?, ?, 'customer', ?, 'sales_invoice', ?, ?, 'in', ?, ?)")
+  const insertReceipt = database.prepare("INSERT INTO payment_receipts(id, organization_id, customer_id, invoice_id, receipt_number, amount, received_at, financial_year_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)")
+  const insertReceiptMovement = database.prepare("INSERT INTO stock_movements(id, organization_id, product_id, warehouse_id, batch_id, type, quantity, movement_date, financial_year_id) VALUES (?, ?, ?, ?, ?, 'stock_in', 25, '2026-04-01', ?)")
   database.exec("BEGIN IMMEDIATE")
+  for (let index = 0; index < 4_000; index += 1) {
+    const productIndex = index % dataset.products
+    insertReceiptMovement.run(`receipt-movement-${index}`, organizationId, `product-${productIndex}`, `warehouse-${productIndex % dataset.warehouses}`, `batch-${productIndex}-${index % 2}`, `fy:${organizationId}:2026:4`)
+  }
   for (let index = 0; index < dataset.invoices; index += 1) {
     const date = dateForInvoice(index)
     const startYear = Number(date.slice(0, 4)) - (Number(date.slice(5, 7)) < 4 ? 1 : 0)
@@ -93,11 +106,16 @@ try {
     const invoiceId = `invoice-${index}`
     const customerId = `customer-${index % dataset.customers}`
     const productId = `product-${index % dataset.products}`
-    const paid = index % 5 === 0 ? 0 : 118
-    insertInvoice.run(invoiceId, organizationId, customerId, `DB-${String(index).padStart(7, "0")}`, `INV-${String(index).padStart(7, "0")}`, date, yearId, paid, 118 - paid, paid ? "paid" : "unpaid")
-    insertItem.run(`item-${index}`, organizationId, invoiceId, productId, `Product ${String(index % dataset.products).padStart(5, "0")}`)
+    const paid = index % 6 === 0 ? 0 : index % 6 === 1 ? 50 : 118
+    const paymentStatus = paid === 0 ? "unpaid" : paid < 118 ? "partial" : "paid"
+    insertInvoice.run(invoiceId, organizationId, customerId, `DB-${String(index).padStart(7, "0")}`, `INV-${String(index).padStart(7, "0")}`, date, yearId, paid, 118 - paid, paymentStatus)
+    insertItem.run(`item-${index}-0`, organizationId, invoiceId, productId, `Product ${String(index % dataset.products).padStart(5, "0")}`)
+    insertItem.run(`item-${index}-1`, organizationId, invoiceId, `product-${(index + 1) % dataset.products}`, `Product ${String((index + 1) % dataset.products).padStart(5, "0")}`)
     insertMovement.run(`movement-${index}`, organizationId, productId, date, yearId)
-    insertPayment.run(`payment-${index}`, organizationId, customerId, invoiceId, paid, date, yearId)
+    if (paid > 0) {
+      insertPayment.run(`payment-${index}`, organizationId, customerId, invoiceId, paid, date, yearId)
+      insertReceipt.run(`receipt-${index}`, organizationId, customerId, invoiceId, `RCPT-${String(index).padStart(7, "0")}`, paid, `${date}T12:00:00`, yearId)
+    }
   }
   database.exec("COMMIT")
 
@@ -112,12 +130,14 @@ try {
     dashboard: measure(15, () => database.prepare("SELECT COUNT(*) invoice_count, SUM(grand_total) revenue, SUM(tax_amount) gst, SUM(outstanding_amount) outstanding FROM sales_invoices WHERE organization_id=? AND financial_year_id=? AND deleted_at IS NULL").get(organizationId, yearId)),
     invoiceHistory: measure(15, () => database.prepare("SELECT id, display_invoice_number, invoice_date, grand_total FROM sales_invoices WHERE organization_id=? AND financial_year_id=? AND deleted_at IS NULL ORDER BY invoice_date DESC, id DESC LIMIT 50").all(organizationId, yearId)),
     invoiceSearch: measure(15, () => database.prepare("SELECT id, display_invoice_number FROM sales_invoices WHERE organization_id=? AND financial_year_id=? AND (invoice_number LIKE ? OR display_invoice_number LIKE ?) LIMIT 50").all(organizationId, yearId, "DB-0001%", "INV-0001%")),
+    productSearch: measure(15, () => database.prepare("SELECT id, name, stock FROM products WHERE organization_id=? AND deleted_at IS NULL AND (name LIKE ? OR sku LIKE ? OR barcode LIKE ?) ORDER BY name LIMIT 50").all(organizationId, "Product 01%", "Product 01%", "Product 01%")),
     customerSearch: measure(15, () => database.prepare("SELECT id, name, current_balance FROM customers WHERE organization_id=? AND deleted_at IS NULL AND name LIKE ? COLLATE NOCASE ORDER BY name LIMIT 50").all(organizationId, "Customer 01%")),
     financialYearSwitch: measure(15, () => database.prepare("SELECT financial_year_id, COUNT(*) invoice_count, SUM(grand_total) revenue FROM sales_invoices WHERE organization_id=? AND financial_year_id IN (?, ?, ?) GROUP BY financial_year_id").all(organizationId, `fy:${organizationId}:2024:4`, `fy:${organizationId}:2025:4`, yearId)),
     salesReport: measure(15, () => database.prepare("SELECT invoice_date, SUM(grand_total) revenue FROM sales_invoices WHERE organization_id=? AND financial_year_id=? GROUP BY invoice_date ORDER BY invoice_date").all(organizationId, yearId)),
     customerLedger: measure(15, () => database.prepare("SELECT payment_date, amount FROM payments WHERE organization_id=? AND financial_year_id=? AND party_id=? ORDER BY payment_date, id").all(organizationId, yearId, "customer-42")),
     gstReport: measure(15, () => database.prepare("SELECT SUM(taxable_amount) taxable, SUM(tax_amount) gst FROM sales_invoices WHERE organization_id=? AND financial_year_id=? AND invoice_type <> 'proforma'").get(organizationId, yearId)),
     inventoryCalculation: measure(15, () => database.prepare("SELECT SUM(stock) quantity, SUM(stock * purchase_rate) cost, SUM(stock * sale_rate) selling_value FROM products WHERE organization_id=? AND deleted_at IS NULL").get(organizationId)),
+    batchAvailability: measure(15, () => database.prepare("SELECT product_id, batch_no, warehouse_id, SUM(quantity) available FROM stock_batches WHERE organization_id=? AND product_id=? AND deleted_at IS NULL AND quantity > 0 GROUP BY product_id, batch_no, warehouse_id ORDER BY MIN(purchase_date), MIN(created_at)").all(organizationId, "product-42")),
     stockHistory: measure(15, () => database.prepare("SELECT id, product_id, quantity, movement_date FROM stock_movements WHERE organization_id=? AND financial_year_id=? ORDER BY movement_date DESC, id DESC LIMIT 100").all(organizationId, yearId)),
     yearEndSummary: measure(15, () => database.prepare("SELECT COUNT(*) invoices, SUM(grand_total) revenue, SUM(tax_amount) gst, SUM(outstanding_amount) receivables FROM sales_invoices WHERE organization_id=? AND financial_year_id=?").get(organizationId, yearId)),
   }
@@ -145,12 +165,20 @@ try {
   assert.equal(openingQuantity, physicalQuantity)
   assert.equal(database.prepare("PRAGMA quick_check").get()?.quick_check, "ok")
   assert.equal(database.prepare("PRAGMA foreign_key_check").all().length, 0)
+  assert.equal(database.prepare("SELECT COUNT(*) AS count FROM sales_invoice_items").get()?.count, dataset.invoiceItems)
+  assert.equal(database.prepare("SELECT COUNT(*) AS count FROM stock_batches").get()?.count, dataset.batches)
+  assert.equal(database.prepare("SELECT COUNT(*) AS count FROM payments").get()?.count, dataset.payments)
+  const queryPlans = {
+    invoiceHistory: database.prepare("EXPLAIN QUERY PLAN SELECT id FROM sales_invoices WHERE organization_id=? AND financial_year_id=? AND deleted_at IS NULL ORDER BY invoice_date DESC, id DESC LIMIT 50").all(organizationId, yearId),
+    batchAvailability: database.prepare("EXPLAIN QUERY PLAN SELECT batch_no, SUM(quantity) FROM stock_batches WHERE organization_id=? AND product_id=? AND deleted_at IS NULL GROUP BY batch_no").all(organizationId, "product-42"),
+    customerSearch: database.prepare("EXPLAIN QUERY PLAN SELECT id FROM customers WHERE organization_id=? AND deleted_at IS NULL AND name LIKE ? ORDER BY name LIMIT 50").all(organizationId, "Customer 01%"),
+  }
   for (const [name, result] of Object.entries(measurements)) {
     if (typeof result === "number") continue
     assert.ok(result.worstMs < 2_000, `${name} exceeded the 2-second local performance guard (${result.worstMs} ms).`)
   }
 
-  const output = { dataset, measurements, openingInventoryQuantity: openingQuantity, physicalInventoryQuantity: physicalQuantity, quickCheck: "ok", foreignKeyViolations: 0, databasePathRetained: false }
+  const output = { dataset, measurements, queryPlans, openingInventoryQuantity: openingQuantity, physicalInventoryQuantity: physicalQuantity, quickCheck: "ok", foreignKeyViolations: 0, databasePathRetained: false }
   writeFileSync(outputPath, `${JSON.stringify(output, null, 2)}\n`)
   console.log(JSON.stringify({ ...output, resultsFile: outputPath }, null, 2))
 } finally {

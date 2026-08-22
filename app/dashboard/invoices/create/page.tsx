@@ -169,7 +169,8 @@ function FieldLabel({ label, children }: { label: string; children: ReactNode })
 
 export default function CreateInvoicePage() {
   const router = useRouter()
-  const { selectedYear } = useFinancialYears()
+  const { selectedYear, activeYear } = useFinancialYears()
+  const historicalReadOnly = Boolean(selectedYear && selectedYear.id !== activeYear?.id)
   const [features, setFeatures] = useState<string[]>([])
   const [customers, setCustomers] = useState<Customer[]>([])
   const [products, setProducts] = useState<Product[]>([])
@@ -697,8 +698,8 @@ export default function CreateInvoicePage() {
 
   async function saveInvoice(printAfterSave = false) {
     if (loading) return
-    if (selectedYear?.status === "CLOSED") {
-      setNotice({ title: "Closed Financial Year", message: `${selectedYear.label} is read-only. Reopen it from Settings → Financial Years before entering a correction.`, type: "warning" })
+    if (!selectedYear || !activeYear || historicalReadOnly || selectedYear.status !== "OPEN") {
+      setNotice({ title: "Historical Financial Year", message: `${selectedYear?.label || "This financial year"} is a read-only accounting view. Switch to the current active year before creating a bill.`, type: "warning" })
       return
     }
     if (!selectedCustomer || items.length === 0) {
@@ -882,7 +883,7 @@ export default function CreateInvoicePage() {
         className="relative z-10 mx-auto max-w-[1800px] space-y-5 px-4 py-4 sm:space-y-8 sm:px-5 sm:py-6 lg:px-8"
         data-enter-navigation="true"
       >
-        {selectedYear?.status === "CLOSED" && <div className="rounded-2xl border border-amber-300/20 bg-amber-400/10 px-5 py-4 text-sm font-bold text-amber-100">{selectedYear.label} is closed and available for viewing only. Invoice creation is disabled.</div>}
+        {(historicalReadOnly || selectedYear?.status !== "OPEN") && <div className="rounded-2xl border border-amber-300/20 bg-amber-400/10 px-5 py-4 text-sm font-bold text-amber-100">{selectedYear?.label || "This financial year"} is a historical accounting view. Invoice creation is disabled; switch to {activeYear?.label || "the current active year"} to post a new bill.</div>}
         <section className="inventory-sheen rounded-lg border border-white/10 bg-white/[0.035] p-5 shadow-[0_0_90px_rgba(0,0,0,0.5)] backdrop-blur-2xl sm:rounded-[40px] sm:p-8 lg:p-10">
           <div className="flex flex-col gap-8 xl:flex-row xl:items-end xl:justify-between">
             <div>
@@ -1236,10 +1237,10 @@ export default function CreateInvoicePage() {
                 </div>
               </div>
               <div className="mt-7 grid grid-cols-1 gap-3 sm:grid-cols-2">
-                <button data-enter-primary onClick={() => void saveInvoice(false)} disabled={loading || selectedYear?.status === "CLOSED"} className="h-14 rounded-lg bg-white text-base font-black text-black disabled:opacity-50 sm:h-16 sm:rounded-2xl sm:text-lg">
+                <button data-enter-primary onClick={() => void saveInvoice(false)} disabled={loading || !selectedYear || !activeYear || historicalReadOnly || selectedYear.status !== "OPEN"} className="h-14 rounded-lg bg-white text-base font-black text-black disabled:opacity-50 sm:h-16 sm:rounded-2xl sm:text-lg">
                   {loading ? "Saving..." : "Save Bill"}
                 </button>
-                <button onClick={() => void saveInvoice(true)} disabled={loading || selectedYear?.status === "CLOSED"} className="h-14 rounded-lg bg-gradient-to-r from-cyan-400 to-blue-600 text-base font-black text-black shadow-[0_20px_70px_rgba(34,211,238,0.28)] disabled:opacity-50 sm:h-16 sm:rounded-2xl sm:text-lg">
+                <button onClick={() => void saveInvoice(true)} disabled={loading || !selectedYear || !activeYear || historicalReadOnly || selectedYear.status !== "OPEN"} className="h-14 rounded-lg bg-gradient-to-r from-cyan-400 to-blue-600 text-base font-black text-black shadow-[0_20px_70px_rgba(34,211,238,0.28)] disabled:opacity-50 sm:h-16 sm:rounded-2xl sm:text-lg">
                   {loading ? "Saving..." : "Save & Print"}
                 </button>
               </div>

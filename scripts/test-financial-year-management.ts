@@ -4,7 +4,10 @@ import { tmpdir } from "node:os"
 import path from "node:path"
 import { DatabaseSync } from "node:sqlite"
 import {
+  assertFinancialYearCanStart,
+  assertOperationalTransactionDate,
   dateBelongsToFinancialYear,
+  FinancialYearDomainError,
   financialYearForDate,
   financialYearIdForDate,
   financialYearRange,
@@ -12,12 +15,14 @@ import {
   nextFinancialYear,
   normalizeLocalDate,
 } from "../lib/financial-years"
+import { allocateAuthoritativeStock, InsufficientStockError } from "../lib/inventory-availability"
 import { LOCAL_DB_VERSION, localMigrations } from "../lib/offline/local/schema"
 
 const directory = mkdtempSync(path.join(tmpdir(), "bezgrow-financial-years-"))
 const databasePath = path.join(directory, "legacy-upgrade.db")
 const backupPath = path.join(directory, "multi-year-backup.db")
 const corruptPath = path.join(directory, "corrupt.db")
+const repairPath = path.join(directory, "legacy-fy-repair.db")
 let database = new DatabaseSync(databasePath)
 
 function applyMigrations(db: DatabaseSync, maximumVersion = LOCAL_DB_VERSION) {
@@ -55,9 +60,38 @@ try {
   assert.deepEqual(financialYearRange(2025), { startDate: "2025-04-01", endDate: "2026-03-31" })
   assert.deepEqual(financialYearRange(2023, 3), { startDate: "2023-03-01", endDate: "2024-02-29" })
   assert.equal(financialYearIdForDate("org-a", "2027-03-15"), "fy:org-a:2026:4")
+  assert.equal(financialYearForDate("org-a", "2026-08-22").label, "FY 2026–27")
+  assert.equal(financialYearForDate("org-a", "2027-03-31").label, "FY 2026–27")
   assert.equal(financialYearForDate("org-a", "2027-04-01").label, "FY 2027–28")
   assert.equal(dateBelongsToFinancialYear("2026-03-31", { start_date: "2025-04-01", end_date: "2026-03-31" }), true)
   expectSqlFailure(() => normalizeLocalDate("2025-02-29"), /valid transaction date/i)
+  assert.equal(financialYearForDate("org-a", new Date("2027-03-31T18:29:59.999Z")).label, "FY 2026–27")
+  assert.equal(financialYearForDate("org-a", new Date("2027-03-31T18:30:00.000Z")).label, "FY 2027–28")
+  assert.equal(financialYearForDate("org-a", new Date("2026-03-31T18:30:00.000Z")).label, "FY 2026–27")
+  const prematureYear = nextFinancialYear({ organization_id: "org-a", start_date: "2026-04-01", start_month: 4 })
+  assert.throws(
+    () => assertFinancialYearCanStart(prematureYear, "2026-08-22"),
+    (error: unknown) => error instanceof FinancialYearDomainError && error.code === "NEXT_FINANCIAL_YEAR_NOT_STARTED" && /1 April 2027/.test(error.message),
+  )
+  assert.doesNotThrow(() => assertFinancialYearCanStart(prematureYear, "2027-04-01"))
+  assert.throws(
+    () => assertOperationalTransactionDate("2027-04-02", "2026-08-22"),
+    (error: unknown) => error instanceof FinancialYearDomainError && error.code === "FUTURE_FINANCIAL_YEAR_POSTING_NOT_ALLOWED",
+  )
+  assert.throws(
+    () => assertOperationalTransactionDate("2025-08-22", "2026-08-22"),
+    (error: unknown) => error instanceof FinancialYearDomainError && error.code === "HISTORICAL_FINANCIAL_YEAR_READ_ONLY",
+  )
+
+  const legacyBatchProduct = { id: "product-1234", stock: 997, batch_no: "1234", warehouse_id: "warehouse-main", warehouse: "Main Warehouse" }
+  const allocation = allocateAuthoritativeStock([legacyBatchProduct], [], [{ product_id: "product-1234", batch_no: "1234", quantity: 3 }], "2026-08-22T12:00:00.000Z")
+  assert.equal(allocation.allocations.reduce((sum, row) => sum + row.quantity, 0), 3)
+  assert.equal(allocation.allocations[0]?.batchNo, "1234")
+  assert.equal(allocation.allocations[0]?.batchId, null)
+  assert.throws(
+    () => allocateAuthoritativeStock([legacyBatchProduct], [], [{ product_id: "product-1234", batch_no: "1234", quantity: 998 }], "2026-08-22T12:00:00.000Z"),
+    (error: unknown) => error instanceof InsufficientStockError && error.available === 997 && /Only 997 units are available in Batch 1234 at Main Warehouse/.test(error.message),
+  )
 
   // Build a real v14 installation first, then populate representative business data.
   applyMigrations(database, 14)
@@ -81,7 +115,7 @@ try {
   database.prepare("INSERT INTO gst_invoice_summary(id, organization_id, invoice_id, gst_rate, taxable_amount, cgst_amount, sgst_amount) VALUES ('gst-mar', 'legacy-business', 'invoice-mar', 18, 100, 9, 9)").run()
   database.prepare("INSERT INTO gst_hsn_summary(id, organization_id, period_key, hsn_code, quantity, taxable_amount, tax_amount) VALUES ('hsn-old', 'legacy-business', '2024-05', '3004', 1, 100, 18)").run()
 
-  // Upgrade to v15 exactly as an application update does.
+  // Upgrade through the current schema exactly as an application update does.
   applyMigrations(database)
   assert.equal(database.prepare("PRAGMA user_version").get()?.user_version, LOCAL_DB_VERSION)
   assert.equal(database.prepare("SELECT financial_year_id FROM sales_invoices WHERE id='invoice-mar'").get()?.financial_year_id, "fy:legacy-business:2024:4")
@@ -193,6 +227,58 @@ try {
     corruptDatabase.close()
   }
 
+  // Upgrade repair: an impossible future ACTIVE row is demoted, the current
+  // FY is restored, date-provable assignments are corrected, and genuinely
+  // future-dated rows remain preserved for review.
+  const repairDatabase = new DatabaseSync(repairPath)
+  try {
+    applyMigrations(repairDatabase, 14)
+    repairDatabase.prepare("INSERT INTO organizations(id, name, invoice_prefix, next_invoice_number) VALUES ('repair-org', 'Repair Org', 'INV', 2), ('preserve-org', 'Preserve Org', 'INV', 1)").run()
+    repairDatabase.prepare("INSERT INTO customers(id, organization_id, name) VALUES ('repair-customer', 'repair-org', 'Repair Customer')").run()
+    repairDatabase.prepare("INSERT INTO products(id, organization_id, name, stock, batch_no) VALUES ('repair-product', 'repair-org', 'Batch Product', 997, '1234'), ('preserve-product', 'preserve-org', 'Future Product', 5, 'FUTURE')").run()
+    repairDatabase.prepare("INSERT INTO sales_invoices(id, organization_id, customer_id, invoice_number, invoice_date, grand_total, total_amount, total, outstanding_amount) VALUES ('repair-invoice', 'repair-org', 'repair-customer', 'INV-00001', '2026-08-18', 100, 100, 100, 100)").run()
+    applyMigrations(repairDatabase, 15)
+    const repairCurrent = "fy:repair-org:2026:4"
+    const repairFuture = "fy:repair-org:2027:4"
+    const preserveCurrent = "fy:preserve-org:2026:4"
+    const preserveFuture = "fy:preserve-org:2027:4"
+    repairDatabase.prepare("UPDATE financial_years SET is_active=0 WHERE organization_id IN ('repair-org', 'preserve-org')").run()
+    repairDatabase.prepare("INSERT INTO financial_years(id, organization_id, label, start_date, end_date, status, is_active, previous_financial_year_id) VALUES (?, 'repair-org', 'FY 2027–28', '2027-04-01', '2028-03-31', 'OPEN', 1, ?), (?, 'preserve-org', 'FY 2027–28', '2027-04-01', '2028-03-31', 'OPEN', 1, ?)")
+      .run(repairFuture, repairCurrent, preserveFuture, preserveCurrent)
+    repairDatabase.prepare("INSERT INTO sales_invoices(id, organization_id, customer_id, invoice_number, invoice_date, financial_year_id, grand_total, total_amount, total, paid_amount, outstanding_amount, payment_status, status) VALUES ('repair-paid-label', 'repair-org', 'repair-customer', 'INV-PAID-LABEL', '2026-08-18', ?, 100, 100, 100, 0, 100, 'paid', 'paid'), ('repair-unpaid-label', 'repair-org', 'repair-customer', 'INV-UNPAID-LABEL', '2026-08-18', ?, 100, 100, 100, 100, 0, 'unpaid', 'unpaid')")
+      .run(repairCurrent, repairCurrent)
+    repairDatabase.prepare("INSERT INTO purchase_invoices(id, organization_id, bill_number, bill_date, financial_year_id, grand_total, paid_amount, outstanding_amount, status) VALUES ('repair-purchase-label', 'repair-org', 'BILL-LABEL', '2026-08-18', ?, 75, 0, 75, 'paid')")
+      .run(repairCurrent)
+    repairDatabase.exec("DROP TRIGGER trg_fy_date_sales_invoice_update")
+    repairDatabase.prepare("UPDATE sales_invoices SET financial_year_id=? WHERE id='repair-invoice'").run(repairFuture)
+    const invoiceDateTrigger = localMigrations.find((migration) => migration.version === 15)?.sql.find((statement) => statement.includes("trg_fy_date_sales_invoice_update"))
+    assert.ok(invoiceDateTrigger)
+    repairDatabase.exec(invoiceDateTrigger)
+    repairDatabase.prepare("INSERT INTO stock_movements(id, organization_id, product_id, type, quantity, movement_date, financial_year_id) VALUES ('preserved-future-movement', 'preserve-org', 'preserve-product', 'opening_stock', 5, '2027-04-02', ?)").run(preserveFuture)
+    applyMigrations(repairDatabase)
+    assert.equal(repairDatabase.prepare("SELECT id FROM financial_years WHERE organization_id='repair-org' AND is_active=1").get()?.id, repairCurrent)
+    assert.equal(repairDatabase.prepare("SELECT financial_year_id FROM sales_invoices WHERE id='repair-invoice'").get()?.financial_year_id, repairCurrent)
+    assert.equal(repairDatabase.prepare("SELECT status FROM financial_years WHERE id=?").get(repairFuture)?.status, "ARCHIVED")
+    assert.equal(repairDatabase.prepare("SELECT id FROM financial_years WHERE organization_id='preserve-org' AND is_active=1").get()?.id, preserveCurrent)
+    assert.equal(repairDatabase.prepare("SELECT is_active FROM financial_years WHERE id=?").get(preserveFuture)?.is_active, 0)
+    assert.equal(repairDatabase.prepare("SELECT financial_year_id FROM stock_movements WHERE id='preserved-future-movement'").get()?.financial_year_id, preserveFuture)
+    assert.equal(repairDatabase.prepare("SELECT COUNT(*) AS count FROM local_audit_logs WHERE action='financial_year.legacy_state_repaired'").get()?.count, 2)
+    assert.deepEqual(
+      { ...repairDatabase.prepare("SELECT payment_status, status, paid_amount, outstanding_amount FROM sales_invoices WHERE id='repair-paid-label'").get() },
+      { payment_status: "unpaid", status: "unpaid", paid_amount: 0, outstanding_amount: 100 },
+    )
+    assert.deepEqual(
+      { ...repairDatabase.prepare("SELECT payment_status, status, paid_amount, outstanding_amount FROM sales_invoices WHERE id='repair-unpaid-label'").get() },
+      { payment_status: "paid", status: "paid", paid_amount: 100, outstanding_amount: 0 },
+    )
+    assert.equal(repairDatabase.prepare("SELECT status FROM purchase_invoices WHERE id='repair-purchase-label'").get()?.status, "unpaid")
+    assert.equal(repairDatabase.prepare("SELECT COUNT(*) AS count FROM local_audit_logs WHERE action='invoice.settlement_status_repaired' AND organization_id='repair-org'").get()?.count, 1)
+    assert.equal(repairDatabase.prepare("PRAGMA quick_check").get()?.quick_check, "ok")
+    assert.equal(repairDatabase.prepare("PRAGMA foreign_key_check").all().length, 0)
+  } finally {
+    repairDatabase.close()
+  }
+
   // Financial-year business logic is local-only and closing invokes backup before status mutation.
   const financialSource = readFileSync(path.join(process.cwd(), "lib/offline/local/financial-years.ts"), "utf8")
   const apiSource = readFileSync(path.join(process.cwd(), "lib/offline/local/api.ts"), "utf8")
@@ -201,6 +287,9 @@ try {
   assert.doesNotMatch(apiSource.slice(apiSource.indexOf("financialYearsList"), apiSource.indexOf("localWorkspaceBootstrap")), /supabase/i)
   assert.ok(financialSource.indexOf('invokeTauri<BackupResult | null>("desktop_database_backup"') < financialSource.indexOf("SET status = 'CLOSED'"))
   assert.match(financialSource, /reason\.trim\(\)\.length < 10/)
+  const createYearSource = financialSource.slice(financialSource.indexOf("export async function createNextFinancialYear"), financialSource.indexOf("export async function financialYearClosingChecks"))
+  assert.ok(createYearSource.indexOf("assertFinancialYearCanStart(next, currentDate)") < createYearSource.indexOf("createFinancialYearSafetyBackup(next.label)"))
+  assert.ok(createYearSource.indexOf("createFinancialYearSafetyBackup(next.label)") < createYearSource.indexOf("await service.transaction(async (db)"))
   assert.match(apiSource, /\/api\/customers\/financial-year-ledger/)
   assert.match(customerSource, /\/api\/customers\/financial-year-ledger/)
 
@@ -211,6 +300,9 @@ try {
     migratedInvoices: 2,
     financialYears: beforeBackup,
     openingInventoryQuantity: opening?.quantity,
+    futureYearProtection: "passed",
+    legacyRepair: "passed",
+    batch1234Available: 997,
     backupRestore: "passed",
     quickCheck: "ok",
     foreignKeyViolations: 0,

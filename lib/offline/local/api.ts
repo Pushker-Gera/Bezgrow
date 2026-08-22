@@ -39,7 +39,8 @@ import {
   type NormalizedListQuery,
 } from "@/lib/offline/local/repositories"
 import { getLocalDatabaseService, LocalDatabaseUnavailableError } from "@/lib/offline/local/service"
-import { isoLocalDate, normalizeLocalDate, type InvoiceNumberingMode } from "@/lib/financial-years"
+import { FinancialYearDomainError, isoLocalDate, normalizeLocalDate, type InvoiceNumberingMode } from "@/lib/financial-years"
+import { allocateAuthoritativeStock } from "@/lib/inventory-availability"
 import {
   assertFinancialYearWriteAllowed,
   closeFinancialYear,
@@ -138,8 +139,8 @@ function ok(payload: Record<string, unknown> = {}) {
   return jsonResponse({ success: true, ...payload })
 }
 
-function fail(message: string, status = 400) {
-  return jsonResponse({ success: false, error: message }, status)
+function fail(message: string, status = 400, code?: string) {
+  return jsonResponse({ success: false, error: message, ...(code ? { code } : {}) }, status)
 }
 
 function isLicenseError(message: string) {
@@ -610,63 +611,6 @@ function nextItemsTax(items: DataRow[]) {
   return items.reduce((sum, item) => sum + localNumber(item.gst_amount, localNumber(item.tax_amount)), 0)
 }
 
-type BatchAllocation = {
-  productId: string
-  batchId: string | null
-  warehouseId: string | null
-  quantity: number
-}
-
-function consumeInvoiceBatches(batches: DataRow[], items: DataRow[], now: string) {
-  let nextBatches = [...batches]
-  const allocations: BatchAllocation[] = []
-
-  for (const item of items) {
-    const productId = localString(item.product_id)
-    const requestedBatch = localString(item.batch_no || item.batch_number)
-    let remaining = Math.max(0, localNumber(item.quantity))
-    if (!productId || remaining <= 0) continue
-
-    const eligibleLots = nextBatches
-      .filter((lot) =>
-        lot.product_id === productId &&
-        !lot.deleted_at &&
-        localNumber(lot.quantity) > 0 &&
-        (!requestedBatch || localString(lot.batch_no) === requestedBatch)
-      )
-      .sort((left, right) => {
-        const dateOrder = localString(left.purchase_date, localString(left.created_at, "9999")).localeCompare(
-          localString(right.purchase_date, localString(right.created_at, "9999"))
-        )
-        return dateOrder || localString(left.id).localeCompare(localString(right.id))
-      })
-
-    for (const lot of eligibleLots) {
-      if (remaining <= 0) break
-      const quantity = Math.min(remaining, localNumber(lot.quantity))
-      remaining -= quantity
-      nextBatches = nextBatches.map((candidate) =>
-        candidate.id === lot.id
-          ? { ...candidate, quantity: Math.max(0, localNumber(candidate.quantity) - quantity), sync_status: "pending_update", updated_at: now }
-          : candidate
-      )
-      allocations.push({
-        productId,
-        batchId: localString(lot.id) || null,
-        warehouseId: localString(lot.warehouse_id) || null,
-        quantity,
-      })
-    }
-
-    if (requestedBatch && remaining > 0.0001) {
-      throw new Error(`Batch ${requestedBatch} does not have enough stock.`)
-    }
-    if (remaining > 0) allocations.push({ productId, batchId: null, warehouseId: null, quantity: remaining })
-  }
-
-  return { nextBatches, allocations }
-}
-
 async function createInvoice(body: DataRow, organizationId: string) {
   const now = nowIso()
   const invoiceDate = normalizeLocalDate(localString(body.invoice_date || body.date, isoLocalDate()))
@@ -760,9 +704,9 @@ async function createInvoice(body: DataRow, organizationId: string) {
       updated_at: now,
     }
   })
-  let consumedBatches: ReturnType<typeof consumeInvoiceBatches>
+  let consumedBatches: ReturnType<typeof allocateAuthoritativeStock>
   try {
-    consumedBatches = consumeInvoiceBatches(batches, items, now)
+    consumedBatches = allocateAuthoritativeStock(products, batches, items, now)
   } catch (error) {
     return fail(error instanceof Error ? error.message : "The selected stock batch is unavailable.", 409)
   }
@@ -1017,7 +961,7 @@ async function deleteInvoice(body: DataRow, organizationId: string) {
     if (batchId) restoredByBatch.set(batchId, (restoredByBatch.get(batchId) || 0) + Math.max(0, localNumber(movement.quantity)))
   }
   const batchRestoreById = new Map<string, number>()
-  const restoreAllocations: BatchAllocation[] = []
+  const restoreAllocations: Array<{ productId: string; batchId: string | null; warehouseId: string | null; quantity: number }> = []
   for (const [productId, restoreQuantity] of restoreQuantityByProduct.entries()) {
     let remaining = restoreQuantity
     const saleMovements = movements.filter(
@@ -1787,7 +1731,14 @@ export async function localApiFetch(input: RequestInfo | URL, init: RequestInit 
       `${(init.method || "GET").toUpperCase()} ${url.pathname}`
     )
     const message = userSafeLocalError(error)
-    return { handled: true, response: fail(message, isLicenseError(message) ? 403 : 500) }
+    return {
+      handled: true,
+      response: fail(
+        message,
+        isLicenseError(message) ? 403 : error instanceof FinancialYearDomainError ? 409 : 500,
+        error instanceof FinancialYearDomainError ? error.code : undefined
+      ),
+    }
   }
 
   return { handled: false, response: null }

@@ -3,6 +3,7 @@
 import Link from "next/link"
 import { useEffect, useMemo, useState } from "react"
 import { MoneyValue } from "@/components/MoneyValue"
+import { useFinancialYears } from "@/components/financial-years/FinancialYearContext"
 import { apiFetch } from "@/lib/api/client-fetch"
 import { exportCsv } from "@/lib/desktop-file-export"
 import { getOrganizationFeatures } from "@/lib/get-organization-features"
@@ -159,6 +160,8 @@ function relationName(value: RelationName) {
 }
 
 export default function InventoryPage() {
+    const { selectedYear, activeYear } = useFinancialYears()
+    const operationalWriteAllowed = Boolean(selectedYear && activeYear && selectedYear.id === activeYear.id && selectedYear.status === "OPEN")
     const [organizationId, setOrganizationId] = useState("")
     const [features, setFeatures] = useState<string[]>([])
     const [products, setProducts] = useState<InventoryProduct[]>([])
@@ -362,6 +365,10 @@ export default function InventoryPage() {
     async function applyStockChange(mode: "add" | "transfer") {
         setNotice("")
         setFormError("")
+        if (!operationalWriteAllowed) {
+            setFormError(`Stock movements are disabled while viewing ${selectedYear?.label || "a historical year"}. Switch to the current active financial year.`)
+            return
+        }
         const product = products.find((item) => item.id === selectedProductId)
         const qty = Number(quantity)
         const parsedPurchaseRate = purchaseRate === "" ? null : Number(purchaseRate)
@@ -760,13 +767,15 @@ export default function InventoryPage() {
                         <div className="grid w-full grid-cols-2 gap-3 sm:flex sm:w-auto sm:flex-wrap">
                             <button
                                 onClick={() => setShowAddStockModal(true)}
-                                className="h-12 rounded-lg bg-emerald-400 px-5 text-sm font-bold text-black shadow-lg shadow-emerald-500/20 transition-all duration-300 hover:-translate-y-1 hover:bg-emerald-300"
+                                disabled={!operationalWriteAllowed}
+                                className="h-12 rounded-lg bg-emerald-400 px-5 text-sm font-bold text-black shadow-lg shadow-emerald-500/20 transition-all duration-300 hover:-translate-y-1 hover:bg-emerald-300 disabled:cursor-not-allowed disabled:opacity-40"
                             >
                                 Add Stock
                             </button>
                             <button
                                 onClick={() => setShowTransferModal(true)}
-                                className="h-12 rounded-lg border border-white/10 bg-white/[0.05] px-5 text-sm font-bold transition-all duration-300 hover:-translate-y-1 hover:border-sky-300/40 hover:bg-white/[0.08]"
+                                disabled={!operationalWriteAllowed}
+                                className="h-12 rounded-lg border border-white/10 bg-white/[0.05] px-5 text-sm font-bold transition-all duration-300 hover:-translate-y-1 hover:border-sky-300/40 hover:bg-white/[0.08] disabled:cursor-not-allowed disabled:opacity-40"
                             >
                                 Transfer
                             </button>
@@ -1317,7 +1326,7 @@ export default function InventoryPage() {
                                     Cancel
                                 </button>
                                 <button
-                                    disabled={actionLoading || !selectedProductId || Number(quantity) <= 0 || (showAddStockModal && purchaseRate !== "" && (!Number.isFinite(Number(purchaseRate)) || Number(purchaseRate) < 0))}
+                                    disabled={!operationalWriteAllowed || actionLoading || !selectedProductId || Number(quantity) <= 0 || (showAddStockModal && purchaseRate !== "" && (!Number.isFinite(Number(purchaseRate)) || Number(purchaseRate) < 0))}
                                     data-enter-primary
                                     onClick={() =>
                                         applyStockChange(showAddStockModal ? "add" : "transfer")

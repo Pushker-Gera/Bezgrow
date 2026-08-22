@@ -1,4 +1,18 @@
-# Bezgrow 0.2.0
+# Bezgrow 0.2.1
+
+Financial-year and billing integrity hardening.
+
+- Made the India-local April–March calendar authoritative for financial-year creation, activation, and dated posting; future and historical postings are rejected in the local domain service.
+- Added an automatic, backed-up SQLite v16 repair that restores the date-valid current year, archives empty premature years without deleting their audit data, and reclassifies only date-provable transaction assignments.
+- Unified billing, purchase-return, and stock-out availability around physical product stock plus FIFO batch rows, including legacy product-level batches with no duplicated batch record.
+- Kept invoice creation atomic under insufficient stock and made batch errors report the exact available quantity and warehouse.
+- Preserved closed historical invoices while allowing their receivables to be settled in the current operational year.
+- Reconciled legacy paid/partial/unpaid labels only when stored paid and outstanding amounts prove the correct state, and allowed current-year settlement of closed historical supplier bills without altering their accounting period.
+- Added current-versus-historical read-only UI states, viewport-safe closing workflows, explicit physical-stock/report scopes, integrity guards, and expanded financial-year scale coverage.
+
+Public installer and updater metadata remains pinned to the genuine 0.2.0 artifacts until 0.2.1 artifacts complete the release verification and publication gates.
+
+## Previous 0.2.0 notes
 
 Local-first Financial Year Management.
 
@@ -14,7 +28,7 @@ Local-first Financial Year Management.
 - Added explicit draft/building/validating/ready/published/failed release states, internal versus stable trust policy, cross-platform atomic publication gates, and exact per-platform availability.
 - Added `release:verify` and `release:publish` commands, immutable artifact/provenance validation, published-only updater discovery, and transition regressions for incomplete or failed releases.
 
-Public 0.2.0 installer/update metadata must not be published until corresponding integrity-verified artifacts exist. The checked-in public download manifests therefore continue to describe the genuine 0.1.15 artifacts.
+The checked-in 0.2.0 public download manifests describe the last genuinely published artifact cohort and remain the fallback for newer source builds.
 
 ## Previous 0.1.16 notes
 

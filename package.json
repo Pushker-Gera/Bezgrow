@@ -1,6 +1,6 @@
 {
   "name": "saas-project",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "private": true,
   "engines": {
     "node": ">=22 <23"
@@ -13,7 +13,7 @@
     "typecheck": "tsc --noEmit",
     "test": "npm run test:architecture && npm run test:financial-years && npm run test:form-keyboard-navigation && npm run test:production-polish && npm run test:product-invoice-snapshots && npm run test:seo && npm run test:license && npm run test:production-lifecycle && npm run test:admin-control-plane && npm run test:admin-scale && npm run test:admin-final && npm run test:admin-buttons && npm run test:admin-api-security && npm run test:desktop-admin-online-only && npm run test:api-routes && npm run test:release-artifacts && npm run test:release-metadata && npm run test:release-pipeline-reliability && npm run test:release-verifier && npm run test:release-trust && npm run test:updater && npm run test:download-routes && npm run test:integration && npm run test:windows && npm run test:desktop-sqlite && npm run test:desktop-sqlite-regression && npm run test:desktop-hardening && npm run test:offline && npm run test:diagnostics && npm run test:local-lists && npm run test:invoice-print && npm run test:reports && npm run test:final-offline-network && npm run test:final-offline-exports && npm run test:backup && npm run test:final-prelaunch-hardening && npm run test:performance",
     "test:architecture": "node scripts/test-local-first-architecture.mjs",
-    "test:financial-years": "node --disable-warning=ExperimentalWarning --import tsx scripts/test-financial-year-management.ts",
+    "test:financial-years": "node --disable-warning=ExperimentalWarning --import tsx scripts/test-financial-year-management.ts && node --disable-warning=ExperimentalWarning --import tsx scripts/test-financial-year-billing-integrity.ts",
     "test:financial-year-performance": "node --disable-warning=ExperimentalWarning --import tsx scripts/test-financial-year-performance.ts",
     "test:form-keyboard-navigation": "node --import tsx scripts/test-form-keyboard-navigation.ts",
     "test:production-polish": "node --disable-warning=ExperimentalWarning --import tsx scripts/test-production-polish.ts",
