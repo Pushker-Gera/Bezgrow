@@ -1,11 +1,15 @@
 "use client"
 
-export const LOCAL_DB_VERSION = 14
+export const LOCAL_DB_VERSION = 15
 export const LOCAL_DB_URL = "sqlite:bezgrow-offline.db"
 
 export const normalizedTables = [
   "organizations",
   "business_settings",
+  "financial_years",
+  "financial_year_opening_balances",
+  "financial_year_inventory_openings",
+  "financial_year_invoice_sequences",
   "local_users",
   "roles",
   "permissions",
@@ -68,6 +72,47 @@ const commonSyncColumns = `
   updated_at TEXT NOT NULL DEFAULT (datetime('now')),
   deleted_at TEXT
 `
+
+function closedFinancialYearMutationTriggers(table: string, stem: string) {
+  return (["INSERT", "UPDATE", "DELETE"] as const).map((operation) => {
+    const row = operation === "DELETE" ? "OLD" : "NEW"
+    return `CREATE TRIGGER IF NOT EXISTS trg_fy_guard_${stem}_${operation.toLowerCase()}
+      BEFORE ${operation} ON ${table} FOR EACH ROW
+      WHEN ${row}.financial_year_id IS NOT NULL AND EXISTS (
+        SELECT 1 FROM financial_years fy
+        WHERE fy.id = ${row}.financial_year_id AND fy.organization_id = ${row}.organization_id AND fy.status <> 'OPEN'
+      )
+      BEGIN SELECT RAISE(ABORT, 'financial_year_closed'); END`
+  })
+}
+
+function closedFinancialYearChildTriggers(childTable: string, parentTable: string, foreignKey: string, stem: string) {
+  return (["INSERT", "UPDATE", "DELETE"] as const).map((operation) => {
+    const row = operation === "DELETE" ? "OLD" : "NEW"
+    return `CREATE TRIGGER IF NOT EXISTS trg_fy_guard_${stem}_${operation.toLowerCase()}
+      BEFORE ${operation} ON ${childTable} FOR EACH ROW
+      WHEN EXISTS (
+        SELECT 1 FROM ${parentTable} parent
+        JOIN financial_years fy ON fy.id = parent.financial_year_id AND fy.organization_id = parent.organization_id
+        WHERE parent.id = ${row}.${foreignKey} AND parent.organization_id = ${row}.organization_id AND fy.status <> 'OPEN'
+      )
+      BEGIN SELECT RAISE(ABORT, 'financial_year_closed'); END`
+  })
+}
+
+function financialYearDateAssignmentTriggers(table: string, stem: string, dateExpression: string) {
+  return (["INSERT", "UPDATE"] as const).map((operation) => {
+    const expression = dateExpression.replaceAll("ROW", "NEW")
+    return `CREATE TRIGGER IF NOT EXISTS trg_fy_date_${stem}_${operation.toLowerCase()}
+      BEFORE ${operation} ON ${table} FOR EACH ROW
+      WHEN NEW.financial_year_id IS NOT NULL AND NOT EXISTS (
+        SELECT 1 FROM financial_years fy
+        WHERE fy.id = NEW.financial_year_id AND fy.organization_id = NEW.organization_id
+          AND date(${expression}) BETWEEN date(fy.start_date) AND date(fy.end_date)
+      )
+      BEGIN SELECT RAISE(ABORT, 'financial_year_date_mismatch'); END`
+  })
+}
 
 export const localMigrations: Array<{ version: number; name: string; sql: string[] }> = [
   {
@@ -1192,6 +1237,264 @@ export const localMigrations: Array<{ version: number; name: string; sql: string
       "CREATE INDEX IF NOT EXISTS idx_ledger_org_document_active ON ledger_entries (organization_id, document_id, deleted_at)",
       "CREATE INDEX IF NOT EXISTS idx_payments_org_document_active ON payments (organization_id, document_id, deleted_at)",
       "CREATE INDEX IF NOT EXISTS idx_sales_invoices_org_customer_active_date ON sales_invoices (organization_id, customer_id, deleted_at, invoice_date DESC, created_at DESC)",
+    ],
+  },
+  {
+    version: 15,
+    name: "local_financial_year_management",
+    sql: [
+      `CREATE TABLE IF NOT EXISTS financial_years (
+        id TEXT PRIMARY KEY,
+        organization_id TEXT NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+        label TEXT NOT NULL,
+        start_date TEXT NOT NULL,
+        end_date TEXT NOT NULL,
+        start_month INTEGER NOT NULL DEFAULT 4 CHECK (start_month BETWEEN 1 AND 12),
+        status TEXT NOT NULL DEFAULT 'OPEN' CHECK (status IN ('OPEN', 'CLOSED', 'ARCHIVED')),
+        is_active INTEGER NOT NULL DEFAULT 0 CHECK (is_active IN (0, 1)),
+        previous_financial_year_id TEXT REFERENCES financial_years(id) ON DELETE SET NULL,
+        invoice_numbering_mode TEXT NOT NULL DEFAULT 'CONTINUE' CHECK (invoice_numbering_mode IN ('CONTINUE', 'RESTART')),
+        opening_snapshot_json TEXT,
+        close_summary_json TEXT,
+        close_backup_path TEXT,
+        created_at TEXT NOT NULL DEFAULT (datetime('now')),
+        closed_at TEXT,
+        reopened_at TEXT,
+        reopen_reason TEXT,
+        schema_version INTEGER NOT NULL DEFAULT 1,
+        UNIQUE (organization_id, start_date),
+        UNIQUE (organization_id, label),
+        CHECK (date(start_date) IS NOT NULL AND date(end_date) IS NOT NULL AND date(start_date) <= date(end_date))
+      )`,
+      `CREATE TABLE IF NOT EXISTS financial_year_opening_balances (
+        id TEXT PRIMARY KEY,
+        organization_id TEXT NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+        financial_year_id TEXT NOT NULL REFERENCES financial_years(id) ON DELETE CASCADE,
+        source_financial_year_id TEXT REFERENCES financial_years(id) ON DELETE SET NULL,
+        party_type TEXT NOT NULL CHECK (party_type IN ('customer', 'supplier')),
+        party_id TEXT NOT NULL,
+        balance_type TEXT NOT NULL CHECK (balance_type IN ('RECEIVABLE', 'PAYABLE')),
+        amount REAL NOT NULL DEFAULT 0 CHECK (amount >= 0),
+        created_at TEXT NOT NULL DEFAULT (datetime('now')),
+        UNIQUE (organization_id, financial_year_id, party_type, party_id, balance_type)
+      )`,
+      `CREATE TABLE IF NOT EXISTS financial_year_inventory_openings (
+        id TEXT PRIMARY KEY,
+        organization_id TEXT NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+        financial_year_id TEXT NOT NULL REFERENCES financial_years(id) ON DELETE CASCADE,
+        source_financial_year_id TEXT REFERENCES financial_years(id) ON DELETE SET NULL,
+        inventory_key TEXT NOT NULL,
+        product_id TEXT NOT NULL REFERENCES products(id) ON DELETE CASCADE,
+        warehouse_id TEXT REFERENCES warehouses(id) ON DELETE SET NULL,
+        batch_id TEXT REFERENCES stock_batches(id) ON DELETE SET NULL,
+        batch_no TEXT,
+        expiry_date TEXT,
+        quantity REAL NOT NULL DEFAULT 0 CHECK (quantity >= 0),
+        purchase_rate REAL,
+        mrp REAL,
+        created_at TEXT NOT NULL DEFAULT (datetime('now')),
+        UNIQUE (organization_id, financial_year_id, inventory_key)
+      )`,
+      `CREATE TABLE IF NOT EXISTS financial_year_invoice_sequences (
+        id TEXT PRIMARY KEY,
+        organization_id TEXT NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+        financial_year_id TEXT NOT NULL REFERENCES financial_years(id) ON DELETE CASCADE,
+        prefix TEXT NOT NULL DEFAULT 'INV',
+        next_number INTEGER NOT NULL DEFAULT 1 CHECK (next_number >= 1),
+        updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+        UNIQUE (organization_id, financial_year_id)
+      )`,
+      "ALTER TABLE sales_invoices ADD COLUMN financial_year_id TEXT REFERENCES financial_years(id) ON DELETE RESTRICT",
+      "ALTER TABLE sales_invoices ADD COLUMN display_invoice_number TEXT",
+      "ALTER TABLE purchase_invoices ADD COLUMN financial_year_id TEXT REFERENCES financial_years(id) ON DELETE RESTRICT",
+      "ALTER TABLE stock_movements ADD COLUMN financial_year_id TEXT REFERENCES financial_years(id) ON DELETE RESTRICT",
+      "ALTER TABLE expenses ADD COLUMN financial_year_id TEXT REFERENCES financial_years(id) ON DELETE RESTRICT",
+      "ALTER TABLE payments ADD COLUMN financial_year_id TEXT REFERENCES financial_years(id) ON DELETE RESTRICT",
+      "ALTER TABLE payment_receipts ADD COLUMN financial_year_id TEXT REFERENCES financial_years(id) ON DELETE RESTRICT",
+      "ALTER TABLE ledger_entries ADD COLUMN financial_year_id TEXT REFERENCES financial_years(id) ON DELETE RESTRICT",
+      "ALTER TABLE accounting_vouchers ADD COLUMN financial_year_id TEXT REFERENCES financial_years(id) ON DELETE RESTRICT",
+      "ALTER TABLE credit_notes ADD COLUMN financial_year_id TEXT REFERENCES financial_years(id) ON DELETE RESTRICT",
+      "ALTER TABLE debit_notes ADD COLUMN financial_year_id TEXT REFERENCES financial_years(id) ON DELETE RESTRICT",
+      "ALTER TABLE delivery_challans ADD COLUMN financial_year_id TEXT REFERENCES financial_years(id) ON DELETE RESTRICT",
+      "ALTER TABLE quotations ADD COLUMN financial_year_id TEXT REFERENCES financial_years(id) ON DELETE RESTRICT",
+      "ALTER TABLE orders ADD COLUMN financial_year_id TEXT REFERENCES financial_years(id) ON DELETE RESTRICT",
+      "ALTER TABLE gst_invoice_summary ADD COLUMN financial_year_id TEXT REFERENCES financial_years(id) ON DELETE RESTRICT",
+      "ALTER TABLE gst_hsn_summary ADD COLUMN financial_year_id TEXT REFERENCES financial_years(id) ON DELETE RESTRICT",
+      `WITH dated(organization_id, transaction_date) AS (
+         SELECT id, date('now', 'localtime') FROM organizations
+         UNION ALL SELECT organization_id, date(COALESCE(invoice_date, date, created_at)) FROM sales_invoices
+         UNION ALL SELECT organization_id, date(COALESCE(bill_date, created_at)) FROM purchase_invoices
+         UNION ALL SELECT organization_id, date(COALESCE(movement_date, created_at)) FROM stock_movements
+         UNION ALL SELECT organization_id, date(COALESCE(expense_date, created_at)) FROM expenses
+         UNION ALL SELECT organization_id, date(COALESCE(payment_date, created_at)) FROM payments
+         UNION ALL SELECT organization_id, date(COALESCE(received_at, created_at)) FROM payment_receipts
+         UNION ALL SELECT organization_id, date(COALESCE(entry_date, created_at)) FROM ledger_entries
+         UNION ALL SELECT organization_id, date(COALESCE(voucher_date, created_at)) FROM accounting_vouchers
+         UNION ALL SELECT organization_id, date(COALESCE(note_date, created_at)) FROM credit_notes
+         UNION ALL SELECT organization_id, date(COALESCE(note_date, created_at)) FROM debit_notes
+         UNION ALL SELECT organization_id, date(COALESCE(challan_date, created_at)) FROM delivery_challans
+         UNION ALL SELECT organization_id, date(created_at) FROM quotations
+         UNION ALL SELECT organization_id, date(created_at) FROM orders
+         UNION ALL SELECT organization_id, date(period_key || '-01') FROM gst_hsn_summary
+       ), years AS (
+         SELECT DISTINCT organization_id,
+           CAST(strftime('%Y', transaction_date) AS INTEGER) - CASE WHEN CAST(strftime('%m', transaction_date) AS INTEGER) < 4 THEN 1 ELSE 0 END AS start_year
+         FROM dated WHERE organization_id IS NOT NULL AND transaction_date IS NOT NULL
+       )
+       INSERT OR IGNORE INTO financial_years (
+         id, organization_id, label, start_date, end_date, start_month, status, is_active,
+         invoice_numbering_mode, created_at, closed_at, schema_version
+       )
+       SELECT
+         'fy:' || organization_id || ':' || start_year || ':4',
+         organization_id,
+         'FY ' || start_year || '–' || printf('%02d', (start_year + 1) % 100),
+         printf('%04d-04-01', start_year),
+         printf('%04d-03-31', start_year + 1),
+         4,
+         CASE WHEN date(printf('%04d-03-31', start_year + 1)) < date('now', 'localtime') THEN 'CLOSED' ELSE 'OPEN' END,
+         CASE WHEN date('now', 'localtime') BETWEEN date(printf('%04d-04-01', start_year)) AND date(printf('%04d-03-31', start_year + 1)) THEN 1 ELSE 0 END,
+         'CONTINUE',
+         datetime('now'),
+         CASE WHEN date(printf('%04d-03-31', start_year + 1)) < date('now', 'localtime') THEN datetime('now') ELSE NULL END,
+         1
+       FROM years`,
+      `UPDATE financial_years AS current
+       SET previous_financial_year_id = (
+         SELECT previous.id FROM financial_years previous
+         WHERE previous.organization_id = current.organization_id
+           AND date(previous.end_date) < date(current.start_date)
+         ORDER BY previous.end_date DESC LIMIT 1
+       )
+       WHERE previous_financial_year_id IS NULL`,
+      `UPDATE sales_invoices
+       SET financial_year_id = 'fy:' || organization_id || ':' ||
+         (CAST(strftime('%Y', date(COALESCE(invoice_date, date, created_at))) AS INTEGER) - CASE WHEN CAST(strftime('%m', date(COALESCE(invoice_date, date, created_at))) AS INTEGER) < 4 THEN 1 ELSE 0 END) || ':4',
+           display_invoice_number = COALESCE(NULLIF(trim(display_invoice_number), ''), invoice_number)
+       WHERE financial_year_id IS NULL OR display_invoice_number IS NULL OR trim(display_invoice_number) = ''`,
+      `UPDATE purchase_invoices SET financial_year_id = 'fy:' || organization_id || ':' || (CAST(strftime('%Y', date(COALESCE(bill_date, created_at))) AS INTEGER) - CASE WHEN CAST(strftime('%m', date(COALESCE(bill_date, created_at))) AS INTEGER) < 4 THEN 1 ELSE 0 END) || ':4' WHERE financial_year_id IS NULL`,
+      `UPDATE stock_movements SET financial_year_id = 'fy:' || organization_id || ':' || (CAST(strftime('%Y', date(COALESCE(movement_date, created_at))) AS INTEGER) - CASE WHEN CAST(strftime('%m', date(COALESCE(movement_date, created_at))) AS INTEGER) < 4 THEN 1 ELSE 0 END) || ':4' WHERE financial_year_id IS NULL`,
+      `UPDATE expenses SET financial_year_id = 'fy:' || organization_id || ':' || (CAST(strftime('%Y', date(COALESCE(expense_date, created_at))) AS INTEGER) - CASE WHEN CAST(strftime('%m', date(COALESCE(expense_date, created_at))) AS INTEGER) < 4 THEN 1 ELSE 0 END) || ':4' WHERE financial_year_id IS NULL`,
+      `UPDATE payments SET financial_year_id = 'fy:' || organization_id || ':' || (CAST(strftime('%Y', date(COALESCE(payment_date, created_at))) AS INTEGER) - CASE WHEN CAST(strftime('%m', date(COALESCE(payment_date, created_at))) AS INTEGER) < 4 THEN 1 ELSE 0 END) || ':4' WHERE financial_year_id IS NULL`,
+      `UPDATE payment_receipts SET financial_year_id = 'fy:' || organization_id || ':' || (CAST(strftime('%Y', date(COALESCE(received_at, created_at))) AS INTEGER) - CASE WHEN CAST(strftime('%m', date(COALESCE(received_at, created_at))) AS INTEGER) < 4 THEN 1 ELSE 0 END) || ':4' WHERE financial_year_id IS NULL`,
+      `UPDATE ledger_entries SET financial_year_id = 'fy:' || organization_id || ':' || (CAST(strftime('%Y', date(COALESCE(entry_date, created_at))) AS INTEGER) - CASE WHEN CAST(strftime('%m', date(COALESCE(entry_date, created_at))) AS INTEGER) < 4 THEN 1 ELSE 0 END) || ':4' WHERE financial_year_id IS NULL`,
+      `UPDATE accounting_vouchers SET financial_year_id = 'fy:' || organization_id || ':' || (CAST(strftime('%Y', date(COALESCE(voucher_date, created_at))) AS INTEGER) - CASE WHEN CAST(strftime('%m', date(COALESCE(voucher_date, created_at))) AS INTEGER) < 4 THEN 1 ELSE 0 END) || ':4' WHERE financial_year_id IS NULL`,
+      `UPDATE credit_notes SET financial_year_id = 'fy:' || organization_id || ':' || (CAST(strftime('%Y', date(COALESCE(note_date, created_at))) AS INTEGER) - CASE WHEN CAST(strftime('%m', date(COALESCE(note_date, created_at))) AS INTEGER) < 4 THEN 1 ELSE 0 END) || ':4' WHERE financial_year_id IS NULL`,
+      `UPDATE debit_notes SET financial_year_id = 'fy:' || organization_id || ':' || (CAST(strftime('%Y', date(COALESCE(note_date, created_at))) AS INTEGER) - CASE WHEN CAST(strftime('%m', date(COALESCE(note_date, created_at))) AS INTEGER) < 4 THEN 1 ELSE 0 END) || ':4' WHERE financial_year_id IS NULL`,
+      `UPDATE delivery_challans SET financial_year_id = 'fy:' || organization_id || ':' || (CAST(strftime('%Y', date(COALESCE(challan_date, created_at))) AS INTEGER) - CASE WHEN CAST(strftime('%m', date(COALESCE(challan_date, created_at))) AS INTEGER) < 4 THEN 1 ELSE 0 END) || ':4' WHERE financial_year_id IS NULL`,
+      `UPDATE quotations SET financial_year_id = 'fy:' || organization_id || ':' || (CAST(strftime('%Y', date(created_at)) AS INTEGER) - CASE WHEN CAST(strftime('%m', date(created_at)) AS INTEGER) < 4 THEN 1 ELSE 0 END) || ':4' WHERE financial_year_id IS NULL`,
+      `UPDATE orders SET financial_year_id = 'fy:' || organization_id || ':' || (CAST(strftime('%Y', date(created_at)) AS INTEGER) - CASE WHEN CAST(strftime('%m', date(created_at)) AS INTEGER) < 4 THEN 1 ELSE 0 END) || ':4' WHERE financial_year_id IS NULL`,
+      `UPDATE gst_invoice_summary SET financial_year_id = (SELECT invoice.financial_year_id FROM sales_invoices invoice WHERE invoice.id = gst_invoice_summary.invoice_id AND invoice.organization_id = gst_invoice_summary.organization_id) WHERE financial_year_id IS NULL`,
+      `UPDATE gst_hsn_summary SET financial_year_id = (
+         SELECT fy.id FROM financial_years fy WHERE fy.organization_id = gst_hsn_summary.organization_id
+           AND (gst_hsn_summary.period_key || '-01') BETWEEN fy.start_date AND fy.end_date LIMIT 1
+       ) WHERE financial_year_id IS NULL`,
+      `INSERT OR IGNORE INTO financial_year_invoice_sequences (id, organization_id, financial_year_id, prefix, next_number, updated_at)
+       SELECT 'fy-seq:' || fy.id, fy.organization_id, fy.id,
+         CASE WHEN trim(COALESCE(org.invoice_prefix, '')) = '' THEN 'INV' ELSE trim(org.invoice_prefix) END,
+         MAX(1, COALESCE(org.next_invoice_number, 1)), datetime('now')
+       FROM financial_years fy JOIN organizations org ON org.id = fy.organization_id`,
+      "CREATE UNIQUE INDEX IF NOT EXISTS idx_financial_years_one_active ON financial_years (organization_id) WHERE is_active = 1",
+      "CREATE INDEX IF NOT EXISTS idx_financial_years_org_dates ON financial_years (organization_id, start_date DESC, end_date DESC)",
+      "CREATE INDEX IF NOT EXISTS idx_financial_year_opening_party ON financial_year_opening_balances (organization_id, financial_year_id, party_type, party_id)",
+      "CREATE INDEX IF NOT EXISTS idx_financial_year_opening_inventory ON financial_year_inventory_openings (organization_id, financial_year_id, product_id, warehouse_id, batch_id)",
+      "CREATE INDEX IF NOT EXISTS idx_sales_invoices_org_fy_date ON sales_invoices (organization_id, financial_year_id, invoice_date DESC, id DESC)",
+      "CREATE INDEX IF NOT EXISTS idx_sales_invoices_org_fy_customer ON sales_invoices (organization_id, financial_year_id, customer_id, invoice_date DESC)",
+      "CREATE INDEX IF NOT EXISTS idx_sales_invoices_org_fy_status ON sales_invoices (organization_id, financial_year_id, payment_status, invoice_date DESC)",
+      "CREATE INDEX IF NOT EXISTS idx_sales_invoices_org_fy_number ON sales_invoices (organization_id, financial_year_id, invoice_number COLLATE NOCASE, display_invoice_number COLLATE NOCASE)",
+      "CREATE INDEX IF NOT EXISTS idx_purchase_invoices_org_fy_date ON purchase_invoices (organization_id, financial_year_id, bill_date DESC)",
+      "CREATE INDEX IF NOT EXISTS idx_stock_movements_org_fy_date ON stock_movements (organization_id, financial_year_id, movement_date DESC)",
+      "CREATE INDEX IF NOT EXISTS idx_payments_org_fy_party_date ON payments (organization_id, financial_year_id, party_type, party_id, payment_date DESC)",
+      "CREATE INDEX IF NOT EXISTS idx_ledger_org_fy_account_date ON ledger_entries (organization_id, financial_year_id, account_type, account_id, entry_date DESC)",
+      `CREATE TRIGGER IF NOT EXISTS trg_financial_year_no_closed_invoice_insert
+       BEFORE INSERT ON sales_invoices FOR EACH ROW
+       WHEN NEW.financial_year_id IS NOT NULL AND EXISTS (SELECT 1 FROM financial_years fy WHERE fy.id = NEW.financial_year_id AND fy.organization_id = NEW.organization_id AND fy.status <> 'OPEN')
+       BEGIN SELECT RAISE(ABORT, 'financial_year_closed'); END`,
+      `CREATE TRIGGER IF NOT EXISTS trg_financial_year_no_closed_invoice_update
+       BEFORE UPDATE ON sales_invoices FOR EACH ROW
+       WHEN OLD.financial_year_id IS NOT NULL
+         AND EXISTS (SELECT 1 FROM financial_years fy WHERE fy.id = OLD.financial_year_id AND fy.organization_id = OLD.organization_id AND fy.status <> 'OPEN')
+         AND (OLD.invoice_date IS NOT NEW.invoice_date OR OLD.customer_id IS NOT NEW.customer_id OR OLD.invoice_number IS NOT NEW.invoice_number
+           OR OLD.subtotal IS NOT NEW.subtotal OR OLD.tax_total IS NOT NEW.tax_total OR OLD.grand_total IS NOT NEW.grand_total OR OLD.deleted_at IS NOT NEW.deleted_at)
+       BEGIN SELECT RAISE(ABORT, 'financial_year_closed'); END`,
+      `CREATE TRIGGER IF NOT EXISTS trg_financial_year_no_closed_invoice_delete
+       BEFORE DELETE ON sales_invoices FOR EACH ROW
+       WHEN OLD.financial_year_id IS NOT NULL AND EXISTS (SELECT 1 FROM financial_years fy WHERE fy.id = OLD.financial_year_id AND fy.status <> 'OPEN')
+       BEGIN SELECT RAISE(ABORT, 'financial_year_closed'); END`,
+      `CREATE TRIGGER IF NOT EXISTS trg_financial_year_no_closed_item_mutation
+       BEFORE UPDATE ON sales_invoice_items FOR EACH ROW
+       WHEN EXISTS (SELECT 1 FROM sales_invoices invoice JOIN financial_years fy ON fy.id = invoice.financial_year_id WHERE invoice.id = OLD.invoice_id AND invoice.organization_id = OLD.organization_id AND fy.status <> 'OPEN')
+         AND (OLD.product_id IS NOT NEW.product_id OR OLD.quantity IS NOT NEW.quantity OR OLD.unit_price IS NOT NEW.unit_price OR OLD.tax_percent IS NOT NEW.tax_percent OR OLD.line_total IS NOT NEW.line_total OR OLD.deleted_at IS NOT NEW.deleted_at)
+       BEGIN SELECT RAISE(ABORT, 'financial_year_closed'); END`,
+      `CREATE TRIGGER IF NOT EXISTS trg_financial_year_no_closed_movement_insert
+       BEFORE INSERT ON stock_movements FOR EACH ROW
+       WHEN NEW.financial_year_id IS NOT NULL AND EXISTS (SELECT 1 FROM financial_years fy WHERE fy.id = NEW.financial_year_id AND fy.status <> 'OPEN')
+       BEGIN SELECT RAISE(ABORT, 'financial_year_closed'); END`,
+      `CREATE TRIGGER IF NOT EXISTS trg_financial_year_no_closed_movement_update
+       BEFORE UPDATE ON stock_movements FOR EACH ROW
+       WHEN OLD.financial_year_id IS NOT NULL AND EXISTS (SELECT 1 FROM financial_years fy WHERE fy.id = OLD.financial_year_id AND fy.status <> 'OPEN')
+         AND (OLD.quantity IS NOT NEW.quantity OR OLD.movement_date IS NOT NEW.movement_date OR OLD.product_id IS NOT NEW.product_id OR OLD.batch_id IS NOT NEW.batch_id OR OLD.warehouse_id IS NOT NEW.warehouse_id OR OLD.deleted_at IS NOT NEW.deleted_at)
+       BEGIN SELECT RAISE(ABORT, 'financial_year_closed'); END`,
+      `CREATE TRIGGER IF NOT EXISTS trg_financial_year_no_closed_movement_delete
+       BEFORE DELETE ON stock_movements FOR EACH ROW
+       WHEN OLD.financial_year_id IS NOT NULL AND EXISTS (SELECT 1 FROM financial_years fy WHERE fy.id = OLD.financial_year_id AND fy.status <> 'OPEN')
+       BEGIN SELECT RAISE(ABORT, 'financial_year_closed'); END`,
+      `CREATE TRIGGER IF NOT EXISTS trg_financial_year_no_closed_purchase_insert
+       BEFORE INSERT ON purchase_invoices FOR EACH ROW
+       WHEN NEW.financial_year_id IS NOT NULL AND EXISTS (SELECT 1 FROM financial_years fy WHERE fy.id = NEW.financial_year_id AND fy.status <> 'OPEN')
+       BEGIN SELECT RAISE(ABORT, 'financial_year_closed'); END`,
+      `CREATE TRIGGER IF NOT EXISTS trg_financial_year_no_closed_ledger_insert
+       BEFORE INSERT ON ledger_entries FOR EACH ROW
+       WHEN NEW.financial_year_id IS NOT NULL AND EXISTS (SELECT 1 FROM financial_years fy WHERE fy.id = NEW.financial_year_id AND fy.status <> 'OPEN')
+       BEGIN SELECT RAISE(ABORT, 'financial_year_closed'); END`,
+      `CREATE TRIGGER IF NOT EXISTS trg_financial_year_no_closed_payment_insert
+       BEFORE INSERT ON payments FOR EACH ROW
+       WHEN NEW.financial_year_id IS NOT NULL AND EXISTS (SELECT 1 FROM financial_years fy WHERE fy.id = NEW.financial_year_id AND fy.status <> 'OPEN')
+       BEGIN SELECT RAISE(ABORT, 'financial_year_closed'); END`,
+      ...closedFinancialYearMutationTriggers("purchase_invoices", "purchase_invoice"),
+      ...closedFinancialYearMutationTriggers("expenses", "expense"),
+      ...closedFinancialYearMutationTriggers("payments", "payment"),
+      ...closedFinancialYearMutationTriggers("payment_receipts", "payment_receipt"),
+      ...closedFinancialYearMutationTriggers("ledger_entries", "ledger_entry"),
+      ...closedFinancialYearMutationTriggers("accounting_vouchers", "accounting_voucher"),
+      ...closedFinancialYearMutationTriggers("credit_notes", "credit_note"),
+      ...closedFinancialYearMutationTriggers("debit_notes", "debit_note"),
+      ...closedFinancialYearMutationTriggers("delivery_challans", "delivery_challan"),
+      ...closedFinancialYearMutationTriggers("quotations", "quotation"),
+      ...closedFinancialYearMutationTriggers("orders", "order"),
+      ...closedFinancialYearMutationTriggers("gst_invoice_summary", "gst_invoice_summary"),
+      ...closedFinancialYearMutationTriggers("gst_hsn_summary", "gst_hsn_summary"),
+      ...closedFinancialYearMutationTriggers("financial_year_opening_balances", "opening_balance"),
+      ...closedFinancialYearMutationTriggers("financial_year_inventory_openings", "inventory_opening"),
+      ...closedFinancialYearChildTriggers("sales_invoice_items", "sales_invoices", "invoice_id", "sales_invoice_item"),
+      ...closedFinancialYearChildTriggers("purchase_invoice_items", "purchase_invoices", "purchase_invoice_id", "purchase_invoice_item"),
+      ...closedFinancialYearChildTriggers("accounting_voucher_entries", "accounting_vouchers", "voucher_id", "accounting_voucher_entry"),
+      ...closedFinancialYearChildTriggers("credit_note_items", "credit_notes", "credit_note_id", "credit_note_item"),
+      ...closedFinancialYearChildTriggers("debit_note_items", "debit_notes", "debit_note_id", "debit_note_item"),
+      ...closedFinancialYearChildTriggers("delivery_challan_items", "delivery_challans", "challan_id", "delivery_challan_item"),
+      ...closedFinancialYearChildTriggers("quotation_items", "quotations", "quotation_id", "quotation_item"),
+      ...closedFinancialYearChildTriggers("order_items", "orders", "order_id", "order_item"),
+      ...financialYearDateAssignmentTriggers("sales_invoices", "sales_invoice", "COALESCE(ROW.invoice_date, ROW.date, ROW.created_at)"),
+      ...financialYearDateAssignmentTriggers("purchase_invoices", "purchase_invoice", "COALESCE(ROW.bill_date, ROW.created_at)"),
+      ...financialYearDateAssignmentTriggers("stock_movements", "stock_movement", "COALESCE(ROW.movement_date, ROW.created_at)"),
+      ...financialYearDateAssignmentTriggers("expenses", "expense", "COALESCE(ROW.expense_date, ROW.created_at)"),
+      ...financialYearDateAssignmentTriggers("payments", "payment", "COALESCE(ROW.payment_date, ROW.created_at)"),
+      ...financialYearDateAssignmentTriggers("payment_receipts", "payment_receipt", "COALESCE(ROW.received_at, ROW.created_at)"),
+      ...financialYearDateAssignmentTriggers("ledger_entries", "ledger_entry", "COALESCE(ROW.entry_date, ROW.created_at)"),
+      ...financialYearDateAssignmentTriggers("accounting_vouchers", "accounting_voucher", "COALESCE(ROW.voucher_date, ROW.created_at)"),
+      ...financialYearDateAssignmentTriggers("credit_notes", "credit_note", "COALESCE(ROW.note_date, ROW.created_at)"),
+      ...financialYearDateAssignmentTriggers("debit_notes", "debit_note", "COALESCE(ROW.note_date, ROW.created_at)"),
+      ...financialYearDateAssignmentTriggers("delivery_challans", "delivery_challan", "COALESCE(ROW.challan_date, ROW.created_at)"),
+      ...financialYearDateAssignmentTriggers("quotations", "quotation", "ROW.created_at"),
+      ...financialYearDateAssignmentTriggers("orders", "order", "ROW.created_at"),
+      `CREATE TRIGGER IF NOT EXISTS trg_financial_year_verify_inventory_opening
+       BEFORE UPDATE OF opening_snapshot_json ON financial_years FOR EACH ROW
+       WHEN NEW.opening_snapshot_json IS NOT NULL AND NEW.previous_financial_year_id IS NOT NULL
+         AND ABS(
+           COALESCE((SELECT SUM(quantity) FROM financial_year_inventory_openings opening WHERE opening.organization_id = NEW.organization_id AND opening.financial_year_id = NEW.id), 0)
+           - COALESCE((SELECT SUM(stock) FROM products product WHERE product.organization_id = NEW.organization_id AND product.deleted_at IS NULL), 0)
+         ) > 0.0001
+       BEGIN SELECT RAISE(ABORT, 'financial_year_inventory_opening_mismatch'); END`,
     ],
   },
 ]

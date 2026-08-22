@@ -3,6 +3,7 @@
 import { getLocalDatabaseService, type SqlExecutor, type SqlValue } from "@/lib/offline/local/service"
 import { normalizedTables } from "@/lib/offline/local/schema"
 import type { OfflineAction, OfflineActionStatus, OfflineCollection } from "@/lib/offline/db"
+import { financialYearIdForDate } from "@/lib/financial-years"
 
 type DataRow = Record<string, unknown>
 
@@ -20,6 +21,7 @@ export type NormalizedListQuery = {
   gstStatus?: string
   customerId?: string
   period?: string
+  financialYearId?: string
 }
 
 export type NormalizedListPage = {
@@ -78,7 +80,18 @@ const collectionOrder: Partial<Record<OfflineCollection, string>> = {
   settings: "datetime(updated_at) DESC",
   profiles: "datetime(updated_at) DESC",
   organization_members: "datetime(updated_at) DESC",
+  financial_years: "start_date DESC",
+  financial_year_opening_balances: "created_at DESC",
+  financial_year_inventory_openings: "created_at DESC",
+  financial_year_invoice_sequences: "updated_at DESC",
   workspace: "datetime(updated_at) DESC",
+}
+
+const financialCollectionTables: Partial<Record<OfflineCollection, string>> = {
+  financial_years: "financial_years",
+  financial_year_opening_balances: "financial_year_opening_balances",
+  financial_year_inventory_openings: "financial_year_inventory_openings",
+  financial_year_invoice_sequences: "financial_year_invoice_sequences",
 }
 
 function nowIso() {
@@ -143,6 +156,13 @@ function common(row: DataRow, organizationId: string, prefix: string, index = 0)
     updated_at: text(row, ["updated_at"]) || nowIso(),
     deleted_at: text(row, ["deleted_at"]),
   }
+}
+
+function datedFinancialYearId(input: DataRow, organizationId: string, dateKeys: string[]) {
+  const explicit = text(input, ["financial_year_id"])
+  if (explicit) return explicit
+  const value = text(input, dateKeys) || text(input, ["created_at"]) || nowIso().slice(0, 10)
+  return financialYearIdForDate(organizationId, value)
 }
 
 async function upsert(db: SqlExecutor, table: string, row: DataRow) {
@@ -293,11 +313,14 @@ function warehouseRow(input: DataRow, organizationId: string, index = 0) {
 function invoiceRow(input: DataRow, organizationId: string, index = 0) {
   const amount = number(input, ["grand_total", "total_amount", "total"], 0)
   const created = text(input, ["created_at"]) || nowIso()
+  const databaseInvoiceNumber = text(input, ["database_invoice_number", "invoice_number"], `INV-${Date.now()}-${index}`)
+  const displayInvoiceNumber = text(input, ["display_invoice_number", "invoice_number"], databaseInvoiceNumber)
   return {
     ...common(input, organizationId, "invoice", index),
     customer_id: text(input, ["customer_id"]),
     customer_name: text(input, ["customer_name"]),
-    invoice_number: text(input, ["invoice_number"], `INV-${Date.now()}-${index}`),
+    invoice_number: databaseInvoiceNumber,
+    display_invoice_number: displayInvoiceNumber,
     invoice_type: text(input, ["invoice_type"], "standard"),
     invoice_date: text(input, ["invoice_date", "date"]) || created.slice(0, 10),
     date: text(input, ["date"]) || created.slice(0, 10),
@@ -321,6 +344,7 @@ function invoiceRow(input: DataRow, organizationId: string, index = 0) {
     courier_name: text(input, ["courier_name"]),
     tracking_number: text(input, ["tracking_number"]),
     offline_client_id: text(input, ["offline_client_id", "offlineClientId"]),
+    financial_year_id: datedFinancialYearId(input, organizationId, ["invoice_date", "date"]),
   }
 }
 
@@ -368,6 +392,7 @@ function orderRow(input: DataRow, organizationId: string, index = 0) {
     total_amount: amount,
     grand_total: number(input, ["grand_total", "total_amount", "total"], amount),
     total: number(input, ["total", "grand_total", "total_amount"], amount),
+    financial_year_id: datedFinancialYearId(input, organizationId, ["created_at"]),
   }
 }
 
@@ -412,6 +437,7 @@ function paymentReceiptRow(input: DataRow, organizationId: string, index = 0) {
     reference_no: text(input, ["reference_no"]),
     received_at: text(input, ["received_at", "payment_date"]) || nowIso(),
     notes: text(input, ["notes"]),
+    financial_year_id: datedFinancialYearId(input, organizationId, ["received_at", "payment_date"]),
   }
 }
 
@@ -427,6 +453,7 @@ function ledgerEntryRow(input: DataRow, organizationId: string, index = 0) {
     credit: number(input, ["credit"], 0),
     currency: text(input, ["currency"], "INR"),
     description: text(input, ["description", "notes"]),
+    financial_year_id: datedFinancialYearId(input, organizationId, ["entry_date", "date"]),
   }
 }
 
@@ -476,6 +503,7 @@ function accountingVoucherRow(input: DataRow, organizationId: string, index = 0)
     total_debit: number(input, ["total_debit"], 0),
     total_credit: number(input, ["total_credit"], 0),
     status: text(input, ["status"], "posted"),
+    financial_year_id: datedFinancialYearId(input, organizationId, ["voucher_date", "date"]),
   }
 }
 
@@ -506,6 +534,7 @@ function quotationRow(input: DataRow, organizationId: string, index = 0) {
     tax_total: number(input, ["tax_total", "tax_amount"], 0),
     grand_total: number(input, ["grand_total", "total_amount", "total"], 0),
     notes: text(input, ["notes"]),
+    financial_year_id: datedFinancialYearId(input, organizationId, ["created_at"]),
   }
 }
 
@@ -531,6 +560,7 @@ function deliveryChallanRow(input: DataRow, organizationId: string, index = 0) {
     challan_date: text(input, ["challan_date", "date"]) || nowIso().slice(0, 10),
     status: text(input, ["status"], "draft"),
     notes: text(input, ["notes"]),
+    financial_year_id: datedFinancialYearId(input, organizationId, ["challan_date", "date"]),
   }
 }
 
@@ -556,6 +586,7 @@ function creditNoteRow(input: DataRow, organizationId: string, index = 0) {
     tax_total: number(input, ["tax_total", "tax_amount"], 0),
     grand_total: number(input, ["grand_total", "total_amount", "total"], 0),
     status: text(input, ["status"], "open"),
+    financial_year_id: datedFinancialYearId(input, organizationId, ["note_date", "date"]),
   }
 }
 
@@ -582,6 +613,7 @@ function debitNoteRow(input: DataRow, organizationId: string, index = 0) {
     tax_total: number(input, ["tax_total", "tax_amount"], 0),
     grand_total: number(input, ["grand_total", "total_amount", "total"], 0),
     status: text(input, ["status"], "open"),
+    financial_year_id: datedFinancialYearId(input, organizationId, ["note_date", "date"]),
   }
 }
 
@@ -662,6 +694,7 @@ function stockMovementRow(input: DataRow, organizationId: string, index = 0) {
     reference_type: text(input, ["reference_type"]),
     reference_id: text(input, ["reference_id"]),
     movement_date: text(input, ["movement_date"]) || (text(input, ["created_at"]) || nowIso()).slice(0, 10),
+    financial_year_id: datedFinancialYearId(input, organizationId, ["movement_date"]),
   }
 }
 
@@ -841,6 +874,15 @@ export class InvoiceRepository extends TableRepository {
     const tx = db || (await service.requireConnection("read"))
     return listTable(tx, "sales_invoice_items", organizationId, "datetime(created_at) ASC")
   }
+
+  async list(organizationId: string, db?: SqlExecutor) {
+    const rows = await super.list(organizationId, db)
+    return rows.map((row) => ({
+      ...row,
+      database_invoice_number: row.invoice_number,
+      invoice_number: row.display_invoice_number || row.invoice_number,
+    }))
+  }
 }
 
 export class PurchaseRepository extends TableRepository {
@@ -866,6 +908,7 @@ export class PurchaseRepository extends TableRepository {
       outstanding_amount: number(row, ["outstanding_amount"], Math.max(0, number(row, ["grand_total", "total_amount", "total"], 0) - number(row, ["paid_amount"], 0))),
       status: text(row, ["status"], "unpaid"),
       notes: text(row, ["notes"]),
+      financial_year_id: datedFinancialYearId(row, organizationId, ["bill_date"]),
     }))
   }
 
@@ -911,6 +954,7 @@ export class ExpenseRepository extends TableRepository {
       outstanding_amount: number(row, ["outstanding_amount"], 0),
       payment_method: text(row, ["payment_method"]),
       reference_no: text(row, ["reference_no"]),
+      financial_year_id: datedFinancialYearId(row, organizationId, ["expense_date"]),
     }))
   }
 }
@@ -930,6 +974,7 @@ export class PaymentRepository extends TableRepository {
       payment_date: text(row, ["payment_date", "received_at"]) || nowIso().slice(0, 10),
       cleared_at: text(row, ["cleared_at"]),
       notes: text(row, ["notes"]),
+      financial_year_id: datedFinancialYearId(row, organizationId, ["payment_date", "received_at"]),
     }))
   }
 
@@ -1243,6 +1288,11 @@ export async function putNormalizedCollection(organizationId: string, collection
 
 async function putNormalizedCollectionWithDb(db: SqlExecutor, organizationId: string, collection: OfflineCollection, rows: DataRow[]) {
   await ensureOrganization(db, organizationId)
+  const financialTable = financialCollectionTables[collection]
+  if (financialTable) {
+    for (const row of rows) await upsert(db, financialTable, { ...row, organization_id: organizationId })
+    return
+  }
   if (collection === "products") await repositories.products.replaceSynced(organizationId, rows, db)
   // ProductRepository updates inventory_items atomically with products. The
   // compatibility collection must not run the same full replacement twice.
@@ -1292,15 +1342,17 @@ export async function readNormalizedInvoiceCreationContext(
   organizationId: string,
   customerId: string,
   productIds: string[],
-  offlineClientId: string
+  offlineClientId: string,
+  invoiceDate: string,
+  financialYearIdValue: string
 ) {
   const db = await service.requireConnection("read")
   const uniqueProductIds = [...new Set(productIds.filter(Boolean))]
   const placeholders = uniqueProductIds.map(() => "?").join(", ")
-  const [existingRows, organizationRows, customerRows, products, batches] = await Promise.all([
+  const [existingRows, organizationRows, customerRows, products, batches, yearRows, sequenceRows] = await Promise.all([
     offlineClientId
       ? db.select<DataRow>(
-          "SELECT id, invoice_number FROM sales_invoices WHERE organization_id = ? AND offline_client_id = ? LIMIT 1",
+          "SELECT id, COALESCE(display_invoice_number, invoice_number) AS invoice_number FROM sales_invoices WHERE organization_id = ? AND offline_client_id = ? LIMIT 1",
           [organizationId, offlineClientId]
         )
       : Promise.resolve([]),
@@ -1318,18 +1370,38 @@ export async function readNormalizedInvoiceCreationContext(
           [organizationId, ...uniqueProductIds]
         )
       : Promise.resolve([]),
+    db.select<DataRow>(
+      "SELECT * FROM financial_years WHERE organization_id = ? AND id = ? AND date(?) BETWEEN date(start_date) AND date(end_date) LIMIT 1",
+      [organizationId, financialYearIdValue, invoiceDate]
+    ),
+    db.select<DataRow>(
+      "SELECT * FROM financial_year_invoice_sequences WHERE organization_id = ? AND financial_year_id = ? LIMIT 1",
+      [organizationId, financialYearIdValue]
+    ),
   ])
   const organization = organizationRows[0] || null
-  const prefix = text(organization || {}, ["invoice_prefix"], "INV") || "INV"
+  const financialYear = yearRows[0] || null
+  const sequence = sequenceRows[0] || null
+  const numberingMode = text(financialYear, ["invoice_numbering_mode"], "CONTINUE") || "CONTINUE"
+  const prefix = text(sequence, ["prefix"], text(organization || {}, ["invoice_prefix"], "INV")) || "INV"
   const nextSequence = Math.max(1, Number(organization?.next_invoice_number || 1))
+  const financialYearSequence = Math.max(1, Number(sequence?.next_number || 1))
+  const invoiceSequence = numberingMode === "RESTART" ? financialYearSequence : nextSequence
+  const displayInvoiceNumber = `${prefix}-${String(invoiceSequence).padStart(5, "0")}`
+  const databaseInvoiceNumber = numberingMode === "RESTART"
+    ? `${String(financialYear?.label || financialYearIdValue).replace(/[^0-9A-Za-z-]/g, "-")}/${displayInvoiceNumber}`
+    : displayInvoiceNumber
   return {
     existing: existingRows[0] || null,
     organization,
     customer: customerRows[0] || null,
     products,
     batches,
-    invoiceSequence: nextSequence,
-    invoiceNumber: `${prefix}-${String(nextSequence).padStart(5, "0")}`,
+    financialYear,
+    numberingMode,
+    invoiceSequence,
+    invoiceNumber: displayInvoiceNumber,
+    databaseInvoiceNumber,
   }
 }
 
@@ -1385,6 +1457,8 @@ export type NormalizedInvoiceAtomicInput = {
   customerSalesDelta: number
   customerBalanceDelta: number
   invoiceSequence: number
+  numberingMode: "CONTINUE" | "RESTART"
+  financialYearId: string
 }
 
 export type NormalizedInvoiceDeletionInput = {
@@ -1476,12 +1550,25 @@ export async function createNormalizedInvoiceAtomic(input: NormalizedInvoiceAtom
         input.customerId,
       ]
     )
-    await db.execute(
-      `UPDATE organizations
-       SET next_invoice_number = MAX(COALESCE(next_invoice_number, 1), ?), updated_at = ?
-       WHERE id = ?`,
-      [input.invoiceSequence + 1, input.invoice.updated_at as SqlValue, input.organizationId]
-    )
+    if (input.numberingMode === "RESTART") {
+      await db.execute(
+        `UPDATE financial_year_invoice_sequences SET next_number = MAX(next_number, ?), updated_at = ?
+         WHERE organization_id = ? AND financial_year_id = ?`,
+        [input.invoiceSequence + 1, input.invoice.updated_at as SqlValue, input.organizationId, input.financialYearId]
+      )
+    } else {
+      await db.execute(
+        `UPDATE organizations
+         SET next_invoice_number = MAX(COALESCE(next_invoice_number, 1), ?), updated_at = ?
+         WHERE id = ?`,
+        [input.invoiceSequence + 1, input.invoice.updated_at as SqlValue, input.organizationId]
+      )
+      await db.execute(
+        `UPDATE financial_year_invoice_sequences SET next_number = MAX(next_number, ?), updated_at = ?
+         WHERE organization_id = ? AND financial_year_id = ?`,
+        [input.invoiceSequence + 1, input.invoice.updated_at as SqlValue, input.organizationId, input.financialYearId]
+      )
+    }
   })
 }
 
@@ -1728,6 +1815,8 @@ export async function queryNormalizedProducts(organizationId: string, query: Nor
 
 export async function queryNormalizedCustomers(organizationId: string, query: NormalizedListQuery): Promise<NormalizedListPage> {
   const db = await service.requireConnection("read")
+  const invoiceYearClause = query.financialYearId ? " AND financial_year_id = ?" : ""
+  const invoiceYearValues: SqlValue[] = query.financialYearId ? [query.financialYearId] : []
   const where = ["c.organization_id = ?", "c.deleted_at IS NULL"]
   const values: SqlValue[] = [organizationId]
   const search = query.search.trim()
@@ -1767,6 +1856,35 @@ export async function queryNormalizedCustomers(organizationId: string, query: No
      WHERE ${whereSql}`,
     values
   )
+  if (query.financialYearId && summaryRow) {
+    const [financialSummary] = await db.select<Record<string, number>>(
+      `WITH filtered_customers AS (
+         SELECT c.id FROM customers c WHERE ${whereSql}
+       ), invoice_summary AS (
+         SELECT COALESCE(SUM(COALESCE(invoice.grand_total, invoice.total_amount, invoice.total, 0)), 0) AS revenue
+         FROM sales_invoices invoice
+         WHERE invoice.organization_id = ? AND invoice.financial_year_id = ? AND invoice.deleted_at IS NULL
+           AND invoice.customer_id IN (SELECT id FROM filtered_customers)
+       ), opening AS (
+         SELECT party_id, SUM(amount) AS amount FROM financial_year_opening_balances
+         WHERE organization_id = ? AND financial_year_id = ? AND party_type = 'customer' AND balance_type = 'RECEIVABLE'
+         GROUP BY party_id
+       ), activity AS (
+         SELECT account_id AS party_id, SUM(COALESCE(debit, 0) - COALESCE(credit, 0)) AS amount FROM ledger_entries
+         WHERE organization_id = ? AND financial_year_id = ? AND account_type = 'customer' AND deleted_at IS NULL
+         GROUP BY account_id
+       )
+       SELECT
+         (SELECT revenue FROM invoice_summary) AS totalRevenue,
+         COALESCE(SUM(MAX(0, COALESCE(opening.amount, 0) + COALESCE(activity.amount, 0))), 0) AS totalOutstanding
+       FROM filtered_customers customer
+       LEFT JOIN opening ON opening.party_id = customer.id
+       LEFT JOIN activity ON activity.party_id = customer.id`,
+      [...values, organizationId, query.financialYearId, organizationId, query.financialYearId, organizationId, query.financialYearId]
+    )
+    summaryRow.totalRevenue = Number(financialSummary?.totalRevenue || 0)
+    summaryRow.totalOutstanding = Number(financialSummary?.totalOutstanding || 0)
+  }
   const total = Number(summaryRow?.totalCustomers || 0)
   const offset = (query.page - 1) * query.limit
   const metricSort = ["total_sales", "last_purchase_at", "invoice_count"].includes(query.sort)
@@ -1775,7 +1893,7 @@ export async function queryNormalizedCustomers(organizationId: string, query: No
         `SELECT
            c.*,
            COALESCE(inv.invoice_count, 0) AS invoice_count,
-           CASE WHEN COALESCE(inv.invoice_count, 0) > 0 THEN COALESCE(inv.invoice_revenue, 0) ELSE COALESCE(c.total_sales, 0) END AS total_sales,
+           CASE WHEN COALESCE(inv.invoice_count, 0) > 0 THEN COALESCE(inv.invoice_revenue, 0) ELSE ${query.financialYearId ? "0" : "COALESCE(c.total_sales, 0)"} END AS total_sales,
            COALESCE(inv.last_purchase_at, c.last_purchase_at) AS last_purchase_at
          FROM customers c
          LEFT JOIN (
@@ -1784,13 +1902,13 @@ export async function queryNormalizedCustomers(organizationId: string, query: No
                   SUM(COALESCE(grand_total, total_amount, total, 0)) AS invoice_revenue,
                   MAX(created_at) AS last_purchase_at
            FROM sales_invoices
-           WHERE organization_id = ? AND deleted_at IS NULL
+           WHERE organization_id = ? AND deleted_at IS NULL${invoiceYearClause}
            GROUP BY customer_id
          ) inv ON inv.customer_id = c.id
          WHERE ${whereSql}
          ORDER BY ${orderBy} ${listDirection(query.direction)}, c.id ${listDirection(query.direction)}
          LIMIT ? OFFSET ?`,
-        [organizationId, ...values, query.limit, offset]
+        [organizationId, ...invoiceYearValues, ...values, query.limit, offset]
       )
     : await db.select<DataRow>(
         `WITH customer_page AS (
@@ -1805,19 +1923,19 @@ export async function queryNormalizedCustomers(organizationId: string, query: No
                   SUM(COALESCE(invoice.grand_total, invoice.total_amount, invoice.total, 0)) AS invoice_revenue,
                   MAX(invoice.created_at) AS last_purchase_at
            FROM sales_invoices invoice
-           WHERE invoice.organization_id = ? AND invoice.deleted_at IS NULL
+           WHERE invoice.organization_id = ? AND invoice.deleted_at IS NULL${query.financialYearId ? " AND invoice.financial_year_id = ?" : ""}
              AND invoice.customer_id IN (SELECT id FROM customer_page)
            GROUP BY invoice.customer_id
          )
          SELECT
            page.*,
            COALESCE(metrics.invoice_count, 0) AS invoice_count,
-           CASE WHEN COALESCE(metrics.invoice_count, 0) > 0 THEN COALESCE(metrics.invoice_revenue, 0) ELSE COALESCE(page.total_sales, 0) END AS total_sales,
+           CASE WHEN COALESCE(metrics.invoice_count, 0) > 0 THEN COALESCE(metrics.invoice_revenue, 0) ELSE ${query.financialYearId ? "0" : "COALESCE(page.total_sales, 0)"} END AS total_sales,
            COALESCE(metrics.last_purchase_at, page.last_purchase_at) AS last_purchase_at
          FROM customer_page page
          LEFT JOIN invoice_metrics metrics ON metrics.customer_id = page.id
          ORDER BY ${query.sort === "name" ? "page.name COLLATE NOCASE" : query.sort === "updated_at" ? "datetime(page.updated_at)" : "datetime(page.created_at)"} ${listDirection(query.direction)}, page.id ${listDirection(query.direction)}`,
-        [...values, query.limit, offset, organizationId]
+        [...values, query.limit, offset, organizationId, ...invoiceYearValues]
       )
   return { data, total, summary: { ...summaryRow, totalCustomers: total } }
 }
@@ -1826,11 +1944,15 @@ export async function queryNormalizedInvoices(organizationId: string, query: Nor
   const db = await service.requireConnection("read")
   const where = ["i.organization_id = ?", "i.deleted_at IS NULL"]
   const values: SqlValue[] = [organizationId]
+  if (query.financialYearId) {
+    where.push("i.financial_year_id = ?")
+    values.push(query.financialYearId)
+  }
   const search = query.search.trim()
   if (search) {
     const term = likeTerm(search)
-    where.push("(i.invoice_number LIKE ? COLLATE NOCASE OR i.payment_method LIKE ? COLLATE NOCASE OR COALESCE(i.customer_name, c.name) LIKE ? COLLATE NOCASE OR i.notes LIKE ? COLLATE NOCASE)")
-    values.push(term, term, term, term)
+    where.push("(i.invoice_number LIKE ? COLLATE NOCASE OR i.display_invoice_number LIKE ? COLLATE NOCASE OR i.payment_method LIKE ? COLLATE NOCASE OR COALESCE(i.customer_name, c.name) LIKE ? COLLATE NOCASE OR i.notes LIKE ? COLLATE NOCASE)")
+    values.push(term, term, term, term, term)
   }
   if (query.status && query.status !== "all") {
     where.push("(i.payment_status = ? OR i.status = ?)")
@@ -1929,7 +2051,11 @@ export async function queryNormalizedInvoices(organizationId: string, query: Nor
   const paidRevenue = Number(summaryRow?.paidRevenue || 0)
   return {
     data: data.map((row) => {
-      const output = { ...row }
+      const output: DataRow = {
+        ...row,
+        database_invoice_number: row.invoice_number,
+        invoice_number: row.display_invoice_number || row.invoice_number,
+      }
       delete output.resolved_customer_name
       return output
     }),
@@ -1945,8 +2071,11 @@ export async function queryNormalizedInvoices(organizationId: string, query: Nor
   }
 }
 
-export async function queryNormalizedDashboardSummary(organizationId: string) {
+export async function queryNormalizedDashboardSummary(organizationId: string, financialYearId?: string | null) {
   const db = await service.requireConnection("read")
+  const financialYearClause = financialYearId ? " AND financial_year_id = ?" : ""
+  const aliasedFinancialYearClause = financialYearId ? " AND invoice.financial_year_id = ?" : ""
+  const financialYearValues: SqlValue[] = financialYearId ? [organizationId, financialYearId] : [organizationId]
   const [invoiceRows, productRows, customerRows, warehouseRows, weeklyRevenue, recentProducts, lowStockProducts, recentInvoices, recentMovements] = await Promise.all([
     db.select<DataRow>(
       `SELECT
@@ -1956,8 +2085,8 @@ export async function queryNormalizedDashboardSummary(organizationId: string) {
          COALESCE(SUM(COALESCE(NULLIF(paid_amount, 0), CASE WHEN lower(COALESCE(payment_status, status, '')) IN ('paid', 'completed', 'success') THEN COALESCE(grand_total, total_amount, total, 0) ELSE 0 END)), 0) AS paidRevenue,
          SUM(CASE WHEN lower(COALESCE(payment_status, status, 'unpaid')) IN ('unpaid', 'pending', 'overdue', 'partial', '') THEN 1 ELSE 0 END) AS pendingInvoices
        FROM sales_invoices
-       WHERE organization_id = ? AND deleted_at IS NULL`,
-      [organizationId]
+       WHERE organization_id = ? AND deleted_at IS NULL${financialYearClause}`,
+      financialYearValues
     ),
     db.select<DataRow>(
       `SELECT
@@ -1977,9 +2106,10 @@ export async function queryNormalizedDashboardSummary(organizationId: string) {
               COALESCE(SUM(COALESCE(grand_total, total_amount, total, 0)), 0) AS value
        FROM sales_invoices
        WHERE organization_id = ? AND deleted_at IS NULL
+         ${financialYearClause}
          AND date(COALESCE(invoice_date, date, created_at)) >= date('now', 'localtime', '-6 days')
        GROUP BY weekday`,
-      [organizationId]
+      financialYearValues
     ),
     db.select<DataRow>("SELECT * FROM products WHERE organization_id = ? AND deleted_at IS NULL ORDER BY created_at DESC, id DESC LIMIT 5", [organizationId]),
     db.select<DataRow>("SELECT * FROM products WHERE organization_id = ? AND deleted_at IS NULL AND COALESCE(stock, 0) <= COALESCE(min_stock, 5) ORDER BY stock ASC, updated_at DESC LIMIT 5", [organizationId]),
@@ -1988,11 +2118,11 @@ export async function queryNormalizedDashboardSummary(organizationId: string) {
               customer.phone AS customer_phone, customer.email AS customer_email
        FROM sales_invoices invoice
        LEFT JOIN customers customer ON customer.id = invoice.customer_id AND customer.organization_id = invoice.organization_id
-       WHERE invoice.organization_id = ? AND invoice.deleted_at IS NULL
+       WHERE invoice.organization_id = ? AND invoice.deleted_at IS NULL${aliasedFinancialYearClause}
        ORDER BY invoice.created_at DESC, invoice.id DESC LIMIT 5`,
-      [organizationId]
+      financialYearValues
     ),
-    db.select<DataRow>("SELECT * FROM stock_movements WHERE organization_id = ? AND deleted_at IS NULL ORDER BY created_at DESC, id DESC LIMIT 12", [organizationId]),
+    db.select<DataRow>(`SELECT * FROM stock_movements WHERE organization_id = ? AND deleted_at IS NULL${financialYearClause} ORDER BY created_at DESC, id DESC LIMIT 12`, financialYearValues),
   ])
   const invoices = invoiceRows[0] || {}
   const products = productRows[0] || {}
@@ -2035,8 +2165,11 @@ export async function queryNormalizedDashboardSummary(organizationId: string) {
   }
 }
 
-export async function queryNormalizedBillingSummary(organizationId: string) {
+export async function queryNormalizedBillingSummary(organizationId: string, financialYearId?: string | null) {
   const db = await service.requireConnection("read")
+  const financialYearClause = financialYearId ? " AND financial_year_id = ?" : ""
+  const aliasedFinancialYearClause = financialYearId ? " AND invoice.financial_year_id = ?" : ""
+  const financialYearValues: SqlValue[] = financialYearId ? [organizationId, financialYearId] : [organizationId]
   const [invoiceRows, productRows, customerRows, weeklyRevenue, recentInvoices] = await Promise.all([
     db.select<DataRow>(
       `SELECT
@@ -2051,8 +2184,8 @@ export async function queryNormalizedBillingSummary(organizationId: string) {
          SUM(CASE WHEN lower(COALESCE(payment_status, status, 'unpaid')) = 'partial' THEN 1 ELSE 0 END) AS partialCount,
          SUM(CASE WHEN lower(COALESCE(payment_status, status, 'unpaid')) NOT IN ('paid', 'completed', 'success', 'cancelled') THEN 1 ELSE 0 END) AS openInvoices
        FROM sales_invoices
-       WHERE organization_id = ? AND deleted_at IS NULL`,
-      [organizationId]
+       WHERE organization_id = ? AND deleted_at IS NULL${financialYearClause}`,
+      financialYearValues
     ),
     db.select<DataRow>(
       `SELECT COUNT(*) AS productCount,
@@ -2067,18 +2200,19 @@ export async function queryNormalizedBillingSummary(organizationId: string) {
               COALESCE(SUM(COALESCE(grand_total, total_amount, total, 0)), 0) AS total
        FROM sales_invoices
        WHERE organization_id = ? AND deleted_at IS NULL
+         ${financialYearClause}
          AND date(COALESCE(invoice_date, date, created_at)) >= date('now', 'localtime', '-6 days')
        GROUP BY day ORDER BY day ASC`,
-      [organizationId]
+      financialYearValues
     ),
     db.select<DataRow>(
       `SELECT invoice.*, COALESCE(invoice.customer_name, customer.name) AS customer_name,
               customer.phone AS customer_phone, customer.email AS customer_email
        FROM sales_invoices invoice
        LEFT JOIN customers customer ON customer.id = invoice.customer_id AND customer.organization_id = invoice.organization_id
-       WHERE invoice.organization_id = ? AND invoice.deleted_at IS NULL
+       WHERE invoice.organization_id = ? AND invoice.deleted_at IS NULL${aliasedFinancialYearClause}
        ORDER BY invoice.created_at DESC, invoice.id DESC LIMIT 10`,
-      [organizationId]
+      financialYearValues
     ),
   ])
   const invoice = invoiceRows[0] || {}
@@ -2121,8 +2255,10 @@ export async function queryNormalizedBillingSummary(organizationId: string) {
   }
 }
 
-export async function queryNormalizedAnalyticsReport(organizationId: string) {
+export async function queryNormalizedAnalyticsReport(organizationId: string, financialYearId?: string | null) {
   const db = await service.requireConnection("read")
+  const financialYearClause = financialYearId ? " AND financial_year_id = ?" : ""
+  const financialYearValues: SqlValue[] = financialYearId ? [organizationId, financialYearId] : [organizationId]
   const [invoiceRows, productRows, customerRows, weeklyRevenue, categories, productProfit] = await Promise.all([
     db.select<DataRow>(
       `SELECT COUNT(*) AS invoiceCount,
@@ -2130,8 +2266,8 @@ export async function queryNormalizedAnalyticsReport(organizationId: string) {
               COALESCE(SUM(COALESCE(NULLIF(paid_amount, 0), CASE WHEN lower(COALESCE(payment_status, status, '')) IN ('paid', 'completed', 'success') THEN COALESCE(grand_total, total_amount, total, 0) ELSE 0 END)), 0) AS paidRevenue,
               SUM(CASE WHEN lower(COALESCE(payment_status, status, 'unpaid')) IN ('paid', 'completed', 'success') THEN 1 ELSE 0 END) AS paidCount,
               SUM(CASE WHEN lower(COALESCE(payment_status, status, 'unpaid')) NOT IN ('paid', 'completed', 'success', 'cancelled') THEN 1 ELSE 0 END) AS unpaidCount
-       FROM sales_invoices WHERE organization_id = ? AND deleted_at IS NULL`,
-      [organizationId]
+       FROM sales_invoices WHERE organization_id = ? AND deleted_at IS NULL${financialYearClause}`,
+      financialYearValues
     ),
     db.select<DataRow>(
       `SELECT COUNT(*) AS productCount,
@@ -2149,9 +2285,10 @@ export async function queryNormalizedAnalyticsReport(organizationId: string) {
               COALESCE(SUM(COALESCE(grand_total, total_amount, total, 0)), 0) AS revenue
        FROM sales_invoices
        WHERE organization_id = ? AND deleted_at IS NULL
+         ${financialYearClause}
          AND date(COALESCE(invoice_date, date, created_at)) >= date('now', 'localtime', '-6 days')
        GROUP BY day ORDER BY day`,
-      [organizationId]
+      financialYearValues
     ),
     db.select<DataRow>(
       `SELECT COALESCE(NULLIF(trim(category), ''), 'General') AS name,
@@ -2211,6 +2348,10 @@ export async function queryNormalizedAnalyticsReport(organizationId: string) {
 
 export async function getNormalizedCollection(organizationId: string, collection: OfflineCollection) {
   const db = await service.requireConnection("read")
+  const financialTable = financialCollectionTables[collection]
+  if (financialTable) {
+    return db.select<DataRow>(`SELECT * FROM ${financialTable} WHERE organization_id = ? ORDER BY ${collectionOrder[collection] || "created_at DESC"}`, [organizationId])
+  }
   if (collection === "products" || collection === "inventory_items") return repositories.products.list(organizationId, db)
   if (collection === "customers") return repositories.customers.list(organizationId, db)
   if (collection === "suppliers") return repositories.suppliers.list(organizationId, db)
@@ -2382,9 +2523,13 @@ export async function clearNormalizedData() {
 export async function mergeNormalizedOrganization(sourceOrganizationId: string, targetOrganizationId: string) {
   if (!sourceOrganizationId || !targetOrganizationId || sourceOrganizationId === targetOrganizationId) return
   const businessTables = [
+    "financial_years",
+    "financial_year_invoice_sequences",
     "products",
     "inventory_items",
     "stock_batches",
+    "financial_year_opening_balances",
+    "financial_year_inventory_openings",
     "stock_movements",
     "customers",
     "suppliers",
@@ -2415,8 +2560,13 @@ export async function mergeNormalizedOrganization(sourceOrganizationId: string, 
   await service.transaction(async (db) => {
     await ensureOrganization(db, targetOrganizationId)
     await db.execute("PRAGMA defer_foreign_keys = ON")
+    const yearStates = await db.select<{ id: string; status: string }>("SELECT id, status FROM financial_years WHERE organization_id = ?", [sourceOrganizationId])
+    await db.execute("UPDATE financial_years SET status = 'OPEN' WHERE organization_id = ?", [sourceOrganizationId])
     for (const table of businessTables) {
       await db.execute(`UPDATE ${table} SET organization_id = ? WHERE organization_id = ?`, [targetOrganizationId, sourceOrganizationId])
+    }
+    for (const year of yearStates) {
+      await db.execute("UPDATE financial_years SET status = ? WHERE organization_id = ? AND id = ?", [year.status, targetOrganizationId, year.id])
     }
   })
 }

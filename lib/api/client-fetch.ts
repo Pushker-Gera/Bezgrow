@@ -79,8 +79,27 @@ export async function authHeaders(headersInit?: HeadersInit) {
   return headers
 }
 
+function withSelectedFinancialYear(input: RequestInfo | URL, init: RequestInit) {
+  if (typeof window === "undefined") return { input, init }
+  const selected = localStorage.getItem("bezgrow:selected-financial-year") || ""
+  if (!selected) return { input, init }
+  const raw = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url
+  const url = new URL(raw, window.location.origin)
+  if (!url.searchParams.has("financial_year_id")) url.searchParams.set("financial_year_id", selected)
+  const nextInput = raw.startsWith("http://") || raw.startsWith("https://") ? url.toString() : `${url.pathname}${url.search}${url.hash}`
+  if (typeof init.body !== "string") return { input: nextInput, init }
+  try {
+    const body = JSON.parse(init.body) as Record<string, unknown>
+    if (!body.financial_year_id) body.financial_year_id = selected
+    return { input: nextInput, init: { ...init, body: JSON.stringify(body) } }
+  } catch {
+    return { input: nextInput, init }
+  }
+}
+
 export async function apiFetch(input: RequestInfo | URL, init: RequestInit = {}) {
-  const localResult = await localApiFetch(input, init)
+  const contextual = withSelectedFinancialYear(input, init)
+  const localResult = await localApiFetch(contextual.input, contextual.init)
   if (localResult.handled && localResult.response) {
     if (localResult.response.status === 403 && typeof window !== "undefined") {
       const payload = (await localResult.response.clone().json().catch(() => null)) as { error?: string } | null

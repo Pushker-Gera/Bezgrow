@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from "react"
 import { useDebounce } from "use-debounce"
 import { MoneyValue } from "@/components/MoneyValue"
+import { useFinancialYears } from "@/components/financial-years/FinancialYearContext"
 import { apiFetch } from "@/lib/api/client-fetch"
 import { exportCsv } from "@/lib/desktop-file-export"
 import { getOrganizationId } from "@/lib/getOrganization"
@@ -74,6 +75,14 @@ type CustomerWithLedger = Customer & {
   invoiceCount: number
   invoiceRevenue: number
   lastInvoiceAt: string | null
+}
+
+type FinancialYearLedger = {
+  openingBalance: number
+  invoices: number
+  payments: number
+  closingBalance: number
+  entries: Array<Record<string, unknown>>
 }
 
 const emptyForm: CustomerForm = {
@@ -1155,6 +1164,31 @@ function CustomerDetailModal({
   customer: CustomerWithLedger
   onClose: () => void
 }) {
+  const { years, selectedYear } = useFinancialYears()
+  const [ledgerYearId, setLedgerYearId] = useState(selectedYear?.id || "all")
+  const [ledger, setLedger] = useState<FinancialYearLedger | null>(null)
+  const [ledgerError, setLedgerError] = useState("")
+
+  useEffect(() => {
+    let active = true
+    async function loadLedger() {
+      try {
+        const params = new URLSearchParams({ customer_id: customer.id, financial_year_id: ledgerYearId })
+        const response = await apiFetch(`/api/customers/financial-year-ledger?${params}`, { cache: "no-store" })
+        const payload = await response.json() as { ledger?: FinancialYearLedger; error?: string }
+        if (!response.ok) throw new Error(payload.error || "Customer ledger failed to load.")
+        if (active) {
+          setLedger(payload.ledger || null)
+          setLedgerError("")
+        }
+      } catch (error) {
+        if (active) setLedgerError(error instanceof Error ? error.message : "Customer ledger failed to load.")
+      }
+    }
+    void loadLedger()
+    return () => { active = false }
+  }, [customer.id, ledgerYearId])
+
   return (
     <div className="fixed inset-0 z-50 flex justify-end bg-black/75 backdrop-blur-sm">
       <div className="h-full w-full max-w-2xl overflow-y-auto border-l border-white/10 bg-[#050606] shadow-2xl">
@@ -1194,6 +1228,25 @@ function CustomerDetailModal({
           <div className="rounded-lg border border-white/10 bg-white/[0.04] p-4 sm:col-span-2">
             <p className="text-xs uppercase tracking-[0.14em] text-neutral-500">Address</p>
             <p className="mt-2 leading-6 text-neutral-100">{customer.address || "-"}</p>
+          </div>
+          <div className="rounded-lg border border-cyan-300/20 bg-cyan-400/[0.05] p-4 sm:col-span-2">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div><p className="text-xs uppercase tracking-[0.14em] text-cyan-200">Customer Ledger</p><p className="mt-1 text-sm text-neutral-400">Opening balances are shown separately from taxable sales.</p></div>
+              <select value={ledgerYearId} onChange={(event) => setLedgerYearId(event.target.value)} className="h-10 rounded-lg border border-white/10 bg-black px-3 text-sm font-bold">
+                <option value="all">All Financial Years</option>
+                {years.map((year) => <option key={year.id} value={year.id}>{year.label}</option>)}
+              </select>
+            </div>
+            {ledgerError ? <p className="mt-4 text-sm text-red-200">{ledgerError}</p> : ledger ? (
+              <>
+                <div className="mt-4 grid grid-cols-2 gap-3 sm:grid-cols-4">
+                  {[["Opening Receivable", ledger.openingBalance], ["Invoices", ledger.invoices], ["Payments", ledger.payments], ["Closing Balance", ledger.closingBalance]].map(([label, value]) => <div key={String(label)} className="rounded-lg border border-white/10 bg-black/35 p-3"><p className="text-[10px] uppercase tracking-wider text-neutral-500">{label}</p><p className="mt-2 font-black">{money(Number(value))}</p></div>)}
+                </div>
+                <div className="mt-4 max-h-64 overflow-auto rounded-lg border border-white/10">
+                  {ledger.entries.length === 0 ? <p className="p-4 text-sm text-neutral-500">No ledger entries in this period.</p> : <table className="w-full text-left text-xs"><thead className="sticky top-0 bg-neutral-950 text-neutral-500"><tr><th className="p-3">Date</th><th className="p-3">Description</th><th className="p-3 text-right">Debit</th><th className="p-3 text-right">Credit</th><th className="p-3 text-right">Balance</th></tr></thead><tbody>{ledger.entries.map((entry) => <tr key={String(entry.id)} className="border-t border-white/10"><td className="p-3">{formatDate(String(entry.entry_date || entry.created_at || ""))}</td><td className="p-3">{String(entry.description || entry.document_type || "Entry")}</td><td className="p-3 text-right">{money(Number(entry.debit || 0))}</td><td className="p-3 text-right">{money(Number(entry.credit || 0))}</td><td className="p-3 text-right font-bold">{money(Number(entry.running_balance || 0))}</td></tr>)}</tbody></table>}
+                </div>
+              </>
+            ) : <p className="mt-4 text-sm text-neutral-500">Loading ledger…</p>}
           </div>
         </div>
       </div>

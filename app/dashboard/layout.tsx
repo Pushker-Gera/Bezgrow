@@ -14,6 +14,7 @@ import { isTauriRuntimeAsync } from "@/lib/desktop/tauri"
 import { getLocalDatabaseService } from "@/lib/offline/local/service"
 import { localLicenseSnapshot, restoreLicensedWorkspaceContext, revalidateLocalLicenseWithControlPlane } from "@/lib/offline/local/license"
 import { clearWorkspaceBootstrapCache } from "@/lib/workspaceBootstrapClient"
+import { FinancialYearProvider, FinancialYearScopedContent, FinancialYearSelector, FinancialYearViewingBanner } from "@/components/financial-years/FinancialYearContext"
 
 const navItems = [
     ["Dashboard", "/dashboard"],
@@ -56,6 +57,7 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
     const pathname = usePathname()
     const [businessName, setBusinessName] = useState("My Business")
     const [ownerEmail, setOwnerEmail] = useState("")
+    const [organizationId, setOrganizationId] = useState("")
     const [mobileMoreOpen, setMobileMoreOpen] = useState(false)
     const [tabletNavOpen, setTabletNavOpen] = useState(false)
     const [online, setOnline] = useState(true)
@@ -102,6 +104,7 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
                     if (!cancelled) setDesktopDatabase({ status: "license-valid" })
 
                     if (restoredWorkspace?.success) {
+                        setOrganizationId(organizationId || "")
                         if (restoredWorkspace.organization?.name) setBusinessName(restoredWorkspace.organization.name)
                         setOwnerEmail(restoredWorkspace.user?.email || "licensed@bezgrow.local")
                         setCanShowAdmin(false)
@@ -231,6 +234,7 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
     }
 
     return (
+        <FinancialYearProvider organizationId={organizationId}>
         <div className="responsive-shell flex h-dvh max-h-dvh overflow-hidden bg-black text-white">
             <FormKeyboardNavigation />
             <aside className="hidden w-[292px] shrink-0 border-r border-white/10 bg-[#060909] p-5 lg:flex lg:flex-col">
@@ -284,6 +288,7 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
                                 Sales, stock, customers, invoices, and reports.
                             </p>
                         </div>
+                        <FinancialYearSelector />
                         <Link href="/profile" className="flex h-11 shrink-0 items-center gap-2 rounded-2xl border border-white/10 bg-white/[0.04] px-2 hover:border-cyan-400/30 sm:h-12 sm:gap-3 sm:px-3">
                             <span className="flex h-9 w-9 items-center justify-center rounded-xl bg-cyan-400 text-sm font-black text-black">
                                 {workspaceInitial}
@@ -309,6 +314,7 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
                                 Sales, stock, customers, invoices, and reports.
                             </p>
                         </div>
+                        <FinancialYearSelector compact />
                         <Link href="/profile" className="flex h-12 shrink-0 items-center gap-3 rounded-2xl border border-white/10 bg-white/[0.04] px-3 hover:border-cyan-400/30">
                             <span className="flex h-9 w-9 items-center justify-center rounded-xl bg-cyan-400 text-sm font-black text-black">
                                 {workspaceInitial}
@@ -347,6 +353,7 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
                                     <span className={`h-2 w-2 rounded-full ${online ? "bg-emerald-300" : "bg-amber-300"}`} />
                                     <span>{online ? "Online" : "Offline"}</span>
                                 </div>
+                                <div className="mt-2"><FinancialYearSelector compact /></div>
                             </div>
                         </div>
                         <div className="flex shrink-0 items-center gap-2">
@@ -369,7 +376,8 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
                 </header>
 
                 <main className={`min-h-0 flex-1 overflow-x-hidden bg-black ${isInvoicePrintWorkspace ? "overflow-hidden p-0" : "overflow-y-auto pb-28 md:pb-4"}`}>
-                    {children}
+                    {!isInvoicePrintWorkspace && <FinancialYearViewingBanner />}
+                    <FinancialYearScopedContent>{children}</FinancialYearScopedContent>
                 </main>
 
                 <nav className="fixed inset-x-0 bottom-0 z-40 border-t border-white/10 bg-[#050707]/95 px-2 pb-[calc(env(safe-area-inset-bottom)+0.5rem)] pt-2 shadow-[0_-18px_60px_rgba(0,0,0,0.35)] backdrop-blur-xl md:hidden">
@@ -433,5 +441,6 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
                 </nav>
             </div>
         </div>
+        </FinancialYearProvider>
     )
 }

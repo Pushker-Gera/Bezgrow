@@ -39,6 +39,19 @@ import {
   type NormalizedListQuery,
 } from "@/lib/offline/local/repositories"
 import { getLocalDatabaseService, LocalDatabaseUnavailableError } from "@/lib/offline/local/service"
+import { isoLocalDate, normalizeLocalDate, type InvoiceNumberingMode } from "@/lib/financial-years"
+import {
+  assertFinancialYearWriteAllowed,
+  closeFinancialYear,
+  createNextFinancialYear,
+  customerFinancialYearLedger,
+  financialYearClosingChecks,
+  financialYearSummary,
+  getFinancialYear,
+  listFinancialYears,
+  reopenFinancialYear,
+  setFinancialYearNumberingMode,
+} from "@/lib/offline/local/financial-years"
 
 type DataRow = Record<string, unknown> & { id?: string }
 
@@ -100,6 +113,14 @@ const dailyEndpoints = new Set([
   "/api/database/integrity",
   "/api/settings/update-organization",
   "/api/settings/toggle-feature",
+  "/api/financial-years/list",
+  "/api/financial-years/summary",
+  "/api/financial-years/closing-checks",
+  "/api/financial-years/create-next",
+  "/api/financial-years/close",
+  "/api/financial-years/reopen",
+  "/api/financial-years/numbering",
+  "/api/customers/financial-year-ledger",
 ])
 
 function jsonResponse(payload: unknown, status = 200) {
@@ -241,7 +262,41 @@ function normalizedListQuery(url: URL): NormalizedListQuery {
     gstStatus: url.searchParams.get("gst_status") || "all",
     customerId: url.searchParams.get("customer_id") || "all",
     period: url.searchParams.get("period") || "all",
+    financialYearId: url.searchParams.get("financial_year_id") || undefined,
   }
+}
+
+const datedMutationKeys: Record<string, string[]> = {
+  "/api/invoices/create": ["invoice_date", "date"],
+  "/api/purchases/create": ["bill_date"],
+  "/api/purchases/return": ["bill_date"],
+  "/api/purchases/order": ["bill_date"],
+  "/api/purchases/goods-received": ["bill_date"],
+  "/api/purchases/supplier-payment": ["payment_date"],
+  "/api/quotations/create": ["created_at"],
+  "/api/delivery-challans/create": ["challan_date"],
+  "/api/sales/proforma/create": ["invoice_date", "date"],
+  "/api/sales/returns/create": ["note_date"],
+  "/api/payments/create": ["payment_date"],
+  "/api/accounting/vouchers/create": ["voucher_date"],
+  "/api/notes/credit": ["note_date"],
+  "/api/notes/debit": ["note_date"],
+  "/api/expenses/create": ["expense_date"],
+  "/api/inventory/simple-movement": ["movement_date"],
+  "/api/inventory/professional-movement": ["movement_date"],
+}
+
+async function applyDatedMutationFinancialYear(pathname: string, body: DataRow, organizationId: string) {
+  const keys = datedMutationKeys[pathname]
+  if (!keys) return null
+  const rawDate = keys.map((key) => localString(body[key])).find(Boolean) || isoLocalDate()
+  const date = normalizeLocalDate(rawDate)
+  const requested = localString(body.financial_year_id)
+  const year = await assertFinancialYearWriteAllowed(organizationId, date, requested || null)
+  body.financial_year_id = year.id
+  const primaryKey = keys[0]
+  if (!body[primaryKey]) body[primaryKey] = date
+  return year
 }
 
 function localListResponse(collection: "products" | "customers" | "invoices", url: URL, organizationId: string, page: NormalizedListPage) {
@@ -272,6 +327,11 @@ function localListResponse(collection: "products" | "customers" | "invoices", ur
 
 function filterDeleted<T extends DataRow>(rows: T[]) {
   return rows.filter((row) => !row.deleted_at)
+}
+
+function filterSelectedFinancialYear<T extends DataRow>(url: URL, rows: T[]) {
+  const financialYearIdValue = url.searchParams.get("financial_year_id")
+  return financialYearIdValue ? rows.filter((row) => row.financial_year_id === financialYearIdValue) : rows
 }
 
 async function readCollection<T extends DataRow>(organizationId: string, collection: OfflineCollection) {
@@ -609,6 +669,8 @@ function consumeInvoiceBatches(batches: DataRow[], items: DataRow[], now: string
 
 async function createInvoice(body: DataRow, organizationId: string) {
   const now = nowIso()
+  const invoiceDate = normalizeLocalDate(localString(body.invoice_date || body.date, isoLocalDate()))
+  const financialYear = await assertFinancialYearWriteAllowed(organizationId, invoiceDate, localString(body.financial_year_id) || null)
   const items = Array.isArray(body.items) ? (body.items as DataRow[]) : []
   if (!items.length) return fail("Invalid invoice.", 422)
 
@@ -618,7 +680,9 @@ async function createInvoice(body: DataRow, organizationId: string) {
     organizationId,
     localString(body.customer_id),
     productIds,
-    offlineClientId
+    offlineClientId,
+    invoiceDate,
+    financialYear.id
   )
   if (context.existing) {
     return ok({
@@ -647,6 +711,7 @@ async function createInvoice(body: DataRow, organizationId: string) {
   const invoiceId = createOfflineId("invoice")
   const invoiceSequence = context.invoiceSequence
   const invoiceNumber = context.invoiceNumber
+  const databaseInvoiceNumber = context.databaseInvoiceNumber
   const totalAmount = localNumber(body.total_amount)
   const paidAmount = Math.min(totalAmount, localNumber(body.paid_amount, body.payment_status === "paid" ? totalAmount : 0))
   const outstandingAmount = Math.max(0, totalAmount - paidAmount)
@@ -657,7 +722,8 @@ async function createInvoice(body: DataRow, organizationId: string) {
     ...body,
     id: invoiceId,
     organization_id: organizationId,
-    invoice_number: invoiceNumber,
+    invoice_number: databaseInvoiceNumber,
+    display_invoice_number: invoiceNumber,
     customer_name: customer.name || "Customer",
     grand_total: body.total_amount,
     total: body.total_amount,
@@ -668,8 +734,9 @@ async function createInvoice(body: DataRow, organizationId: string) {
     outstanding_amount: outstandingAmount,
     payment_status: paymentStatus,
     status: paymentStatus,
-    date: now.slice(0, 10),
-    invoice_date: now.slice(0, 10),
+    date: invoiceDate,
+    invoice_date: invoiceDate,
+    financial_year_id: financialYear.id,
     offline_client_id: offlineClientId,
     sync_status: "pending_create",
     created_at: now,
@@ -720,6 +787,8 @@ async function createInvoice(body: DataRow, organizationId: string) {
         reference_no: invoiceNumber,
         reference_type: "invoice",
         reference_id: invoiceId,
+        movement_date: invoiceDate,
+        financial_year_id: financialYear.id,
         sync_status: "pending_create",
         created_at: now,
         updated_at: now,
@@ -734,7 +803,8 @@ async function createInvoice(body: DataRow, organizationId: string) {
       account_id: body.customer_id,
       document_type: "sales_invoice",
       document_id: invoiceId,
-      entry_date: now.slice(0, 10),
+        entry_date: invoiceDate,
+        financial_year_id: financialYear.id,
       debit: totalAmount,
       credit: 0,
       description: `Invoice ${invoiceNumber}`,
@@ -749,7 +819,8 @@ async function createInvoice(body: DataRow, organizationId: string) {
       account_id: null,
       document_type: "sales_invoice",
       document_id: invoiceId,
-      entry_date: now.slice(0, 10),
+        entry_date: invoiceDate,
+        financial_year_id: financialYear.id,
       debit: 0,
       credit: taxableAmount,
       description: `Invoice ${invoiceNumber}`,
@@ -766,7 +837,8 @@ async function createInvoice(body: DataRow, organizationId: string) {
             account_id: null,
             document_type: "sales_invoice",
             document_id: invoiceId,
-            entry_date: now.slice(0, 10),
+            entry_date: invoiceDate,
+            financial_year_id: financialYear.id,
             debit: 0,
             credit: taxTotal,
             description: `GST ${invoiceNumber}`,
@@ -785,7 +857,8 @@ async function createInvoice(body: DataRow, organizationId: string) {
             account_id: null,
             document_type: "payment_receipt",
             document_id: receiptId,
-            entry_date: now.slice(0, 10),
+            entry_date: invoiceDate,
+            financial_year_id: financialYear.id,
             debit: paidAmount,
             credit: 0,
             description: `Receipt ${invoiceNumber}`,
@@ -800,7 +873,8 @@ async function createInvoice(body: DataRow, organizationId: string) {
             account_id: body.customer_id,
             document_type: "payment_receipt",
             document_id: receiptId,
-            entry_date: now.slice(0, 10),
+            entry_date: invoiceDate,
+            financial_year_id: financialYear.id,
             debit: 0,
             credit: paidAmount,
             description: `Receipt ${invoiceNumber}`,
@@ -821,7 +895,8 @@ async function createInvoice(body: DataRow, organizationId: string) {
           receipt_type: "customer_receipt",
           amount: paidAmount,
           payment_method: body.payment_method || "cash",
-          received_at: now,
+          received_at: `${invoiceDate}T12:00:00`,
+          financial_year_id: financialYear.id,
           sync_status: "pending_create",
           created_at: now,
           updated_at: now,
@@ -840,7 +915,8 @@ async function createInvoice(body: DataRow, organizationId: string) {
             direction: "in",
             payment_method: body.payment_method || "cash",
             reference_no: invoiceNumber,
-            payment_date: now.slice(0, 10),
+            payment_date: invoiceDate,
+            financial_year_id: financialYear.id,
             cleared_at: now,
             sync_status: "pending_create",
             created_at: now,
@@ -874,6 +950,8 @@ async function createInvoice(body: DataRow, organizationId: string) {
     customerSalesDelta: totalAmount,
     customerBalanceDelta: outstandingAmount,
     invoiceSequence,
+    numberingMode: context.numberingMode as "CONTINUE" | "RESTART",
+    financialYearId: financialYear.id,
   })
 
   return ok({ invoice_id: invoiceId, invoice_number: invoiceNumber })
@@ -883,6 +961,11 @@ async function updateInvoiceStatus(body: DataRow, organizationId: string) {
   const invoiceId = localString(body.invoice_id)
   const paymentStatus = localString(body.payment_status || body.status)
   if (!invoiceId || !paymentStatus) return fail("Invalid invoice status update.", 422)
+  const [invoice] = await databaseManager.select<DataRow>("SELECT financial_year_id FROM sales_invoices WHERE organization_id = ? AND id = ? AND deleted_at IS NULL LIMIT 1", [organizationId, invoiceId])
+  if (invoice?.financial_year_id) {
+    const year = await getFinancialYear(organizationId, String(invoice.financial_year_id))
+    if (year?.status !== "OPEN") return fail(`${year?.label || "This financial year"} is closed. Invoice status cannot be edited.`, 409)
+  }
   const now = nowIso()
   const updated = await updateNormalizedInvoicePaymentStatus(organizationId, invoiceId, paymentStatus, now)
   if (!updated) return fail("Invoice was not found.", 404)
@@ -896,6 +979,10 @@ async function deleteInvoice(body: DataRow, organizationId: string) {
   const context = await readNormalizedInvoiceDeletionContext(organizationId, invoiceId)
   if (!context) return fail("Invoice was not found.", 404)
   const { invoice, items, movements, products } = context
+  if (invoice.financial_year_id) {
+    const year = await getFinancialYear(organizationId, String(invoice.financial_year_id))
+    if (year?.status !== "OPEN") return fail(`${year?.label || "This financial year"} is closed. Historical invoices cannot be deleted.`, 409)
+  }
   const invoiceQuantityByProduct = new Map<string, number>()
   for (const item of items) {
     const productId = localString(item.product_id)
@@ -1044,7 +1131,7 @@ function moneyValue(value: number) {
 
 async function listQuotations(url: URL, organizationId: string) {
   const search = url.searchParams.get("search") || ""
-  let rows = filterDeleted(await readCollection<DataRow>(organizationId, "quotations"))
+  let rows = filterSelectedFinancialYear(url, filterDeleted(await readCollection<DataRow>(organizationId, "quotations")))
   rows = rows.filter((row) => rowMatches(row, ["quote_number", "status", "notes"], search))
   rows = sortRows(rows, url.searchParams.get("sort") || "created_at", url.searchParams.get("direction") || "desc")
   return jsonResponse(paginate(url, rows))
@@ -1088,7 +1175,7 @@ async function createQuotation(body: DataRow, organizationId: string) {
 
 async function listDeliveryChallans(url: URL, organizationId: string) {
   const search = url.searchParams.get("search") || ""
-  let rows = filterDeleted(await readCollection<DataRow>(organizationId, "delivery_challans"))
+  let rows = filterSelectedFinancialYear(url, filterDeleted(await readCollection<DataRow>(organizationId, "delivery_challans")))
   rows = rows.filter((row) => rowMatches(row, ["challan_number", "status", "notes"], search))
   rows = sortRows(rows, url.searchParams.get("sort") || "created_at", url.searchParams.get("direction") || "desc")
   return jsonResponse(paginate(url, rows))
@@ -1254,7 +1341,7 @@ async function stockMovement(body: DataRow, organizationId: string) {
 async function listPurchases(url: URL, organizationId: string) {
   const search = url.searchParams.get("search") || ""
   const kind = url.searchParams.get("kind") || "all"
-  let rows = filterDeleted(await readCollection<DataRow>(organizationId, "purchase_invoices"))
+  let rows = filterSelectedFinancialYear(url, filterDeleted(await readCollection<DataRow>(organizationId, "purchase_invoices")))
   rows = rows.filter((row) => (kind === "all" ? true : row.invoice_kind === kind))
   rows = rows.filter((row) => rowMatches(row, ["bill_number", "supplier_name", "status", "invoice_kind", "notes"], search))
   rows = sortRows(rows, url.searchParams.get("sort") || "created_at", url.searchParams.get("direction") || "desc")
@@ -1278,7 +1365,7 @@ async function purchaseCreate(body: DataRow, organizationId: string, kind: "purc
 async function listPayments(url: URL, organizationId: string) {
   const search = url.searchParams.get("search") || ""
   const paymentDirection = url.searchParams.get("payment_direction") || "all"
-  let rows = filterDeleted(await readCollection<DataRow>(organizationId, "payments"))
+  let rows = filterSelectedFinancialYear(url, filterDeleted(await readCollection<DataRow>(organizationId, "payments")))
   rows = rows.filter((row) => (paymentDirection === "all" ? true : row.direction === paymentDirection))
   rows = rows.filter((row) => rowMatches(row, ["party_type", "payment_method", "reference_no", "notes"], search))
   rows = sortRows(rows, url.searchParams.get("sort") || "created_at", url.searchParams.get("direction") || "desc")
@@ -1357,7 +1444,7 @@ async function saveBankAccount(body: DataRow, organizationId: string) {
 async function listAccountingVouchers(url: URL, organizationId: string) {
   const search = url.searchParams.get("search") || ""
   const kind = url.searchParams.get("type") || "all"
-  let rows = filterDeleted(await readCollection<DataRow>(organizationId, "accounting_vouchers"))
+  let rows = filterSelectedFinancialYear(url, filterDeleted(await readCollection<DataRow>(organizationId, "accounting_vouchers")))
   rows = rows.filter((row) => (kind === "all" ? true : row.voucher_type === kind))
   rows = rows.filter((row) => rowMatches(row, ["voucher_number", "voucher_type", "reference_no", "narration"], search))
   rows = sortRows(rows, url.searchParams.get("sort") || "voucher_date", url.searchParams.get("direction") || "desc")
@@ -1379,7 +1466,7 @@ async function noteCreate(body: DataRow, organizationId: string, kind: "credit" 
 async function listExpenses(url: URL, organizationId: string) {
   const search = url.searchParams.get("search") || ""
   const category = url.searchParams.get("category") || "all"
-  let rows = filterDeleted(await readCollection<DataRow>(organizationId, "expenses"))
+  let rows = filterSelectedFinancialYear(url, filterDeleted(await readCollection<DataRow>(organizationId, "expenses")))
   rows = rows.filter((row) => (category === "all" ? true : row.category === category))
   rows = rows.filter((row) => rowMatches(row, ["category", "description", "payment_method", "reference_no"], search))
   rows = sortRows(rows, url.searchParams.get("sort") || "created_at", url.searchParams.get("direction") || "desc")
@@ -1403,13 +1490,14 @@ async function professionalInventoryMovement(body: DataRow, organizationId: stri
 
 async function localReport(url: URL, organizationId: string) {
   if (url.searchParams.get("type") === "analytics-dashboard") {
-    return jsonResponse({ success: true, report: await queryNormalizedAnalyticsReport(organizationId) })
+    return jsonResponse({ success: true, report: await queryNormalizedAnalyticsReport(organizationId, url.searchParams.get("financial_year_id")) })
   }
   const report = await getOfflineReport(organizationId, url.searchParams.get("type") || "dashboard", {
     start: url.searchParams.get("start"),
     end: url.searchParams.get("end"),
     account_type: url.searchParams.get("account_type"),
     account_id: url.searchParams.get("account_id"),
+    financial_year_id: url.searchParams.get("financial_year_id"),
   })
   if (url.searchParams.get("format") === "csv") {
     const candidate = report as DataRow
@@ -1439,15 +1527,65 @@ async function databaseIntegrity(organizationId: string) {
   return jsonResponse({ success: true, integrity: await runProfessionalIntegrityChecks(organizationId) })
 }
 
+async function financialYearsList(organizationId: string) {
+  const years = await listFinancialYears(organizationId)
+  return ok({ years, active: years.find((year) => year.is_active) || null })
+}
+
+async function financialYearSummaryResponse(url: URL, organizationId: string) {
+  const financialYearIdValue = url.searchParams.get("financial_year_id") || ""
+  if (!financialYearIdValue) return fail("Financial year is required.", 422)
+  const year = await getFinancialYear(organizationId, financialYearIdValue)
+  if (!year) return fail("Financial year was not found.", 404)
+  return ok({ year, summary: await financialYearSummary(organizationId, financialYearIdValue) })
+}
+
+async function financialYearClosingChecksResponse(url: URL, organizationId: string) {
+  const financialYearIdValue = url.searchParams.get("financial_year_id") || ""
+  if (!financialYearIdValue) return fail("Financial year is required.", 422)
+  return ok({ checks: await financialYearClosingChecks(organizationId, financialYearIdValue) })
+}
+
+async function financialYearCreateNext(body: DataRow, organizationId: string) {
+  const sourceId = localString(body.source_financial_year_id || body.financial_year_id)
+  if (!sourceId) return fail("Source financial year is required.", 422)
+  return ok(await createNextFinancialYear(organizationId, sourceId) as unknown as Record<string, unknown>)
+}
+
+async function financialYearClose(body: DataRow, organizationId: string) {
+  const financialYearIdValue = localString(body.financial_year_id)
+  if (!financialYearIdValue) return fail("Financial year is required.", 422)
+  return ok(await closeFinancialYear(organizationId, financialYearIdValue, localString(body.confirmation)) as unknown as Record<string, unknown>)
+}
+
+async function financialYearReopen(body: DataRow, organizationId: string) {
+  const financialYearIdValue = localString(body.financial_year_id)
+  if (!financialYearIdValue) return fail("Financial year is required.", 422)
+  return ok(await reopenFinancialYear(organizationId, financialYearIdValue, localString(body.confirmation), localString(body.reason)) as unknown as Record<string, unknown>)
+}
+
+async function financialYearNumbering(body: DataRow, organizationId: string) {
+  const financialYearIdValue = localString(body.financial_year_id)
+  if (!financialYearIdValue) return fail("Financial year is required.", 422)
+  return ok(await setFinancialYearNumberingMode(organizationId, financialYearIdValue, localString(body.mode) as InvoiceNumberingMode) as unknown as Record<string, unknown>)
+}
+
+async function customerLedgerByFinancialYear(url: URL, organizationId: string) {
+  const customerId = url.searchParams.get("customer_id") || ""
+  if (!customerId) return fail("Customer is required.", 422)
+  const requestedYear = url.searchParams.get("financial_year_id")
+  return ok({ ledger: await customerFinancialYearLedger(organizationId, customerId, requestedYear === "all" ? null : requestedYear) })
+}
+
 async function localWorkspaceBootstrap() {
   const workspace = getCachedWorkspaceBootstrap() || (await restoreLicensedWorkspaceContext().catch(() => null))
   if (!workspace?.success) return fail("Activation required. Enter a valid Bezgrow license to use desktop mode.", 403)
   return ok(workspace as unknown as Record<string, unknown>)
 }
 
-async function dashboardSummary(organizationId: string) {
+async function dashboardSummary(url: URL, organizationId: string) {
   const workspace = getCachedWorkspaceBootstrap()
-  const summary = await queryNormalizedDashboardSummary(organizationId)
+  const summary = await queryNormalizedDashboardSummary(organizationId, url.searchParams.get("financial_year_id"))
   return jsonResponse({
     workspace: {
       organizationId,
@@ -1462,8 +1600,8 @@ async function dashboardSummary(organizationId: string) {
   })
 }
 
-async function billingSummary(organizationId: string) {
-  return jsonResponse(await queryNormalizedBillingSummary(organizationId))
+async function billingSummary(url: URL, organizationId: string) {
+  return jsonResponse(await queryNormalizedBillingSummary(organizationId, url.searchParams.get("financial_year_id")))
 }
 
 async function updateOrganization(body: DataRow, organizationId: string) {
@@ -1583,9 +1721,18 @@ export async function localApiFetch(input: RequestInfo | URL, init: RequestInit 
     if (isLicenseRestrictedEndpoint(url.pathname, method)) {
       await assertLocalWriteAllowed(organizationId, url.pathname)
     }
+    if (method === "POST" && body) await applyDatedMutationFinancialYear(url.pathname, body, organizationId)
 
-    if (method === "GET" && url.pathname === "/api/dashboard/summary") return { handled: true, response: await dashboardSummary(organizationId) }
-    if (method === "GET" && url.pathname === "/api/dashboard/billing/summary") return { handled: true, response: await billingSummary(organizationId) }
+    if (method === "GET" && url.pathname === "/api/financial-years/list") return { handled: true, response: await financialYearsList(organizationId) }
+    if (method === "GET" && url.pathname === "/api/financial-years/summary") return { handled: true, response: await financialYearSummaryResponse(url, organizationId) }
+    if (method === "GET" && url.pathname === "/api/financial-years/closing-checks") return { handled: true, response: await financialYearClosingChecksResponse(url, organizationId) }
+    if (method === "POST" && url.pathname === "/api/financial-years/create-next") return { handled: true, response: await financialYearCreateNext(body || {}, organizationId) }
+    if (method === "POST" && url.pathname === "/api/financial-years/close") return { handled: true, response: await financialYearClose(body || {}, organizationId) }
+    if (method === "POST" && url.pathname === "/api/financial-years/reopen") return { handled: true, response: await financialYearReopen(body || {}, organizationId) }
+    if (method === "POST" && url.pathname === "/api/financial-years/numbering") return { handled: true, response: await financialYearNumbering(body || {}, organizationId) }
+    if (method === "GET" && url.pathname === "/api/customers/financial-year-ledger") return { handled: true, response: await customerLedgerByFinancialYear(url, organizationId) }
+    if (method === "GET" && url.pathname === "/api/dashboard/summary") return { handled: true, response: await dashboardSummary(url, organizationId) }
+    if (method === "GET" && url.pathname === "/api/dashboard/billing/summary") return { handled: true, response: await billingSummary(url, organizationId) }
     if (method === "GET" && url.pathname === "/api/products/list") return { handled: true, response: await listProducts(url, organizationId) }
     if (method === "POST" && url.pathname === "/api/products/create") return { handled: true, response: await saveProduct(url, body || {}, false, organizationId) }
     if (method === "POST" && url.pathname === "/api/products/update") return { handled: true, response: await saveProduct(url, body || {}, true, organizationId) }

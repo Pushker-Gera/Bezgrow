@@ -6,6 +6,7 @@ import type { ReactNode } from "react"
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { useDebounce } from "use-debounce"
 import { apiFetch } from "@/lib/api/client-fetch"
+import { useFinancialYears } from "@/components/financial-years/FinancialYearContext"
 import { loadStoredPrintSettings } from "@/components/print/settings/defaults"
 import { getOrganizationId } from "@/lib/getOrganization"
 import { createOfflineId, getOfflineData, putOfflineData, queueOfflineAction } from "@/lib/offline/db"
@@ -82,6 +83,7 @@ type InvoiceCreateResponse = {
 
 type InvoicePayload = {
   customer_id: string
+  invoice_date: string
   subtotal: number
   discount_amount: number
   discount_total: number
@@ -144,6 +146,12 @@ function offlineInvoiceNumber(date = new Date()) {
   return `OFFLINE-${stamp}`
 }
 
+function todayInputDate() {
+  const date = new Date()
+  const offset = date.getTimezoneOffset() * 60_000
+  return new Date(date.getTime() - offset).toISOString().slice(0, 10)
+}
+
 function inputClass(extra = "") {
   return `h-14 w-full rounded-2xl border border-white/10 bg-black/50 px-5 text-sm font-semibold text-white outline-none transition-all duration-300 placeholder:text-neutral-600 focus:border-cyan-300/60 focus:ring-2 focus:ring-cyan-500/10 ${extra}`
 }
@@ -161,6 +169,7 @@ function FieldLabel({ label, children }: { label: string; children: ReactNode })
 
 export default function CreateInvoicePage() {
   const router = useRouter()
+  const { selectedYear } = useFinancialYears()
   const [features, setFeatures] = useState<string[]>([])
   const [customers, setCustomers] = useState<Customer[]>([])
   const [products, setProducts] = useState<Product[]>([])
@@ -170,6 +179,7 @@ export default function CreateInvoicePage() {
   const [invoiceType, setInvoiceType] = useState("standard")
   const [paymentStatus, setPaymentStatus] = useState("paid")
   const [paymentMethod, setPaymentMethod] = useState("cash")
+  const [invoiceDate, setInvoiceDate] = useState(todayInputDate)
   const [dueDate, setDueDate] = useState("")
   const [invoiceNotes, setInvoiceNotes] = useState("")
   const [shippingCode, setShippingCode] = useState("")
@@ -454,6 +464,7 @@ export default function CreateInvoicePage() {
     setInvoiceType("standard")
     setPaymentStatus("paid")
     setPaymentMethod("cash")
+    setInvoiceDate(todayInputDate())
     setDueDate("")
     setInvoiceNotes("")
     setShippingCode("")
@@ -583,7 +594,8 @@ export default function CreateInvoicePage() {
       status: invoicePayload.payment_status,
       payment_method: invoicePayload.payment_method,
       due_date: invoicePayload.due_date,
-      date: now.slice(0, 10),
+      invoice_date: invoicePayload.invoice_date,
+      date: invoicePayload.invoice_date,
       notes: invoicePayload.notes,
       invoice_type: invoicePayload.invoice_type,
       shipping_code: invoicePayload.shipping_code,
@@ -634,6 +646,8 @@ export default function CreateInvoicePage() {
         new_stock: previousStock - quantity,
         reason: `Invoice ${invoiceNumber}`,
         reference_no: invoiceNumber,
+        movement_date: invoicePayload.invoice_date,
+        date: invoicePayload.invoice_date,
         sync_status: "pending_create",
         created_at: now,
         updated_at: now,
@@ -683,12 +697,20 @@ export default function CreateInvoicePage() {
 
   async function saveInvoice(printAfterSave = false) {
     if (loading) return
+    if (selectedYear?.status === "CLOSED") {
+      setNotice({ title: "Closed Financial Year", message: `${selectedYear.label} is read-only. Reopen it from Settings → Financial Years before entering a correction.`, type: "warning" })
+      return
+    }
     if (!selectedCustomer || items.length === 0) {
       setNotice({ title: "Incomplete Invoice", message: "Select a customer and add at least one product.", type: "warning" })
       return
     }
     if (items.some((item) => !item.product_id || item.quantity <= 0)) {
       setNotice({ title: "Invalid Products", message: "Select valid products and quantities for all invoice rows.", type: "warning" })
+      return
+    }
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(invoiceDate)) {
+      setNotice({ title: "Invoice Date Required", message: "Choose the accounting date for this invoice.", type: "warning" })
       return
     }
 
@@ -710,6 +732,7 @@ export default function CreateInvoicePage() {
 
     const invoicePayload: InvoicePayload = {
       customer_id: selectedCustomer,
+      invoice_date: invoiceDate,
       subtotal: totals.subtotal,
       discount_amount: totals.discount,
       discount_total: totals.discount,
@@ -859,6 +882,7 @@ export default function CreateInvoicePage() {
         className="relative z-10 mx-auto max-w-[1800px] space-y-5 px-4 py-4 sm:space-y-8 sm:px-5 sm:py-6 lg:px-8"
         data-enter-navigation="true"
       >
+        {selectedYear?.status === "CLOSED" && <div className="rounded-2xl border border-amber-300/20 bg-amber-400/10 px-5 py-4 text-sm font-bold text-amber-100">{selectedYear.label} is closed and available for viewing only. Invoice creation is disabled.</div>}
         <section className="inventory-sheen rounded-lg border border-white/10 bg-white/[0.035] p-5 shadow-[0_0_90px_rgba(0,0,0,0.5)] backdrop-blur-2xl sm:rounded-[40px] sm:p-8 lg:p-10">
           <div className="flex flex-col gap-8 xl:flex-row xl:items-end xl:justify-between">
             <div>
@@ -988,6 +1012,9 @@ export default function CreateInvoicePage() {
                     <option value="card">Card</option>
                     <option value="bank_transfer">Bank Transfer</option>
                   </select>
+                </FieldLabel>
+                <FieldLabel label="Invoice Date">
+                  <input type="date" value={invoiceDate} onChange={(e) => setInvoiceDate(e.target.value)} className={inputClass()} required />
                 </FieldLabel>
                 <FieldLabel label="Due Date">
                   <input type="date" value={dueDate} onChange={(e) => setDueDate(e.target.value)} className={inputClass()} />
@@ -1209,10 +1236,10 @@ export default function CreateInvoicePage() {
                 </div>
               </div>
               <div className="mt-7 grid grid-cols-1 gap-3 sm:grid-cols-2">
-                <button data-enter-primary onClick={() => void saveInvoice(false)} disabled={loading} className="h-14 rounded-lg bg-white text-base font-black text-black disabled:opacity-50 sm:h-16 sm:rounded-2xl sm:text-lg">
+                <button data-enter-primary onClick={() => void saveInvoice(false)} disabled={loading || selectedYear?.status === "CLOSED"} className="h-14 rounded-lg bg-white text-base font-black text-black disabled:opacity-50 sm:h-16 sm:rounded-2xl sm:text-lg">
                   {loading ? "Saving..." : "Save Bill"}
                 </button>
-                <button onClick={() => void saveInvoice(true)} disabled={loading} className="h-14 rounded-lg bg-gradient-to-r from-cyan-400 to-blue-600 text-base font-black text-black shadow-[0_20px_70px_rgba(34,211,238,0.28)] disabled:opacity-50 sm:h-16 sm:rounded-2xl sm:text-lg">
+                <button onClick={() => void saveInvoice(true)} disabled={loading || selectedYear?.status === "CLOSED"} className="h-14 rounded-lg bg-gradient-to-r from-cyan-400 to-blue-600 text-base font-black text-black shadow-[0_20px_70px_rgba(34,211,238,0.28)] disabled:opacity-50 sm:h-16 sm:rounded-2xl sm:text-lg">
                   {loading ? "Saving..." : "Save & Print"}
                 </button>
               </div>

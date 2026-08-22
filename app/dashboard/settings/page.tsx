@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation"
 import { useDebounce } from "use-debounce"
 import AppUpdatesPanel from "@/components/AppUpdatesPanel"
 import DesktopDiagnosticsPanel from "@/components/settings/DesktopDiagnosticsPanel"
+import { FinancialYearManagement } from "@/components/financial-years/FinancialYearManagement"
 import { loadStoredPrintSettings, persistPrintSettings, readStoredPrintSettings, saveStoredPrintSettings } from "@/components/print/settings/defaults"
 import type { PrintFormat, PrintSettings } from "@/components/print/types"
 import { LocalDataExportsPanel } from "@/components/settings/LocalDataExportsPanel"
@@ -775,6 +776,8 @@ export default function SettingsPage() {
                 {saving ? "Saving..." : "Save Business"}
               </button>
             </div>
+
+            {organizationId && <FinancialYearManagement organizationId={organizationId} />}
 
             <div className="rounded-[36px] border border-white/10 bg-white/[0.035] p-7 backdrop-blur-2xl">
               <div className="flex flex-col gap-5 md:flex-row md:items-center md:justify-between">

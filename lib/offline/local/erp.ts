@@ -1244,31 +1244,57 @@ export function rowsToCsv(rows: DataRow[]) {
 export async function getOfflineReport(
   organizationId: string,
   type: string,
-  options: { start?: string | null; end?: string | null; account_type?: string | null; account_id?: string | null } = {}
+  options: { start?: string | null; end?: string | null; account_type?: string | null; account_id?: string | null; financial_year_id?: string | null } = {}
 ) {
-  const [invoices, invoiceItems, purchases, purchaseItems, products, customers, suppliers, expenses, ledgerEntries, stockMovements, accounts] = await Promise.all([
-    readRows(organizationId, "invoices"),
-    readRows(organizationId, "invoice_items"),
-    readRows(organizationId, "purchase_invoices"),
-    readRows(organizationId, "purchase_items"),
+  const database = options.financial_year_id ? await service.requireConnection("read") : null
+  const scopedRows = (table: string) => database
+    ? database.select<DataRow>(`SELECT * FROM ${table} WHERE organization_id = ? AND financial_year_id = ? AND deleted_at IS NULL`, [organizationId, options.financial_year_id || null])
+    : null
+  const [invoices, invoiceItems, purchases, purchaseItems, products, customers, suppliers, expenses, ledgerEntries, stockMovements, accounts, openingBalances] = await Promise.all([
+    scopedRows("sales_invoices") || readRows(organizationId, "invoices"),
+    database
+      ? database.select<DataRow>(`SELECT item.* FROM sales_invoice_items item JOIN sales_invoices invoice ON invoice.id = item.invoice_id AND invoice.organization_id = item.organization_id WHERE item.organization_id = ? AND invoice.financial_year_id = ? AND item.deleted_at IS NULL AND invoice.deleted_at IS NULL`, [organizationId, options.financial_year_id || null])
+      : readRows(organizationId, "invoice_items"),
+    scopedRows("purchase_invoices") || readRows(organizationId, "purchase_invoices"),
+    database
+      ? database.select<DataRow>(`SELECT item.* FROM purchase_invoice_items item JOIN purchase_invoices purchase ON purchase.id = item.purchase_invoice_id AND purchase.organization_id = item.organization_id WHERE item.organization_id = ? AND purchase.financial_year_id = ? AND item.deleted_at IS NULL AND purchase.deleted_at IS NULL`, [organizationId, options.financial_year_id || null])
+      : readRows(organizationId, "purchase_items"),
     readRows(organizationId, "products"),
     readRows(organizationId, "customers"),
     readRows(organizationId, "suppliers"),
-    readRows(organizationId, "expenses"),
-    readRows(organizationId, "ledger_entries"),
-    readRows(organizationId, "stock_movements"),
+    scopedRows("expenses") || readRows(organizationId, "expenses"),
+    scopedRows("ledger_entries") || readRows(organizationId, "ledger_entries"),
+    scopedRows("stock_movements") || readRows(organizationId, "stock_movements"),
     readRows(organizationId, "chart_of_accounts"),
+    database
+      ? database.select<DataRow>("SELECT * FROM financial_year_opening_balances WHERE organization_id = ? AND financial_year_id = ?", [organizationId, options.financial_year_id || null])
+      : Promise.resolve([]),
   ])
-  const sales = activeRows(invoices).filter((row) => row.invoice_type !== "proforma" && inDateRange(row, ["invoice_date", "date", "created_at"], options.start, options.end))
-  const purchaseDocs = activeRows(purchases).filter((row) => inDateRange(row, ["bill_date", "created_at"], options.start, options.end))
-  const expenseRows = activeRows(expenses).filter((row) => inDateRange(row, ["expense_date", "created_at"], options.start, options.end))
-  const ledger = activeRows(ledgerEntries).filter((row) => inDateRange(row, ["entry_date", "created_at"], options.start, options.end))
+  const inFinancialYear = (row: DataRow) => !options.financial_year_id || row.financial_year_id === options.financial_year_id
+  const sales = activeRows(invoices).filter((row) => inFinancialYear(row) && row.invoice_type !== "proforma" && inDateRange(row, ["invoice_date", "date", "created_at"], options.start, options.end))
+  const purchaseDocs = activeRows(purchases).filter((row) => inFinancialYear(row) && inDateRange(row, ["bill_date", "created_at"], options.start, options.end))
+  const expenseRows = activeRows(expenses).filter((row) => inFinancialYear(row) && inDateRange(row, ["expense_date", "created_at"], options.start, options.end))
+  const ledger = activeRows(ledgerEntries).filter((row) => inFinancialYear(row) && inDateRange(row, ["entry_date", "created_at"], options.start, options.end))
   const saleIds = new Set(sales.map((row) => String(row.id || "")))
   const purchaseIds = new Set(purchaseDocs.map((row) => String(row.id || "")))
   const salesItems = activeRows(invoiceItems).filter((row) => saleIds.has(String(row.invoice_id || "")))
   const purchaseLineItems = activeRows(purchaseItems).filter((row) => purchaseIds.has(String(row.purchase_invoice_id || "")))
   const productById = new Map(products.map((row) => [String(row.id || ""), row]))
   const customerById = new Map(customers.map((row) => [String(row.id || ""), row]))
+  const scopedPartyBalances = (partyType: "customer" | "supplier", rows: DataRow[]) => {
+    if (!options.financial_year_id) return activeRows(rows)
+    const balances = new Map<string, number>()
+    for (const opening of openingBalances.filter((row) => row.party_type === partyType)) {
+      balances.set(String(opening.party_id || ""), localNumber(opening.amount))
+    }
+    for (const entry of ledger.filter((row) => row.account_type === partyType)) {
+      const partyId = String(entry.account_id || "")
+      balances.set(partyId, (balances.get(partyId) || 0) + localNumber(entry.debit) - localNumber(entry.credit))
+    }
+    return activeRows(rows).map((row) => ({ ...row, current_balance: money(balances.get(String(row.id || "")) || 0) }))
+  }
+  const scopedCustomers = scopedPartyBalances("customer", customers)
+  const scopedSuppliers = scopedPartyBalances("supplier", suppliers)
 
   const salesTotal = money(sales.reduce((sum, row) => sum + localNumber(row.grand_total, localNumber(row.total_amount, localNumber(row.total))), 0))
   const purchaseTotal = money(purchaseDocs.filter((row) => row.invoice_kind !== "purchase_order" && row.invoice_kind !== "goods_received").reduce((sum, row) => sum + localNumber(row.grand_total), 0))
@@ -1355,20 +1381,20 @@ export async function getOfflineReport(
     }
   }
   if (type === "stock" || type === "stock_valuation") return { type, items: activeRows(products), stock_value: money(activeRows(products).reduce((sum, row) => sum + localNumber(row.stock) * localNumber(row.purchase_rate, localNumber(row.price)), 0)) }
-  if (type === "stock_ledger") return { type, entries: activeRows(stockMovements).filter((row) => inDateRange(row, ["movement_date", "created_at"], options.start, options.end)) }
+  if (type === "stock_ledger") return { type, entries: activeRows(stockMovements).filter((row) => inFinancialYear(row) && inDateRange(row, ["movement_date", "created_at"], options.start, options.end)) }
   if (type === "low_stock") return { type, items: activeRows(products).filter((row) => localNumber(row.stock) <= localNumber(row.min_stock, 0)) }
   if (type === "outstanding_customers") {
-    return { type, customers: activeRows(customers).filter((row) => localNumber(row.current_balance) > 0), total: money(activeRows(customers).reduce((sum, row) => sum + Math.max(0, localNumber(row.current_balance)), 0)) }
+    return { type, customers: scopedCustomers.filter((row) => localNumber(row.current_balance) > 0), total: money(scopedCustomers.reduce((sum, row) => sum + Math.max(0, localNumber(row.current_balance)), 0)) }
   }
   if (type === "outstanding_suppliers") {
-    return { type, suppliers: activeRows(suppliers).filter((row) => localNumber(row.current_balance) > 0), total: money(activeRows(suppliers).reduce((sum, row) => sum + Math.max(0, localNumber(row.current_balance)), 0)) }
+    return { type, suppliers: scopedSuppliers.filter((row) => localNumber(row.current_balance) > 0), total: money(scopedSuppliers.reduce((sum, row) => sum + Math.max(0, localNumber(row.current_balance)), 0)) }
   }
   if (type === "expense") return { type, total: expenseTotal, categories: groupSum(expenseRows, "category", "amount"), expenses: expenseRows }
   if (type === "expense_report") return { type, total: expenseTotal, categories: groupSum(expenseRows, "category", "amount"), expenses: expenseRows }
   if (type === "outstanding_report") {
-    const customerTotal = money(activeRows(customers).reduce((sum, row) => sum + Math.max(0, localNumber(row.current_balance)), 0))
-    const supplierTotal = money(activeRows(suppliers).reduce((sum, row) => sum + Math.max(0, localNumber(row.current_balance)), 0))
-    return { type, customer_total: customerTotal, supplier_total: supplierTotal, customers: activeRows(customers), suppliers: activeRows(suppliers) }
+    const customerTotal = money(scopedCustomers.reduce((sum, row) => sum + Math.max(0, localNumber(row.current_balance)), 0))
+    const supplierTotal = money(scopedSuppliers.reduce((sum, row) => sum + Math.max(0, localNumber(row.current_balance)), 0))
+    return { type, customer_total: customerTotal, supplier_total: supplierTotal, customers: scopedCustomers, suppliers: scopedSuppliers }
   }
   if (type === "gst_summary") {
     return {

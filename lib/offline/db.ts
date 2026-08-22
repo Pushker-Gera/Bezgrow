@@ -20,6 +20,10 @@ export type OfflineCollection =
   | "profiles"
   | "organization"
   | "organization_members"
+  | "financial_years"
+  | "financial_year_opening_balances"
+  | "financial_year_inventory_openings"
+  | "financial_year_invoice_sequences"
   | "products"
   | "inventory_items"
   | "customers"
@@ -139,6 +143,8 @@ const offlineCollections: OfflineCollection[] = [
   "profiles",
   "organization",
   "organization_members",
+  "financial_years",
+  "financial_year_invoice_sequences",
   "products",
   "inventory_items",
   "customers",
@@ -173,6 +179,8 @@ const offlineCollections: OfflineCollection[] = [
   "settings",
   "stock_movements",
   "stock_batches",
+  "financial_year_opening_balances",
+  "financial_year_inventory_openings",
   "backup_manifest",
 ]
 const singleRecordCollections = new Set<OfflineCollection>(["workspace", "organization", "settings"])
@@ -742,6 +750,13 @@ export async function restoreOfflineBackup(input: unknown) {
 
   let restoredRecords = 0
   const restoredActions = 0
+  const deferredFinancialYears = new Map<string, unknown[]>()
+
+  const stageFinancialYears = async (organizationId: string, values: unknown[]) => {
+    deferredFinancialYears.set(organizationId, [...(deferredFinancialYears.get(organizationId) || []), ...values])
+    const openRows = values.map((value) => value && typeof value === "object" ? { ...(value as Record<string, unknown>), status: "OPEN", is_active: 0 } : value)
+    await restoreCollection(organizationId, "financial_years", openRows)
+  }
 
   if (Array.isArray(backup.data)) {
     for (const record of backup.data) {
@@ -749,7 +764,8 @@ export async function restoreOfflineBackup(input: unknown) {
       const organizationId = record.organizationId || record.organization_id
       if (!organizationId) continue
 
-      restoredRecords += await restoreCollection(organizationId, record.collection, [record.value])
+      if (record.collection === "financial_years") await stageFinancialYears(organizationId, [record.value])
+      else restoredRecords += await restoreCollection(organizationId, record.collection, [record.value])
     }
   } else {
     for (const collection of offlineCollections) {
@@ -766,9 +782,17 @@ export async function restoreOfflineBackup(input: unknown) {
       })
 
       for (const [organizationId, values] of rowsByOrganization) {
-        restoredRecords += await restoreCollection(organizationId, collection, values)
+        if (collection === "financial_years") await stageFinancialYears(organizationId, values)
+        else restoredRecords += await restoreCollection(organizationId, collection, values)
       }
     }
+  }
+
+  // Closed-year triggers protect normal writes. Restore stages the year rows as
+  // open, restores their transactions, then reapplies the backed-up status and
+  // active-year flags exactly.
+  for (const [organizationId, years] of deferredFinancialYears) {
+    restoredRecords += await restoreCollection(organizationId, "financial_years", years)
   }
 
   // Legacy cloud-sync actions are intentionally not restored. Business rows
