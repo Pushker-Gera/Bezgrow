@@ -7,7 +7,7 @@ function readJson(filename) {
 function cargoPackageVersion(filename, packageName) {
   const source = readFileSync(filename, "utf8")
   const packageBlock = source.match(
-    new RegExp(`(?:^|\\n)\\[\\[package\\]\\]\\nname = "${packageName}"\\nversion = "([^"]+)"`)
+    new RegExp(`(?:^|\\r?\\n)\\[\\[package\\]\\]\\r?\\nname = "${packageName}"\\r?\\nversion = "([^"]+)"`)
   )
   if (!packageBlock) throw new Error(`Cargo.lock is missing ${packageName}.`)
   return packageBlock[1]

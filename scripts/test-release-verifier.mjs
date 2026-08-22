@@ -8,6 +8,7 @@ import { basename, join } from "node:path"
 const version = JSON.parse(readFileSync("package.json", "utf8")).version
 const commit = spawnSync("git", ["rev-parse", "HEAD"], { encoding: "utf8" }).stdout.trim()
 const root = mkdtempSync(join(tmpdir(), "bezgrow-release-verifier-"))
+const crlfAlignmentRoot = `${root}-crlf-alignment`
 
 function sha256(filename) {
   return createHash("sha256").update(readFileSync(filename)).digest("hex")
@@ -117,9 +118,42 @@ try {
   assert.notEqual(badChecksum.status, 0)
   assert.match(badChecksum.stderr, /Checksum mismatch/)
 
-  console.log("release-verifier-ok complete-cohort=accepted missing-windows=rejected bad-checksum=rejected source-alignment=verified")
+  mkdirSync(join(crlfAlignmentRoot, "src-tauri"), { recursive: true })
+  mkdirSync(join(crlfAlignmentRoot, "public", "downloads"), { recursive: true })
+  writeFileSync(join(crlfAlignmentRoot, "package.json"), JSON.stringify({ version }))
+  writeFileSync(join(crlfAlignmentRoot, "package-lock.json"), JSON.stringify({
+    packages: {
+      "": { version },
+      "node_modules/@tauri-apps/cli": { version: "2.11.3" },
+      "node_modules/@tauri-apps/api": { version: "2.11.1" },
+    },
+  }))
+  writeFileSync(join(crlfAlignmentRoot, "src-tauri", "tauri.conf.json"), JSON.stringify({ version }))
+  writeFileSync(join(crlfAlignmentRoot, "src-tauri", "Cargo.toml"), `[package]\r\nversion = "${version}"\r\n`)
+  writeFileSync(
+    join(crlfAlignmentRoot, "src-tauri", "Cargo.lock"),
+    [
+      "[[package]]", `name = "bezgrow-erp"`, `version = "${version}"`, "",
+      "[[package]]", `name = "tauri"`, `version = "2.11.3"`, "",
+      "[[package]]", `name = "tauri-plugin-updater"`, `version = "2.10.1"`, "",
+    ].join("\r\n")
+  )
+  writeFileSync(join(crlfAlignmentRoot, "RELEASE_NOTES.md"), `# Bezgrow ${version}\r\n`)
+  writeFileSync(join(crlfAlignmentRoot, "public", "downloads", "desktop-release.json"), JSON.stringify({
+    version: "0.1.15",
+    publicationStatus: "published",
+  }))
+  const crlfAlignment = spawnSync(
+    process.execPath,
+    [join(process.cwd(), "scripts", "verify-release-version-alignment.mjs")],
+    { cwd: crlfAlignmentRoot, encoding: "utf8" }
+  )
+  assert.equal(crlfAlignment.status, 0, crlfAlignment.stderr || crlfAlignment.stdout)
+
+  console.log("release-verifier-ok complete-cohort=accepted missing-windows=rejected bad-checksum=rejected source-alignment=verified crlf=verified")
 } finally {
   rmSync(root, { recursive: true, force: true })
   rmSync(`${root}-incomplete`, { recursive: true, force: true })
   rmSync(`${root}-corrupt`, { recursive: true, force: true })
+  rmSync(crlfAlignmentRoot, { recursive: true, force: true })
 }
