@@ -186,7 +186,12 @@ try {
   assert.equal(database.prepare("SELECT COUNT(*) AS count FROM sales_invoices WHERE id='new-year-invoice'").get()?.count, 1)
   assert.equal(database.prepare("PRAGMA foreign_key_check").all().length, 0)
   writeFileSync(corruptPath, "not a sqlite backup")
-  expectSqlFailure(() => new DatabaseSync(corruptPath).prepare("PRAGMA quick_check").all(), /database|file|encrypted/i)
+  const corruptDatabase = new DatabaseSync(corruptPath)
+  try {
+    expectSqlFailure(() => corruptDatabase.prepare("PRAGMA quick_check").all(), /database|file|encrypted/i)
+  } finally {
+    corruptDatabase.close()
+  }
 
   // Financial-year business logic is local-only and closing invokes backup before status mutation.
   const financialSource = readFileSync(path.join(process.cwd(), "lib/offline/local/financial-years.ts"), "utf8")
