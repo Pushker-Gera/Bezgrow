@@ -15,15 +15,20 @@ import {
   formatAdminDate,
   useAdminList,
 } from "@/components/admin/ControlPlaneUi"
-import { downloadAdminFile, secureAdminFetch } from "@/lib/platform-admin/client"
+import { LicenseActionDialog } from "@/components/admin/LicenseActionDialog"
+import { LicenseActionButtons } from "@/components/admin/LicenseActionButtons"
+import { copyAdminText, downloadAdminFile, secureAdminFetch } from "@/lib/platform-admin/client"
 import {
   createLicenseSchema,
   licenseValidationErrors,
   licenseValidationIssue,
+  MODERN_LICENSE_FEATURES,
+  type AdminLicenseAction,
   type LicenseFieldName,
+  type ValidUpdateLicenseInput,
 } from "@/lib/license/admin-license-validation"
 
-const availableFeatures = ["billing", "customers", "inventory", "products", "reports", "backup", "multi_branch"]
+const availableFeatures = [...MODERN_LICENSE_FEATURES]
 
 function today() {
   return new Date().toISOString().slice(0, 10)
@@ -69,6 +74,8 @@ export default function LicensesPage() {
   const [historyTitle, setHistoryTitle] = useState("")
   const [notice, setNotice] = useState("")
   const [actionError, setActionError] = useState("")
+  const [activeAction, setActiveAction] = useState<{ action: AdminLicenseAction; row: Record<string, unknown> } | null>(null)
+  const [pendingActionId, setPendingActionId] = useState("")
   const [fieldErrors, setFieldErrors] = useState<Partial<Record<LicenseFieldName, string>>>({})
   const createRequestKey = useRef("")
   const createInFlight = useRef(false)
@@ -107,7 +114,7 @@ export default function LicensesPage() {
         idempotency_key: createRequestKey.current,
       })
       const key = String(payload.license?.signed_license_key || "")
-      if (key) await navigator.clipboard.writeText(key)
+      if (key) await copyAdminText(key)
       setNotice("License generated, stored, audited, and copied to the clipboard.")
       setCreateOpen(false)
       setForm(initialForm)
@@ -122,61 +129,64 @@ export default function LicensesPage() {
     }
   }
 
-  async function runAction(row: Record<string, unknown>, action: string) {
+  function openAction(row: Record<string, unknown>, action: AdminLicenseAction) {
     setActionError("")
     setNotice("")
-    const id = String(row.id)
-    let body: Record<string, unknown> = { id, action }
+    setActiveAction({ row, action })
+  }
 
-    if (action === "renew") {
-      const expiry = window.prompt("New expiry date (YYYY-MM-DD)", oneYearFromNow())
-      if (!expiry) return
-      body.expiry_date = expiry
-    }
-    if (action === "extend") {
-      const days = window.prompt("Number of days to extend", "30")
-      if (!days) return
-      body.extend_days = Number(days)
-    }
-    if (action === "change_grace") {
-      const days = window.prompt("New grace period in days", String(row.grace_days || 7))
-      if (days === null) return
-      body.grace_days = Number(days)
-    }
-    if (action === "update_features") {
-      const value = window.prompt(
-        "Comma-separated allowed features",
-        Array.isArray(row.allowed_features) ? row.allowed_features.join(",") : ""
-      )
-      if (!value) return
-      body.allowed_features = value.split(",").map((item) => item.trim()).filter(Boolean)
-      const plan = window.prompt("Plan name", String(row.plan_name || "Offline ERP"))
-      if (plan) body.plan_name = plan
-    }
-    if (action === "replace_device" || action === "transfer") {
-      const deviceId = window.prompt("Replacement Device ID")
-      if (!deviceId) return
-      const reason = window.prompt("Required transfer/replacement reason")
-      if (!reason) return
-      body = { ...body, new_device_id: deviceId, reason }
-    }
-    if (action === "suspend" || action === "revoke") {
-      if (!window.confirm(`${action === "revoke" ? "Revoke" : "Suspend"} license ${id}?`)) return
-      const reason = window.prompt("Internal reason (optional)")
-      if (reason) body.reason = reason
-    }
-
+  async function runAction(input: ValidUpdateLicenseInput) {
+    const mutationKey = `${input.id}:${input.action}`
+    if (pendingActionId) throw new Error("Another licence action is already being applied.")
+    setPendingActionId(mutationKey)
+    setActionError("")
+    setNotice("")
     try {
-      const result = await adminMutation<{ license?: Record<string, unknown> }>("/api/admin/licenses", "PATCH", body)
-      if ((action === "renew" || action === "extend" || action === "update_features" || action === "replace_device" || action === "transfer") && result.license?.signed_license_key) {
-        await navigator.clipboard.writeText(String(result.license.signed_license_key))
-        setNotice("License updated and the new signed key was copied.")
-      } else {
-        setNotice("License status updated and audited.")
+      const result = await adminMutation<{
+        license?: Record<string, unknown>
+        replacedLicense?: Record<string, unknown>
+        replacedLicenseId?: string
+        duplicate?: boolean
+      }>("/api/admin/licenses", "PATCH", input)
+      if (!result.license) throw new Error("The control plane did not return the updated licence row.")
+      if (result.replacedLicense) list.upsert(result.replacedLicense)
+      if (result.replacedLicenseId) list.prepend(result.license)
+      else list.upsert(result.license)
+      const labels: Partial<Record<AdminLicenseAction, string>> = {
+        renew: "Licence renewed, re-signed, audited, and queued for device refresh.",
+        extend: "Licence extended, re-signed, audited, and queued for device refresh.",
+        change_grace: "Grace period updated, re-signed, and audited.",
+        update_features: "Plan and features updated, re-signed, and audited.",
+        replace_device: "Replacement licence issued; the previous device binding is now replaced.",
+        transfer: "Licence transferred atomically to the target device.",
+        suspend: "Licence suspended. The installed device will enforce it at the next online verification.",
+        reactivate: "Licence reactivated. The installed device will resume at the next online verification.",
+        revoke: "Licence revoked. Local ERP data remains untouched.",
       }
-      list.reload()
+      setNotice(`${labels[input.action] || "Licence updated and audited."}${result.duplicate ? " The original idempotent result was returned." : ""}`)
+      setActiveAction(null)
+    } finally {
+      setPendingActionId("")
+    }
+  }
+
+  async function copyCurrentKey(row: Record<string, unknown>) {
+    const id = String(row.id)
+    const mutationKey = `${id}:copy`
+    if (pendingActionId) return
+    setPendingActionId(mutationKey)
+    setActionError("")
+    setNotice("")
+    try {
+      const response = await secureAdminFetch(`/api/admin/licenses/${encodeURIComponent(id)}/download`, { cache: "no-store", signal: AbortSignal.timeout(15_000) })
+      const payload = await response.json().catch(() => null) as { license_key?: string; error?: string } | null
+      if (!response.ok || !payload?.license_key) throw new Error(payload?.error || "The current signed licence key is unavailable.")
+      await copyAdminText(payload.license_key)
+      setNotice("Current signed licence key copied.")
     } catch (error) {
-      setActionError(error instanceof Error ? error.message : "License action failed.")
+      setActionError(error instanceof Error ? error.message : "Licence key could not be copied.")
+    } finally {
+      setPendingActionId("")
     }
   }
 
@@ -293,19 +303,14 @@ export default function LicensesPage() {
             key: "actions",
             label: "Actions",
             render: (row) => (
-              <div className="flex min-w-[270px] flex-wrap gap-2">
-                <button type="button" onClick={() => void navigator.clipboard.writeText(String(row.signed_license_key || ""))} disabled={!row.signed_license_key} className="rounded-lg border border-white/10 px-2.5 py-1.5 text-xs font-bold disabled:opacity-30">Copy key</button>
-                <button type="button" onClick={() => void downloadAdminFile(`/api/admin/licenses/${row.id}/download`).catch((error) => setActionError(error instanceof Error ? error.message : "License download failed."))} className="rounded-lg border border-white/10 px-2.5 py-1.5 text-xs font-bold">Download</button>
-                <button type="button" onClick={() => void viewHistory(row)} className="rounded-lg border border-white/10 px-2.5 py-1.5 text-xs font-bold">History</button>
-                <button type="button" onClick={() => void runAction(row, "renew")} className="rounded-lg border border-cyan-400/25 px-2.5 py-1.5 text-xs font-bold text-cyan-100">Renew</button>
-                <button type="button" onClick={() => void runAction(row, "extend")} className="rounded-lg border border-white/10 px-2.5 py-1.5 text-xs font-bold">Extend</button>
-                <button type="button" onClick={() => void runAction(row, "change_grace")} className="rounded-lg border border-white/10 px-2.5 py-1.5 text-xs font-bold">Grace</button>
-                <button type="button" onClick={() => void runAction(row, "update_features")} className="rounded-lg border border-white/10 px-2.5 py-1.5 text-xs font-bold">Plan/features</button>
-                <button type="button" onClick={() => void runAction(row, "replace_device")} className="rounded-lg border border-amber-400/20 px-2.5 py-1.5 text-xs font-bold text-amber-100">Replace device</button>
-                <button type="button" onClick={() => void runAction(row, "transfer")} className="rounded-lg border border-amber-400/20 px-2.5 py-1.5 text-xs font-bold text-amber-100">Transfer</button>
-                <button type="button" onClick={() => void runAction(row, "suspend")} className="rounded-lg border border-amber-400/20 px-2.5 py-1.5 text-xs font-bold text-amber-100">Suspend</button>
-                <button type="button" onClick={() => void runAction(row, "revoke")} className="rounded-lg border border-red-400/20 px-2.5 py-1.5 text-xs font-bold text-red-200">Revoke</button>
-              </div>
+              <LicenseActionButtons
+                row={row}
+                busy={Boolean(pendingActionId)}
+                onAction={(action) => openAction(row, action)}
+                onCopy={() => void copyCurrentKey(row)}
+                onDownload={() => void downloadAdminFile(`/api/admin/licenses/${row.id}/download`).then((saved) => { if (saved) setNotice(`Current licence saved as ${saved.filename}.`) }).catch((error) => setActionError(error instanceof Error ? error.message : "License download failed."))}
+                onHistory={() => void viewHistory(row)}
+              />
             ),
           },
         ]}
@@ -416,6 +421,15 @@ export default function LicensesPage() {
           )) : <p className="rounded-2xl border border-dashed border-white/10 py-10 text-center text-sm text-neutral-500">No history recorded.</p>}
         </div>
       </AdminModal>
+      {activeAction && (
+        <LicenseActionDialog
+          key={`${activeAction.row.id}:${activeAction.action}:${activeAction.row.updated_at}`}
+          action={activeAction.action}
+          row={activeAction.row}
+          onClose={() => setActiveAction(null)}
+          onConfirm={runAction}
+        />
+      )}
     </div>
   )
 }

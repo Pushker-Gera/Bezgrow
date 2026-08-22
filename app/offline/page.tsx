@@ -7,7 +7,7 @@ import LocalDatabaseRecovery from "@/components/offline/LocalDatabaseRecovery"
 import PlatformAdminLauncher from "@/components/desktop/PlatformAdminLauncher"
 import { markDesktopSessionActive } from "@/lib/desktop/session"
 import { isTauriRuntimeAsync } from "@/lib/desktop/tauri"
-import { activateOfflineLicense, localLicenseSnapshot, restoreLicensedWorkspaceContext } from "@/lib/offline/local/license"
+import { activateOfflineLicense, localLicenseSnapshot, restoreLicensedWorkspaceContext, revalidateLocalLicenseWithControlPlane } from "@/lib/offline/local/license"
 import { getLocalDatabaseService } from "@/lib/offline/local/service"
 import type { LicensePolicyResult } from "@/lib/license/policy"
 
@@ -62,7 +62,10 @@ export default function OfflinePage() {
           }
           const restoredWorkspace = openedAfterLogout ? null : await restoreLicensedWorkspaceContext().catch(() => null)
           const organizationId = restoredWorkspace?.organization?.id || restoredWorkspace?.membership?.organization_id || undefined
-          const snapshot = await localLicenseSnapshot(organizationId).catch(() => null)
+          let snapshot = await localLicenseSnapshot(organizationId).catch(() => null)
+          if (navigator.onLine) {
+            snapshot = (await revalidateLocalLicenseWithControlPlane(organizationId).catch(() => null))?.snapshot || snapshot
+          }
           if (snapshot) {
             setDeviceId(snapshot.device_id)
             setStatus(snapshot)
@@ -86,6 +89,34 @@ export default function OfflinePage() {
       setNotice("Please activate Bezgrow using your license key.")
     }
   }, [router])
+
+  useEffect(() => {
+    if (!desktopRuntime || checkingLocalDatabase) return
+    let running = false
+    let cancelled = false
+    const refreshAuthoritativeStatus = async () => {
+      if (running || !navigator.onLine) return
+      running = true
+      try {
+        const result = await revalidateLocalLicenseWithControlPlane()
+        if (!cancelled) {
+          setDeviceId(result.snapshot.device_id)
+          setStatus(result.snapshot)
+        }
+      } catch (error) {
+        console.warn("Licence screen revalidation warning:", error)
+      } finally {
+        running = false
+      }
+    }
+    window.addEventListener("online", refreshAuthoritativeStatus)
+    const timer = globalThis.setInterval(() => void refreshAuthoritativeStatus(), 60_000)
+    return () => {
+      cancelled = true
+      window.removeEventListener("online", refreshAuthoritativeStatus)
+      globalThis.clearInterval(timer)
+    }
+  }, [checkingLocalDatabase, desktopRuntime])
 
   async function copyDeviceId() {
     if (!deviceId) return

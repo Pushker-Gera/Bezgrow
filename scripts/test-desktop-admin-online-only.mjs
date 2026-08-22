@@ -26,6 +26,7 @@ assert.match(rust, /platform_admin_signing_key[\s\S]*keychain_entry[\s\S]*write_
 assert.match(rust, /permissions\(\)\.mode\(\) & 0o077[\s\S]*permissions are unsafe/, "The file fallback must fail closed if another user can read the private key.")
 assert.match(rust, /desktop_platform_admin_proof[\s\S]*bezgrow-platform-admin-v1[\s\S]*sign\(canonical\.as_bytes\(\)\)/, "Every admin request must receive a native device signature.")
 assert.match(rust, /window\.label\(\) == "platform-admin"[\s\S]*return;/, "Closing admin must leave the local ERP running.")
+assert.match(rust, /fn close_platform_admin[\s\S]*get_webview_window\("platform-admin"\)[\s\S]*\.close\(\)/, "Return to local ERP must close the Rust-created admin window natively.")
 assert.match(mainCapability, /allow-open-platform-admin/, "Only the main ERP window may launch Platform Admin.")
 assert.match(adminCapability, /"windows": \["platform-admin"\][\s\S]*allow-desktop-platform-admin-proof/, "The admin window must receive only its narrow proof capability.")
 assert.doesNotMatch(adminCapability, /desktop-execute|desktop-select|read-secret|store-secret/, "The admin window must not receive SQLite or general secret-store commands.")
@@ -43,6 +44,8 @@ assert.match(login, /PLATFORM_ADMIN_DEVICE_DENIED/, "Other devices and browsers 
 assert.match(adminLayout, /secureAdminFetch\("\/api\/admin\/session"/, "Every open admin window must revalidate account and device.")
 assert.match(adminLayout, /supabase\.auth\.signOut/, "Admin logout must destroy the authenticated session.")
 assert.match(adminLayout, /local SQLite data are unchanged/, "Admin disconnects must preserve the local ERP workspace.")
+assert.match(adminLayout, /invokeTauri\("close_platform_admin"\)/, "The packaged Return to local ERP control must use the native close command.")
+assert.match(adminCapability, /allow-close-platform-admin/, "Only the admin window may invoke its native return command.")
 
 assert.match(proxy, /localDesktopHost && adminRoute[\s\S]*verifyDesktopAdminPageSession[\s\S]*NextResponse\.next/, "The bundled admin shell must require a server-signed page session minted after device verification.")
 assert.match(proxy, /if \(adminRoute\)[\s\S]*available only inside an authorized Bezgrow desktop application[\s\S]*status: 403/, "Hosted browser admin pages must fail closed.")

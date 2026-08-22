@@ -1,6 +1,7 @@
 "use client"
 
 import { invokeTauri, isTauriRuntimeAsync } from "@/lib/desktop/tauri"
+import { saveDesktopBytes } from "@/lib/desktop-file-export"
 import { supabase } from "@/lib/supabase"
 
 type DeviceProof = {
@@ -156,15 +157,42 @@ export async function downloadAdminFile(pathAndQuery: string) {
     const payload = await response.json().catch(() => null) as { error?: string } | null
     throw new Error(payload?.error || "The admin export could not be downloaded.")
   }
-  const blob = await response.blob()
   const disposition = response.headers.get("content-disposition") || ""
   const filename = /filename="?([^";]+)"?/i.exec(disposition)?.[1] || "bezgrow-admin-export.csv"
-  const url = URL.createObjectURL(blob)
-  const link = document.createElement("a")
-  link.href = url
-  link.download = filename
-  link.click()
-  globalThis.setTimeout(() => URL.revokeObjectURL(url), 30_000)
+  const contentType = response.headers.get("content-type") || ""
+  const rawBytes = new Uint8Array(await response.arrayBuffer())
+  const fileKind = filename.toLowerCase().endsWith(".json") || contentType.includes("application/json") ? "json" : "csv"
+  let bytes = rawBytes
+  if (fileKind === "csv" && !(rawBytes[0] === 0xef && rawBytes[1] === 0xbb && rawBytes[2] === 0xbf)) {
+    bytes = new Uint8Array(rawBytes.byteLength + 3)
+    bytes.set([0xef, 0xbb, 0xbf])
+    bytes.set(rawBytes, 3)
+  }
+  return saveDesktopBytes(filename, bytes, fileKind)
+}
+
+export async function copyAdminText(value: string) {
+  if (!value) throw new Error("The current signed licence key is unavailable.")
+  if (await isTauriRuntimeAsync()) {
+    await invokeTauri("desktop_copy_text", { value })
+    return
+  }
+  try {
+    await navigator.clipboard.writeText(value)
+    return
+  } catch {
+    const input = document.createElement("textarea")
+    input.value = value
+    input.readOnly = true
+    input.style.position = "fixed"
+    input.style.opacity = "0"
+    input.style.pointerEvents = "none"
+    document.body.appendChild(input)
+    input.select()
+    const copied = document.execCommand("copy")
+    input.remove()
+    if (!copied) throw new Error("The signed licence key could not be copied. Use Download instead.")
+  }
 }
 
 export { DEVICE_DENIED as PLATFORM_ADMIN_DEVICE_DENIED }

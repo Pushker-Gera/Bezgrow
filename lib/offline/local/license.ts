@@ -36,6 +36,7 @@ type DeviceCheckinResponse = {
   code?: string
   licenseStatus?: string | null
   authoritative?: boolean
+  refreshedLicenseKey?: string | null
 }
 
 function nowIso() {
@@ -241,6 +242,39 @@ async function writeActivatedLicense(payload: LicensePayload, licenseKey: string
   }
 }
 
+async function installRefreshedLicenseKey(current: ReturnType<typeof parseLicenseInput>, value: string) {
+  const refreshed = parseLicenseInput(value)
+  const sameBinding =
+    refreshed.payload.license_id === current.payload.license_id &&
+    refreshed.payload.device_id === current.payload.device_id &&
+    refreshed.payload.business_id === current.payload.business_id &&
+    refreshed.payload.customer_id === current.payload.customer_id &&
+    refreshed.payload.platform === current.payload.platform
+  if (!sameBinding) throw new Error("The control plane returned a licence for another device or business.")
+  if (!(await verifyLicenseSignature(refreshed, PUBLIC_KEY))) {
+    throw new Error("The refreshed licence signature is invalid.")
+  }
+
+  const row = licenseRowFromPayload(refreshed.payload, refreshed.licenseKey, refreshed.signatureText, "active")
+  const targets = [...new Set([refreshed.payload.business_id, workspaceOrganizationId(), "global"].filter(Boolean))]
+  for (const organizationId of targets) {
+    const rows = await getOfflineData<DataRow[]>(organizationId, "license", []).catch(() => [])
+    await putOfflineData(
+      organizationId,
+      "license",
+      [{ ...row, organization_id: organizationId }, ...rows.filter((entry) => entry.id !== refreshed.payload.license_id)]
+    )
+    await logLicenseEvent(
+      organizationId,
+      "LICENSE_REFRESHED",
+      "Installed a newer server-signed licence after authoritative online verification.",
+      refreshed.payload.license_id
+    )
+  }
+  await writeDesktopSecret(LICENSE_SECRET_KEY, refreshed.licenseKey)
+  await cacheWorkspaceBootstrap(workspaceFromLicense(refreshed.payload))
+}
+
 async function restoreLicenseRowsFromDesktopSecret(deviceId: string) {
   const licenseKey = await readDesktopSecret(LICENSE_SECRET_KEY)
   if (!licenseKey) return []
@@ -443,6 +477,9 @@ export async function reportActivatedDevice(
       authoritativeStatus: result?.authoritative ? normalizeAuthoritativeStatus(result.licenseStatus) : null,
       code: result?.code || null,
     }
+  }
+  if (result.refreshedLicenseKey) {
+    await installRefreshedLicenseKey(parsed, result.refreshedLicenseKey)
   }
   return {
     reported: true,

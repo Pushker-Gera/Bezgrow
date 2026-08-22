@@ -6,6 +6,7 @@ import type { ReactNode } from "react"
 import { useEffect, useState } from "react"
 import { AdminOnlineProvider } from "@/components/admin/ControlPlaneUi"
 import { BezgrowLogoMark } from "@/components/brand/BezgrowLogoMark"
+import { invokeTauri, isTauriRuntimeAsync } from "@/lib/desktop/tauri"
 import { supabase } from "@/lib/supabase"
 import { secureAdminFetch } from "@/lib/platform-admin/client"
 
@@ -123,8 +124,12 @@ export default function AdminLayout({ children }: { children: ReactNode }) {
     router.replace("/login?next=/admin&platform_admin=1")
   }
 
-  function returnToErp() {
+  async function returnToErp() {
     sessionStorage.removeItem("bezgrow:platform-admin-window")
+    if (await isTauriRuntimeAsync().catch(() => false)) {
+      await invokeTauri("close_platform_admin")
+      return
+    }
     window.close()
   }
 
@@ -165,7 +170,7 @@ export default function AdminLayout({ children }: { children: ReactNode }) {
             {desktopAdminWindow && (
               <button
                 type="button"
-                onClick={returnToErp}
+                onClick={() => void returnToErp()}
                 className="mt-3 h-10 w-full rounded-xl bg-cyan-300 text-xs font-black text-black"
               >
                 Return to local ERP
@@ -229,7 +234,7 @@ export default function AdminLayout({ children }: { children: ReactNode }) {
                     Admin reads and mutations are stopped. Your customer ERP workspace and local SQLite data are unchanged.
                   </p>
                   {desktopAdminWindow && (
-                    <button type="button" onClick={returnToErp} className="mt-6 h-12 rounded-2xl bg-white px-6 text-sm font-black text-black">
+                    <button type="button" onClick={() => void returnToErp()} className="mt-6 h-12 rounded-2xl bg-white px-6 text-sm font-black text-black">
                       Return to local ERP
                     </button>
                   )}

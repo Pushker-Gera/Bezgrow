@@ -16,8 +16,8 @@ const supabase = createClient(supabaseUrl, serviceRoleKey, {
 const readiness = await supabase.rpc("admin_control_plane_current_schema_status")
 if (readiness.error) throw readiness.error
 assert.equal(readiness.data?.ready, true, JSON.stringify(readiness.data?.missing || {}))
-assert.equal(readiness.data?.expectedVersion, 2026082102)
-assert.ok(Number(readiness.data?.actualVersion) >= 2026082102)
+assert.equal(readiness.data?.expectedVersion, 2026082201)
+assert.ok(Number(readiness.data?.actualVersion) >= 2026082201)
 
 const areas = {
   licenses: [
@@ -48,6 +48,10 @@ const areas = {
     "platform_settings",
     "id,platform_name,support_email,default_license_duration_days,default_grace_days,update_channels,backup_policies,updated_at",
   ],
+  licenseMutations: [
+    "admin_license_mutations",
+    "idempotency_key,license_id,action,created_at",
+  ],
 }
 
 const counts = {}
@@ -57,7 +61,7 @@ for (const [area, [table, columns]] of Object.entries(areas)) {
   counts[area] = result.count || 0
 }
 
-const [ownerDevice, ownerProfile, nonceTable, dashboard] = await Promise.all([
+const [ownerDevice, ownerProfile, nonceTable, dashboard, mutationRpc] = await Promise.all([
   supabase
     .from("registered_devices")
     .select("id,device_id,device_status,platform_admin_allowed,allowed_admin_user_id,platform_admin_revoked_at")
@@ -73,11 +77,31 @@ const [ownerDevice, ownerProfile, nonceTable, dashboard] = await Promise.all([
     requesting_admin_id: ownerAdminId,
     range_days: 30,
   }),
+  supabase.rpc("admin_mutate_license", {
+    p_license_id: "READ_ONLY-CAPABILITY-PROBE",
+    p_action: "invalid_read_only_probe",
+    p_action_name: "READ_ONLY_CAPABILITY_PROBE",
+    p_expected_updated_at: new Date(0).toISOString(),
+    p_changed_at: new Date(0).toISOString(),
+    p_updates: {},
+    p_replacement: null,
+    p_new_device_id: null,
+    p_reason: null,
+    p_idempotency_key: "read-only-capability-probe",
+    p_request_id: "read-only-capability-probe",
+    p_admin_user_id: ownerAdminId,
+    p_admin_email: null,
+    p_ip_address: null,
+    p_user_agent: "read-only-capability-probe",
+    p_previous_values: {},
+    p_new_values: {},
+  }),
 ])
 
 for (const [name, result] of Object.entries({ ownerDevice, ownerProfile, nonceTable, dashboard })) {
   if (result.error) throw new Error(`${name}: ${result.error.code} ${result.error.message}`)
 }
+assert.match(mutationRpc.error?.message || "", /invalid licence mutation action/i, "Atomic mutation RPC capability probe did not reach its validation boundary.")
 
 assert.equal(ownerDevice.data?.device_status, "active")
 assert.equal(ownerDevice.data?.platform_admin_allowed, true)

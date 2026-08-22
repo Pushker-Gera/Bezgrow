@@ -101,6 +101,19 @@ video {
   animation: softGlow 4s ease-in-out infinite;
 }
 
+/* Native desktop shells may mark selected titlebar surfaces as draggable.
+   Admin controls and dialogs are always explicit interaction surfaces. */
+.desktop-interactive,
+.desktop-interactive button,
+.desktop-interactive input,
+.desktop-interactive select,
+.desktop-interactive textarea,
+.desktop-interactive label,
+.desktop-interactive summary,
+.desktop-interactive a {
+  -webkit-app-region: no-drag;
+}
+
 .entry-calculator-overlay {
   position: fixed;
   inset: 0;

@@ -19,7 +19,7 @@ use std::os::unix::{fs::OpenOptionsExt, process::CommandExt};
 #[cfg(all(target_os = "windows", not(debug_assertions)))]
 use std::ffi::OsString;
 
-#[cfg(any(target_os = "windows", not(debug_assertions)))]
+#[cfg(any(target_os = "macos", target_os = "windows", not(debug_assertions)))]
 use std::process::Stdio;
 
 #[cfg(target_os = "windows")]
@@ -1861,6 +1861,70 @@ fn local_asset_path<R: tauri::Runtime>(
         return Err("The local asset is outside Bezgrow's managed asset folder.".to_string());
     }
     managed_app_data_root(app).map(|root| root.join(path))
+}
+
+#[tauri::command]
+fn close_platform_admin<R: tauri::Runtime>(app: tauri::AppHandle<R>) -> Result<(), String> {
+    let window = app
+        .get_webview_window("platform-admin")
+        .ok_or_else(|| "The Platform Administration window is not open.".to_string())?;
+    window
+        .close()
+        .map_err(|_| "Platform Administration could not return to the local ERP.".to_string())
+}
+
+#[tauri::command]
+fn desktop_copy_text(value: String) -> Result<(), String> {
+    if value.is_empty() {
+        return Err("There is no text to copy.".to_string());
+    }
+    if value.len() > 100_000 {
+        return Err("The text is too large to copy safely.".to_string());
+    }
+
+    #[cfg(target_os = "macos")]
+    let mut child = Command::new("/usr/bin/pbcopy")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .map_err(|_| "The macOS clipboard is unavailable.".to_string())?;
+
+    #[cfg(target_os = "windows")]
+    let mut child = Command::new("powershell.exe")
+        .args([
+            "-NoLogo",
+            "-NoProfile",
+            "-NonInteractive",
+            "-Command",
+            "$value = [Console]::In.ReadToEnd(); Set-Clipboard -Value $value",
+        ])
+        .creation_flags(CREATE_NO_WINDOW)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .map_err(|_| "The Windows clipboard is unavailable.".to_string())?;
+
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    return Err("Native clipboard copy is unavailable on this platform.".to_string());
+
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
+    {
+        child
+            .stdin
+            .take()
+            .ok_or_else(|| "The native clipboard input is unavailable.".to_string())?
+            .write_all(value.as_bytes())
+            .map_err(|_| "The signed licence key could not be copied.".to_string())?;
+        let status = child
+            .wait()
+            .map_err(|_| "The native clipboard did not finish.".to_string())?;
+        if !status.success() {
+            return Err("The native clipboard rejected the text.".to_string());
+        }
+        Ok(())
+    }
 }
 
 #[tauri::command]
@@ -5481,6 +5545,8 @@ pub fn run() {
             delete_secret,
             desktop_get_or_create_device_id,
             desktop_platform_admin_proof,
+            close_platform_admin,
+            desktop_copy_text,
             desktop_save_file,
             desktop_prepare_invoice_share,
             desktop_pick_business_logo,

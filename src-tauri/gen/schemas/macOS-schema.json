@@ -177,6 +177,12 @@
       "description": "Permission identifier",
       "oneOf": [
         {
+          "description": "Enables the close_platform_admin command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-close-platform-admin",
+          "markdownDescription": "Enables the close_platform_admin command without any pre-configured scope."
+        },
+        {
           "description": "Enables the delete_secret command without any pre-configured scope.",
           "type": "string",
           "const": "allow-delete-secret",
@@ -187,6 +193,12 @@
           "type": "string",
           "const": "allow-desktop-cancel-update-preparation",
           "markdownDescription": "Enables the desktop_cancel_update_preparation command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the desktop_copy_text command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-desktop-copy-text",
+          "markdownDescription": "Enables the desktop_copy_text command without any pre-configured scope."
         },
         {
           "description": "Enables the desktop_database_backup command without any pre-configured scope.",
@@ -351,6 +363,12 @@
           "markdownDescription": "Enables the store_secret command without any pre-configured scope."
         },
         {
+          "description": "Denies the close_platform_admin command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-close-platform-admin",
+          "markdownDescription": "Denies the close_platform_admin command without any pre-configured scope."
+        },
+        {
           "description": "Denies the delete_secret command without any pre-configured scope.",
           "type": "string",
           "const": "deny-delete-secret",
@@ -361,6 +379,12 @@
           "type": "string",
           "const": "deny-desktop-cancel-update-preparation",
           "markdownDescription": "Denies the desktop_cancel_update_preparation command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the desktop_copy_text command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-desktop-copy-text",
+          "markdownDescription": "Denies the desktop_copy_text command without any pre-configured scope."
         },
         {
           "description": "Denies the desktop_database_backup command without any pre-configured scope.",

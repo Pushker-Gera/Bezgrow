@@ -10,6 +10,7 @@ export type DeviceReportAuth = {
   license: Record<string, unknown>
   payload: ReturnType<typeof parseLicenseInput>["payload"]
   device: Record<string, unknown> | null
+  refreshedLicenseKey: string | null
 }
 
 function trustedReportOrigin(request: Request) {
@@ -103,10 +104,6 @@ export async function authenticateDeviceReport(
         licenseStatus: "invalid",
       }
     }
-    if (licenseResult.data.signed_license_key !== parsed.licenseKey) {
-      await recordFailure(request, requestId, input.deviceId, "stale_or_replaced_key")
-      return { ok: false, status: 403, error: "This license key has been replaced.", requestId, code: "license_replaced", licenseStatus: "replaced" }
-    }
     if (licenseResult.data.device_id !== input.deviceId) {
       await recordFailure(request, requestId, input.deviceId, "registered_device_mismatch")
       return {
@@ -152,6 +149,13 @@ export async function authenticateDeviceReport(
         licenseStatus: effectiveStatus,
       }
     }
+    const refreshedLicenseKey = licenseResult.data.signed_license_key !== parsed.licenseKey
+      ? String(licenseResult.data.signed_license_key || "")
+      : null
+    if (licenseResult.data.signed_license_key !== parsed.licenseKey && !refreshedLicenseKey) {
+      await recordFailure(request, requestId, input.deviceId, "authoritative_key_unavailable")
+      return { ok: false, status: 503, error: "The refreshed licence is temporarily unavailable.", requestId }
+    }
 
     const deviceResult = await adminSupabase
       .from("registered_devices")
@@ -193,6 +197,7 @@ export async function authenticateDeviceReport(
         license: licenseResult.data,
         payload: parsed.payload,
         device: deviceResult.data,
+        refreshedLicenseKey,
       },
     }
   } catch {

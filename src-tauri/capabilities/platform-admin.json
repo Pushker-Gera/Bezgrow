@@ -8,6 +8,9 @@
   "windows": ["platform-admin"],
   "permissions": [
     "core:default",
-    "allow-desktop-platform-admin-proof"
+    "allow-desktop-platform-admin-proof",
+    "allow-close-platform-admin",
+    "allow-desktop-copy-text",
+    "allow-desktop-save-file"
   ]
 }

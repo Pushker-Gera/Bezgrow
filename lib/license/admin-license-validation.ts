@@ -25,6 +25,30 @@ export const licenseFieldLabels = {
   idempotency_key: "Idempotency key",
 } as const
 
+export const MODERN_LICENSE_FEATURES = [
+  "backup",
+  "billing",
+  "customers",
+  "inventory",
+  "multi_branch",
+  "products",
+  "reports",
+] as const
+
+export const LICENSE_RENEWAL_MONTHS = [1, 3, 6, 12, 24] as const
+
+export type AdminLicenseAction =
+  | "renew"
+  | "extend"
+  | "change_grace"
+  | "update_features"
+  | "replace_device"
+  | "transfer"
+  | "suspend"
+  | "reactivate"
+  | "revoke"
+  | "notes"
+
 export type LicenseFieldName = keyof typeof licenseFieldLabels
 
 const optionalWorkspaceId = z.preprocess(
@@ -41,6 +65,87 @@ const licenseArchitecture = z.preprocess(
   (value) => (value === "x86_64" ? "x64" : value),
   z.enum(["arm64", "x64"], { error: "Select ARM64 or x86_64 (x64)." })
 )
+
+const modernLicenseFeature = z.enum(MODERN_LICENSE_FEATURES, {
+  error: "Select only a current Bezgrow licence capability.",
+})
+
+const featureSchema = z
+  .array(modernLicenseFeature)
+  .min(1, "Select at least one feature.")
+  .max(MODERN_LICENSE_FEATURES.length, "Too many features were selected.")
+  .transform((features) => [...new Set(features)].sort())
+
+export const updateLicenseSchema = z
+  .object({
+    id: z.string().trim().min(8).max(160),
+    action: z.enum([
+      "renew",
+      "extend",
+      "change_grace",
+      "update_features",
+      "suspend",
+      "reactivate",
+      "revoke",
+      "replace_device",
+      "transfer",
+      "notes",
+    ]),
+    idempotency_key: z.string().trim().min(8).max(160),
+    expected_updated_at: z.string().datetime(),
+    renew_months: z.coerce.number().int().refine(
+      (value) => LICENSE_RENEWAL_MONTHS.includes(value as (typeof LICENSE_RENEWAL_MONTHS)[number]),
+      "Select a supported renewal duration.",
+    ).optional(),
+    extend_days: z.coerce.number().int().min(1).max(3650).optional(),
+    grace_days: z.coerce.number().int().min(0).max(365).optional(),
+    allowed_features: featureSchema.optional(),
+    plan_name: z.string().trim().min(2).max(80).optional(),
+    maximum_users: z.coerce.number().int().min(1).max(10000).optional(),
+    maximum_businesses: z.coerce.number().int().min(1).max(1000).optional(),
+    maximum_branches: z.coerce.number().int().min(1).max(10000).optional(),
+    internal_notes: z.string().trim().max(2000).optional(),
+    new_device_id: z.string().trim().min(8).max(180).optional(),
+    confirmed_device_id: z.string().trim().min(8).max(180).optional(),
+    confirmation: z.enum(["SUSPEND", "REACTIVATE", "REVOKE"]).optional(),
+    reason: z.string().trim().max(500).optional(),
+  })
+  .superRefine((value, context) => {
+    const required = (condition: boolean, path: string, message: string) => {
+      if (!condition) context.addIssue({ code: "custom", path: [path], message })
+    }
+    if (value.action === "renew") {
+      required(Boolean(value.renew_months), "renew_months", "Select a renewal duration.")
+    }
+    if (value.action === "extend") {
+      required(Boolean(value.extend_days), "extend_days", "Enter the number of extension days.")
+    }
+    if (value.action === "change_grace") {
+      required(value.grace_days !== undefined, "grace_days", "Enter the new grace period.")
+    }
+    if (value.action === "update_features") {
+      required(Boolean(value.allowed_features?.length), "allowed_features", "Select at least one feature.")
+      required(Boolean(value.plan_name), "plan_name", "Enter the plan name.")
+    }
+    if (value.action === "replace_device" || value.action === "transfer") {
+      required(Boolean(value.new_device_id), "new_device_id", "Enter the target Device ID.")
+      required(value.confirmed_device_id === value.new_device_id, "confirmed_device_id", "Re-enter the exact target Device ID.")
+      required(Boolean(value.reason?.trim()), "reason", "Enter a reason for this device change.")
+    }
+    if (value.action === "suspend") {
+      required(value.confirmation === "SUSPEND", "confirmation", "Type SUSPEND to confirm.")
+    }
+    if (value.action === "reactivate") {
+      required(value.confirmation === "REACTIVATE", "confirmation", "Type REACTIVATE to confirm.")
+    }
+    if (value.action === "revoke") {
+      required(value.confirmation === "REVOKE", "confirmation", "Type REVOKE to confirm.")
+      required(Boolean(value.reason?.trim()), "reason", "Enter a revocation reason.")
+    }
+  })
+
+export type UpdateLicenseInput = z.input<typeof updateLicenseSchema>
+export type ValidUpdateLicenseInput = z.output<typeof updateLicenseSchema>
 
 export const createLicenseSchema = z
   .object({
@@ -59,10 +164,7 @@ export const createLicenseSchema = z
     issue_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "Enter a valid issue date."),
     expiry_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "Enter a valid expiry date."),
     grace_days: z.coerce.number().int("Enter a whole number.").min(0, "Enter 0 or more.").max(365, "Enter 365 or less.").default(7),
-    allowed_features: z
-      .array(z.string().trim().min(1, "Feature names cannot be empty.").max(80, "Feature names must be 80 characters or less."))
-      .min(1, "Select at least one feature.")
-      .max(80, "Select no more than 80 features."),
+    allowed_features: featureSchema,
     maximum_users: z.coerce.number().int("Enter a whole number.").min(1, "Enter at least 1.").max(10000, "Enter 10,000 or less.").default(1),
     maximum_businesses: z.coerce.number().int("Enter a whole number.").min(1, "Enter at least 1.").max(1000, "Enter 1,000 or less.").default(1),
     maximum_branches: z.coerce.number().int("Enter a whole number.").min(1, "Enter at least 1.").max(10000, "Enter 10,000 or less.").default(1),

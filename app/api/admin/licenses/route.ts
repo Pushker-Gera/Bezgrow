@@ -1,6 +1,5 @@
 import "server-only"
 
-import { z } from "zod"
 import { requireAdminControlPlane } from "@/lib/api/auth"
 import {
   adminFail,
@@ -15,7 +14,19 @@ import {
   recordLicenseEvent,
   unexpectedAdminError,
 } from "@/lib/admin/control-plane"
-import { createLicenseSchema, licenseValidationIssue } from "@/lib/license/admin-license-validation"
+import {
+  createLicenseSchema,
+  licenseValidationIssue,
+  updateLicenseSchema,
+  type ValidCreateLicenseInput,
+} from "@/lib/license/admin-license-validation"
+import {
+  addLicenseDays,
+  effectiveStatusForRow,
+  licenseActionStateError,
+  licenseAuditSnapshot,
+  renewedExpiry,
+} from "@/lib/license/admin-license-actions"
 import { LICENSE_SCHEMA_VERSION, type LicensePayload } from "@/lib/license/codec"
 import { createLicenseId, hasLicenseSigningKey, licenseSigningStatus, signLicensePayload } from "@/lib/license/server"
 import { adminSupabase } from "@/lib/supabase/admin"
@@ -23,34 +34,7 @@ import { adminRequestTiming } from "@/lib/admin/request-timing"
 
 export const dynamic = "force-dynamic"
 
-const featureSchema = z.array(z.string().trim().min(1).max(80)).min(1).max(80)
-const LICENSE_LIST_COLUMNS = "id,platform_customer_id,platform_business_id,customer_name,customer_email,business_name,device_id,platform,architecture,app_version,plan_name,issue_date,expiry_date,grace_days,allowed_features,maximum_users,maximum_businesses,maximum_branches,internal_notes,status,signed_license_key,issuer_key_id,signature_algorithm,issued_by_admin_id,issued_by_admin_email,created_at,updated_at,effective_status"
-
-const updateLicenseSchema = z.object({
-  id: z.string().trim().min(8).max(160),
-  action: z.enum([
-    "renew",
-    "extend",
-    "change_grace",
-    "update_features",
-    "suspend",
-    "revoke",
-    "replace_device",
-    "transfer",
-    "notes",
-  ]),
-  expiry_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
-  extend_days: z.coerce.number().int().min(1).max(3650).optional(),
-  grace_days: z.coerce.number().int().min(0).max(365).optional(),
-  allowed_features: featureSchema.optional(),
-  plan_name: z.string().trim().min(2).max(80).optional(),
-  maximum_users: z.coerce.number().int().min(1).max(10000).optional(),
-  maximum_businesses: z.coerce.number().int().min(1).max(1000).optional(),
-  maximum_branches: z.coerce.number().int().min(1).max(10000).optional(),
-  internal_notes: z.string().trim().max(2000).optional(),
-  new_device_id: z.string().trim().min(8).max(180).optional(),
-  reason: z.string().trim().min(3).max(500).optional(),
-})
+const LICENSE_LIST_COLUMNS = "id,platform_customer_id,platform_business_id,customer_name,customer_email,business_name,device_id,platform,architecture,app_version,plan_name,issue_date,expiry_date,grace_days,allowed_features,maximum_users,maximum_businesses,maximum_branches,internal_notes,status,issuer_key_id,signature_algorithm,issued_by_admin_id,issued_by_admin_email,created_at,updated_at,effective_status"
 
 type StoredLicense = {
   id: string
@@ -86,12 +70,6 @@ type StoredLicense = {
   suspended_at?: string | null
   created_at: string
   updated_at: string
-}
-
-function dateAfter(dateText: string, days: number) {
-  const date = new Date(`${dateText.slice(0, 10)}T12:00:00.000Z`)
-  date.setUTCDate(date.getUTCDate() + days)
-  return date.toISOString().slice(0, 10)
 }
 
 function licensePayload(row: StoredLicense, adminLabel: string): LicensePayload {
@@ -139,7 +117,7 @@ function signedFile(row: StoredLicense) {
   }
 }
 
-async function ensureCustomer(input: z.infer<typeof createLicenseSchema>) {
+async function ensureCustomer(input: ValidCreateLicenseInput) {
   const email = input.customer_email.toLowerCase()
   const existing = await adminSupabase
     .from("platform_customers")
@@ -181,7 +159,7 @@ async function ensureCustomer(input: z.infer<typeof createLicenseSchema>) {
   return created.data.id as string
 }
 
-async function ensureBusiness(input: z.infer<typeof createLicenseSchema>, customerId: string) {
+async function ensureBusiness(input: ValidCreateLicenseInput, customerId: string) {
   const workspaceId = input.workspace_id || `workspace:${input.device_id}`
   const existing = await adminSupabase
     .from("platform_businesses")
@@ -284,7 +262,8 @@ export async function GET(request: Request) {
         `id.ilike.%${term}%,customer_name.ilike.%${term}%,customer_email.ilike.%${term}%,business_name.ilike.%${term}%,device_id.ilike.%${term}%`
       )
     }
-    if (list.status) query = query.eq("effective_status", list.status)
+    if (["draft", "suspended", "revoked", "replaced"].includes(list.status)) query = query.eq("status", list.status)
+    else if (list.status) query = query.eq("effective_status", list.status)
     if (list.platform) query = query.eq("platform", list.platform)
     query = exportMode ? query.limit(10000) : query.range(from, to)
 
@@ -294,7 +273,7 @@ export async function GET(request: Request) {
       return adminFail(context, controlPlaneErrorMessage(result.error, "Licenses failed to load."), 500)
     }
 
-    const rows = ((result.data || []) as StoredLicense[]).map((license) => ({
+    const rows = ((result.data || []) as unknown as StoredLicense[]).map((license) => ({
       ...license,
       effective_status: effectiveLicenseStatus(license),
     }))
@@ -520,170 +499,154 @@ export async function PATCH(request: Request) {
     if (currentResult.error) throw currentResult.error
     if (!currentResult.data) return adminFail(context, "License was not found.", 404)
     const current = currentResult.data as StoredLicense
-
-    if (["replace_device", "transfer"].includes(input.action)) {
-      if (!input.new_device_id || !input.reason) {
-        return adminFail(context, "A new Device ID and transfer reason are required.", 422)
-      }
-      if (!hasLicenseSigningKey()) {
-        return adminFail(context, "License generation failed because the server signing key is not configured.", 503)
-      }
-
-      const replacementId = createLicenseId()
-      const replacement = await persistSignedLicense(
-        {
-          id: replacementId,
-          platform_customer_id: current.platform_customer_id,
-          platform_business_id: current.platform_business_id,
-          subject_customer_id: current.subject_customer_id,
-          subject_business_id: current.subject_business_id,
-          customer_name: current.customer_name,
-          customer_email: current.customer_email,
-          business_name: current.business_name,
-          device_id: input.new_device_id,
-          platform: current.platform,
-          architecture: current.architecture,
-          app_version: current.app_version,
-          plan_name: current.plan_name,
-          issue_date: new Date().toISOString().slice(0, 10),
-          expiry_date: current.expiry_date,
-          grace_days: current.grace_days,
-          allowed_features: current.allowed_features,
-          maximum_users: current.maximum_users,
-          maximum_businesses: current.maximum_businesses,
-          maximum_branches: current.maximum_branches,
-          status: "active",
-          internal_notes: [current.internal_notes, input.reason].filter(Boolean).join("\n"),
-          issued_by_admin_id: context.adminUserId,
-          issued_by_admin_email: context.adminEmail,
-        },
-        context.adminEmail || context.adminUserId
-      )
-
-      const updatedOld = await adminSupabase
-        .from("licenses")
-        .update({
-          status: "replaced",
-          replaced_by_license_id: replacement.id,
-          updated_at: new Date().toISOString(),
-        })
-        .eq("id", current.id)
-      if (updatedOld.error) throw updatedOld.error
-
-      const oldDevice = await adminSupabase
-        .from("registered_devices")
-        .update({
-          device_status: "replaced",
-          replaced_by_device_id: input.new_device_id,
-          updated_at: new Date().toISOString(),
-        })
-        .eq("device_id", current.device_id)
-      if (oldDevice.error) throw oldDevice.error
-      const newDevice = await adminSupabase.from("registered_devices").upsert(
-        {
-          device_id: input.new_device_id,
-          platform_customer_id: current.platform_customer_id,
-          platform_business_id: current.platform_business_id,
-          license_id: replacement.id,
-          platform: current.platform,
-          architecture: current.architecture,
-          app_version: current.app_version,
-          device_status: "registered",
-          updated_at: new Date().toISOString(),
-        },
-        { onConflict: "device_id" }
-      )
-      if (newDevice.error) throw newDevice.error
-
-      await recordLicenseEvent({
-        context,
-        licenseId: current.id,
-        action: input.action === "transfer" ? "LICENSE_TRANSFERRED" : "DEVICE_REPLACED",
-        previousValues: { device_id: current.device_id, status: current.status },
-        newValues: { device_id: replacement.device_id, status: "replaced", replacement_license_id: replacement.id },
-        notes: input.reason,
-      })
-      await recordLicenseEvent({
-        context,
-        licenseId: replacement.id,
-        action: "REPLACEMENT_LICENSE_GENERATED",
-        newValues: { device_id: replacement.device_id, replaces_license_id: current.id },
-        notes: input.reason,
-      })
-      return adminOk(context, { license: replacement, replacedLicenseId: current.id })
+    // Fresh requests get a precise transition error before signing. A retry
+    // intentionally reaches the RPC when the row timestamp moved so its
+    // idempotency ledger can return the exact first response.
+    if (input.expected_updated_at === current.updated_at) {
+      const stateError = licenseActionStateError(input.action, current.status)
+      if (stateError) return adminFail(context, stateError, 409, { code: "INVALID_LICENSE_TRANSITION" })
     }
 
-    const updates: Record<string, unknown> = { updated_at: new Date().toISOString() }
-    if (input.action === "suspend") {
-      updates.status = "suspended"
-      updates.suspended_at = new Date().toISOString()
-    }
-    if (input.action === "revoke") {
-      updates.status = "revoked"
-      updates.revoked_at = new Date().toISOString()
-    }
+    const changedAt = new Date().toISOString()
+    const adminLabel = context.adminEmail || context.adminUserId
+    const updates: Record<string, unknown> = { updated_at: changedAt }
+    if (input.action === "suspend") Object.assign(updates, { status: "suspended", suspended_at: changedAt })
+    if (input.action === "reactivate") Object.assign(updates, { status: "active", suspended_at: null })
+    if (input.action === "revoke") Object.assign(updates, { status: "revoked", revoked_at: changedAt })
     if (input.action === "notes") updates.internal_notes = input.internal_notes ?? ""
-    if (input.action === "change_grace") {
-      if (input.grace_days === undefined) return adminFail(context, "Grace days are required.", 422)
-      updates.grace_days = input.grace_days
-    }
+    if (input.action === "change_grace") updates.grace_days = input.grace_days
     if (input.action === "update_features") {
-      if (!input.allowed_features) return adminFail(context, "Allowed features are required.", 422)
-      updates.allowed_features = [...new Set(input.allowed_features)].sort()
-      if (input.plan_name) updates.plan_name = input.plan_name
-      if (input.maximum_users) updates.maximum_users = input.maximum_users
-      if (input.maximum_businesses) updates.maximum_businesses = input.maximum_businesses
-      if (input.maximum_branches) updates.maximum_branches = input.maximum_branches
+      updates.allowed_features = input.allowed_features
+      updates.plan_name = input.plan_name
+      if (input.maximum_users !== undefined) updates.maximum_users = input.maximum_users
+      if (input.maximum_businesses !== undefined) updates.maximum_businesses = input.maximum_businesses
+      if (input.maximum_branches !== undefined) updates.maximum_branches = input.maximum_branches
     }
     if (input.action === "renew") {
-      if (!input.expiry_date) return adminFail(context, "A renewal expiry date is required.", 422)
-      updates.expiry_date = input.expiry_date
-      updates.issue_date = new Date().toISOString().slice(0, 10)
+      updates.expiry_date = renewedExpiry(current.expiry_date, input.renew_months as number)
+      updates.issue_date = changedAt.slice(0, 10)
       updates.status = "active"
-      updates.renewed_at = new Date().toISOString()
+      updates.renewed_at = changedAt
+      updates.suspended_at = null
     }
     if (input.action === "extend") {
-      if (!input.extend_days) return adminFail(context, "Extension days are required.", 422)
-      updates.expiry_date = dateAfter(current.expiry_date, input.extend_days)
-      updates.status = "active"
-      updates.renewed_at = new Date().toISOString()
+      updates.expiry_date = addLicenseDays(current.expiry_date, input.extend_days as number)
+      updates.renewed_at = changedAt
     }
 
     const signatureChanges = ["renew", "extend", "change_grace", "update_features"].includes(input.action)
+    if (signatureChanges && !hasLicenseSigningKey()) {
+      return adminFail(context, "Licence signing failed because the server signing key is not configured. Existing licence remains unchanged.", 503)
+    }
     if (signatureChanges) {
-      if (!hasLicenseSigningKey()) {
-        return adminFail(context, "License update failed because the server signing key is not configured.", 503)
-      }
       const next = { ...current, ...updates } as StoredLicense
-      const signed = signLicensePayload(licensePayload(next, context.adminEmail || context.adminUserId))
+      const signed = signLicensePayload(licensePayload(next, adminLabel))
       updates.signed_license_key = signed.license_key
       updates.issuer_key_id = signed.payload.issuer_key_id
       updates.signature_algorithm = signed.payload.signature_algorithm
+      updates.issued_by_admin_id = context.adminUserId
+      updates.issued_by_admin_email = context.adminEmail
     }
 
-    const result = await adminSupabase.from("licenses").update(updates).eq("id", current.id).select("*").single()
-    if (result.error) throw result.error
-    const changed = result.data as StoredLicense
+    let replacement: StoredLicense | null = null
+    if (input.action === "replace_device" || input.action === "transfer") {
+      if (!hasLicenseSigningKey()) {
+        return adminFail(context, "Licence signing failed because the server signing key is not configured. Existing licence remains unchanged.", 503)
+      }
+      const replacementId = createLicenseId()
+      const replacementBase = {
+        ...current,
+        id: replacementId,
+        device_id: input.new_device_id as string,
+        issue_date: changedAt.slice(0, 10),
+        status: "active",
+        internal_notes: [current.internal_notes, input.reason].filter(Boolean).join("\n"),
+        signed_license_key: null,
+        issuer_key_id: null,
+        signature_algorithm: null,
+        issued_by_admin_id: context.adminUserId,
+        issued_by_admin_email: context.adminEmail,
+        activation_date: null,
+        renewed_at: null,
+        revoked_at: null,
+        suspended_at: null,
+        created_at: changedAt,
+        updated_at: changedAt,
+      } satisfies StoredLicense
+      const signed = signLicensePayload(licensePayload(replacementBase, adminLabel))
+      replacement = {
+        ...replacementBase,
+        signed_license_key: signed.license_key,
+        issuer_key_id: signed.payload.issuer_key_id || null,
+        signature_algorithm: signed.payload.signature_algorithm || null,
+      }
+    }
+
     const actionNames: Record<typeof input.action, string> = {
       renew: "LICENSE_RENEWED",
       extend: "LICENSE_EXTENDED",
       change_grace: "LICENSE_GRACE_CHANGED",
       update_features: "LICENSE_FEATURES_CHANGED",
       suspend: "LICENSE_SUSPENDED",
+      reactivate: "LICENSE_REACTIVATED",
       revoke: "LICENSE_REVOKED",
       replace_device: "DEVICE_REPLACED",
       transfer: "LICENSE_TRANSFERRED",
       notes: "LICENSE_NOTES_UPDATED",
     }
-    await recordLicenseEvent({
-      context,
-      licenseId: current.id,
-      action: actionNames[input.action],
-      previousValues: compactRecord(current),
-      newValues: compactRecord(changed),
-      notes: input.reason || input.internal_notes || null,
+    const nextSnapshot = replacement
+      ? { ...licenseAuditSnapshot(current), status: "replaced", replaced_by_license_id: replacement.id, updated_at: changedAt }
+      : licenseAuditSnapshot({ ...current, ...updates })
+    const mutation = await adminSupabase.rpc("admin_mutate_license", {
+      p_license_id: current.id,
+      p_action: input.action,
+      p_action_name: actionNames[input.action],
+      p_expected_updated_at: input.expected_updated_at,
+      p_changed_at: changedAt,
+      p_updates: updates,
+      p_replacement: replacement,
+      p_new_device_id: input.new_device_id || null,
+      p_reason: input.reason || input.internal_notes || null,
+      p_idempotency_key: input.idempotency_key,
+      p_request_id: context.requestId,
+      p_admin_user_id: context.adminUserId,
+      p_admin_email: context.adminEmail,
+      p_ip_address: context.ipAddress,
+      p_user_agent: context.userAgent,
+      p_previous_values: licenseAuditSnapshot(current),
+      p_new_values: nextSnapshot,
     })
-    return adminOk(context, { license: changed })
+    if (mutation.error) {
+      const message = mutation.error.message || ""
+      if (/already revoked/i.test(message)) return adminFail(context, "Licence is already revoked.", 409, { code: "INVALID_LICENSE_TRANSITION" })
+      if (/already suspended/i.test(message)) return adminFail(context, "Licence is already suspended.", 409, { code: "INVALID_LICENSE_TRANSITION" })
+      if (/changed concurrently/i.test(message)) return adminFail(context, "This licence changed concurrently. Refresh the row before retrying.", 409, { code: "LICENSE_CHANGED" })
+      if (/target device is already assigned/i.test(message)) return adminFail(context, "The target Device ID is already assigned to another licence.", 409, { code: "DEVICE_ALREADY_ASSIGNED" })
+      if (/invalid licence transition/i.test(message)) return adminFail(context, "This licence state does not permit the requested action.", 409, { code: "INVALID_LICENSE_TRANSITION" })
+      throw mutation.error
+    }
+    const mutationResult = mutation.data as {
+      license?: StoredLicense
+      replacedLicense?: StoredLicense
+      replacedLicenseId?: string
+      duplicate?: boolean
+    } | null
+    if (!mutationResult?.license) throw new Error("Atomic licence mutation returned no licence row.")
+    const responseLicense = {
+      ...mutationResult.license,
+      effective_status: effectiveStatusForRow(mutationResult.license as unknown as Record<string, unknown>),
+    }
+    const replacedLicense = mutationResult.replacedLicense
+      ? {
+          ...mutationResult.replacedLicense,
+          effective_status: effectiveStatusForRow(mutationResult.replacedLicense as unknown as Record<string, unknown>),
+        }
+      : undefined
+    return adminOk(context, {
+      ...mutationResult,
+      license: responseLicense,
+      replacedLicense,
+    })
   } catch (error) {
     return unexpectedAdminError(context, error, "License change failed.")
   }

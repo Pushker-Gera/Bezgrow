@@ -2,7 +2,7 @@ import "server-only"
 
 import { adminSupabase } from "@/lib/supabase/admin"
 
-export const ADMIN_CONTROL_PLANE_SCHEMA_VERSION = 2026082102
+export const ADMIN_CONTROL_PLANE_SCHEMA_VERSION = 2026082201
 export const ADMIN_CONTROL_PLANE_SCHEMA_STATUS_RPC = "admin_control_plane_current_schema_status"
 
 export type AdminControlPlaneSchemaStatus = {
@@ -42,13 +42,20 @@ function normalizeStatus(value: unknown): AdminControlPlaneSchemaStatus {
         )
       : unavailableStatus.missing
 
+  const expectedVersion = Number(raw.expectedVersion || 0)
+  const actualVersion =
+    raw.actualVersion === null || raw.actualVersion === undefined
+      ? null
+      : Number(raw.actualVersion)
+
   return {
-    ready: raw.ready === true,
-    expectedVersion: Number(raw.expectedVersion || ADMIN_CONTROL_PLANE_SCHEMA_VERSION),
-    actualVersion:
-      raw.actualVersion === null || raw.actualVersion === undefined
-        ? null
-        : Number(raw.actualVersion),
+    ready:
+      raw.ready === true &&
+      expectedVersion === ADMIN_CONTROL_PLANE_SCHEMA_VERSION &&
+      actualVersion !== null &&
+      actualVersion >= ADMIN_CONTROL_PLANE_SCHEMA_VERSION,
+    expectedVersion,
+    actualVersion,
     missing,
   }
 }

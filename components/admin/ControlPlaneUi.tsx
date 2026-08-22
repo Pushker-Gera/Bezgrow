@@ -159,10 +159,14 @@ export async function adminMutation<T = Record<string, unknown>>(
         "content-type": "application/json",
         "idempotency-key": crypto.randomUUID(),
       },
+      signal: AbortSignal.timeout(20_000),
       body: JSON.stringify(body),
     })
-  } catch {
-    throw new Error("Internet connection required for Platform Administration")
+  } catch (error) {
+    if (error instanceof DOMException && error.name === "TimeoutError") {
+      throw new Error("The Bezgrow control plane did not respond within 20 seconds. No success was assumed; refresh the row before retrying.")
+    }
+    throw new Error("Unable to reach the Bezgrow control plane. No changes were assumed.")
   } finally {
     activeAdminMutations.delete(mutationKey)
   }
@@ -425,20 +429,25 @@ export function AdminModal({
 }) {
   useEffect(() => {
     if (!open) return
+    const previousOverflow = document.body.style.overflow
+    document.body.style.overflow = "hidden"
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key === "Escape") onClose()
     }
     window.addEventListener("keydown", onKeyDown)
-    return () => window.removeEventListener("keydown", onKeyDown)
+    return () => {
+      document.body.style.overflow = previousOverflow
+      window.removeEventListener("keydown", onKeyDown)
+    }
   }, [onClose, open])
 
   if (!open) return null
   return (
-    <div className="fixed inset-0 z-[80] flex items-center justify-center bg-black/80 p-4 backdrop-blur-sm" role="dialog" aria-modal="true">
-      <section className="max-h-[90dvh] w-full max-w-3xl overflow-y-auto rounded-[30px] border border-white/15 bg-[#080b0b] p-5 shadow-2xl sm:p-7">
+    <div className="desktop-interactive fixed inset-0 z-[80] flex items-center justify-center bg-black/80 p-4 backdrop-blur-sm" role="dialog" aria-modal="true" aria-label={title} onPointerDown={(event) => { if (event.target === event.currentTarget) onClose() }}>
+      <section className="desktop-interactive max-h-[90dvh] w-full max-w-3xl overflow-y-auto rounded-[30px] border border-white/15 bg-[#080b0b] p-5 shadow-2xl sm:p-7" onPointerDown={(event) => event.stopPropagation()}>
         <div className="flex items-center justify-between gap-4">
           <h3 className="text-2xl font-black">{title}</h3>
-          <button type="button" onClick={onClose} className="h-10 rounded-xl border border-white/10 px-4 text-sm font-black">
+          <button type="button" onClick={onClose} className="desktop-interactive h-10 rounded-xl border border-white/10 px-4 text-sm font-black">
             Close
           </button>
         </div>

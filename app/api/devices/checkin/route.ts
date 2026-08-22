@@ -102,7 +102,7 @@ export async function POST(request: Request) {
       { status: auth.status, headers: { "Cache-Control": "no-store", "X-Request-Id": auth.requestId } }
     )
   }
-  const { requestId, license, device } = auth.context
+  const { requestId, license, device, refreshedLicenseKey } = auth.context
 
   try {
     if (input.license_id && input.license_id !== license.id) {
@@ -390,6 +390,7 @@ export async function POST(request: Request) {
         requestId,
         serverTime: now,
         licenseStatus: license.status,
+        refreshedLicenseKey,
         diagnosticRequested: Boolean(registeredDevice.diagnostic_requested_at),
         eligibleRelease: update,
       },

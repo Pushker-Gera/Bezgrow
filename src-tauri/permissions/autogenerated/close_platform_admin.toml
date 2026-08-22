@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-close-platform-admin"
+description = "Enables the close_platform_admin command without any pre-configured scope."
+commands.allow = ["close_platform_admin"]
+
+[[permission]]
+identifier = "deny-close-platform-admin"
+description = "Denies the close_platform_admin command without any pre-configured scope."
+commands.deny = ["close_platform_admin"]
