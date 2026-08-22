@@ -77,7 +77,7 @@ function getInstallerInfo(
   ].filter(Boolean)
   return {
     available: release.available,
-    href: fallbackHref,
+    href: release.available && release.downloadUrl ? release.downloadUrl : fallbackHref,
     sizeLabel,
     warning: release.warning,
     blockedReason: release.blockedReason,
@@ -180,6 +180,14 @@ export default async function DownloadPage() {
     availability.mac.releaseNotes,
     availability.windows.releaseNotes,
   ].filter((note, index, notes): note is string => Boolean(note) && notes.indexOf(note) === index)
+  const publishedVersions = [macInstaller, windowsInstaller]
+    .filter((installer) => installer.available && installer.version)
+    .map((installer) => `${installer.platform === "macos" ? "Mac" : "Windows"} v${installer.version}`)
+  const releaseLabel = releaseManifest?.version
+    ? `Available desktop release ${releaseManifest.version}`
+    : installersReady
+      ? `Available desktop releases · ${publishedVersions.join(" · ")}`
+      : "No validated desktop installer available"
 
   return (
     <main className="min-h-dvh overflow-x-hidden bg-[#020403] px-4 py-8 text-white sm:px-5 sm:py-10 lg:px-8">
@@ -197,9 +205,7 @@ export default async function DownloadPage() {
           </p>
 
           <div className="mt-6 inline-flex rounded-full border border-white/10 bg-black/35 px-4 py-2 text-sm font-bold text-white/65">
-            {releaseManifest?.version
-              ? `Available desktop release ${releaseManifest.version}`
-              : "No validated desktop installer available"}
+            {releaseLabel}
           </div>
 
           {installersReady && (

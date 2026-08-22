@@ -10,6 +10,9 @@ Local-first Financial Year Management.
 - Added FY-scoped dashboard, billing, customer metrics, local reports, GST, stock history, and customer ledgers with opening balances shown separately.
 - Extended full local backup/export coverage to financial years, opening records, numbering sequences, close metadata, and audit history.
 - Added upgrade, boundary, leap-year, carry-forward, numbering, mutation-protection, backup/restore, privacy, integrity, and 2,000-product/5,000-customer/20,000-invoice performance tests.
+- Decoupled the development/source version from the latest published desktop release so future source bumps cannot disable the previous integrity-verified Mac or Windows download.
+- Added explicit draft/building/validating/ready/published/failed release states, internal versus stable trust policy, cross-platform atomic publication gates, and exact per-platform availability.
+- Added `release:verify` and `release:publish` commands, immutable artifact/provenance validation, published-only updater discovery, and transition regressions for incomplete or failed releases.
 
 Public 0.2.0 installer/update metadata must not be published until corresponding integrity-verified artifacts exist. The checked-in public download manifests therefore continue to describe the genuine 0.1.15 artifacts.
 

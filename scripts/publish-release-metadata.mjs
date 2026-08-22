@@ -16,6 +16,7 @@ const buildNumber = arg("--build-number", process.env.GITHUB_RUN_NUMBER || "")
 const expectedCommit = arg("--commit", process.env.GITHUB_SHA || "")
 const releaseChannel = arg("--channel", "stable")
 const platformFilter = arg("--platform", "all")
+const publicationMode = arg("--publication-mode", "cross-platform")
 const supabaseUrl = process.env.SUPABASE_URL || process.env.NEXT_PUBLIC_SUPABASE_URL
 const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY
 const requestId = `github-release-${process.env.GITHUB_RUN_ID || "local"}-${process.env.GITHUB_RUN_ATTEMPT || "1"}`
@@ -30,6 +31,9 @@ if (!version || !buildNumber) {
 }
 if (!/^[a-f0-9]{40}$/i.test(expectedCommit)) {
   throw new Error("Release metadata publication requires the exact 40-character source commit.")
+}
+if (!["cross-platform", "staged"].includes(publicationMode)) {
+  throw new Error("Publication mode must be cross-platform or staged.")
 }
 
 const supabase = createClient(supabaseUrl, serviceRoleKey, {
@@ -53,6 +57,10 @@ const supportsUpdaterMetadata = await supportsColumns("release_artifacts", [
   "updater_size",
   "updater_sha256",
   "updater_signature_status",
+])
+const supportsAtomicReleaseState = await supportsColumns("desktop_releases", [
+  "publication_mode",
+  "trust_mode",
 ])
 if (manifest.mandatoryAfter && !supportsMandatoryAfter) {
   throw new Error("The control plane must apply the mandatory_after migration before scheduling a mandatory release.")
@@ -89,6 +97,13 @@ const artifacts = definitions
 
 if (artifacts.length === 0) {
   throw new Error(`No ${platformFilter} installer metadata exists in the release manifest.`)
+}
+const artifactPlatforms = new Set(artifacts.map((entry) => entry.platform))
+if (
+  publicationMode === "cross-platform" &&
+  (!artifactPlatforms.has("macos") || !artifactPlatforms.has("windows"))
+) {
+  throw new Error("Cross-platform publication requires validated macOS and Windows artifact sets in the same release cohort.")
 }
 
 for (const entry of artifacts) {
@@ -172,7 +187,7 @@ for (const entries of grouped.values()) {
   }
   const releaseValues = {
     ...identity,
-    release_status: "draft",
+    release_status: supportsAtomicReleaseState ? "validating" : "draft",
     minimum_supported_version: manifest.minimumSupportedVersion || null,
     release_notes: Array.isArray(manifest.releaseNotes)
       ? manifest.releaseNotes.join("\n")
@@ -184,6 +199,10 @@ for (const entries of grouped.values()) {
     build_timestamp: first.installer.buildTimestamp,
     published_at: null,
     updated_at: new Date().toISOString(),
+  }
+  if (supportsAtomicReleaseState) {
+    releaseValues.publication_mode = publicationMode
+    releaseValues.trust_mode = ["manual", "internal"].includes(first.channel) ? "internal" : "stable"
   }
   if (supportsMandatoryAfter) {
     releaseValues.mandatory_after = manifest.mandatoryAfter || null
@@ -236,6 +255,14 @@ for (const entries of grouped.values()) {
     if (artifactResult.error) throw artifactResult.error
   }
 
+  if (supportsAtomicReleaseState) {
+    const readyResult = await supabase
+      .from("desktop_releases")
+      .update({ release_status: "ready", updated_at: new Date().toISOString() })
+      .eq("id", releaseResult.data.id)
+    if (readyResult.error) throw readyResult.error
+  }
+
   stagedReleases.push({
     id: releaseResult.data.id,
     identity,
@@ -245,6 +272,12 @@ for (const entries of grouped.values()) {
 
 if (stagedReleases.length !== grouped.size || stagedReleases.length < 1) {
   throw new Error("A public desktop release requires at least one staged, integrity-verified platform record.")
+}
+if (publicationMode === "cross-platform") {
+  const stagedPlatforms = new Set(stagedReleases.map((release) => release.identity.platform))
+  if (!stagedPlatforms.has("macos") || !stagedPlatforms.has("windows")) {
+    throw new Error("Atomic publication refused because the ready cohort is missing macOS or Windows.")
+  }
 }
 
 const publishedAt = new Date().toISOString()
@@ -290,5 +323,5 @@ for (const release of stagedReleases) {
 }
 
 console.log(
-  `Atomically published ${stagedReleases.length} platform records with integrity-verified metadata for ${artifacts.length} installer artifacts.`
+  `Atomically published ${stagedReleases.length} platform records in ${publicationMode} mode with integrity-verified metadata for ${artifacts.length} installer artifacts.`
 )

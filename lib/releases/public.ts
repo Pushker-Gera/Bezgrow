@@ -9,6 +9,11 @@ import {
   type ValidatedInstaller,
   validateInstallerCandidate,
 } from "@/lib/releases/artifact-validation"
+import {
+  commonPublishedVersion,
+  isExplicitlyPublished,
+  selectLatestPublishedInstaller,
+} from "@/lib/releases/policy"
 import { adminSupabase } from "@/lib/supabase/admin"
 
 export type PublicInstallerRelease = ValidatedInstaller
@@ -89,11 +94,15 @@ type RawInstaller = {
   updaterSignatureVerified?: boolean
   publicationStatus?: string
   releaseDate?: string
+  available?: boolean
+  checksumVerified?: boolean
+  metadataValid?: boolean
 }
 
 type RawManifest = {
   version?: string
   generatedAt?: string
+  publicationStatus?: string
   releaseNotes?: string[]
   mac?: RawInstaller
   macX64?: RawInstaller
@@ -172,11 +181,6 @@ function readJson<T>(path: string): T | null {
   }
 }
 
-function packageVersion() {
-  const packageJson = readJson<{ version?: string }>(join(process.cwd(), "package.json"))
-  return packageJson?.version || null
-}
-
 function inferArchitecture(filename: string): InstallerArchitecture | null {
   const lower = filename.toLowerCase()
   if (/(?:^|[-_.])(arm64|aarch64)(?:[-_.]|$)/.test(lower)) return "arm64"
@@ -188,10 +192,12 @@ function candidateFromManifest(
   platform: InstallerPlatform,
   installer: RawInstaller,
   manifestVersion: string | undefined,
-  releaseNotes: string[]
+  releaseNotes: string[],
+  manifestPublicationStatus?: string
 ): InstallerCandidate {
   const href = installer.downloadUrl || installer.url || installer.file || null
   const filename = installer.filename || (href ? basename(href.split("?")[0]) : null)
+  const publicationStatus = installer.publicationStatus || manifestPublicationStatus || null
   return {
     platform,
     architecture: installer.architecture || (filename ? inferArchitecture(filename) : null),
@@ -218,8 +224,15 @@ function candidateFromManifest(
     updaterSha256: installer.updaterSha256 || null,
     updateSignature: installer.updateSignature || null,
     updaterSignatureVerified: installer.updaterSignatureVerified === true,
-    publicationStatus: installer.publicationStatus || null,
+    publicationStatus,
     releaseDate: installer.releaseDate || null,
+    integrityAttested:
+      publicationStatus === "published" &&
+      installer.available === true &&
+      installer.checksumVerified === true &&
+      installer.metadataValid === true,
+    checksumVerified: installer.checksumVerified === true,
+    metadataValid: installer.metadataValid === true,
   }
 }
 
@@ -239,7 +252,7 @@ function checkedInCandidates(platform: InstallerPlatform) {
           manifest?.windowsArm64Msix,
         ]
   for (const entry of entries) {
-    if (entry) candidates.push(candidateFromManifest(platform, entry, manifest?.version, notes))
+    if (entry) candidates.push(candidateFromManifest(platform, entry, manifest?.version, notes, manifest?.publicationStatus))
   }
 
   const platformManifestNames =
@@ -252,7 +265,13 @@ function checkedInCandidates(platform: InstallerPlatform) {
         ]
   for (const name of platformManifestNames) {
     const installer = readJson<RawInstaller>(join(downloadsDirectory, name))
-    if (installer) candidates.push(candidateFromManifest(platform, installer, manifest?.version, notes))
+    if (
+      installer &&
+      manifest?.publicationStatus === "published" &&
+      installer.version === manifest.version
+    ) {
+      candidates.push(candidateFromManifest(platform, installer, manifest.version, notes, manifest.publicationStatus))
+    }
   }
 
   if (existsSync(downloadsDirectory)) {
@@ -264,13 +283,14 @@ function checkedInCandidates(platform: InstallerPlatform) {
       candidates.push({
         platform,
         architecture: inferArchitecture(filename),
-        version: manifest?.version || packageVersion(),
+        version: manifest?.version || null,
         downloadUrl: href,
         filename,
         signed: false,
         notarized: false,
         releaseChannel: "manual",
         releaseNotes: notes.join("\n\n") || null,
+        publicationStatus: "draft",
       })
     }
   }
@@ -296,7 +316,7 @@ function configuredCandidates(platform: InstallerPlatform) {
     {
       platform,
       architecture: architecture || inferArchitecture(filename),
-      version: process.env[`BEZGROW_${prefix}_INSTALLER_VERSION`]?.trim() || packageVersion(),
+      version: process.env[`BEZGROW_${prefix}_INSTALLER_VERSION`]?.trim() || null,
       downloadUrl: url,
       filename,
       size: rawSize > 0 ? rawSize : null,
@@ -309,6 +329,9 @@ function configuredCandidates(platform: InstallerPlatform) {
       generatedAt: new Date().toISOString(),
       buildCommit: process.env[`BEZGROW_${prefix}_INSTALLER_COMMIT`]?.trim() || null,
       buildTimestamp: process.env[`BEZGROW_${prefix}_INSTALLER_BUILT_AT`]?.trim() || null,
+      publicationStatus:
+        process.env[`BEZGROW_${prefix}_INSTALLER_PUBLICATION_STATUS`]?.trim().toLowerCase() ||
+        "draft",
     } satisfies InstallerCandidate,
   ]
 }
@@ -349,6 +372,9 @@ function controlPlaneCandidate(release: ReleaseRow): InstallerCandidate | null {
     updaterSignatureVerified: artifact.updater_signature_status === "valid",
     publicationStatus: release.release_status || null,
     releaseDate: release.published_at || null,
+    integrityAttested: artifact.validation_status === "valid",
+    checksumVerified: artifact.validation_status === "valid",
+    metadataValid: artifact.validation_status === "valid",
   }
 }
 
@@ -432,12 +458,9 @@ function missingAvailability(
 async function availabilityForPlatform(
   platform: InstallerPlatform,
   rows: ReleaseRow[],
-  controlPlaneError: string | null,
-  requestedVersion: string | null
+  controlPlaneError: string | null
 ): Promise<PublicReleaseAvailability> {
-  const platformRows = rows.filter(
-    (row) => row.platform === platform && (!requestedVersion || row.version === requestedVersion)
-  )
+  const platformRows = rows.filter((row) => row.platform === platform)
   const controlCandidates = publishedRows(platformRows, platform)
     .map(controlPlaneCandidate)
     .filter((candidate): candidate is InstallerCandidate => Boolean(candidate))
@@ -447,9 +470,7 @@ async function availabilityForPlatform(
     ...controlCandidates,
     ...configuredCandidates(platform),
   ])
-  const candidates = allCandidates.filter(
-    (candidate) => !requestedVersion || candidate.version === requestedVersion
-  )
+  const candidates = allCandidates.filter(isExplicitlyPublished)
 
   if (candidates.length === 0) {
     if (platformRows.length > 0) {
@@ -469,31 +490,26 @@ async function availabilityForPlatform(
         "unpublished"
       )
     }
-    const staleVersions = [...new Set(allCandidates.map((candidate) => candidate.version).filter(Boolean))]
-    if (requestedVersion && staleVersions.length > 0) {
+    const unpublishedVersions = [...new Set(allCandidates.map((candidate) => candidate.version).filter(Boolean))]
+    if (unpublishedVersions.length > 0) {
       return missingAvailability(
         platform,
-        `${platform === "macos" ? "macOS" : "Windows"} release metadata is stale (${staleVersions.join(", ")}); no integrity-verified ${requestedVersion} artifact is available.`,
-        "stale_metadata"
+        `${platform === "macos" ? "macOS" : "Windows"} release metadata exists for ${unpublishedVersions.join(", ")}, but none is explicitly published.`,
+        "unpublished"
       )
     }
     return missingAvailability(
       platform,
-      `No genuine ${platform === "macos" ? "macOS" : "Windows"} installer for Bezgrow ${requestedVersion || "current"} was found in verified release metadata${controlPlaneError ? "; the control-plane lookup is also temporarily unavailable" : ""}.`
+      `No genuine published ${platform === "macos" ? "macOS" : "Windows"} installer was found in verified release metadata${controlPlaneError ? "; the control-plane lookup is also temporarily unavailable" : ""}.`
     )
   }
 
-  const validations = await Promise.all(candidates.map((candidate) => validateInstallerCandidate(candidate)))
-  const available = validations
-    .filter((installer) => installer.available)
-    .sort((left, right) => {
-      const score = (installer: ValidatedInstaller) =>
-        (installer.productionRecommended ? 100 : 0) +
-        (installer.releaseChannel === "stable" ? 20 : 0) +
-        (installer.checksumVerified ? 10 : 0) +
-        (installer.metadataValid ? 5 : 0)
-      return score(right) - score(left)
-    })[0]
+  const validations = await Promise.all(
+    candidates.map((candidate) =>
+      validateInstallerCandidate(candidate, { allowPublicationAttestation: true })
+    )
+  )
+  const available = selectLatestPublishedInstaller(validations)
 
   if (available) {
     const reason = available.warning || `${platform === "macos" ? "macOS" : "Windows"} installer is available and passed integrity validation.`
@@ -515,43 +531,6 @@ async function availabilityForPlatform(
   }
 }
 
-function compareReleaseVersions(left: string, right: string) {
-  const parse = (value: string) => {
-    const [core, prerelease = ""] = value.split("-", 2)
-    return { parts: core.split(".").map((part) => Number(part)), prerelease }
-  }
-  const a = parse(left)
-  const b = parse(right)
-  for (let index = 0; index < Math.max(a.parts.length, b.parts.length); index += 1) {
-    const difference = (b.parts[index] || 0) - (a.parts[index] || 0)
-    if (difference !== 0) return difference
-  }
-  if (!a.prerelease && b.prerelease) return -1
-  if (a.prerelease && !b.prerelease) return 1
-  return b.prerelease.localeCompare(a.prerelease)
-}
-
-function releaseCandidateVersions(rows: ReleaseRow[]) {
-  const candidates = [
-    packageVersion(),
-    ...rows
-      .filter(
-        (row) =>
-          row.release_status === "published" &&
-          row.active &&
-          row.published_at &&
-          Number(row.rollout_percentage ?? 100) === 100
-      )
-      .map((row) => row.version),
-    ...checkedInCandidates("macos").map((candidate) => candidate.version),
-    ...checkedInCandidates("windows").map((candidate) => candidate.version),
-    ...configuredCandidates("macos").map((candidate) => candidate.version),
-    ...configuredCandidates("windows").map((candidate) => candidate.version),
-  ]
-  return [...new Set(candidates.filter((version): version is string => Boolean(version && /^\d+\.\d+\.\d+(?:[-+][A-Za-z0-9.-]+)?$/.test(version))))]
-    .sort(compareReleaseVersions)
-}
-
 function desktopAvailability(
   mac: PublicReleaseAvailability,
   windows: PublicReleaseAvailability,
@@ -566,7 +545,6 @@ function desktopAvailability(
     if (!installer) continue
     const key = manifestKey(installer)
     manifest[key] = installer
-    if (!manifest.version) manifest.version = installer.version || undefined
     if (
       installer.generatedAt &&
       Date.parse(installer.generatedAt) > Date.parse(manifest.generatedAt)
@@ -577,6 +555,7 @@ function desktopAvailability(
       manifest.releaseNotes.push(installer.releaseNotes)
     }
   }
+  manifest.version = commonPublishedVersion([mac, windows]) || undefined
 
   return {
     manifest:
@@ -656,13 +635,11 @@ export async function getDesktopReleaseAvailability(): Promise<PublicDesktopRele
     })
   }
 
-  // Fail closed on the newest intended version. Falling back to an older
-  // complete cohort while a newer website/control-plane version is incomplete
-  // is precisely how stale installers get served under confusing release UI.
-  const releaseVersion = releaseCandidateVersions(rows)[0] || packageVersion() || "current"
+  // Public availability is intentionally independent of package.json. A source
+  // version bump must never hide the latest genuinely published installer.
   const [mac, windows] = await Promise.all([
-    availabilityForPlatform("macos", rows, controlPlaneError, releaseVersion),
-    availabilityForPlatform("windows", rows, controlPlaneError, releaseVersion),
+    availabilityForPlatform("macos", rows, controlPlaneError),
+    availabilityForPlatform("windows", rows, controlPlaneError),
   ])
   return desktopAvailability(mac, windows, controlPlaneError)
 }

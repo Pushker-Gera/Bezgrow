@@ -5,6 +5,8 @@
   ],
   "generatedAt": "2026-08-21T05:49:33.539Z",
   "publicationStatus": "published",
+  "publicationMode": "cross-platform",
+  "trustMode": "internal",
   "minimumSupportedVersion": "0.1.14",
   "mac": {
     "downloadUrl": "https://github.com/Pushker-Gera/Bezgrow/releases/download/v0.1.15-manual.29/Bezgrow-0.1.15-arm64.dmg",

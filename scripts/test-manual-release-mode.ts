@@ -62,6 +62,7 @@ const manualManifest: DesktopReleaseManifest = {
     size: 80 * 1024 * 1024,
     sha256,
     checksumVerified: true,
+    publicationStatus: "published",
     metadataValid: true,
     signed: false,
     notarized: false,

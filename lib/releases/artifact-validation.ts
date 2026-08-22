@@ -42,6 +42,9 @@ export type InstallerCandidate = {
   updaterSignatureVerified?: boolean | null
   publicationStatus?: string | null
   releaseDate?: string | null
+  integrityAttested?: boolean | null
+  checksumVerified?: boolean | null
+  metadataValid?: boolean | null
 }
 
 export type ValidatedInstaller = {
@@ -95,6 +98,7 @@ type ArtifactBytes = {
 
 type ValidationOptions = {
   cache?: boolean
+  allowPublicationAttestation?: boolean
 }
 
 type PeArchitecture = InstallerArchitecture | "x86"
@@ -413,6 +417,111 @@ function unavailable(candidate: InstallerCandidate, reason: string): ValidatedIn
   }
 }
 
+function validatePublicationAttestation(candidate: InstallerCandidate): ValidatedInstaller {
+  const href = candidateHref(candidate)
+  if (!href || href.startsWith("/") || !isTrustedBezgrowArtifactUrl(href)) {
+    return unavailable(candidate, "Published installer attestation requires an immutable trusted HTTPS URL.")
+  }
+  const filename = candidate.filename || basename(new URL(href).pathname)
+  const publicFilename = basename(new URL(href).pathname)
+  const extension = installerExtension(candidate.platform, filename)
+  if (!extension) {
+    return unavailable(candidate, candidate.platform === "macos" ? "Artifact is not a macOS .dmg installer." : "Artifact is not a Windows installer.")
+  }
+  if (publicFilename !== filename) {
+    return unavailable(candidate, "Published installer URL does not end in the exact recorded filename.")
+  }
+  const filenameVersion = inferredVersion(filename)
+  const filenameArchitecture = inferredArchitecture(filename)
+  if (candidate.version && filenameVersion !== candidate.version) {
+    return unavailable(candidate, `Installer filename ${filename} does not contain metadata version ${candidate.version}.`)
+  }
+  if (
+    candidate.architecture &&
+    filenameArchitecture &&
+    comparableArchitecture(candidate.architecture) !== comparableArchitecture(filenameArchitecture)
+  ) {
+    return unavailable(candidate, `Installer architecture ${filenameArchitecture} does not match metadata architecture ${candidate.architecture}.`)
+  }
+  const metadataValid = Boolean(
+    candidate.integrityAttested === true &&
+      candidate.checksumVerified === true &&
+      candidate.metadataValid === true &&
+      candidate.publicationStatus === "published" &&
+      semverLike(candidate.version) &&
+      candidate.architecture &&
+      filenameVersion === candidate.version &&
+      candidate.size &&
+      candidate.size >= minimumArtifactBytes(extension) &&
+      candidate.size <= MAX_ARTIFACT_BYTES &&
+      sha256Like(candidate.sha256) &&
+      commitLike(candidate.buildCommit) &&
+      timestampLike(candidate.buildTimestamp)
+  )
+  if (!metadataValid) {
+    return unavailable(candidate, "Published installer attestation is incomplete or invalid.")
+  }
+
+  const signed = candidate.signed === true
+  const notarized = candidate.platform === "macos" && candidate.notarized === true
+  const releaseChannel = candidate.releaseChannel || "manual"
+  const productionRecommended = Boolean(
+    signed &&
+      (candidate.platform === "windows" || notarized) &&
+      releaseChannel === "stable"
+  )
+  const { productionSigned, manualInstallAllowed, trustState, releaseMode } = classifyReleaseTrust({
+    available: true,
+    platform: candidate.platform,
+    signed,
+    notarized,
+  })
+  const warning = productionRecommended
+    ? null
+    : candidate.platform === "macos"
+      ? "Manual installation build. This version is not yet Apple-notarized. macOS may display a security warning during first launch. The application is fully functional after the operating system permits it to run."
+      : "Manual installation build. This version is not yet digitally signed with a production Windows certificate. Windows SmartScreen may display a warning during installation."
+
+  return {
+    version: candidate.version || filenameVersion,
+    platform: candidate.platform,
+    architecture: candidate.architecture || filenameArchitecture,
+    downloadUrl: href,
+    filename,
+    contentType: contentTypes[extension],
+    size: candidate.size || null,
+    sha256: candidate.sha256?.toLowerCase() || null,
+    available: true,
+    signed,
+    notarized,
+    checksumVerified: true,
+    metadataValid: true,
+    productionRecommended,
+    productionSigned,
+    manualInstallAllowed,
+    trustState,
+    releaseMode,
+    warning,
+    blockedReason: null,
+    releaseChannel,
+    generatedAt: candidate.generatedAt || null,
+    buildCommit: candidate.buildCommit || null,
+    buildTimestamp: candidate.buildTimestamp || null,
+    releaseNotes: candidate.releaseNotes || null,
+    buildNumber: candidate.buildNumber || null,
+    mandatory: Boolean(candidate.mandatory),
+    minimumSupportedVersion: candidate.minimumSupportedVersion || null,
+    artifactType: candidate.artifactType || extension.slice(1),
+    updaterUrl: candidate.updaterUrl || null,
+    updaterSize: candidate.updaterSize || null,
+    updaterSha256: candidate.updaterSha256?.toLowerCase() || null,
+    updateSignature: candidate.updateSignature || null,
+    updaterSignatureVerified: candidate.updaterSignatureVerified === true,
+    publicationStatus: candidate.publicationStatus || null,
+    releaseDate: candidate.releaseDate || null,
+  }
+}
+
 async function validateUncached(candidate: InstallerCandidate): Promise<ValidatedInstaller> {
   const href = candidateHref(candidate)
   if (!href) return unavailable(candidate, "No installer URL or local file is configured.")
@@ -590,6 +699,9 @@ export async function validateInstallerCandidate(
   candidate: InstallerCandidate,
   options: ValidationOptions = {}
 ): Promise<ValidatedInstaller> {
+  if (options.allowPublicationAttestation && candidate.integrityAttested === true) {
+    return validatePublicationAttestation(candidate)
+  }
   if (options.cache === false) return validateUncached(candidate)
 
   const href = candidateHref(candidate) || ""

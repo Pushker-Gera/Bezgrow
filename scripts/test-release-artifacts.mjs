@@ -63,9 +63,10 @@ assert.match(validator, /const available = checksumVerified && metadataValid/, "
 assert.match(validator, /Installer architecture .* does not match metadata architecture/, "Architecture mismatch must block downloads.")
 assert.match(publicReleaseSource, /checkedInCandidates/, "Local public/downloads artifacts must be discovered.")
 assert.match(publicReleaseSource, /configuredCandidates/, "Configured installer URLs must be discovered.")
-assert.match(publicReleaseSource, /releaseCandidateVersions/, "The download page must evaluate immutable release versions independently of the website package version.")
-assert.match(publicReleaseSource, /Fail closed on the newest intended version/, "The download page must not fall back to an older complete installer cohort.")
-assert.match(publicReleaseSource, /"stale_metadata"/, "Stale release metadata must have a precise status.")
+assert.match(publicReleaseSource, /filter\(isExplicitlyPublished\)/, "The download page must consider only explicitly published releases.")
+assert.match(publicReleaseSource, /allowPublicationAttestation: true/, "Runtime availability must consume publication-time checksum/provenance attestation instead of re-downloading every installer.")
+assert.match(publicReleaseSource, /source[\s\S]*version bump must never hide/i, "The source version must not control public installer availability.")
+assert.doesNotMatch(publicReleaseSource, /releaseCandidateVersions|newest intended version/, "The obsolete source-version coupling must stay removed.")
 assert.match(publicReleaseSource, /metadataService:/, "Control-plane outages must be reported separately from artifact validity.")
 assert.match(
   publicReleaseSource,

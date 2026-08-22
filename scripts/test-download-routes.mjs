@@ -22,6 +22,7 @@ assert.match(route, /X-Bezgrow-Artifact-Built-At/, "The download endpoint must e
 assert.match(route, /metadata expects[\s\S]*source reports/, "The download endpoint must reject source-size drift.")
 assert.doesNotMatch(route, /signed\s*!==\s*true|notarized\s*!==\s*true/, "Trust status must not disable downloads.")
 assert.match(page, /<DownloadButton href=\{downloadHref\} available=\{info\.available\}>/, "Button state must follow availability.")
+assert.match(page, /release\.available && release\.downloadUrl \? release\.downloadUrl : fallbackHref/, "Browser downloads must use the immutable versioned artifact URL instead of proxying large installers through the web runtime.")
 assert.match(page, /disabled/, "Unavailable platforms must render a disabled button.")
 assert.match(page, /info\.warning/, "Available manual installation builds must show a warning.")
 assert.match(page, /info\.blockedReason/, "Unavailable platforms must show the exact reason.")

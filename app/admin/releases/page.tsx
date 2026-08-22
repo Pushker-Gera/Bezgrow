@@ -22,6 +22,9 @@ const initialRelease = {
   platform: "macos",
   architecture: "arm64",
   release_channel: "manual",
+  publication_mode: "cross-platform",
+  build_commit: "",
+  build_timestamp: "",
   artifact_type: "dmg",
   file_url: "",
   file_size: "",
@@ -61,6 +64,7 @@ export default function ReleasesPage() {
         updater_sha256: form.updater_sha256 || undefined,
         updater_url: form.updater_url || undefined,
         update_signature: form.update_signature || undefined,
+        build_timestamp: new Date(form.build_timestamp).toISOString(),
         mandatory_after: form.mandatory_after ? new Date(form.mandatory_after).toISOString() : undefined,
         rollout_percentage: Number(form.rollout_percentage),
         mandatory: false,
@@ -88,7 +92,13 @@ export default function ReleasesPage() {
     if (action === "mark_mandatory") body.mandatory = !row.mandatory
     try {
       await adminMutation("/api/admin/releases", "PATCH", body)
-      setNotice(action === "verify_artifact" ? "Artifact metadata verification completed." : "Release status updated and audited.")
+      setNotice(
+        action === "verify_artifact"
+          ? "Artifact verification completed; valid candidates are now READY."
+          : action === "publish"
+            ? "The complete validated release cohort was published atomically."
+            : "Release status updated and audited."
+      )
       list.reload()
     } catch (error) {
       setActionError(error instanceof Error ? error.message : "Release action failed.")
@@ -121,7 +131,7 @@ export default function ReleasesPage() {
             </select>
             <select value={status} onChange={(event) => setStatus(event.target.value)} className="h-11 rounded-2xl border border-white/10 bg-black px-4 text-sm">
               <option value="">All statuses</option>
-              {["draft", "published", "paused", "retired"].map((value) => <option key={value} value={value}>{value}</option>)}
+              {["draft", "building", "validating", "ready", "published", "failed", "paused", "retired"].map((value) => <option key={value} value={value}>{value}</option>)}
             </select>
           </>
         }
@@ -135,7 +145,7 @@ export default function ReleasesPage() {
           {
             key: "version",
             label: "Release",
-            render: (row) => <div><p className="font-black text-white">v{displayValue(row.version)} ({displayValue(row.build_number)})</p><p className="mt-1 text-xs text-neutral-500">{displayValue(row.platform)} · {displayValue(row.architecture)} · {["manual", "internal"].includes(String(row.release_channel)) ? "manual installation" : displayValue(row.release_channel)}</p><p className="mt-1 text-xs text-neutral-600">Minimum: {displayValue(row.minimum_supported_version, "Not configured")}</p></div>,
+            render: (row) => <div><p className="font-black text-white">v{displayValue(row.version)} ({displayValue(row.build_number)})</p><p className="mt-1 text-xs text-neutral-500">{displayValue(row.platform)} · {displayValue(row.architecture)} · {["manual", "internal"].includes(String(row.release_channel)) ? "manual installation" : displayValue(row.release_channel)}</p><p className="mt-1 text-xs text-neutral-600">{displayValue(row.publication_mode, "cross-platform")} · Minimum: {displayValue(row.minimum_supported_version, "Not configured")}</p><code className="mt-1 block max-w-[220px] truncate text-[10px] text-neutral-600">{displayValue(row.build_commit, "Commit not recorded")}</code></div>,
           },
           {
             key: "artifact",
@@ -168,7 +178,7 @@ export default function ReleasesPage() {
                 <div className="flex min-w-[250px] flex-wrap gap-2">
                   {Boolean(artifact?.file_url) && <button type="button" onClick={() => void navigator.clipboard.writeText(String(artifact?.file_url))} className="rounded-lg border border-white/10 px-2.5 py-1.5 text-xs font-bold">Copy URL</button>}
                   <button type="button" disabled={!artifact} onClick={() => void runAction(row, "verify_artifact")} className="rounded-lg border border-cyan-400/25 px-2.5 py-1.5 text-xs font-bold text-cyan-100 disabled:opacity-30">Verify artifact</button>
-                  {row.release_status === "draft" && <button type="button" onClick={() => void runAction(row, "publish")} className="rounded-lg border border-emerald-400/25 px-2.5 py-1.5 text-xs font-bold text-emerald-100">Publish</button>}
+                  {row.release_status === "ready" && <button type="button" onClick={() => void runAction(row, "publish")} className="rounded-lg border border-emerald-400/25 px-2.5 py-1.5 text-xs font-bold text-emerald-100">Publish release</button>}
                   {row.release_status === "published" && <button type="button" onClick={() => void runAction(row, "unpublish")} className="rounded-lg border border-amber-400/25 px-2.5 py-1.5 text-xs font-bold text-amber-100">Unpublish</button>}
                   {row.release_status === "paused" && <button type="button" onClick={() => void runAction(row, "resume")} className="rounded-lg border border-emerald-400/25 px-2.5 py-1.5 text-xs font-bold text-emerald-100">Resume</button>}
                   {!["manual", "internal"].includes(String(row.release_channel)) && <button type="button" onClick={() => void runAction(row, "mark_manual")} className="rounded-lg border border-amber-400/25 px-2.5 py-1.5 text-xs font-bold text-amber-100">Mark manual installation</button>}
@@ -190,6 +200,8 @@ export default function ReleasesPage() {
             {[
               ["version", "Version", "text"],
               ["build_number", "Build number", "text"],
+              ["build_commit", "Exact 40-character build commit", "text"],
+              ["build_timestamp", "Build timestamp", "datetime-local"],
               ["file_url", "HTTPS artifact URL", "url"],
               ["file_size", "File size in bytes (optional)", "number"],
               ["sha256", "SHA-256 (optional)", "text"],
@@ -202,13 +214,14 @@ export default function ReleasesPage() {
             ].map(([key, label, type]) => (
               <label key={key} className={`${["file_url", "sha256", "updater_url", "updater_sha256"].includes(key) ? "sm:col-span-2" : ""} text-sm font-bold text-neutral-300`}>
                 {label}
-                <input type={type} required={["version", "build_number", "file_url"].includes(key)} value={form[key as keyof typeof form]} onChange={(event) => setForm((current) => ({ ...current, [key]: event.target.value }))} className="mt-2 h-11 w-full rounded-xl border border-white/10 bg-black/50 px-3 outline-none focus:border-cyan-400/40" />
+                <input type={type} required={["version", "build_number", "build_commit", "build_timestamp", "file_url"].includes(key)} value={form[key as keyof typeof form]} onChange={(event) => setForm((current) => ({ ...current, [key]: event.target.value }))} className="mt-2 h-11 w-full rounded-xl border border-white/10 bg-black/50 px-3 outline-none focus:border-cyan-400/40" />
               </label>
             ))}
             {[
               ["platform", "Platform", ["macos", "windows"]],
               ["architecture", "Architecture", ["arm64", "x64"]],
               ["release_channel", "Channel", ["stable", "beta", "manual", "internal"]],
+              ["publication_mode", "Publication policy", ["cross-platform", "staged"]],
             ].map(([key, label, options]) => (
               <label key={String(key)} className="text-sm font-bold text-neutral-300">
                 {String(label)}

@@ -24,6 +24,8 @@ function cargoManifestVersion(filename) {
 const packageJson = readJson("package.json")
 const packageLock = readJson("package-lock.json")
 const tauriConfig = readJson("src-tauri/tauri.conf.json")
+const releaseNotes = readFileSync("RELEASE_NOTES.md", "utf8")
+const publishedManifest = readJson("public/downloads/desktop-release.json")
 const expectedVersion = packageJson.version
 const applicationVersions = {
   "package.json": expectedVersion,
@@ -42,6 +44,26 @@ for (const [filename, version] of Object.entries(applicationVersions)) {
   }
 }
 
+const releaseNotesVersion = releaseNotes.match(/^# Bezgrow (\d+\.\d+\.\d+)\s*$/m)?.[1]
+if (releaseNotesVersion !== expectedVersion) {
+  throw new Error(`RELEASE_NOTES.md reports ${releaseNotesVersion || "(missing)"}; expected source version ${expectedVersion}.`)
+}
+
+if (publishedManifest.publicationStatus !== "published") {
+  throw new Error("public/downloads/desktop-release.json must describe an explicitly published fallback release.")
+}
+const publicInstallerKeys = ["mac", "macX64", "windows", "windowsMsi", "windowsMsix", "windowsArm64", "windowsArm64Msi", "windowsArm64Msix"]
+for (const key of publicInstallerKeys) {
+  const installer = publishedManifest[key]
+  if (!installer) continue
+  if (installer.version !== publishedManifest.version) {
+    throw new Error(`Published ${key} metadata reports ${installer.version || "(missing)"}; expected public release ${publishedManifest.version}.`)
+  }
+  if (installer.publicationStatus !== "published") {
+    throw new Error(`Published ${key} metadata is not explicitly marked published.`)
+  }
+}
+
 const tauriVersions = {
   cli: packageLock.packages?.["node_modules/@tauri-apps/cli"]?.version,
   api: packageLock.packages?.["node_modules/@tauri-apps/api"]?.version,
@@ -57,5 +79,8 @@ if (!tauriVersions.cli || !tauriVersions.rust || tauriVersions.cli !== tauriVers
 console.log(JSON.stringify({
   releaseVersion: expectedVersion,
   applicationVersions,
+  releaseNotesVersion,
+  latestPublishedVersion: publishedManifest.version,
+  sourceAndPublicVersionsAreIndependent: true,
   tauriVersions,
 }, null, 2))

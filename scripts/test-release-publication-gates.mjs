@@ -15,8 +15,9 @@ assert.match(workflow, /Verify packaged Mac launch, local SQLite, and clean shut
 assert.match(workflow, /Download and verify the previously published Windows installer[\s\S]*PreviousInstallerPath/, "Windows release CI must test an in-place upgrade from the checksum-pinned previous public version.")
 assert.match(workflow, /windows:\s*[\s\S]*needs:\s*release-gates/, "The Windows build must require the release-gate job.")
 assert.match(workflow, /runs-on:\s*windows-latest[\s\S]*--bundles", "msi,nsis"/, "Genuine Windows x64 NSIS and MSI builds must run on windows-latest.")
-assert.match(workflow, /needs\.mac\.result == 'success' \|\| needs\.windows\.result == 'success'/, "Publication must allow either independently verified platform artifact.")
-assert.match(publisher, /verifiedPlatforms\.includes\("macos"\) \|\| verifiedPlatforms\.includes\("windows-x64-nsis-msi"\)/, "Publication input verification must accept a complete single-platform release.")
+assert.match(workflow, /needs\.mac\.result == 'success'[\s\S]*needs\.windows\.result == 'success'/, "Normal publication must require both independently verified platforms.")
+assert.match(publisher, /Cross-platform publication requires a complete genuine macOS DMG set/, "Publication input verification must require the Mac cohort.")
+assert.match(publisher, /Cross-platform publication requires genuine Windows NSIS and MSI sets/, "Publication input verification must require the Windows cohort.")
 assert.match(workflow, /Compute release checksums[\s\S]*Verify genuine publication inputs[\s\S]*Create or update GitHub Release/, "Checksums and installer bytes must pass before GitHub Release mutation.")
 assert.match(workflow, /Create or update GitHub Release[\s\S]*Verify uploaded digests and public installer URLs[\s\S]*Write verified website release metadata/, "Public URLs and uploaded digests must pass before website metadata advances.")
 assert.match(workflow, /verify-release-publication-inputs\.mjs/, "The release workflow must execute the publication input verifier.")
@@ -31,7 +32,8 @@ assert.match(publisher, /expectedCommit[\s\S]*Windows build commit/, "Publicatio
 assert.match(writer, /Published release metadata requires a local verified installer file/, "Published metadata must fail closed without a local installer.")
 assert.match(publicAssetVerifier, /remote\.digest === digest/, "Published GitHub asset digests must match the final local bytes.")
 assert.match(publicAssetVerifier, /response\.status === 200/, "Published installer URLs must return HTTP 200 before metadata advances.")
-assert.match(metadataPublisher, /release_status: "draft"[\s\S]*stagedReleases[\s\S]*\.in\("id", releaseIds\)/, "Control-plane releases must stage all artifacts before one multi-platform promotion.")
+assert.match(metadataPublisher, /supportsAtomicReleaseState \? "validating" : "draft"[\s\S]*release_status: "ready"[\s\S]*stagedReleases[\s\S]*\.in\("id", releaseIds\)/, "Control-plane releases must validate and ready all artifacts before one multi-platform promotion while retaining a safe legacy-schema staging fallback.")
+assert.match(metadataPublisher, /publicationMode === "cross-platform"[\s\S]*stagedPlatforms\.has\("macos"\)[\s\S]*stagedPlatforms\.has\("windows"\)/, "Atomic publication must reject incomplete platform cohorts.")
 assert.match(metadataPublisher, /supportsColumns[\s\S]*supportsMandatoryAfter[\s\S]*supportsUpdaterMetadata/, "Control-plane publication must safely detect optional release-schema migrations.")
 assert.match(metadataPublisher, /supportsReleaseProvenance[\s\S]*build_commit:[\s\S]*build_timestamp:/, "Control-plane publication must persist the exact installer build SHA and timestamp.")
 assert.match(metadataPublisher, /const manualChannel = \["manual", "internal"\]\.includes\(entry\.channel\)/, "Manual publication must be explicit and backward-compatible.")
@@ -48,6 +50,8 @@ assert.doesNotMatch(workflow, /The exact previewed invoice PDF remains on this d
 const releaseGateScript = packageJson.scripts["test:release-gates"] || ""
 for (const required of [
   "test:release-version-alignment",
+  "test:release-pipeline-reliability",
+  "test:release-verifier",
   "test:production-polish",
   "test:money-card-layout",
   "test:architecture",

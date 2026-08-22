@@ -26,6 +26,9 @@ const createReleaseSchema = z.object({
   platform: z.enum(["macos", "windows"]),
   architecture: z.enum(["arm64", "x64"]),
   release_channel: z.string().trim().min(2).max(40).default("stable"),
+  publication_mode: z.enum(["cross-platform", "staged"]).default("cross-platform"),
+  build_commit: z.string().trim().regex(/^[a-fA-F0-9]{40}$/),
+  build_timestamp: z.string().datetime({ offset: true }),
   file_url: httpsUrl,
   file_size: z.coerce.number().int().min(1).optional(),
   sha256: z.string().trim().regex(/^[a-fA-F0-9]{64}$/).optional(),
@@ -71,6 +74,8 @@ type ReleaseRow = {
   release_channel: string
   release_status: string
   active: boolean
+  publication_mode?: "cross-platform" | "staged"
+  trust_mode?: "internal" | "stable"
   build_commit?: string | null
   build_timestamp?: string | null
   release_artifacts?: Array<{
@@ -93,9 +98,24 @@ type ReleaseRow = {
 }
 
 function publicationError(release: ReleaseRow) {
-  const artifact = release.release_artifacts?.[0]
-  if (!artifact) return "Release artifact unavailable."
-  if (artifact.validation_status !== "valid") return "Download artifact failed validation."
+  const artifacts = release.release_artifacts || []
+  if (artifacts.length === 0) return `${release.platform} artifact unavailable.`
+  const artifact = artifacts.find((entry) => entry.validation_status === "valid")
+  if (!artifact) return `${release.platform} download artifact failed validation.`
+  if (!/^[a-f0-9]{40}$/i.test(release.build_commit || "")) return `${release.platform} build commit provenance is missing.`
+  if (Number.isNaN(Date.parse(release.build_timestamp || ""))) return `${release.platform} build timestamp provenance is missing.`
+  for (const entry of artifacts) {
+    if (entry.validation_status !== "valid") return `${release.platform} ${entry.artifact_type || "installer"} has not passed validation.`
+    if (!entry.file_size || !/^[a-f0-9]{64}$/i.test(entry.sha256 || "")) {
+      return `${release.platform} ${entry.artifact_type || "installer"} is missing size or SHA-256 metadata.`
+    }
+  }
+  if (release.platform === "windows" && release.publication_mode !== "staged") {
+    const kinds = new Set(artifacts.map((entry) => entry.artifact_type))
+    if (!kinds.has("nsis") || !kinds.has("msi")) {
+      return "Windows cross-platform publication requires validated NSIS and MSI artifacts."
+    }
+  }
   const productionTrusted =
     artifact.signature_status === "valid" &&
     artifact.code_signing_status === "valid" &&
@@ -113,6 +133,25 @@ function publicationError(release: ReleaseRow) {
       artifact.updater_signature_status !== "valid")
   ) {
     return "Stable releases require a present, SHA-256 validated, cryptographically verified updater artifact."
+  }
+  return null
+}
+
+function cohortPublicationError(releases: ReleaseRow[], publicationMode: "cross-platform" | "staged") {
+  if (releases.length === 0) return "No release cohort was found."
+  if (publicationMode === "cross-platform") {
+    const platforms = new Set(releases.map((release) => release.platform))
+    if (!platforms.has("macos")) return "The release cohort is missing a validated macOS artifact."
+    if (!platforms.has("windows")) return "The release cohort is missing validated Windows artifacts."
+  }
+  const commits = new Set(releases.map((release) => release.build_commit).filter(Boolean))
+  if (commits.size !== 1) return "Every platform in the release cohort must come from the same exact commit."
+  for (const release of releases) {
+    if (release.release_status !== "ready" && release.release_status !== "paused") {
+      return `${release.platform} is ${release.release_status}; verify it until it is READY before publication.`
+    }
+    const error = publicationError(release)
+    if (error) return error
   }
   return null
 }
@@ -324,6 +363,10 @@ export async function POST(request: Request) {
         architecture: input.architecture,
         release_channel: input.release_channel,
         release_status: "draft",
+        publication_mode: input.publication_mode,
+        trust_mode: ["manual", "internal"].includes(input.release_channel) ? "internal" : "stable",
+        build_commit: input.build_commit.toLowerCase(),
+        build_timestamp: input.build_timestamp,
         minimum_supported_version: input.minimum_supported_version || null,
         release_notes: input.release_notes || null,
         rollout_percentage: input.rollout_percentage,
@@ -394,6 +437,11 @@ export async function PATCH(request: Request) {
     if (input.action === "verify_artifact") {
       const artifact = release.release_artifacts?.[0]
       if (!artifact) return adminFail(context, "Release artifact unavailable.", 404)
+      const validating = await adminSupabase
+        .from("desktop_releases")
+        .update({ release_status: "validating", updated_at: new Date().toISOString() })
+        .eq("id", release.id)
+      if (validating.error) throw validating.error
       const verification = await verifyArtifact(artifact, release)
       const result = await adminSupabase
         .from("release_artifacts")
@@ -402,6 +450,12 @@ export async function PATCH(request: Request) {
         .select("*")
         .single()
       if (result.error) throw result.error
+      const verifiedStatus = result.data.validation_status === "valid" ? "ready" : "failed"
+      const statusResult = await adminSupabase
+        .from("desktop_releases")
+        .update({ release_status: verifiedStatus, updated_at: new Date().toISOString() })
+        .eq("id", release.id)
+      if (statusResult.error) throw statusResult.error
       await writeAdminAudit(context, {
         action: "RELEASE_ARTIFACT_VERIFIED",
         targetType: "release_artifact",
@@ -414,12 +468,39 @@ export async function PATCH(request: Request) {
     }
 
     const updates: Record<string, unknown> = { updated_at: new Date().toISOString() }
-    if (input.action === "publish") {
-      const error = publicationError(release)
+    if (input.action === "publish" || input.action === "resume") {
+      const publicationMode = release.publication_mode || "cross-platform"
+      let cohortQuery = adminSupabase
+        .from("desktop_releases")
+        .select("*,release_artifacts(*)")
+        .eq("version", release.version)
+        .eq("build_number", release.build_number)
+        .eq("release_channel", release.release_channel)
+      if (publicationMode === "staged") cohortQuery = cohortQuery.eq("id", release.id)
+      const cohortResult = await cohortQuery
+      if (cohortResult.error) throw cohortResult.error
+      const cohort = (cohortResult.data || []) as ReleaseRow[]
+      const error = cohortPublicationError(cohort, publicationMode)
       if (error) return adminFail(context, error, 422)
-      updates.release_status = "published"
-      updates.active = true
-      updates.published_at = new Date().toISOString()
+      const publishedAt = new Date().toISOString()
+      const ids = cohort.map((entry) => entry.id)
+      const promoted = await adminSupabase
+        .from("desktop_releases")
+        .update({ release_status: "published", active: true, published_at: publishedAt, updated_at: publishedAt })
+        .in("id", ids)
+        .select("*")
+      if (promoted.error) throw promoted.error
+      if ((promoted.data || []).length !== ids.length) {
+        return adminFail(context, "Atomic release promotion did not update the complete cohort.", 500)
+      }
+      await writeAdminAudit(context, {
+        action: input.action === "publish" ? "RELEASE_COHORT_PUBLISHED" : "RELEASE_COHORT_RESUMED",
+        targetType: "desktop_release",
+        targetId: release.id,
+        previousValues: { cohort },
+        newValues: { release_ids: ids, version: release.version, publication_mode: publicationMode, published_at: publishedAt },
+      })
+      return adminOk(context, { releases: promoted.data })
     }
     if (input.action === "pause") {
       updates.release_status = "paused"
@@ -428,12 +509,6 @@ export async function PATCH(request: Request) {
     if (input.action === "unpublish") {
       updates.release_status = "paused"
       updates.active = false
-    }
-    if (input.action === "resume") {
-      const error = publicationError(release)
-      if (error) return adminFail(context, error, 422)
-      updates.release_status = "published"
-      updates.active = true
     }
     if (input.action === "retire") {
       updates.release_status = "retired"
@@ -448,11 +523,36 @@ export async function PATCH(request: Request) {
       if (input.rollout_percentage === undefined) return adminFail(context, "Rollout percentage is required.", 422)
       updates.rollout_percentage = input.rollout_percentage
     }
-    if (input.action === "mark_internal") updates.release_channel = "internal"
-    if (input.action === "mark_manual") updates.release_channel = "manual"
-    if (input.action === "mark_stable") updates.release_channel = "stable"
+    if (input.action === "mark_internal") {
+      updates.release_channel = "internal"
+      updates.trust_mode = "internal"
+    }
+    if (input.action === "mark_manual") {
+      updates.release_channel = "manual"
+      updates.trust_mode = "internal"
+    }
+    if (input.action === "mark_stable") {
+      updates.release_channel = "stable"
+      updates.trust_mode = "stable"
+    }
 
-    const result = await adminSupabase.from("desktop_releases").update(updates).eq("id", input.id).select("*").single()
+    let targetIds = [input.id]
+    if ((release.publication_mode || "cross-platform") === "cross-platform") {
+      const cohortIds = await adminSupabase
+        .from("desktop_releases")
+        .select("id")
+        .eq("version", release.version)
+        .eq("build_number", release.build_number)
+        .eq("release_channel", release.release_channel)
+      if (cohortIds.error) throw cohortIds.error
+      targetIds = (cohortIds.data || []).map((entry) => entry.id)
+      if (targetIds.length === 0) return adminFail(context, "Release cohort was not found.", 404)
+    }
+    const result = await adminSupabase
+      .from("desktop_releases")
+      .update(updates)
+      .in("id", targetIds)
+      .select("*")
     if (result.error) throw result.error
     const actionMap: Record<string, string> = {
       publish: "RELEASE_PUBLISHED",
@@ -472,9 +572,12 @@ export async function PATCH(request: Request) {
       targetType: "desktop_release",
       targetId: input.id,
       previousValues: current.data,
-      newValues: result.data,
+      newValues: { releases: result.data, release_ids: targetIds },
     })
-    return adminOk(context, { release: result.data })
+    return adminOk(context, {
+      release: (result.data || []).find((entry) => entry.id === input.id) || null,
+      releases: result.data || [],
+    })
   } catch (error) {
     return unexpectedAdminError(context, error, "Release action failed.")
   }

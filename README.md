@@ -182,7 +182,25 @@ BEZGROW_WINDOWS_TIMESTAMP_URL optional
 SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY optional for control-plane metadata publication
 ```
 
-The workflow builds the Mac DMG on macOS and Windows NSIS/MSI installers on `windows-latest`, verifies artifact provenance and bytes, calculates SHA-256, uploads artifacts to a GitHub Release, and commits `public/downloads/desktop-release.json` with download URLs and independent integrity/trust flags. Missing production signing credentials produce a clearly labelled manual installation release instead of discarding a genuine installer. Each platform publishes independently after its artifact passes type, non-zero-size, installer-magic, architecture/version/commit metadata, trusted-URL, and checksum checks. Signing and notarization affect OS trust, warnings, and `productionRecommended`, not basic download availability or ERP features.
+The workflow builds the Mac DMG on macOS and Windows NSIS/MSI installers on `windows-latest`, verifies artifact provenance and bytes, calculates SHA-256, uploads immutable artifacts to a GitHub Release, and commits `public/downloads/desktop-release.json` with download URLs and independent integrity/trust flags. Missing production signing credentials produce a clearly labelled internal/manual installation release instead of discarding a genuine installer. Normal publication requires both platform jobs and promotes the validated cohort together; an explicitly configured staged release may publish one platform without disabling the previous valid release on the other platform. Signing and notarization affect OS trust, warnings, and `productionRecommended`, not file integrity, basic download availability, or ERP features.
+
+`package.json` is the authoritative development/build version. Cargo, Tauri, the lockfiles, and the current release-notes heading must match it. The public website and updater do not consume that source version: they select only the latest explicitly `published`, integrity-valid artifact for the requested platform. Therefore advancing source to a future version never removes the preceding published installer.
+
+Before publication, validate a downloaded CI artifact cohort with:
+
+```bash
+npm run release:verify -- 0.2.0 --root release-artifacts --mode internal
+```
+
+After the exact source commit is clean and pushed to `origin/main`, dispatch the controlled cross-platform pipeline with an explicit trust policy:
+
+```bash
+npm run release:publish -- 0.2.0 --channel internal
+# or, once all platform credentials exist:
+npm run release:publish -- 0.2.0 --channel stable
+```
+
+The publication command always dispatches both platform builders. Candidate states progress through draft/building/validating/ready and become published only after the complete required cohort passes validation. Failed candidates remain non-public, and previous immutable release history remains available.
 
 The release trust states are `signed-production`, `unsigned-manual-install`, and `invalid`. The internal release mode for a valid unsigned artifact is `UNSIGNED_MANUAL_RELEASE`. Tauri updater signatures are evaluated independently of Apple and Windows platform signatures. When a cryptographically verified Tauri updater package is present, the normal in-app updater can install it. Otherwise Update Now downloads the installer only from Bezgrow's trusted release endpoint, verifies version, platform, architecture, size, and SHA-256 natively, opens the installer through the normal OS path, and closes Bezgrow cleanly. It does not alter Gatekeeper, SIP, SmartScreen, Defender, quarantine attributes, or machine-wide security policy.
 

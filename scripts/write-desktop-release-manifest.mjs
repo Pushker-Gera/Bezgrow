@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
 import { basename, dirname, isAbsolute, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -8,6 +8,7 @@ const manifestPath = join(root, "public", "downloads", "desktop-release.json");
 const packageJson = JSON.parse(readFileSync(join(root, "package.json"), "utf8"));
 const args = process.argv.slice(2);
 const publicationStatus = readArg("--publication-status") || "draft";
+const publicationMode = readArg("--publication-mode") || "cross-platform";
 
 function readArg(name) {
   const index = args.indexOf(name);
@@ -218,6 +219,18 @@ const installers = {
   windowsArm64PortableZip: buildInstaller("windows-arm64-portable-zip", version, "arm64"),
 };
 
+if (!["cross-platform", "staged"].includes(publicationMode)) {
+  throw new Error("Publication mode must be cross-platform or staged.");
+}
+if (publicationStatus === "published" && publicationMode === "cross-platform") {
+  if (!installers.mac && !installers.macX64) {
+    throw new Error("Cross-platform publication requires a verified macOS DMG.");
+  }
+  if (!installers.windows || !installers.windowsMsi) {
+    throw new Error("Cross-platform publication requires verified Windows NSIS and MSI installers.");
+  }
+}
+
 const releaseNotes = readArg("--release-notes");
 const nextManifest = {
   ...existingManifest,
@@ -225,6 +238,8 @@ const nextManifest = {
   ...(releaseNotes ? { releaseNotes: [releaseNotes] } : {}),
   generatedAt: new Date().toISOString(),
   publicationStatus,
+  publicationMode,
+  trustMode: (readArg("--channel") || "internal") === "stable" ? "stable" : "internal",
   ...(readArg("--mandatory-after") ? { mandatoryAfter: readArg("--mandatory-after") } : {}),
   minimumSupportedVersion: readArg("--minimum-supported-version") || undefined,
 };
@@ -233,8 +248,7 @@ for (const [key, installer] of Object.entries(installers)) {
 }
 
 mkdirSync(dirname(manifestPath), { recursive: true });
-writeFileSync(manifestPath, `${JSON.stringify(nextManifest, null, 2)}\n`);
-
+const stagedFiles = [];
 for (const [key, filename] of [
   ["mac", "Bezgrow-mac.dmg.release.json"],
   ["windows", "Bezgrow-windows.exe.release.json"],
@@ -242,10 +256,14 @@ for (const [key, filename] of [
   ["windowsMsix", "Bezgrow-windows.msix.release.json"],
 ]) {
   if (nextManifest[key]) {
-    writeFileSync(
-      join(dirname(manifestPath), filename),
-      `${JSON.stringify(nextManifest[key], null, 2)}\n`
-    );
+    const finalPath = join(dirname(manifestPath), filename);
+    const temporaryPath = `${finalPath}.next`;
+    writeFileSync(temporaryPath, `${JSON.stringify(nextManifest[key], null, 2)}\n`);
+    stagedFiles.push([temporaryPath, finalPath]);
   }
 }
+const manifestTemporaryPath = `${manifestPath}.next`;
+writeFileSync(manifestTemporaryPath, `${JSON.stringify(nextManifest, null, 2)}\n`);
+for (const [temporaryPath, finalPath] of stagedFiles) renameSync(temporaryPath, finalPath);
+renameSync(manifestTemporaryPath, manifestPath);
 console.log(`Wrote ${manifestPath}`);

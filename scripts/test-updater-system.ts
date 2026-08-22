@@ -43,16 +43,21 @@ assert.equal(compareVersions("1.0.0-beta.1", "1.0.0"), -1)
 
 const platformManifest: DesktopReleaseManifest = {
   version: "0.1.14",
-  mac: { version: "0.1.14", signed: true, notarized: true, platform: "macos", architecture: "arm64" },
-  macX64: { version: "0.1.14", signed: true, notarized: true, platform: "macos", architecture: "x86_64" },
-  windows: { version: "0.1.14", signed: true, platform: "windows", architecture: "x86_64" },
-  windowsArm64: { version: "0.1.14", signed: true, platform: "windows", architecture: "arm64" },
+  mac: { version: "0.1.14", signed: true, notarized: true, platform: "macos", architecture: "arm64", publicationStatus: "published" },
+  macX64: { version: "0.1.14", signed: true, notarized: true, platform: "macos", architecture: "x86_64", publicationStatus: "published" },
+  windows: { version: "0.1.14", signed: true, platform: "windows", architecture: "x86_64", publicationStatus: "published" },
+  windowsArm64: { version: "0.1.14", signed: true, platform: "windows", architecture: "arm64", publicationStatus: "published" },
 }
 assert.equal(releaseForPlatform(platformManifest, "mac", "arm64"), platformManifest.mac)
 assert.equal(releaseForPlatform(platformManifest, "mac", "x64"), platformManifest.macX64)
 assert.equal(releaseForPlatform(platformManifest, "windows", "arm64"), platformManifest.windowsArm64)
 assert.equal(releaseForPlatform({ windows: platformManifest.windows }, "windows", "arm64"), null, "Windows arm64 must never fall back to x64")
 assert.equal(releaseForPlatform({ mac: platformManifest.mac }, "mac", "x64"), null, "Intel macOS must never receive arm64")
+assert.equal(
+  releaseForPlatform({ windows: { ...platformManifest.windows, publicationStatus: "draft" } }, "windows", "x64"),
+  null,
+  "The installed app must ignore draft release metadata"
+)
 
 const pendingRestart = markUpdatePendingRestart("0.1.15", "0.1.14", firstSeen)
 assert.deepEqual(readPendingUpdateRestart(), pendingRestart)

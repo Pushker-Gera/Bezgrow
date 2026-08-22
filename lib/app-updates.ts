@@ -159,6 +159,7 @@ export function verifiedInstallerRouteForCurrentPlatform() {
 
 function releaseMatchesTarget(release: WindowsRelease | MacRelease | null | undefined, platform: "mac" | "windows", architecture: "x64" | "arm64") {
   if (!release) return null
+  if (release.publicationStatus !== "published") return null
   const expectedPlatform = platform === "mac" ? "macos" : "windows"
   const expectedArchitectures = architecture === "x64" ? ["x64", "x86_64"] : ["arm64"]
   if (release.platform && release.platform !== expectedPlatform) return null
@@ -193,7 +194,7 @@ function releaseHref(release: ReturnType<typeof releaseForCurrentPlatform>) {
 
 export function latestVersionForCurrentPlatform(manifest: DesktopReleaseManifest | null) {
   const release = releaseForCurrentPlatform(manifest)
-  return release?.version || manifest?.version || ""
+  return release?.version || ""
 }
 
 export function isDesktopUpdateAvailable(manifest: DesktopReleaseManifest | null, currentVersion: string) {

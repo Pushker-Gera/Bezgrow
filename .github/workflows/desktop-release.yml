@@ -708,7 +708,8 @@ jobs:
     if: >-
       always() &&
       !cancelled() &&
-      (needs.mac.result == 'success' || needs.windows.result == 'success') &&
+      needs.mac.result == 'success' &&
+      needs.windows.result == 'success' &&
       (github.event_name == 'push' ||
       (inputs.publish == true && inputs.platform == 'all'))
     timeout-minutes: 30
@@ -746,7 +747,8 @@ jobs:
             --root release-artifacts \
             --checksums release-artifacts/SHA256SUMS.txt \
             --version "$(node -p "require('./package.json').version")" \
-            --commit "${{ github.sha }}"
+            --commit "${{ github.sha }}" \
+            --required-platforms "macos,windows"
 
       - name: Resolve release identity and policy
         id: release
@@ -825,6 +827,17 @@ jobs:
             echo "$NOTES"
             echo "BEZGROW_NOTES"
           } >> "$GITHUB_OUTPUT"
+
+      - name: Validate the complete candidate release
+        shell: bash
+        run: |
+          VALIDATION_MODE="${{ steps.release.outputs.channel }}"
+          if [ "$VALIDATION_MODE" = "manual" ]; then VALIDATION_MODE="internal"; fi
+          npm run release:verify -- \
+            "${{ steps.release.outputs.version }}" \
+            --root release-artifacts \
+            --commit "${{ github.sha }}" \
+            --mode "$VALIDATION_MODE"
 
       - name: Verify the release source is still current main
         shell: bash
@@ -906,6 +919,7 @@ jobs:
             --minimum-supported-windows-version "Windows 10 version 1809 (64-bit)"
             --mandatory-after "${{ inputs.mandatory_after }}"
             --publication-status "published"
+            --publication-mode "cross-platform"
             --updater-compatibility "tauri-v2"
             --build-commit "${{ github.sha }}"
             --workflow-run-id "${{ github.run_id }}"
@@ -918,8 +932,7 @@ jobs:
             MAC_SIGNED="$(tr -d '\r\n' < release-artifacts/mac/mac-signing-status.txt)"
             MAC_NOTARIZED="$(tr -d '\r\n' < release-artifacts/mac/mac-notarization-status.txt)"
             MAC_BUILD_TIMESTAMP="$(node -p "require('./release-artifacts/mac/mac-build.json').builtAt")"
-            MAC_CHANNEL="manual"
-            if [ "$MAC_SIGNED" = "true" ] && [ "$MAC_NOTARIZED" = "true" ]; then MAC_CHANNEL="stable"; fi
+            MAC_CHANNEL="${{ steps.release.outputs.channel }}"
             MANIFEST_ARGS+=(
               --mac-url "$BASE_URL/$MAC_DMG_NAME"
               --mac-file "$MAC_DMG"
@@ -948,11 +961,8 @@ jobs:
             WINDOWS_SIGNING="$(tr -d '\r\n' < "$WINDOWS_DIR/windows-signing-status.txt")"
             WINDOWS_BUILD_TIMESTAMP="$(node -p "require('./release-artifacts/windows-x64/windows-build.json').builtAt")"
             WINDOWS_SIGNED=false
-            WINDOWS_CHANNEL="manual"
-            if [ "$WINDOWS_SIGNING" = "valid" ]; then
-              WINDOWS_SIGNED=true
-              WINDOWS_CHANNEL="stable"
-            fi
+            WINDOWS_CHANNEL="${{ steps.release.outputs.channel }}"
+            if [ "$WINDOWS_SIGNING" = "valid" ]; then WINDOWS_SIGNED=true; fi
             WINDOWS_EXE="$(find "$WINDOWS_DIR" -maxdepth 1 -name 'Bezgrow-Setup-*-x64.exe' -print -quit)"
             WINDOWS_MSI="$(find "$WINDOWS_DIR" -maxdepth 1 -name 'Bezgrow-*-x64.msi' -print -quit)"
             WINDOWS_PORTABLE="$(find "$WINDOWS_DIR" -maxdepth 1 -name 'Bezgrow-*-x64-portable.exe' -print -quit)"
@@ -1037,7 +1047,8 @@ jobs:
             --build-number "${{ github.run_number }}" \
             --commit "${{ github.sha }}" \
             --channel "${{ steps.release.outputs.channel }}" \
-            --platform "$PUBLISH_PLATFORM"
+            --platform "$PUBLISH_PLATFORM" \
+            --publication-mode "cross-platform"
 
       - name: Commit website release metadata
         if: steps.release.outputs.draft != 'true'

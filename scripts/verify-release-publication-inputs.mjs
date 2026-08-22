@@ -48,6 +48,10 @@ function readStatus(filename, allowed) {
 const root = path.resolve(arg("--root", "release-artifacts"))
 const version = arg("--version")
 const expectedCommit = arg("--commit")
+const requiredPlatforms = arg("--required-platforms", "macos,windows")
+  .split(",")
+  .map((value) => value.trim())
+  .filter(Boolean)
 const checksumFile = path.resolve(arg("--checksums", path.join(root, "SHA256SUMS.txt")))
 assert(version, "--version is required.")
 assert(/^[a-f0-9]{40}$/i.test(expectedCommit), "--commit must be the exact 40-character source commit.")
@@ -145,15 +149,22 @@ if (existsSync(windowsDirectory)) {
   verifiedPlatforms.push("windows-x64-nsis-msi")
 }
 
-assert(
-  verifiedPlatforms.includes("macos") || verifiedPlatforms.includes("windows-x64-nsis-msi"),
-  "Publication requires at least one complete, genuine, integrity-verified platform installer set."
-)
+for (const platform of requiredPlatforms) {
+  if (platform === "macos") {
+    assert(verifiedPlatforms.includes("macos"), "Cross-platform publication requires a complete genuine macOS DMG set.")
+  } else if (platform === "windows") {
+    assert(verifiedPlatforms.includes("windows-x64-nsis-msi"), "Cross-platform publication requires genuine Windows NSIS and MSI sets.")
+  } else {
+    throw new Error(`Unsupported required platform: ${platform}`)
+  }
+}
+assert(requiredPlatforms.length > 0, "At least one required publication platform must be specified.")
 console.log(JSON.stringify({
   root,
   version,
   verifiedFiles: releaseFiles.length,
   verifiedPlatforms,
+  requiredPlatforms,
   checksumFile,
   verification: "genuine-installers-and-checksums-valid",
 }, null, 2))
