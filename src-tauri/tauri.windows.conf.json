@@ -17,6 +17,7 @@
         "silent": true
       },
       "nsis": {
+        "template": "windows/installer-template.nsi",
         "installMode": "perMachine",
         "installerIcon": "icons/icon.ico",
         "uninstallerIcon": "icons/icon.ico",
@@ -26,7 +27,8 @@
         "compression": "lzma"
       },
       "wix": {
-        "language": "en-US"
+        "language": "en-US",
+        "template": "windows/main-template.wxs"
       }
     }
   }

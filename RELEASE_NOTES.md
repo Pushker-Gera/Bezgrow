@@ -1,4 +1,16 @@
-# Bezgrow 0.2.1
+# Bezgrow 0.2.2
+
+Windows installer compatibility hardening.
+
+- Added an installer-startup operating-system check that rejects Windows 7, Windows 8/8.1, 32-bit Windows, and Windows 10 builds older than version 1809 before Microsoft Edge WebView2 is launched.
+- Replaced the low-level `KERNEL32.dll`/`MicrosoftEdgeUpdate.exe` failure on unsupported computers with a single clear message explaining the supported Windows versions.
+- Applied the same minimum-system contract to the NSIS EXE, MSI, and portable Windows packages while preserving uninstall access for previously installed MSI builds.
+- Updated the public download page to show the exact requirement: 64-bit Windows 10 version 1809 or newer, or Windows 11.
+- Added packaging regression checks that keep the operating-system guard ahead of the WebView2 installer and keep the custom templates aligned with the pinned Tauri CLI.
+
+Public installer and updater metadata remains pinned to the genuine 0.2.1 artifacts until 0.2.2 artifacts complete the release verification and publication gates.
+
+## Previous 0.2.1 notes
 
 Financial-year and billing integrity hardening.
 

@@ -72,6 +72,8 @@ assert.ok(!capability.permissions.some((permission) => permission.startsWith("sq
 assert.ok(capability.windows.includes("main"), "Main window capability is missing.");
 assert.equal(windowsConfig.bundle.windows.nsis.installMode, "perMachine", "Windows installer must use Program Files.");
 assert.equal(windowsConfig.bundle.windows.nsis.installerIcon, "icons/icon.ico", "Windows installer icon is missing.");
+assert.equal(windowsConfig.bundle.windows.nsis.template, "windows/installer-template.nsi", "Windows NSIS installer must reject unsupported operating systems before WebView2.");
+assert.equal(windowsConfig.bundle.windows.wix.template, "windows/main-template.wxs", "Windows MSI installer must reject unsupported operating systems before WebView2.");
 assert.equal(windowsConfig.bundle.windows.webviewInstallMode.type, "offlineInstaller", "Clean Windows installs must work without downloading WebView2.");
 assert.equal(windowsConfig.app.trayIcon.iconPath, "icons/32x32.png", "Windows notification-area icon is missing.");
 

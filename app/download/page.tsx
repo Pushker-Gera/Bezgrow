@@ -55,7 +55,7 @@ function getInstallerInfo(
   const sizeLabel = release.size ? formatFileSize(release.size) : null
   const statusParts = [
     release.version ? `Version ${release.version}` : null,
-    release.platform === "windows" ? "Windows 10/11" : null,
+    release.platform === "windows" ? "Windows 10 version 1809+ or Windows 11" : null,
     release.architecture
       ? release.architecture === "x86_64"
         ? "x64"
