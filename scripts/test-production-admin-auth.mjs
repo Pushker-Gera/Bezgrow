@@ -140,29 +140,32 @@ try {
   const schemaStatusResult = await service.rpc("admin_control_plane_current_schema_status")
   if (schemaStatusResult.error) throw schemaStatusResult.error
 
-  assert.equal(anonymous.status, 401, "Anonymous admin access must be rejected.")
+  assert.equal(anonymous.status, 403, "Anonymous requests without native device proof must be rejected.")
+  assert.match(
+    anonymous.payload?.message || anonymous.payload?.error || "",
+    /device is not authorized/i,
+    "Anonymous requests must fail at the Platform Admin device boundary.",
+  )
   assert.equal(normal.status, 403, "Normal-user admin access must be rejected.")
-  for (const visibility of [anonymousVisibility, normalVisibility]) {
+  for (const visibility of [anonymousVisibility, normalVisibility, adminVisibility]) {
     assert.ok(
       Object.values(visibility).every((entry) => entry.count === 0),
-      "Non-admin users must not see control-plane rows."
+      "Browser JWTs without a verified native-device request must not see control-plane rows."
     )
   }
-  assert.equal(
-    adminVisibility.customers.access,
-    "granted",
-    "Platform admin must have platform-customer read access."
-  )
-  assert.equal(
-    adminVisibility.businesses.access,
-    "granted",
-    "Platform admin must have platform-business read access."
-  )
-  assert.ok(adminVisibility.customers.count >= 1, "Platform admin must be able to read platform customers.")
-  assert.ok(adminVisibility.businesses.count >= 1, "Platform admin must be able to read platform businesses.")
   assert.ok(
-    [200, 500, 503].includes(admin.status),
-    `Platform-admin dashboard returned unexpected HTTP ${admin.status}.`
+    Object.values(adminVisibility).every((entry) => entry.access === "denied"),
+    "Platform-admin JWTs must not bypass the server and native-device proof boundary.",
+  )
+  assert.equal(
+    admin.status,
+    403,
+    "Platform-admin credentials without an authorized native-device proof must be rejected.",
+  )
+  assert.match(
+    admin.payload?.message || admin.payload?.error || "",
+    /device is not authorized/i,
+    "Platform-admin credentials alone must not bypass device authorization.",
   )
 
   console.log(

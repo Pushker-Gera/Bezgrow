@@ -19,6 +19,7 @@ const binaryPath = join(appPath, "Contents", "MacOS", "Bezgrow")
 const buildIdentityPath = join(appPath, "Contents", "Resources", "next-server", "public", "desktop-build.json")
 const cycles = Number(valueAfter("cycles", "20"))
 const expectedStalePid = Number(valueAfter("expect-stale-pid", "0"))
+const skipNativeClose = process.argv.includes("--skip-native-close")
 const dataRoot = join(homedir(), "Library", "Application Support", "com.bezgrow.erp")
 const runtimeStatePath = join(dataRoot, "Runtime", "runtime.json")
 const databasePath = join(dataRoot, "bezgrow-offline.db")
@@ -206,13 +207,17 @@ if (before.sqlite.exists && before.sqlite.integrity !== "ok") throw new Error(`S
 let first = await launch()
 if (expectedStalePid) {
   if (processExists(expectedStalePid)) throw new Error(`Verified legacy stale process ${expectedStalePid} survived recovery.`)
-  const log = existsSync(startupLogPath) ? readFileSync(startupLogPath, "utf8") : ""
-  if (!log.includes(`Verified legacy Bezgrow runtime recovery completed. server_pid=${expectedStalePid}`)) {
-    throw new Error(`Startup log did not prove legacy stale recovery for PID ${expectedStalePid}.`)
-  }
+  await waitUntil(() => {
+    const log = existsSync(startupLogPath) ? readFileSync(startupLogPath, "utf8") : ""
+    return log.includes(`Verified stale Bezgrow runtime recovery completed. server_pid=${expectedStalePid}`)
+  }, 5_000, `Startup log did not prove legacy stale recovery for PID ${expectedStalePid}.`)
 }
 await testSecondLaunch(first)
-await closeMainWindow(first)
+if (skipNativeClose) {
+  await quitNormally(first, "Accessibility-limited native-close cleanup")
+} else {
+  await closeMainWindow(first)
+}
 
 for (let cycle = 1; cycle <= cycles; cycle += 1) {
   const active = await launch()
@@ -231,7 +236,7 @@ console.log(JSON.stringify({
   status: "macos-packaged-lifecycle-ok",
   cycles,
   singleInstance: "ok",
-  nativeWindowClose: "full-exit-ok",
+  nativeWindowClose: skipNativeClose ? "skipped-macos-accessibility-permission" : "full-exit-ok",
   forceKillRecovery: "ok",
   unrelatedPortFallback: "authenticated-and-owner-preserved",
   preferredPortReleased: true,
