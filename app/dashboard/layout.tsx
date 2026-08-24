@@ -9,11 +9,10 @@ import { FormKeyboardNavigation } from "@/components/forms/FormKeyboardNavigatio
 import DesktopBackButton from "@/components/desktop/DesktopBackButton"
 import PlatformAdminLauncher from "@/components/desktop/PlatformAdminLauncher"
 import LocalDatabaseRecovery from "@/components/offline/LocalDatabaseRecovery"
-import { clearDesktopSession } from "@/lib/desktop/session"
+import { AppLockGate } from "@/components/security/AppLockGate"
 import { isTauriRuntimeAsync } from "@/lib/desktop/tauri"
 import { getLocalDatabaseService } from "@/lib/offline/local/service"
 import { localLicenseSnapshot, restoreLicensedWorkspaceContext, revalidateLocalLicenseWithControlPlane } from "@/lib/offline/local/license"
-import { clearWorkspaceBootstrapCache } from "@/lib/workspaceBootstrapClient"
 import { FinancialYearProvider, FinancialYearScopedContent, FinancialYearSelector, FinancialYearViewingBanner } from "@/components/financial-years/FinancialYearContext"
 
 const navItems = [
@@ -202,12 +201,6 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
     const isMoreActive = moreNavItems.some(([, href]) => isActivePath(href))
     const isInvoicePrintWorkspace = /^\/dashboard\/invoices\/[^/]+\/print(?:\/|$)/.test(pathname)
 
-    async function handleLogout() {
-        clearWorkspaceBootstrapCache()
-        await clearDesktopSession()
-        router.replace("/offline?reason=logged_out&next=%2Fdashboard")
-    }
-
     if (desktopDatabase.status === "initializing" || desktopDatabase.status === "database-ready" || desktopDatabase.status === "license-valid") {
         return <LocalDatabaseRecovery checking />
     }
@@ -234,6 +227,7 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
     }
 
     return (
+        <AppLockGate businessName={businessName}>
         <FinancialYearProvider organizationId={organizationId}>
         <div className="responsive-shell flex h-dvh max-h-dvh overflow-hidden bg-black text-white">
             <FormKeyboardNavigation />
@@ -272,9 +266,6 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
                     <p className="truncate text-sm font-bold text-white">{businessName}</p>
                     <p className="mt-1 truncate text-xs text-neutral-500">{ownerEmail}</p>
                     <PlatformAdminLauncher className="mt-4" />
-                    <button onClick={handleLogout} className="mt-4 h-11 w-full rounded-2xl bg-red-500/15 text-sm font-bold text-red-200 hover:bg-red-500/25">
-                        Logout
-                    </button>
                 </div>
             </aside>
 
@@ -397,13 +388,6 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
                                         {name}
                                     </Link>
                                 ))}
-                                <button
-                                    type="button"
-                                    onClick={() => void handleLogout()}
-                                    className="flex min-h-12 items-center rounded-lg border border-red-400/20 bg-red-500/10 px-3 text-left text-sm font-bold text-red-200"
-                                >
-                                    Logout
-                                </button>
                             </div>
                         </div>
                     )}
@@ -442,5 +426,6 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
             </div>
         </div>
         </FinancialYearProvider>
+        </AppLockGate>
     )
 }

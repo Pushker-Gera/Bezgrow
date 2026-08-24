@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { createPrivateKey, generateKeyPairSync, sign } from "node:crypto";
+import { createPrivateKey, generateKeyPairSync, pbkdf2Sync, sign } from "node:crypto";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
@@ -7,6 +7,8 @@ import { pathToFileURL } from "node:url";
 import ts from "typescript";
 
 const DEVICE_ID = "BZG-54842A525D2A47A5BEB2CBD7";
+const APP_PASSWORD = "ReleaseSecure9";
+const APP_SALT = Buffer.from("0123456789abcdef", "utf8");
 const outDir = await mkdtemp(join(tmpdir(), "bezgrow-license-flow-"));
 
 async function transpileSource(relativePath) {
@@ -28,7 +30,7 @@ async function transpileSource(relativePath) {
   const outputText = output.outputText.replace(
     /from "zod";/g,
     `from "${import.meta.resolve("zod")}";`,
-  );
+  ).replace(/from "@\/lib\/app-lock\/shared";/g, 'from "../app-lock/shared.mjs";');
   await writeFile(outputPath, outputText);
   return pathToFileURL(outputPath).href;
 }
@@ -74,6 +76,17 @@ function basePayload(overrides = {}) {
     allowed_features: ["backup", "billing", "customers", "inventory", "orders", "products", "reports"],
     issued_by_admin: "admin@example.com",
     issued_at: "2026-07-09T00:00:00.000Z",
+    app_lock: {
+      version: 1,
+      algorithm: "pbkdf2-sha256",
+      iterations: 600000,
+      salt: APP_SALT.toString("base64url"),
+      verifier: pbkdf2Sync(`${DEVICE_ID}\u0000${APP_PASSWORD}`, APP_SALT, 600000, 32, "sha256").toString("base64url"),
+      device_id: DEVICE_ID,
+      credential_id: "credential-release-flow-0001",
+      issued_at: "2026-07-09T00:00:00.000Z",
+      reset_authorization: null,
+    },
     notes: null,
     ...overrides,
   };
@@ -99,6 +112,7 @@ function rowFromPayload(payload, licenseKey, signatureText) {
 
 async function main() {
   try {
+    await transpileSource("lib/app-lock/shared.ts");
     const codec = await import(await transpileSource("lib/license/codec.ts"));
     const policy = await import(await transpileSource("lib/license/policy.ts"));
     const adminValidation = await import(await transpileSource("lib/license/admin-license-validation.ts"));
@@ -142,6 +156,7 @@ async function main() {
     assert.equal(generated.payload.device_id, DEVICE_ID);
     assert.equal(generated.payload.platform, "windows");
     assert.equal(generated.payload.architecture, "x86_64");
+    assert.equal(generated.payload.app_lock.verifier.includes(APP_PASSWORD), false, "The signed licence must never contain plaintext password material.");
 
     const activated = await activateLikeDesktop(generated.licenseKey);
     assert.equal(activated.parsed.payload.device_id, DEVICE_ID);
@@ -249,6 +264,7 @@ async function main() {
       maximum_branches: 1,
       internal_notes: "",
       status: "active",
+      app_password: APP_PASSWORD,
     };
     const durations = [
       ["monthly", "2026-08-28"],

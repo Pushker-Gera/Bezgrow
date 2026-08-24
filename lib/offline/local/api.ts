@@ -23,8 +23,12 @@ import {
 } from "@/lib/offline/local/erp"
 import { assertLocalWriteAllowed, localLicenseSnapshot, restoreLicensedWorkspaceContext } from "@/lib/offline/local/license"
 import {
+  archiveNormalizedProductAtomic,
   createNormalizedInvoiceAtomic,
   deleteNormalizedInvoiceAtomic,
+  findNormalizedCustomerById,
+  findNormalizedProductById,
+  findNormalizedProductBySku,
   putNormalizedCollectionsInTransaction,
   queryNormalizedAnalyticsReport,
   queryNormalizedBillingSummary,
@@ -34,6 +38,9 @@ import {
   queryNormalizedProducts,
   readNormalizedInvoiceCreationContext,
   readNormalizedInvoiceDeletionContext,
+  saveNormalizedCustomerAtomic,
+  saveNormalizedProductAtomic,
+  updateNormalizedCustomerStatusAtomic,
   updateNormalizedInvoicePaymentStatus,
   type NormalizedListPage,
   type NormalizedListQuery,
@@ -392,13 +399,11 @@ async function listProducts(url: URL, organizationId: string) {
 
 async function saveProduct(url: URL, body: DataRow, isUpdate: boolean, organizationId: string) {
   const now = nowIso()
-  const products = await readCollection<DataRow>(organizationId, "products")
-  const movements = await readCollection<DataRow>(organizationId, "stock_movements")
   const id = isUpdate ? localString(body.id) : createOfflineId("product")
   if (!id) return fail("Invalid product id.", 422)
   if (!localString(body.name)) return fail("Product name is required.", 422)
   const sku = localString(body.sku).toLowerCase()
-  if (sku && products.some((product) => product.id !== id && localString(product.sku).toLowerCase() === sku && !product.deleted_at)) {
+  if (sku && (await findNormalizedProductBySku(organizationId, sku, id))) {
     return fail("A product with this SKU already exists.", 409)
   }
   if (body.stock !== undefined) {
@@ -407,7 +412,8 @@ async function saveProduct(url: URL, body: DataRow, isUpdate: boolean, organizat
     if (parsedStock < 0) return fail("Opening stock cannot be negative.", 422)
   }
 
-  const previous = products.find((product) => product.id === id)
+  const previous = isUpdate ? await findNormalizedProductById(organizationId, id) : null
+  if (isUpdate && !previous) return fail("Product was not found.", 404)
   const stock = localNumber(body.stock, localNumber(previous?.stock))
   const payload: DataRow = {
     ...previous,
@@ -423,62 +429,36 @@ async function saveProduct(url: URL, body: DataRow, isUpdate: boolean, organizat
     sync_status: isUpdate ? "pending_update" : "pending_create",
     offline_local_id: localString(previous?.offline_local_id) || id,
   }
-  const nextProducts = previous ? products.map((product) => (product.id === id ? payload : product)) : [payload, ...products]
   const stockDifference = stock - localNumber(previous?.stock)
-  const nextMovements =
-    stockDifference === 0
-      ? movements
-      : [
-          {
-            id: createOfflineId("stock-movement"),
-            organization_id: organizationId,
-            product_id: id,
-            product_name: payload.name || "",
-            type: isUpdate ? "adjustment" : "opening_stock",
-            quantity: stockDifference,
-            previous_stock: localNumber(previous?.stock),
-            new_stock: stock,
-            reason: isUpdate ? "Product master stock adjustment" : "Initial product master stock",
-            sync_status: "pending_create",
-            created_at: now,
-            updated_at: now,
-          },
-          ...movements,
-        ]
+  const stockMovement = stockDifference === 0
+    ? null
+    : {
+        id: createOfflineId("stock-movement"),
+        organization_id: organizationId,
+        product_id: id,
+        product_name: payload.name || "",
+        type: isUpdate ? "adjustment" : "opening_stock",
+        quantity: stockDifference,
+        previous_stock: localNumber(previous?.stock),
+        new_stock: stock,
+        reason: isUpdate ? "Product master stock adjustment" : "Initial product master stock",
+        sync_status: "pending_create",
+        created_at: now,
+        updated_at: now,
+      }
 
-  await writeCollections(
-    organizationId,
-    [
-      { collection: "products", value: nextProducts },
-      { collection: "inventory_items", value: nextProducts },
-      { collection: "stock_movements", value: nextMovements },
-    ],
-    pendingAction(createOfflineId("product-action"), "save_product", organizationId, {
-      localProductId: id,
-      serverProductId: isUpdate && !id.startsWith("offline-") ? id : null,
-      product: { ...body, id: undefined },
-    })
-  )
-
-  return ok({ product: { id, name: payload.name, sku: payload.sku || null, stock } })
+  const product = await saveNormalizedProductAtomic(organizationId, payload, stockMovement)
+  if (typeof window !== "undefined") window.dispatchEvent(new Event("bezgrow:offline-data-changed"))
+  return ok({ product })
 }
 
 async function archiveProduct(body: DataRow, organizationId: string) {
   const id = localString(body.id)
   if (!id) return fail("Invalid product id.", 422)
   const now = nowIso()
-  const products = await readCollection<DataRow>(organizationId, "products")
-  const nextProducts = products.map((product) =>
-    product.id === id ? { ...product, deleted_at: now, sync_status: "pending_delete", updated_at: now } : product
-  )
-  await writeCollections(
-    organizationId,
-    [
-      { collection: "products", value: nextProducts },
-      { collection: "inventory_items", value: nextProducts },
-    ],
-    pendingAction(createOfflineId("product-archive"), "archive_product", organizationId, { productId: id })
-  )
+  if (!(await findNormalizedProductById(organizationId, id))) return fail("Product was not found.", 404)
+  await archiveNormalizedProductAtomic(organizationId, id, now)
+  if (typeof window !== "undefined") window.dispatchEvent(new Event("bezgrow:offline-data-changed"))
   return ok({ product: { id } })
 }
 
@@ -488,11 +468,11 @@ async function listCustomers(url: URL, organizationId: string) {
 
 async function saveCustomer(body: DataRow, organizationId: string) {
   const now = nowIso()
-  const customers = await readCollection<DataRow>(organizationId, "customers")
   const id = localString(body.id) || createOfflineId("customer")
   if (!localString(body.name)) return fail("Customer name is required.", 422)
   if (body.email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(localString(body.email))) return fail("Enter a valid customer email address.", 422)
-  const previous = customers.find((customer) => customer.id === id)
+  const previous = body.id ? await findNormalizedCustomerById(organizationId, id) : null
+  if (body.id && !previous) return fail("Customer was not found.", 404)
   const nextCustomer = {
     ...previous,
     ...body,
@@ -508,16 +488,9 @@ async function saveCustomer(body: DataRow, organizationId: string) {
     sync_status: previous ? "pending_update" : "pending_create",
     offline_local_id: localString(previous?.offline_local_id) || id,
   }
-  const nextCustomers = previous ? customers.map((customer) => (customer.id === id ? nextCustomer : customer)) : [nextCustomer, ...customers]
-  await writeCollections(
-    organizationId,
-    [{ collection: "customers", value: nextCustomers }],
-    pendingAction(createOfflineId("customer-action"), "save_customer", organizationId, {
-      localCustomerId: id,
-      customer: previous && !id.startsWith("offline-") ? { id, ...body } : body,
-    })
-  )
-  return ok({ id })
+  const customer = await saveNormalizedCustomerAtomic(organizationId, nextCustomer)
+  if (typeof window !== "undefined") window.dispatchEvent(new Event("bezgrow:offline-data-changed"))
+  return ok({ id, customer })
 }
 
 async function customerStatus(body: DataRow, organizationId: string) {
@@ -526,26 +499,9 @@ async function customerStatus(body: DataRow, organizationId: string) {
   const now = nowIso()
   const archive = body.archive === true
   const active = archive ? false : body.active !== undefined ? Boolean(body.active) : true
-  const customers = await readCollection<DataRow>(organizationId, "customers")
-  const nextCustomers = customers.map((customer) =>
-    customer.id === id
-      ? {
-          ...customer,
-          is_active: active,
-          deleted_at: archive ? now : null,
-          sync_status: "pending_update",
-          updated_at: now,
-        }
-      : customer
-  )
-  await writeCollections(
-    organizationId,
-    [{ collection: "customers", value: nextCustomers }],
-    pendingAction(createOfflineId("customer-status"), "customer_status", organizationId, {
-      customerId: id,
-      status: { id: id.startsWith("offline-") ? undefined : id, active, archive },
-    })
-  )
+  if (!(await findNormalizedCustomerById(organizationId, id))) return fail("Customer was not found.", 404)
+  await updateNormalizedCustomerStatusAtomic(organizationId, id, active, archive, now)
+  if (typeof window !== "undefined") window.dispatchEvent(new Event("bezgrow:offline-data-changed"))
   return ok({ id, active, archived: archive })
 }
 
@@ -1636,16 +1592,23 @@ async function shouldHandleLocalApi() {
   return Boolean(license?.allowed)
 }
 
-function userSafeLocalError(error: unknown) {
+function userSafeLocalError(error: unknown, pathname: string) {
   if (error instanceof LocalDatabaseUnavailableError) {
     return "Bezgrow local database could not start. Restart the desktop app and try again. If this continues, export diagnostics before making more changes."
   }
   const message = error instanceof Error ? error.message : "Local database request failed."
   if (/unique constraint.*products.*sku/i.test(message)) return "A product with this SKU already exists."
+  if (isLicenseError(message) || error instanceof FinancialYearDomainError) return message
+  if (/\/api\/products\/(?:create|update)/.test(pathname)) {
+    return "Bezgrow could not save this product. The local database is temporarily unavailable. Nothing was changed; please retry."
+  }
+  if (pathname === "/api/customers/save") {
+    return "Bezgrow could not save this customer. The local database is temporarily unavailable. Nothing was changed; please retry."
+  }
   if (/constraint|sqlite|sql plugin|database is locked|transaction/i.test(message)) {
     return "The local database could not save this change. Nothing was changed; please try again."
   }
-  return message
+  return "Bezgrow could not complete this local operation. Nothing was changed; please try again."
 }
 
 export async function localApiFetch(input: RequestInfo | URL, init: RequestInit = {}): Promise<LocalApiResult> {
@@ -1730,7 +1693,7 @@ export async function localApiFetch(input: RequestInfo | URL, init: RequestInit 
       error,
       `${(init.method || "GET").toUpperCase()} ${url.pathname}`
     )
-    const message = userSafeLocalError(error)
+    const message = userSafeLocalError(error, url.pathname)
     return {
       handled: true,
       response: fail(

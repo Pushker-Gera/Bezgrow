@@ -3,9 +3,8 @@
 import { useCallback, useEffect, useState } from "react"
 import Link from "next/link"
 import { BezgrowLogoMark } from "@/components/brand/BezgrowLogoMark"
-import { clearDesktopSession } from "@/lib/desktop/session"
 import { getOfflineData } from "@/lib/offline/db"
-import { clearWorkspaceBootstrapCache, getWorkspaceBootstrap } from "@/lib/workspaceBootstrapClient"
+import { getWorkspaceBootstrap } from "@/lib/workspaceBootstrapClient"
 import { useRouter } from "next/navigation"
 
 type OrganizationProfile = {
@@ -55,12 +54,6 @@ export default function ProfilePage() {
       void checkUser()
     })
   }, [checkUser])
-
-  async function logout() {
-    clearWorkspaceBootstrapCache()
-    await clearDesktopSession()
-    router.replace("/offline?reason=logged_out&next=%2Fdashboard")
-  }
 
   if (loading) {
     return (
@@ -153,12 +146,12 @@ export default function ProfilePage() {
 
             </div>
 
-            <button
-              onClick={logout}
+            <Link
+              href="/dashboard/settings"
               className="relative z-10 mt-6 w-full rounded-2xl bg-gradient-to-r from-red-600 to-red-500 py-4 text-base font-bold shadow-[0_0_40px_rgba(239,68,68,0.3)] transition-all duration-300 hover:scale-[1.02] hover:from-red-500 hover:to-red-400 lg:mt-0"
             >
-              Logout Workspace
-            </button>
+              <span className="block text-center">Security &amp; Account Settings</span>
+            </Link>
 
           </div>
 

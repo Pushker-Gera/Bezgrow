@@ -2,7 +2,7 @@ import "server-only"
 
 import { adminSupabase } from "@/lib/supabase/admin"
 
-export const ADMIN_CONTROL_PLANE_SCHEMA_VERSION = 2026082203
+export const ADMIN_CONTROL_PLANE_SCHEMA_VERSION = 2026082401
 export const ADMIN_CONTROL_PLANE_SCHEMA_STATUS_RPC = "admin_control_plane_current_schema_status"
 
 export type AdminControlPlaneSchemaStatus = {

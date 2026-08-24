@@ -380,13 +380,35 @@ export default function CustomersPage() {
           ...payload,
         }),
       })
-      const result = (await response.json()) as { error?: string }
+      const result = (await response.json()) as { error?: string; customer?: Customer }
 
       if (!response.ok) {
         setNotice(result.error || "Customer could not be saved.")
         setSaving(false)
         return
       }
+      if (!result.customer) {
+        setNotice("Bezgrow saved the customer but returned no customer record. Reopen Customers and try again.")
+        setSaving(false)
+        return
+      }
+
+      const savedCustomer = result.customer
+      const editedCustomer = editCustomer
+      setCustomers((current) => {
+        const alreadyVisible = current.some((customer) => customer.id === savedCustomer.id)
+        if (alreadyVisible) return current.map((customer) => customer.id === savedCustomer.id ? savedCustomer : customer)
+        if (currentPage !== 1) return current
+        return [savedCustomer, ...current].slice(0, pageSize)
+      })
+      setServerTotal((current) => editedCustomer ? current : current + 1)
+      setCustomerSummary((current) => ({
+        ...current,
+        totalCustomers: Number(current.totalCustomers ?? serverTotal) + (editedCustomer ? 0 : 1),
+        activeCount: Number(current.activeCount ?? customers.filter((customer) => customer.is_active).length) + (editedCustomer ? 0 : 1),
+        gstCount: Number(current.gstCount ?? customers.filter((customer) => customer.gst_number).length)
+          + (!editedCustomer && savedCustomer.gst_number ? 1 : 0),
+      }))
     } catch (error) {
       if (!(await shouldUseWebOfflineFallback(error))) {
         setNotice(error instanceof Error ? error.message : "Customer could not be saved.")
@@ -399,11 +421,11 @@ export default function CustomersPage() {
       return
     }
 
+    const editedCustomer = editCustomer
     setShowFormModal(false)
     setEditCustomer(null)
     setForm(emptyForm)
-    await fetchData()
-    setNotice(editCustomer ? "Customer updated successfully." : "Customer created successfully.")
+    setNotice(editedCustomer ? "Customer updated successfully." : "Customer created successfully.")
     setSaving(false)
   }
 

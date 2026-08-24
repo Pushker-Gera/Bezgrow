@@ -13,6 +13,14 @@ import { apiFetch } from "@/lib/api/client-fetch"
 import { invalidateBusinessLogoUrl, pickBusinessLogo, removeBusinessLogo, resolveBusinessLogoUrl } from "@/lib/business-logo"
 import { invokeTauri, isTauriRuntimeAsync } from "@/lib/desktop/tauri"
 import { clearDesktopSession } from "@/lib/desktop/session"
+import {
+  changeAppPassword,
+  getAppLockStatus,
+  readAutoLockDelay,
+  requestAppLock,
+  saveAutoLockDelay,
+} from "@/lib/app-lock/client"
+import { appPasswordPolicyError } from "@/lib/app-lock/shared"
 import { getOrganizationId } from "@/lib/getOrganization"
 import { createOfflineId, exportOfflineBackup, getOfflineData, putOfflineData, queueOfflineAction, restoreOfflineBackup } from "@/lib/offline/db"
 import { shouldUseWebOfflineFallback } from "@/lib/offline/network"
@@ -155,6 +163,13 @@ export default function SettingsPage() {
   const [licenseRemovalOpen, setLicenseRemovalOpen] = useState(false)
   const [licenseRemovalText, setLicenseRemovalText] = useState("")
   const [removingLicense, setRemovingLicense] = useState(false)
+  const [signedInEmail, setSignedInEmail] = useState("")
+  const [appLockEnabled, setAppLockEnabled] = useState(false)
+  const [appLockDelay, setAppLockDelay] = useState(30_000)
+  const [currentAppPassword, setCurrentAppPassword] = useState("")
+  const [newAppPassword, setNewAppPassword] = useState("")
+  const [confirmAppPassword, setConfirmAppPassword] = useState("")
+  const [changingAppPassword, setChangingAppPassword] = useState(false)
   const backupInputRef = useRef<HTMLInputElement | null>(null)
   const [form, setForm] = useState({
     name: "",
@@ -318,6 +333,11 @@ export default function SettingsPage() {
   useEffect(() => {
     queueMicrotask(() => {
       void initializeSettings()
+      void getWorkspaceBootstrap().then((workspace) => setSignedInEmail(workspace?.user?.email || ""))
+      void getAppLockStatus()
+        .then((status) => setAppLockEnabled(status.enabled))
+        .catch((error) => setNotice(error instanceof Error ? error.message : "App Lock status could not be loaded."))
+      setAppLockDelay(readAutoLockDelay())
     })
   }, [])
 
@@ -707,6 +727,48 @@ export default function SettingsPage() {
     }
   }
 
+  async function updateAppPassword() {
+    setNotice("")
+    const policyError = appPasswordPolicyError(newAppPassword)
+    if (policyError) {
+      setNotice(policyError)
+      return
+    }
+    if (newAppPassword !== confirmAppPassword) {
+      setNotice("The new app-access passwords do not match.")
+      return
+    }
+    setChangingAppPassword(true)
+    try {
+      await changeAppPassword(currentAppPassword, newAppPassword)
+      setCurrentAppPassword("")
+      setNewAppPassword("")
+      setConfirmAppPassword("")
+      setNotice("App-access password changed. Unlock Bezgrow with the new password.")
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : "The app-access password could not be changed.")
+    } finally {
+      setChangingAppPassword(false)
+    }
+  }
+
+  function updateAutoLock(value: number) {
+    try {
+      saveAutoLockDelay(value)
+      setAppLockDelay(value)
+      setNotice("Auto-lock timing saved on this device.")
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : "Auto-lock timing could not be saved.")
+    }
+  }
+
+  async function logoutWorkspace() {
+    requestAppLock()
+    clearWorkspaceBootstrapCache()
+    await clearDesktopSession()
+    router.replace("/offline?reason=logged_out&next=%2Fdashboard")
+  }
+
   return (
     <div className="relative min-h-dvh overflow-y-auto overflow-x-hidden bg-black text-white">
       <div className="pointer-events-none absolute inset-0 overflow-hidden">
@@ -881,6 +943,52 @@ export default function SettingsPage() {
             <AppUpdatesPanel />
 
             <DesktopDiagnosticsPanel />
+
+            <div className="rounded-[36px] border border-cyan-400/20 bg-cyan-500/[0.045] p-7 backdrop-blur-2xl" data-enter-navigation="true">
+              <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+                <div>
+                  <p className="text-xs font-black uppercase tracking-[0.18em] text-cyan-200">Security</p>
+                  <h2 className="mt-2 text-3xl font-black">App Lock</h2>
+                  <p className="mt-3 max-w-3xl text-sm leading-6 text-neutral-400">
+                    Locks the local ERP without removing its signed licence, Device ID, business data, or settings. Password verification stays on this device.
+                  </p>
+                </div>
+                <span className={`rounded-full px-4 py-2 text-xs font-black uppercase tracking-[0.14em] ${appLockEnabled ? "bg-emerald-400/15 text-emerald-200" : "bg-amber-400/15 text-amber-100"}`}>
+                  {appLockEnabled ? "Enabled" : "Needs provisioning"}
+                </span>
+              </div>
+
+              <div className="mt-6 grid grid-cols-1 gap-4 md:grid-cols-3">
+                <input type="password" autoComplete="current-password" value={currentAppPassword} onChange={(event) => setCurrentAppPassword(event.target.value)} placeholder="Current password" className="h-14 rounded-2xl border border-white/10 bg-black/50 px-5 outline-none focus:border-cyan-400/40" />
+                <input type="password" autoComplete="new-password" value={newAppPassword} onChange={(event) => setNewAppPassword(event.target.value)} placeholder="New password" className="h-14 rounded-2xl border border-white/10 bg-black/50 px-5 outline-none focus:border-cyan-400/40" />
+                <input type="password" autoComplete="new-password" value={confirmAppPassword} onChange={(event) => setConfirmAppPassword(event.target.value)} placeholder="Confirm new password" className="h-14 rounded-2xl border border-white/10 bg-black/50 px-5 outline-none focus:border-cyan-400/40" />
+              </div>
+              <p className="mt-3 text-xs leading-5 text-neutral-500">Use at least 10 characters with uppercase, lowercase, and a number.</p>
+              <div className="mt-5 flex flex-wrap gap-3">
+                <button type="button" data-enter-primary onClick={() => void updateAppPassword()} disabled={!appLockEnabled || changingAppPassword} className="h-12 rounded-2xl bg-white px-5 text-sm font-black text-black disabled:cursor-not-allowed disabled:opacity-40">
+                  {changingAppPassword ? "Changing…" : "Change App Password"}
+                </button>
+                <button type="button" onClick={requestAppLock} disabled={!appLockEnabled} className="h-12 rounded-2xl border border-cyan-300/30 bg-cyan-300/10 px-5 text-sm font-black text-cyan-100 disabled:opacity-40">Lock Now</button>
+                <label className="flex min-h-12 items-center gap-3 rounded-2xl border border-white/10 bg-black/40 px-4 text-sm font-bold">
+                  Lock after backgrounding
+                  <select value={appLockDelay} onChange={(event) => updateAutoLock(Number(event.target.value))} className="bg-black px-2 py-1 text-cyan-100 outline-none">
+                    <option value={0}>Immediately</option>
+                    <option value={30000}>30 seconds</option>
+                    <option value={60000}>1 minute</option>
+                    <option value={300000}>5 minutes</option>
+                    <option value={900000}>15 minutes</option>
+                  </select>
+                </label>
+              </div>
+            </div>
+
+            <div className="rounded-[36px] border border-white/10 bg-white/[0.035] p-7 backdrop-blur-2xl">
+              <p className="text-xs font-black uppercase tracking-[0.18em] text-neutral-500">Account</p>
+              <h2 className="mt-2 text-3xl font-black">Workspace session</h2>
+              <p className="mt-3 break-all text-sm text-neutral-400">Signed in as {signedInEmail || form.email || "the licensed business owner"}</p>
+              <p className="mt-3 max-w-3xl text-sm leading-6 text-neutral-500">Logout ends only this local session. It preserves the signed licence, Device ID, SQLite ERP data, backups, logos, settings, and print preferences.</p>
+              <button type="button" onClick={() => void logoutWorkspace()} className="mt-5 h-12 rounded-2xl border border-red-400/30 bg-red-500/10 px-5 text-sm font-black text-red-100">Logout</button>
+            </div>
 
             <div className="rounded-[36px] border border-red-400/20 bg-red-500/[0.04] p-7 backdrop-blur-2xl">
               <h2 className="text-3xl font-black">Device Licence</h2>

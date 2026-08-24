@@ -1,3 +1,5 @@
+import { isAppLockProvisioning, type AppLockProvisioning } from "@/lib/app-lock/shared"
+
 export const LICENSE_KEY_PREFIX = "BZG-LIC-v1"
 export const LICENSE_SCHEMA_VERSION = 1
 export const ED25519_RAW_KEY_BYTES = 32
@@ -27,6 +29,7 @@ export type LicensePayload = {
   signature_algorithm?: "ed25519" | "rsa-pss-sha256" | string | null
   issuer_key_id?: string | null
   issuer_public_key?: string | null
+  app_lock?: AppLockProvisioning | null
   notes?: string | null
 }
 
@@ -196,6 +199,7 @@ function assertPayload(value: unknown): LicensePayload {
     signature_algorithm: payload.signature_algorithm ? String(payload.signature_algorithm) : undefined,
     issuer_key_id: payload.issuer_key_id ? String(payload.issuer_key_id) : undefined,
     issuer_public_key: payload.issuer_public_key ? String(payload.issuer_public_key) : undefined,
+    app_lock: isAppLockProvisioning(payload.app_lock) ? payload.app_lock : null,
     notes: payload.notes ? String(payload.notes) : null,
   }
 }

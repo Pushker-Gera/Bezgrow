@@ -108,9 +108,7 @@ type ProductsListResponse = {
 type ProductActionResponse = {
     success: boolean
     error?: string
-    product?: {
-        id: string
-    }
+    product?: ProductRow
 }
 
 const emptyForm: ProductForm = {
@@ -428,11 +426,6 @@ export default function ProductsPage() {
         }
     }
 
-    async function refreshData() {
-        if (!organizationId) return
-        await fetchProducts(organizationId, true)
-    }
-
     async function fetchStockMovements(productId: string) {
         if (!organizationId) return
 
@@ -567,12 +560,39 @@ export default function ProductsPage() {
                 return
             }
 
+            if (!result.product) {
+                setFormError("Bezgrow saved the product but returned no product record. Reopen Products and try again.")
+                setSaving(false)
+                return
+            }
+
+            const savedProduct = result.product
+            const editedProduct = editProduct
+            setProducts((current) => {
+                const alreadyVisible = current.some((product) => product.id === savedProduct.id)
+                if (alreadyVisible) return current.map((product) => product.id === savedProduct.id ? savedProduct : product)
+                if (currentPage !== 1) return current
+                return [savedProduct, ...current].slice(0, itemsPerPage)
+            })
+            setServerTotal((current) => editedProduct ? current : current + 1)
+            setFacets((current) => ({
+                categories: savedProduct.category
+                    ? Array.from(new Set([...current.categories, savedProduct.category])).sort()
+                    : current.categories,
+                suppliers: savedProduct.supplier
+                    ? Array.from(new Set([...current.suppliers, savedProduct.supplier])).sort()
+                    : current.suppliers,
+            }))
+            writeCachedProducts(
+                products.some((product) => product.id === savedProduct.id)
+                    ? products.map((product) => product.id === savedProduct.id ? savedProduct : product)
+                    : [savedProduct, ...products]
+            )
             setShowFormModal(false)
             setEditProduct(null)
             setForm(emptyForm)
-            await refreshData()
             setSaving(false)
-            setNotice(editProduct ? "Product updated successfully." : "Product created successfully.")
+            setNotice(editedProduct ? "Product updated successfully." : "Product created successfully.")
         } catch (error) {
             if (await shouldUseWebOfflineFallback(error)) {
                 await saveProductOffline(payload)

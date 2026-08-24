@@ -160,6 +160,57 @@ try {
     db.prepare("INSERT INTO local_audit_logs VALUES (?, ?, ?)").run("audit-pos", "workspace-a", "settings.feature_toggled")
     db.prepare("INSERT INTO license_state VALUES (?, ?, ?)").run("license-a", "workspace-a", "active")
   })
+
+  // Regression: the former product/customer save path deleted every synced row
+  // before reinserting it. Production invoice foreign keys use ON DELETE SET
+  // NULL, so a closed-year trigger rejects that cascade with
+  // `financial_year_closed`. This made even an unrelated Add Product fail.
+  db.exec(`
+    CREATE TABLE closed_financial_years (id TEXT PRIMARY KEY, status TEXT NOT NULL);
+    CREATE TABLE closed_products (id TEXT PRIMARY KEY, name TEXT NOT NULL);
+    CREATE TABLE closed_customers (id TEXT PRIMARY KEY, name TEXT NOT NULL);
+    CREATE TABLE closed_invoices (
+      id TEXT PRIMARY KEY,
+      financial_year_id TEXT NOT NULL REFERENCES closed_financial_years(id),
+      customer_id TEXT REFERENCES closed_customers(id) ON DELETE SET NULL
+    );
+    CREATE TABLE closed_invoice_items (
+      id TEXT PRIMARY KEY,
+      invoice_id TEXT NOT NULL REFERENCES closed_invoices(id),
+      product_id TEXT REFERENCES closed_products(id) ON DELETE SET NULL
+    );
+    CREATE TRIGGER closed_invoice_customer_guard
+      BEFORE UPDATE OF customer_id ON closed_invoices
+      WHEN EXISTS (SELECT 1 FROM closed_financial_years fy WHERE fy.id = OLD.financial_year_id AND fy.status <> 'OPEN')
+      BEGIN SELECT RAISE(ABORT, 'financial_year_closed'); END;
+    CREATE TRIGGER closed_invoice_item_product_guard
+      BEFORE UPDATE OF product_id ON closed_invoice_items
+      WHEN EXISTS (
+        SELECT 1 FROM closed_invoices invoice
+        JOIN closed_financial_years fy ON fy.id = invoice.financial_year_id
+        WHERE invoice.id = OLD.invoice_id AND fy.status <> 'OPEN'
+      )
+      BEGIN SELECT RAISE(ABORT, 'financial_year_closed'); END;
+    INSERT INTO closed_financial_years VALUES ('fy-closed', 'CLOSED');
+    INSERT INTO closed_products VALUES ('closed-product', 'Historical Product');
+    INSERT INTO closed_customers VALUES ('closed-customer', 'Historical Customer');
+    INSERT INTO closed_invoices VALUES ('closed-invoice', 'fy-closed', 'closed-customer');
+    INSERT INTO closed_invoice_items VALUES ('closed-item', 'closed-invoice', 'closed-product');
+  `)
+  assert.throws(() => transaction(() => db.exec("DELETE FROM closed_products")), /financial_year_closed/)
+  assert.throws(() => transaction(() => db.exec("DELETE FROM closed_customers")), /financial_year_closed/)
+
+  transaction(() => {
+    db.prepare("UPDATE closed_products SET name = ? WHERE id = ?").run("Historical Product Updated", "closed-product")
+    db.prepare("INSERT INTO closed_products VALUES (?, ?)").run("new-product", "New Product")
+    db.prepare("UPDATE closed_customers SET name = ? WHERE id = ?").run("Historical Customer Updated", "closed-customer")
+    db.prepare("INSERT INTO closed_customers VALUES (?, ?)").run("new-customer", "New Customer")
+  })
+  assert.equal(db.prepare("SELECT product_id FROM closed_invoice_items WHERE id = 'closed-item'").get().product_id, "closed-product")
+  assert.equal(db.prepare("SELECT customer_id FROM closed_invoices WHERE id = 'closed-invoice'").get().customer_id, "closed-customer")
+  assert.equal(db.prepare("SELECT COUNT(*) total FROM closed_products").get().total, 2)
+  assert.equal(db.prepare("SELECT COUNT(*) total FROM closed_customers").get().total, 2)
+
   db.close()
   db = new DatabaseSync(databasePath)
   assert.equal(db.prepare("SELECT status FROM license_state WHERE organization_id = 'workspace-a'").get().status, "active")

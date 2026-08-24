@@ -81,12 +81,18 @@ try {
     ["replace_device", async () => {
       await page.getByLabel("Target Device ID", { exact: true }).fill("BZG-TARGET-DEVICE-0001")
       await page.getByLabel("Re-enter target Device ID").fill("BZG-TARGET-DEVICE-0001")
+      await page.getByLabel("Initial app-access password").fill("StrongDevice9")
       await page.getByLabel("Reason").fill("Fixture replacement")
     }],
     ["transfer", async () => {
       await page.getByLabel("Target Device ID", { exact: true }).fill("BZG-TARGET-DEVICE-0002")
       await page.getByLabel("Re-enter target Device ID").fill("BZG-TARGET-DEVICE-0002")
+      await page.getByLabel("Initial app-access password").fill("StrongDevice8")
       await page.getByLabel("Reason").fill("Fixture transfer")
+    }],
+    ["reset_app_password", async () => {
+      await page.getByLabel("New app-access password").fill("ResetDevice7")
+      await page.getByLabel("Reset reason").fill("Fixture owner recovery")
     }],
     ["suspend", async () => { await page.getByLabel(/Type SUSPEND/).fill("SUSPEND") }],
     ["revoke", async () => {
@@ -122,7 +128,7 @@ try {
   assert.deepEqual(dialogs, [], "Licence actions invoked a blocking browser dialog.")
   const dragContract = await activeRow.locator('[data-license-action="renew"]').evaluate((element) => getComputedStyle(element).getPropertyValue("-webkit-app-region"))
   assert.ok(dragContract === "no-drag" || dragContract === "", `Unexpected app-region contract: ${dragContract}`)
-  console.log("admin-license-interactions-ok controls=12 mutations=9 blocking-dialogs=0 covered-targets=0")
+  console.log("admin-license-interactions-ok controls=13 mutations=10 blocking-dialogs=0 covered-targets=0")
 } catch (error) {
   throw new Error(`${error instanceof Error ? error.message : String(error)}\n${serverOutput.slice(-8_000)}`)
 } finally {

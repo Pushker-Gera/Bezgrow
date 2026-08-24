@@ -27,7 +27,9 @@ import {
   licenseAuditSnapshot,
   renewedExpiry,
 } from "@/lib/license/admin-license-actions"
-import { LICENSE_SCHEMA_VERSION, type LicensePayload } from "@/lib/license/codec"
+import { createAppLockProvisioning } from "@/lib/app-lock/server"
+import type { AppLockProvisioning } from "@/lib/app-lock/shared"
+import { LICENSE_SCHEMA_VERSION, parseLicenseInput, type LicensePayload } from "@/lib/license/codec"
 import { createLicenseId, hasLicenseSigningKey, licenseSigningStatus, signLicensePayload } from "@/lib/license/server"
 import { adminSupabase } from "@/lib/supabase/admin"
 import { adminRequestTiming } from "@/lib/admin/request-timing"
@@ -72,7 +74,20 @@ type StoredLicense = {
   updated_at: string
 }
 
-function licensePayload(row: StoredLicense, adminLabel: string): LicensePayload {
+function storedAppLock(row: Pick<StoredLicense, "signed_license_key">) {
+  if (!row.signed_license_key) return null
+  try {
+    return parseLicenseInput(row.signed_license_key).payload.app_lock || null
+  } catch {
+    return null
+  }
+}
+
+function licensePayload(
+  row: StoredLicense,
+  adminLabel: string,
+  appLock: AppLockProvisioning | null = storedAppLock(row)
+): LicensePayload {
   return {
     schema_version: LICENSE_SCHEMA_VERSION,
     license_id: row.id,
@@ -101,6 +116,7 @@ function licensePayload(row: StoredLicense, adminLabel: string): LicensePayload 
     maximum_branches: row.maximum_branches,
     issued_by_admin: adminLabel,
     issued_at: new Date().toISOString(),
+    app_lock: appLock,
     notes: row.internal_notes,
   }
 }
@@ -207,6 +223,7 @@ async function ensureBusiness(input: ValidCreateLicenseInput, customerId: string
 async function persistSignedLicense(
   row: Omit<StoredLicense, "signed_license_key" | "issuer_key_id" | "signature_algorithm" | "created_at" | "updated_at">,
   adminLabel: string,
+  appLock: AppLockProvisioning,
   idempotencyKey?: string
 ) {
   const timestamp = new Date().toISOString()
@@ -218,7 +235,7 @@ async function persistSignedLicense(
     created_at: timestamp,
     updated_at: timestamp,
   } satisfies StoredLicense
-  const signed = signLicensePayload(licensePayload(rowForSigning, adminLabel))
+  const signed = signLicensePayload(licensePayload(rowForSigning, adminLabel, appLock))
   const inserted = await adminSupabase
     .from("licenses")
     .insert({
@@ -434,6 +451,7 @@ export async function POST(request: Request) {
         issued_by_admin_email: context.adminEmail,
       },
       adminLabel,
+      createAppLockProvisioning(input.app_password, input.device_id),
       idempotencyKey
     )
     timing.mark("sign_and_store")
@@ -534,13 +552,23 @@ export async function PATCH(request: Request) {
       updates.renewed_at = changedAt
     }
 
-    const signatureChanges = ["renew", "extend", "change_grace", "update_features"].includes(input.action)
+    const signatureChanges = ["renew", "extend", "change_grace", "update_features", "reset_app_password"].includes(input.action)
     if (signatureChanges && !hasLicenseSigningKey()) {
       return adminFail(context, "Licence signing failed because the server signing key is not configured. Existing licence remains unchanged.", 503)
     }
     if (signatureChanges) {
       const next = { ...current, ...updates } as StoredLicense
-      const signed = signLicensePayload(licensePayload(next, adminLabel))
+      const appLock = input.action === "reset_app_password"
+        ? createAppLockProvisioning(input.app_password as string, current.device_id, {
+            id: crypto.randomUUID(),
+            issued_at: changedAt,
+            expires_at: new Date(Date.now() + 30 * 60_000).toISOString(),
+          })
+        : storedAppLock(current)
+      if (!appLock) {
+        return adminFail(context, "This licence has no app-access credential. Use Reset App Password to provision one.", 409)
+      }
+      const signed = signLicensePayload(licensePayload(next, adminLabel, appLock))
       updates.signed_license_key = signed.license_key
       updates.issuer_key_id = signed.payload.issuer_key_id
       updates.signature_algorithm = signed.payload.signature_algorithm
@@ -573,7 +601,8 @@ export async function PATCH(request: Request) {
         created_at: changedAt,
         updated_at: changedAt,
       } satisfies StoredLicense
-      const signed = signLicensePayload(licensePayload(replacementBase, adminLabel))
+      const replacementAppLock = createAppLockProvisioning(input.app_password as string, input.new_device_id as string)
+      const signed = signLicensePayload(licensePayload(replacementBase, adminLabel, replacementAppLock))
       replacement = {
         ...replacementBase,
         signed_license_key: signed.license_key,
@@ -593,11 +622,13 @@ export async function PATCH(request: Request) {
       replace_device: "DEVICE_REPLACED",
       transfer: "LICENSE_TRANSFERRED",
       notes: "LICENSE_NOTES_UPDATED",
+      reset_app_password: "APP_PASSWORD_RESET_AUTHORIZED",
     }
     const nextSnapshot = replacement
       ? { ...licenseAuditSnapshot(current), status: "replaced", replaced_by_license_id: replacement.id, updated_at: changedAt }
       : licenseAuditSnapshot({ ...current, ...updates })
-    const mutation = await adminSupabase.rpc("admin_mutate_license", {
+    const mutationName = input.action === "reset_app_password" ? "admin_reset_app_password" : "admin_mutate_license"
+    const mutation = await adminSupabase.rpc(mutationName, {
       p_license_id: current.id,
       p_action: input.action,
       p_action_name: actionNames[input.action],

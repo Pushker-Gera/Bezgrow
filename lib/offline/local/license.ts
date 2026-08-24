@@ -1,6 +1,7 @@
 "use client"
 
 import { normalizeLicenseEnvKey, parseLicenseInput, verifyLicenseSignature, type LicensePayload } from "@/lib/license/codec"
+import { provisionAppLockFromLicense } from "@/lib/app-lock/client"
 import { evaluateStoredLicense, type LicensePolicyResult, type StoredLicenseRow } from "@/lib/license/policy"
 import { verifyStoredLicenseRows } from "@/lib/license/verification"
 import { clearDesktopAuthMarker, markDesktopSessionActive, setDesktopAuthMarker } from "@/lib/desktop/session"
@@ -254,6 +255,12 @@ async function installRefreshedLicenseKey(current: ReturnType<typeof parseLicens
   if (!(await verifyLicenseSignature(refreshed, PUBLIC_KEY))) {
     throw new Error("The refreshed licence signature is invalid.")
   }
+  await provisionAppLockFromLicense(
+    refreshed.payload.app_lock,
+    refreshed.payload.device_id,
+    refreshed.payload.license_id,
+    refreshed.payload.business_id
+  )
 
   const row = licenseRowFromPayload(refreshed.payload, refreshed.licenseKey, refreshed.signatureText, "active")
   const targets = [...new Set([refreshed.payload.business_id, workspaceOrganizationId(), "global"].filter(Boolean))]
@@ -285,6 +292,12 @@ async function restoreLicenseRowsFromDesktopSecret(deviceId: string) {
     if (Date.now() > dateEnd(parsed.payload.expiry_date, parsed.payload.grace_period_days).getTime()) return []
     if (!(await verifyLicenseSignature(parsed, PUBLIC_KEY))) return []
 
+    await provisionAppLockFromLicense(
+      parsed.payload.app_lock,
+      parsed.payload.device_id,
+      parsed.payload.license_id,
+      parsed.payload.business_id
+    )
     await writeActivatedLicense(parsed.payload, parsed.licenseKey, parsed.signatureText)
     return [licenseRowFromPayload(parsed.payload, parsed.licenseKey, parsed.signatureText) as StoredLicenseRow]
   } catch {
@@ -575,6 +588,12 @@ export async function activateOfflineLicense(input: unknown) {
     throw new Error("This license is already expired.")
   }
 
+  await provisionAppLockFromLicense(
+    parsed.payload.app_lock,
+    parsed.payload.device_id,
+    parsed.payload.license_id,
+    parsed.payload.business_id
+  )
   await writeActivatedLicense(parsed.payload, parsed.licenseKey, parsed.signatureText)
   await writeDesktopSecret(LICENSE_SECRET_KEY, parsed.licenseKey)
   await createLocalWorkspaceFromLicense(parsed.payload)

@@ -1,4 +1,19 @@
-# Bezgrow 0.2.2
+# Bezgrow 0.3.0
+
+Windows local-database reliability, App Lock, and mutation UX hardening.
+
+- Replaced destructive full-collection product and customer saves with row-level, atomic SQLite mutations so closed financial-year history and invoice foreign keys remain untouched.
+- Kept product, opening-stock, and stock-movement changes in one native transaction and added actionable user-safe failure messages with technical diagnostics retained locally.
+- Added a polished device App Lock that protects ERP content on launch, restart, meaningful backgrounding, minimize/restore, and sleep/resume, with Caps Lock feedback, password visibility, and escalating retry throttling.
+- Added one-time initial app-password generation during licence creation, PBKDF2-SHA256 per-device verifiers, OS credential-store persistence, local password change, configurable background auto-lock, and Lock Now.
+- Added an atomic, idempotent, audited, device-bound 30-minute password-reset authorization signed by the existing server-only licence trust system; no plaintext password is persisted or recoverable.
+- Moved ordinary logout into Settings, removed duplicate sidebar/profile logout controls, and preserved the licence, Device ID, SQLite ERP records, backups, logo, print settings, and local configuration.
+- Removed whole-list reloads after product/customer creation and editing; the affected row now appears immediately without route refresh, screen flash, scroll reset, or a browser-like loading line.
+- Expanded Windows path/runtime, local-only CRUD, SQLite integrity, closed-year mutation, licence/App-Lock, admin reset, logout placement, no-cloud-write, pagination, and large-data regression coverage.
+
+Public installer and updater metadata remains pinned to the genuine 0.2.1 artifacts until matching 0.3.0 Windows and macOS artifacts complete the release verification and publication gates.
+
+## Previous 0.2.2 notes
 
 Windows installer compatibility hardening.
 

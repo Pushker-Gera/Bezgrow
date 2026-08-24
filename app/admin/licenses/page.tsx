@@ -60,6 +60,13 @@ const initialForm = {
   maximum_businesses: "1",
   maximum_branches: "1",
   internal_notes: "",
+  app_password: "",
+}
+
+function generateAppPassword() {
+  const alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789"
+  const bytes = crypto.getRandomValues(new Uint8Array(14))
+  return `Bg9-${Array.from(bytes, (byte) => alphabet[byte % alphabet.length]).join("")}`
 }
 
 export default function LicensesPage() {
@@ -77,6 +84,7 @@ export default function LicensesPage() {
   const [activeAction, setActiveAction] = useState<{ action: AdminLicenseAction; row: Record<string, unknown> } | null>(null)
   const [pendingActionId, setPendingActionId] = useState("")
   const [fieldErrors, setFieldErrors] = useState<Partial<Record<LicenseFieldName, string>>>({})
+  const [oneTimeCredential, setOneTimeCredential] = useState<{ password: string; licenseKey?: string; title: string } | null>(null)
   const createRequestKey = useRef("")
   const createInFlight = useRef(false)
   const filters = useMemo(() => ({ status, platform }), [platform, status])
@@ -114,8 +122,12 @@ export default function LicensesPage() {
         idempotency_key: createRequestKey.current,
       })
       const key = String(payload.license?.signed_license_key || "")
-      if (key) await copyAdminText(key)
-      setNotice("License generated, stored, audited, and copied to the clipboard.")
+      setOneTimeCredential({
+        password: validation.data.app_password,
+        licenseKey: key,
+        title: "Initial app-access credential",
+      })
+      setNotice("Licence generated, hashed app-access credential provisioned, and audit recorded.")
       setCreateOpen(false)
       setForm(initialForm)
       setFieldErrors({})
@@ -162,8 +174,15 @@ export default function LicensesPage() {
         suspend: "Licence suspended. The installed device will enforce it at the next online verification.",
         reactivate: "Licence reactivated. The installed device will resume at the next online verification.",
         revoke: "Licence revoked. Local ERP data remains untouched.",
+        reset_app_password: "A signed, device-bound app-password reset was authorized for 30 minutes.",
       }
       setNotice(`${labels[input.action] || "Licence updated and audited."}${result.duplicate ? " The original idempotent result was returned." : ""}`)
+      if (input.app_password) {
+        setOneTimeCredential({
+          password: input.app_password,
+          title: input.action === "reset_app_password" ? "Replacement app-access credential" : "Target-device app-access credential",
+        })
+      }
       setActiveAction(null)
     } finally {
       setPendingActionId("")
@@ -337,6 +356,7 @@ export default function LicensesPage() {
               ["maximum_users", "Maximum users", "number"],
               ["maximum_businesses", "Maximum businesses", "number"],
               ["maximum_branches", "Maximum branches", "number"],
+              ["app_password", "Initial app-access password", "password"],
             ].map(([key, label, type]) => (
               <label key={key} className="text-sm font-bold text-neutral-300">
                 {label}
@@ -370,6 +390,9 @@ export default function LicensesPage() {
               </select>
             </label>
           </div>
+          <button type="button" onClick={() => { setForm((current) => ({ ...current, app_password: generateAppPassword() })); setFieldErrors((current) => ({ ...current, app_password: undefined })) }} className="h-11 rounded-xl border border-emerald-400/25 bg-emerald-400/10 px-4 text-sm font-black text-emerald-100">
+            Generate strong app password
+          </button>
           <fieldset>
             <legend className="text-sm font-bold text-neutral-300">Allowed features</legend>
             <div className="mt-3 flex flex-wrap gap-2">
@@ -403,6 +426,22 @@ export default function LicensesPage() {
             {saving ? "Signing and storing…" : "Generate signed license"}
           </button>
         </form>
+      </AdminModal>
+      <AdminModal open={Boolean(oneTimeCredential)} title={oneTimeCredential?.title || "App-access credential"} onClose={() => setOneTimeCredential(null)}>
+        {oneTimeCredential && (
+          <div className="space-y-5">
+            <AdminNotice tone="warning">Copy this password now. Bezgrow stores only a one-way verifier and cannot show this plaintext value again.</AdminNotice>
+            <div className="rounded-2xl border border-emerald-400/20 bg-black/40 p-5">
+              <p className="text-xs font-black uppercase tracking-[0.16em] text-neutral-500">App-access password</p>
+              <code className="mt-3 block break-all text-lg font-black text-emerald-100">{oneTimeCredential.password}</code>
+              <button type="button" onClick={() => void copyAdminText(oneTimeCredential.password)} className="mt-4 h-11 rounded-xl bg-emerald-300 px-4 text-sm font-black text-black">Copy password</button>
+            </div>
+            {oneTimeCredential.licenseKey && (
+              <button type="button" onClick={() => void copyAdminText(oneTimeCredential.licenseKey as string)} className="h-11 w-full rounded-xl border border-cyan-400/25 bg-cyan-400/10 px-4 text-sm font-black text-cyan-100">Copy signed licence key</button>
+            )}
+            <button type="button" onClick={() => setOneTimeCredential(null)} className="h-11 w-full rounded-xl border border-white/10 px-4 text-sm font-black">I have stored it safely</button>
+          </div>
+        )}
       </AdminModal>
       <AdminModal open={historyOpen} title={historyTitle || "License history"} onClose={() => setHistoryOpen(false)}>
         <div className="space-y-3">

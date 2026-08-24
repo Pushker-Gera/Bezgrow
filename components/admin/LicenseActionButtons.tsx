@@ -31,6 +31,7 @@ export function LicenseActionButtons({
       <button type="button" data-license-action="extend" disabled={busy || terminal} onClick={() => onAction("extend")} className={`${common} border-white/10`}>Extend</button>
       <button type="button" data-license-action="change_grace" disabled={busy || terminal} onClick={() => onAction("change_grace")} className={`${common} border-white/10`}>Grace</button>
       <button type="button" data-license-action="update_features" disabled={busy || terminal} onClick={() => onAction("update_features")} className={`${common} border-white/10`}>Plan/features</button>
+      <button type="button" data-license-action="reset_app_password" disabled={busy || terminal} onClick={() => onAction("reset_app_password")} className={`${common} border-emerald-400/25 text-emerald-100`}>Reset App Password</button>
       <button type="button" data-license-action="replace_device" disabled={busy || terminal} onClick={() => onAction("replace_device")} className={`${common} border-amber-400/20 text-amber-100`}>Replace device</button>
       <button type="button" data-license-action="transfer" disabled={busy || terminal} onClick={() => onAction("transfer")} className={`${common} border-amber-400/20 text-amber-100`}>Transfer</button>
       {status === "suspended" ? (

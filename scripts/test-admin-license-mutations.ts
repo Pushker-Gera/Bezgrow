@@ -34,8 +34,9 @@ for (const candidate of [
   { ...common, action: "extend", extend_days: 30 },
   { ...common, action: "change_grace", grace_days: 14 },
   { ...common, action: "update_features", plan_name: "Growth", allowed_features: [...MODERN_LICENSE_FEATURES] },
-  { ...common, action: "replace_device", new_device_id: "BZG-NEW-DEVICE-0001", confirmed_device_id: "BZG-NEW-DEVICE-0001", reason: "Hardware replacement" },
-  { ...common, action: "transfer", new_device_id: "BZG-NEW-DEVICE-0002", confirmed_device_id: "BZG-NEW-DEVICE-0002", reason: "Owner requested transfer" },
+  { ...common, action: "replace_device", new_device_id: "BZG-NEW-DEVICE-0001", confirmed_device_id: "BZG-NEW-DEVICE-0001", reason: "Hardware replacement", app_password: "StrongDevice9" },
+  { ...common, action: "transfer", new_device_id: "BZG-NEW-DEVICE-0002", confirmed_device_id: "BZG-NEW-DEVICE-0002", reason: "Owner requested transfer", app_password: "StrongDevice8" },
+  { ...common, action: "reset_app_password", reason: "Owner recovery", app_password: "ResetDevice7" },
   { ...common, action: "suspend", confirmation: "SUSPEND", reason: "Payment review" },
   { ...common, action: "reactivate", confirmation: "REACTIVATE", reason: "Payment cleared" },
   { ...common, action: "revoke", confirmation: "REVOKE", reason: "Confirmed licence termination" },
@@ -64,12 +65,14 @@ assert.match(page, /list\.upsert\(result\.license\)/, "Successful mutations must
 assert.doesNotMatch(page, /runAction[\s\S]*list\.reload\(\)/, "Mutations must not reload the full licence page.")
 assert.match(controls, /activeAdminMutations/, "Client duplicate submissions must be suppressed.")
 assert.match(route, /p_idempotency_key:\s*input\.idempotency_key/, "Server mutation must receive the stable dialog idempotency key.")
-assert.match(route, /signLicensePayload[\s\S]*\.rpc\("admin_mutate_license"/, "Signing must complete before the atomic database mutation.")
+assert.match(route, /signLicensePayload[\s\S]*const mutationName[\s\S]*\.rpc\(mutationName/, "Signing must complete before the selected atomic database mutation.")
 assert.match(migration, /select \* into current_license[\s\S]*for update/, "Atomic mutations must lock the licence row.")
 assert.match(migration, /pg_advisory_xact_lock[\s\S]*bezgrow-license-device:/, "Concurrent claims for an unseen target Device ID must be serialized.")
 assert.match(migration, /insert into public\.license_events[\s\S]*insert into public\.admin_audit_logs[\s\S]*insert into public\.admin_license_mutations/, "History, audit, and idempotency must commit in the mutation transaction.")
 assert.match(migration, /device_status = 'replaced'/, "Old replacement devices must be invalidated.")
 assert.match(migration, /device_status = 'revoked'/, "Revocation must invalidate the registered device.")
+assert.match(route, /admin_reset_app_password/, "Password reset must use its dedicated atomic control-plane mutation.")
+assert.match(read("supabase/migrations/20260824010000_app_lock_password_reset.sql"), /APP_PASSWORD_RESET_AUTHORIZED[\s\S]*admin_license_mutations/, "Password resets must be audited and idempotent.")
 assert.match(deviceAuth, /refreshedLicenseKey/, "A valid stale signed key must receive the current authoritative key after renewal.")
 assert.match(checkin, /refreshedLicenseKey/, "Device check-in must deliver the current signed key.")
 assert.match(localLicense, /installRefreshedLicenseKey[\s\S]*verifyLicenseSignature[\s\S]*writeDesktopSecret/, "Desktop must verify and persist refreshed signed state locally.")
@@ -79,4 +82,4 @@ assert.match(platformClient, /isTauriRuntimeAsync[\s\S]*desktop_copy_text/, "Pac
 assert.match(desktopShell, /fn desktop_copy_text[\s\S]*CREATE_NO_WINDOW/, "The native clipboard must support macOS and hidden-console Windows copy.")
 assert.doesNotMatch(route + page + dialog, /BEZGROW_LICENSE_PRIVATE_KEY|SUPABASE_SERVICE_ROLE_KEY/, "Private signing or service-role material must not enter mutation UI or routes.")
 
-console.log("admin-license-mutations-ok actions=9 atomic=true idempotent=true desktop-refresh=true")
+console.log("admin-license-mutations-ok actions=10 atomic=true idempotent=true desktop-refresh=true")

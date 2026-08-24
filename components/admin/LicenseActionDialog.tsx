@@ -33,6 +33,7 @@ const actionTitles: Record<AdminLicenseAction, string> = {
   suspend: "Suspend licence",
   reactivate: "Reactivate licence",
   revoke: "Revoke licence",
+  reset_app_password: "Reset app-access password",
   notes: "Update licence notes",
 }
 
@@ -46,11 +47,18 @@ const actionButtons: Record<AdminLicenseAction, string> = {
   suspend: "Suspend Licence",
   reactivate: "Reactivate Licence",
   revoke: "Revoke Licence",
+  reset_app_password: "Authorize Password Reset",
   notes: "Save Notes",
 }
 
 function inputClassName(danger = false) {
   return `mt-2 h-11 w-full rounded-xl border bg-black/50 px-3 outline-none focus:border-cyan-400/50 ${danger ? "border-red-400/40" : "border-white/10"}`
+}
+
+function generateAppPassword() {
+  const alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789"
+  const bytes = crypto.getRandomValues(new Uint8Array(14))
+  return `Bg9-${Array.from(bytes, (byte) => alphabet[byte % alphabet.length]).join("")}`
 }
 
 export function LicenseActionDialog({ action, row, onClose, onConfirm }: LicenseActionDialogProps) {
@@ -70,6 +78,7 @@ export function LicenseActionDialog({ action, row, onClose, onConfirm }: License
   const [reason, setReason] = useState("")
   const [confirmation, setConfirmation] = useState("")
   const [internalNotes, setInternalNotes] = useState(String(row.internal_notes || ""))
+  const [appPassword, setAppPassword] = useState("")
   const [pending, setPending] = useState(false)
   const [error, setError] = useState("")
   const [idempotencyKey] = useState(() => crypto.randomUUID())
@@ -98,7 +107,8 @@ export function LicenseActionDialog({ action, row, onClose, onConfirm }: License
       new_device_id: action === "replace_device" || action === "transfer" ? newDeviceId : undefined,
       confirmed_device_id: action === "replace_device" || action === "transfer" ? confirmedDeviceId : undefined,
       confirmation: ["suspend", "reactivate", "revoke"].includes(action) ? confirmation : undefined,
-      reason: ["replace_device", "transfer", "suspend", "reactivate", "revoke"].includes(action) ? reason : undefined,
+      reason: ["replace_device", "transfer", "suspend", "reactivate", "revoke", "reset_app_password"].includes(action) ? reason : undefined,
+      app_password: ["replace_device", "transfer", "reset_app_password"].includes(action) ? appPassword : undefined,
       internal_notes: action === "notes" ? internalNotes : undefined,
     }
     const parsed = updateLicenseSchema.safeParse(candidate)
@@ -197,7 +207,20 @@ export function LicenseActionDialog({ action, row, onClose, onConfirm }: License
             </p>
             <label className="block text-sm font-bold text-neutral-300">Target Device ID<input autoFocus value={newDeviceId} onChange={(event) => setNewDeviceId(event.target.value)} className={inputClassName()} /></label>
             <label className="block text-sm font-bold text-neutral-300">Re-enter target Device ID<input value={confirmedDeviceId} onChange={(event) => setConfirmedDeviceId(event.target.value)} className={inputClassName()} /></label>
+            <label className="block text-sm font-bold text-neutral-300">Initial app-access password<input type="password" autoComplete="new-password" value={appPassword} onChange={(event) => setAppPassword(event.target.value)} className={inputClassName()} /></label>
+            <button type="button" onClick={() => setAppPassword(generateAppPassword())} className="h-11 rounded-xl border border-emerald-400/25 bg-emerald-400/10 px-4 text-sm font-black text-emerald-100">Generate strong password</button>
             <label className="block text-sm font-bold text-neutral-300">Reason<textarea value={reason} onChange={(event) => setReason(event.target.value)} className="mt-2 min-h-24 w-full rounded-xl border border-white/10 bg-black/50 p-3 outline-none focus:border-cyan-400/50" /></label>
+          </div>
+        )}
+
+        {action === "reset_app_password" && (
+          <div className="space-y-4">
+            <p className="rounded-2xl border border-emerald-400/20 bg-emerald-500/10 p-4 text-sm leading-6 text-emerald-100">
+              This creates a signed, device-bound reset authorization valid for 30 minutes. It never reveals the previous password and takes effect when this device next verifies the licence or imports the refreshed key.
+            </p>
+            <label className="block text-sm font-bold text-neutral-300">New app-access password<input autoFocus type="password" autoComplete="new-password" value={appPassword} onChange={(event) => setAppPassword(event.target.value)} className={inputClassName()} /></label>
+            <button type="button" onClick={() => setAppPassword(generateAppPassword())} className="h-11 rounded-xl border border-emerald-400/25 bg-emerald-400/10 px-4 text-sm font-black text-emerald-100">Generate strong password</button>
+            <label className="block text-sm font-bold text-neutral-300">Reset reason<textarea value={reason} onChange={(event) => setReason(event.target.value)} className="mt-2 min-h-20 w-full rounded-xl border border-white/10 bg-black/50 p-3 outline-none focus:border-emerald-400/50" /></label>
           </div>
         )}
 

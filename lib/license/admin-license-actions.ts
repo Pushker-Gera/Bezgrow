@@ -63,6 +63,7 @@ const terminalActions = new Set<AdminLicenseAction>([
   "transfer",
   "suspend",
   "reactivate",
+  "reset_app_password",
 ])
 
 export function licenseActionStateError(action: AdminLicenseAction, statusValue: unknown) {

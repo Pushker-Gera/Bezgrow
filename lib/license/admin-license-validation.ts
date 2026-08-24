@@ -1,4 +1,5 @@
 import { z } from "zod"
+import { APP_LOCK_MIN_PASSWORD_LENGTH, appPasswordPolicyError } from "@/lib/app-lock/shared"
 
 export const licenseFieldLabels = {
   customer_name: "Customer name",
@@ -23,6 +24,7 @@ export const licenseFieldLabels = {
   internal_notes: "Internal notes",
   status: "Status",
   idempotency_key: "Idempotency key",
+  app_password: "App-access password",
 } as const
 
 export const MODERN_LICENSE_FEATURES = [
@@ -47,6 +49,7 @@ export type AdminLicenseAction =
   | "suspend"
   | "reactivate"
   | "revoke"
+  | "reset_app_password"
   | "notes"
 
 export type LicenseFieldName = keyof typeof licenseFieldLabels
@@ -87,6 +90,7 @@ export const updateLicenseSchema = z
       "suspend",
       "reactivate",
       "revoke",
+      "reset_app_password",
       "replace_device",
       "transfer",
       "notes",
@@ -109,10 +113,15 @@ export const updateLicenseSchema = z
     confirmed_device_id: z.string().trim().min(8).max(180).optional(),
     confirmation: z.enum(["SUSPEND", "REACTIVATE", "REVOKE"]).optional(),
     reason: z.string().trim().max(500).optional(),
+    app_password: z.string().min(APP_LOCK_MIN_PASSWORD_LENGTH).max(256).optional(),
   })
   .superRefine((value, context) => {
     const required = (condition: boolean, path: string, message: string) => {
       if (!condition) context.addIssue({ code: "custom", path: [path], message })
+    }
+    if (value.app_password) {
+      const passwordError = appPasswordPolicyError(value.app_password)
+      if (passwordError) context.addIssue({ code: "custom", path: ["app_password"], message: passwordError })
     }
     if (value.action === "renew") {
       required(Boolean(value.renew_months), "renew_months", "Select a renewal duration.")
@@ -131,6 +140,7 @@ export const updateLicenseSchema = z
       required(Boolean(value.new_device_id), "new_device_id", "Enter the target Device ID.")
       required(value.confirmed_device_id === value.new_device_id, "confirmed_device_id", "Re-enter the exact target Device ID.")
       required(Boolean(value.reason?.trim()), "reason", "Enter a reason for this device change.")
+      required(Boolean(value.app_password), "app_password", "Enter or generate the initial app-access password for the target device.")
     }
     if (value.action === "suspend") {
       required(value.confirmation === "SUSPEND", "confirmation", "Type SUSPEND to confirm.")
@@ -141,6 +151,10 @@ export const updateLicenseSchema = z
     if (value.action === "revoke") {
       required(value.confirmation === "REVOKE", "confirmation", "Type REVOKE to confirm.")
       required(Boolean(value.reason?.trim()), "reason", "Enter a revocation reason.")
+    }
+    if (value.action === "reset_app_password") {
+      required(Boolean(value.app_password), "app_password", "Enter or generate the replacement app-access password.")
+      required(Boolean(value.reason?.trim()), "reason", "Enter a reason for the password reset.")
     }
   })
 
@@ -171,8 +185,13 @@ export const createLicenseSchema = z
     internal_notes: z.string().trim().max(2000, "Enter no more than 2,000 characters.").optional().default(""),
     status: z.enum(["draft", "active", "trial"], { error: "Select draft, active, or trial." }).default("active"),
     idempotency_key: optionalIdempotencyKey,
+    app_password: z.string().min(APP_LOCK_MIN_PASSWORD_LENGTH, `Use at least ${APP_LOCK_MIN_PASSWORD_LENGTH} characters.`).max(256),
   })
   .superRefine((value, context) => {
+    const passwordError = appPasswordPolicyError(value.app_password)
+    if (passwordError) {
+      context.addIssue({ code: "custom", path: ["app_password"], message: passwordError })
+    }
     if (value.issue_date && value.expiry_date && value.expiry_date <= value.issue_date) {
       context.addIssue({
         code: "custom",

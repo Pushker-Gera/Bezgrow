@@ -767,6 +767,19 @@ async function replaceRows(
   }
 }
 
+async function mergeRows(
+  db: SqlExecutor,
+  organizationId: string,
+  table: string,
+  rows: DataRow[],
+  mapper: (row: DataRow, organizationId: string, index: number) => DataRow
+) {
+  await ensureOrganization(db, organizationId)
+  for (let index = 0; index < rows.length; index += 1) {
+    await upsert(db, table, mapper(rows[index], organizationId, index))
+  }
+}
+
 class TableRepository {
   constructor(
     protected readonly table: string,
@@ -781,6 +794,15 @@ class TableRepository {
     }
 
     await service.transaction((tx) => replaceRows(tx, organizationId, this.table, rows, this.mapper))
+  }
+
+  async merge(organizationId: string, rows: DataRow[], db?: SqlExecutor) {
+    if (db) {
+      await mergeRows(db, organizationId, this.table, rows, this.mapper)
+      return
+    }
+
+    await service.transaction((tx) => mergeRows(tx, organizationId, this.table, rows, this.mapper))
   }
 
   async list(organizationId: string, db?: SqlExecutor) {
@@ -810,6 +832,44 @@ export class ProductRepository extends TableRepository {
         if (warehouse) row.warehouse_id = row.warehouse_id || (await ensureNamedReference(tx, "warehouses", organizationId, warehouse))
       }
       await replaceRows(tx, organizationId, this.table, rows, productRow)
+      for (const row of rows) {
+        const product = productRow(row, organizationId)
+        await upsert(tx, "inventory_items", {
+          id: `inventory:${organizationId}:${product.id}:${product.warehouse_id || "main"}:default`,
+          organization_id: organizationId,
+          product_id: product.id,
+          warehouse_id: product.warehouse_id,
+          batch_id: null,
+          quantity: product.stock,
+          reserved_quantity: product.reserved_stock,
+          available_quantity: Math.max(0, Number(product.stock || 0) - Number(product.reserved_stock || 0)),
+          reorder_level: product.min_stock,
+          sync_status: product.sync_status,
+          offline_local_id: product.offline_local_id,
+          server_id: product.server_id,
+          created_at: product.created_at,
+          updated_at: product.updated_at,
+          deleted_at: product.deleted_at,
+        })
+      }
+    }
+
+    if (db) return work(db)
+    await service.transaction(work)
+  }
+
+  async merge(organizationId: string, rows: DataRow[], db?: SqlExecutor) {
+    const work = async (tx: SqlExecutor) => {
+      await ensureOrganization(tx, organizationId)
+      for (const row of rows) {
+        const category = text(row, ["category"])
+        const unit = text(row, ["unit"], "pcs")
+        const warehouse = text(row, ["warehouse"], "Main Warehouse")
+        if (category && !row.category_id) row.category_id = await ensureNamedReference(tx, "categories", organizationId, category)
+        if (unit && !row.unit_id) row.unit_id = await ensureNamedReference(tx, "units", organizationId, unit)
+        if (warehouse && !row.warehouse_id) row.warehouse_id = await ensureNamedReference(tx, "warehouses", organizationId, warehouse)
+      }
+      await mergeRows(tx, organizationId, this.table, rows, productRow)
       for (const row of rows) {
         const product = productRow(row, organizationId)
         await upsert(tx, "inventory_items", {
@@ -1258,6 +1318,132 @@ export const repositories = {
   audit: new AuditRepository(),
 }
 
+export async function findNormalizedProductById(organizationId: string, productId: string) {
+  const db = await service.requireConnection("read")
+  const rows = await db.select<DataRow>(
+    "SELECT * FROM products WHERE organization_id = ? AND id = ? LIMIT 1",
+    [organizationId, productId]
+  )
+  return rows[0] || null
+}
+
+export async function findNormalizedProductBySku(organizationId: string, sku: string, excludingId = "") {
+  if (!sku.trim()) return null
+  const db = await service.requireConnection("read")
+  const rows = await db.select<DataRow>(
+    `SELECT * FROM products
+     WHERE organization_id = ? AND lower(trim(COALESCE(sku, ''))) = lower(trim(?))
+       AND deleted_at IS NULL AND (? = '' OR id <> ?)
+     LIMIT 1`,
+    [organizationId, sku, excludingId, excludingId]
+  )
+  return rows[0] || null
+}
+
+export async function saveNormalizedProductAtomic(
+  organizationId: string,
+  input: DataRow,
+  stockMovement?: DataRow | null
+) {
+  let saved: DataRow | null = null
+  await service.transaction(async (db) => {
+    await ensureOrganization(db, organizationId)
+    const next = { ...input }
+    const previousWarehouseId = text(next, ["warehouse_id"])
+    const category = text(next, ["category"])
+    const unit = text(next, ["unit"], "pcs")
+    const warehouse = text(next, ["warehouse"], "Main Warehouse")
+    next.category_id = category ? await ensureNamedReference(db, "categories", organizationId, category) : null
+    next.unit_id = unit ? await ensureNamedReference(db, "units", organizationId, unit) : null
+    next.warehouse_id = warehouse ? await ensureNamedReference(db, "warehouses", organizationId, warehouse) : null
+
+    const product = productRow(next, organizationId)
+    const inventoryId = `inventory:${organizationId}:${product.id}:${product.warehouse_id || "main"}:default`
+    await upsert(db, "products", product)
+    if (previousWarehouseId !== product.warehouse_id) {
+      await db.execute(
+        "DELETE FROM inventory_items WHERE id = ? AND organization_id = ? AND product_id = ? AND batch_id IS NULL",
+        [`inventory:${organizationId}:${product.id}:${previousWarehouseId || "main"}:default`, organizationId, product.id as SqlValue]
+      )
+    }
+    await upsert(db, "inventory_items", {
+      id: inventoryId,
+      organization_id: organizationId,
+      product_id: product.id,
+      warehouse_id: product.warehouse_id,
+      batch_id: null,
+      quantity: product.stock,
+      reserved_quantity: product.reserved_stock,
+      available_quantity: Math.max(0, Number(product.stock || 0) - Number(product.reserved_stock || 0)),
+      reorder_level: product.min_stock,
+      sync_status: product.sync_status,
+      offline_local_id: product.offline_local_id,
+      server_id: product.server_id,
+      created_at: product.created_at,
+      updated_at: product.updated_at,
+      deleted_at: product.deleted_at,
+    })
+    if (stockMovement) {
+      await upsert(db, "stock_movements", stockMovementRow({ warehouse_id: product.warehouse_id, ...stockMovement }, organizationId))
+    }
+    saved = product
+  })
+  if (!saved) throw new Error("Product save transaction returned no row.")
+  return saved
+}
+
+export async function findNormalizedCustomerById(organizationId: string, customerId: string) {
+  const db = await service.requireConnection("read")
+  const rows = await db.select<DataRow>(
+    "SELECT * FROM customers WHERE organization_id = ? AND id = ? LIMIT 1",
+    [organizationId, customerId]
+  )
+  return rows[0] || null
+}
+
+export async function saveNormalizedCustomerAtomic(organizationId: string, input: DataRow) {
+  const customer = customerRow(input, organizationId)
+  await service.transaction(async (db) => {
+    await ensureOrganization(db, organizationId)
+    await upsert(db, "customers", customer)
+  })
+  return customer
+}
+
+export async function archiveNormalizedProductAtomic(organizationId: string, productId: string, updatedAt: string) {
+  await service.transaction(async (db) => {
+    await db.execute(
+      `UPDATE products
+       SET deleted_at = ?, sync_status = 'pending_delete', updated_at = ?
+       WHERE organization_id = ? AND id = ?`,
+      [updatedAt, updatedAt, organizationId, productId]
+    )
+    await db.execute(
+      `UPDATE inventory_items
+       SET deleted_at = ?, sync_status = 'pending_delete', updated_at = ?
+       WHERE organization_id = ? AND product_id = ? AND deleted_at IS NULL`,
+      [updatedAt, updatedAt, organizationId, productId]
+    )
+  })
+}
+
+export async function updateNormalizedCustomerStatusAtomic(
+  organizationId: string,
+  customerId: string,
+  active: boolean,
+  archive: boolean,
+  updatedAt: string
+) {
+  await service.transaction(async (db) => {
+    await db.execute(
+      `UPDATE customers
+       SET is_active = ?, deleted_at = ?, sync_status = 'pending_update', updated_at = ?
+       WHERE organization_id = ? AND id = ?`,
+      [active ? 1 : 0, archive ? updatedAt : null, updatedAt, organizationId, customerId]
+    )
+  })
+}
+
 const documentRepositories: Partial<Record<OfflineCollection, TableRepository>> = {
   warehouses: new TableRepository("warehouses", warehouseRow),
   quotations: new TableRepository("quotations", quotationRow),
@@ -1293,11 +1479,14 @@ async function putNormalizedCollectionWithDb(db: SqlExecutor, organizationId: st
     for (const row of rows) await upsert(db, financialTable, { ...row, organization_id: organizationId })
     return
   }
-  if (collection === "products") await repositories.products.replaceSynced(organizationId, rows, db)
+  // Runtime collection snapshots are local working sets, not authoritative
+  // cloud replacements. Merge master rows so an unrelated mutation can never
+  // delete a product/customer referenced by immutable financial history.
+  if (collection === "products") await repositories.products.merge(organizationId, rows, db)
   // ProductRepository updates inventory_items atomically with products. The
   // compatibility collection must not run the same full replacement twice.
   if (collection === "inventory_items") return
-  if (collection === "customers") await repositories.customers.replaceSynced(organizationId, rows, db)
+  if (collection === "customers") await repositories.customers.merge(organizationId, rows, db)
   if (collection === "suppliers") await repositories.suppliers.replaceSynced(organizationId, rows, db)
   if (collection === "invoices") await repositories.invoices.replaceSynced(organizationId, rows, db)
   if (collection === "invoice_items") await repositories.invoices.replaceItems(organizationId, rows, db)
