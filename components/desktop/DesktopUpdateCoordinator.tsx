@@ -289,7 +289,7 @@ export default function DesktopUpdateCoordinator() {
       <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
         <div className="min-w-0">
           <p className="text-xs font-black uppercase tracking-[0.16em] text-cyan-200">Verified Bezgrow update available</p>
-          <h2 className="mt-1 text-lg font-black">Version {latestVersion}</h2>
+          <h2 className="mt-1 text-lg font-black">Bezgrow {latestVersion} is available</h2>
           <p className="mt-1 text-sm text-neutral-300">
             Current {currentVersion} · {platformLabel()}{size ? ` · ${size}` : ""} · Restart required
           </p>
@@ -303,8 +303,8 @@ export default function DesktopUpdateCoordinator() {
           {installState === "downloading" && <progress className="mt-2 h-2 w-full" max={100} value={progress} aria-label="Update download progress" />}
         </div>
         <div className="grid shrink-0 grid-cols-2 gap-2 sm:w-72">
-          <button type="button" disabled={busy} onClick={() => void installUpdate(false)} className="min-h-11 rounded-lg bg-cyan-300 px-3 text-sm font-black text-black disabled:opacity-50">Update now</button>
-          <button type="button" disabled={busy} onClick={() => { const next = remindLater(latestVersion); setDecision(next); setMessage("We’ll remind you again in 6 hours.") }} className="min-h-11 rounded-lg border border-white/15 px-3 text-sm font-bold disabled:opacity-50">Remind me later</button>
+          <button type="button" disabled={busy} onClick={() => void installUpdate(false)} className="min-h-11 rounded-lg bg-cyan-300 px-3 text-sm font-black text-black disabled:opacity-50">Update Now</button>
+          <button type="button" disabled={busy} onClick={() => { const next = remindLater(latestVersion); setDecision(next); setMessage("We’ll remind you again in 6 hours.") }} className="min-h-11 rounded-lg border border-white/15 px-3 text-sm font-bold disabled:opacity-50">Later</button>
           <select aria-label="Schedule update" disabled={busy} value={scheduleHours} onChange={(event) => setScheduleHours(event.target.value)} className="min-h-11 rounded-lg border border-white/15 bg-neutral-900 px-2 text-sm">
             <option value="2">In 2 hours</option><option value="12">In 12 hours</option><option value="24">Tomorrow</option><option value="48">In 48 hours</option>
           </select>

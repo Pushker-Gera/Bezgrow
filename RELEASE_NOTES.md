@@ -1,4 +1,4 @@
-# Bezgrow 0.3.0
+# Bezgrow 0.2.3
 
 Windows local-database reliability, App Lock, and mutation UX hardening.
 
@@ -11,7 +11,7 @@ Windows local-database reliability, App Lock, and mutation UX hardening.
 - Removed whole-list reloads after product/customer creation and editing; the affected row now appears immediately without route refresh, screen flash, scroll reset, or a browser-like loading line.
 - Expanded Windows path/runtime, local-only CRUD, SQLite integrity, closed-year mutation, licence/App-Lock, admin reset, logout placement, no-cloud-write, pagination, and large-data regression coverage.
 
-Public installer and updater metadata remains pinned to the genuine 0.2.1 artifacts until matching 0.3.0 Windows and macOS artifacts complete the release verification and publication gates.
+Public installer and updater metadata remains pinned to the genuine 0.2.2 artifacts until matching 0.2.3 Windows and macOS artifacts complete the release verification and publication gates.
 
 ## Previous 0.2.2 notes
 

@@ -14,7 +14,7 @@ import {
   remindLater,
   scheduleUpdate,
 } from "../lib/desktop/update-state"
-import { compareVersions, releaseForPlatform, type DesktopReleaseManifest } from "../lib/app-updates"
+import { compareVersions, isDesktopUpdateAvailable, releaseForPlatform, type DesktopReleaseManifest } from "../lib/app-updates"
 import { verifyUpdaterArtifact } from "../lib/releases/updater-signature"
 
 const storage = new Map<string, string>()
@@ -40,6 +40,61 @@ assert.equal(autoUpdateDue(scheduled, firstSeen + 60_000), true)
 assert.equal(compareVersions("0.1.14", "0.1.13"), 1)
 assert.equal(compareVersions("0.1.15", "0.1.14"), 1)
 assert.equal(compareVersions("1.0.0-beta.1", "1.0.0"), -1)
+
+const installedRelease = "0.2.2"
+const availableRelease = "0.2.3"
+const exactUpgradeManifest: DesktopReleaseManifest = {
+  version: availableRelease,
+  releaseNotes: ["Windows local-database reliability, App Lock, and mutation UX hardening."],
+  mac: {
+    version: availableRelease,
+    downloadUrl: `https://github.com/Pushker-Gera/Bezgrow/releases/download/v${availableRelease}-manual/Bezgrow-${availableRelease}-arm64.dmg`,
+    filename: `Bezgrow-${availableRelease}-arm64.dmg`,
+    size: 1,
+    sha256: "a".repeat(64),
+    platform: "macos",
+    architecture: "arm64",
+    publicationStatus: "published",
+    trustState: "unsigned-manual-install",
+    manualInstallAllowed: true,
+    metadataValid: true,
+    checksumVerified: true,
+  },
+  macX64: {
+    version: availableRelease,
+    downloadUrl: `https://github.com/Pushker-Gera/Bezgrow/releases/download/v${availableRelease}-manual/Bezgrow-${availableRelease}-x64.dmg`,
+    filename: `Bezgrow-${availableRelease}-x64.dmg`,
+    size: 1,
+    sha256: "c".repeat(64),
+    platform: "macos",
+    architecture: "x64",
+    publicationStatus: "published",
+    trustState: "unsigned-manual-install",
+    manualInstallAllowed: true,
+    metadataValid: true,
+    checksumVerified: true,
+  },
+  windows: {
+    version: availableRelease,
+    downloadUrl: `https://github.com/Pushker-Gera/Bezgrow/releases/download/v${availableRelease}-manual/Bezgrow-Setup-${availableRelease}-x64.exe`,
+    filename: `Bezgrow-Setup-${availableRelease}-x64.exe`,
+    size: 1,
+    sha256: "b".repeat(64),
+    platform: "windows",
+    architecture: "x86_64",
+    publicationStatus: "published",
+    trustState: "unsigned-manual-install",
+    manualInstallAllowed: true,
+    metadataValid: true,
+    checksumVerified: true,
+  },
+}
+assert.equal(compareVersions(availableRelease, installedRelease), 1, "0.2.3 must supersede installed 0.2.2")
+assert.equal(isDesktopUpdateAvailable(exactUpgradeManifest, installedRelease), true, "0.2.2 must detect the published 0.2.3 manual installer")
+assert.equal(isDesktopUpdateAvailable(exactUpgradeManifest, availableRelease), false, "0.2.3 must not update to itself")
+const exactLaterDecision = remindLater(availableRelease, firstSeen)
+assert.equal(exactLaterDecision.version, availableRelease)
+assert.ok(exactLaterDecision.nextPromptAt > firstSeen, "Later must defer without dismissing 0.2.3 permanently")
 
 const platformManifest: DesktopReleaseManifest = {
   version: "0.1.14",
@@ -110,7 +165,7 @@ async function run() {
     /SHA-256 mismatch/,
   )
 
-  console.log("updater-system-ok safe-delay=48h platform-match=strict launch-confirmation=valid sha256=valid minisign-ed25519=valid tamper-rejected=true")
+  console.log("updater-system-ok installed=0.2.2 available=0.2.3 decision=update-available later=deferred self-update=false safe-delay=48h platform-match=strict launch-confirmation=valid sha256=valid minisign-ed25519=valid tamper-rejected=true")
 }
 
 void run()
