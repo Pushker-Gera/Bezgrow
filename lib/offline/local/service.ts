@@ -37,9 +37,14 @@ type StartupStage = {
 }
 
 type DesktopDatabaseDiagnostics = {
+  applicationVersion: string
   appConfigDir: string
   appDataDir: string
   databasePath: string
+  deviceIdSource: string
+  licenseStateSource: string
+  legacyMigrationOccurred: boolean
+  legacyMigrationSource: string | null
   parentExists: boolean
   parentCreated: boolean
   parentWritable: boolean

@@ -163,6 +163,9 @@ function assertPayload(value: unknown): LicensePayload {
 
   if (payload.schema_version !== LICENSE_SCHEMA_VERSION) throw new Error("Unsupported license version.")
   if (!Array.isArray(payload.allowed_features)) throw new Error("License features are invalid.")
+  if (payload.app_lock !== undefined && payload.app_lock !== null && !isAppLockProvisioning(payload.app_lock)) {
+    throw new Error("License app-access credential is invalid.")
+  }
 
   return {
     schema_version: LICENSE_SCHEMA_VERSION,
@@ -199,7 +202,11 @@ function assertPayload(value: unknown): LicensePayload {
     signature_algorithm: payload.signature_algorithm ? String(payload.signature_algorithm) : undefined,
     issuer_key_id: payload.issuer_key_id ? String(payload.issuer_key_id) : undefined,
     issuer_public_key: payload.issuer_public_key ? String(payload.issuer_public_key) : undefined,
-    app_lock: isAppLockProvisioning(payload.app_lock) ? payload.app_lock : null,
+    // Optional signed fields must remain absent when they were absent from the
+    // original payload. Adding `app_lock: null` here invalidated every genuine
+    // licence issued before App Lock was introduced because signature
+    // verification canonicalizes this parsed object.
+    ...(payload.app_lock !== undefined ? { app_lock: payload.app_lock } : {}),
     notes: payload.notes ? String(payload.notes) : null,
   }
 }

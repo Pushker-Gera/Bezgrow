@@ -3,6 +3,7 @@
 import type { FormEvent, ReactNode } from "react"
 import { useEffect, useRef, useState } from "react"
 import { BezgrowLogoMark } from "@/components/brand/BezgrowLogoMark"
+import PlatformAdminLauncher from "@/components/desktop/PlatformAdminLauncher"
 import {
   APP_LOCK_CREDENTIAL_CHANGED_EVENT,
   APP_LOCK_EVENT,
@@ -241,6 +242,7 @@ export function AppLockGate({ businessName, children }: { businessName: string; 
             </button>
           </form>
         )}
+        <PlatformAdminLauncher className="mt-5" />
       </section>
     </main>
   )

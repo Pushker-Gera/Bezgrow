@@ -5,6 +5,7 @@ const read = (path) => readFileSync(new URL(`../${path}`, import.meta.url), "utf
 
 const rust = read("src-tauri/src/lib.rs")
 const launcher = read("components/desktop/PlatformAdminLauncher.tsx")
+const appLockGate = read("components/security/AppLockGate.tsx")
 const login = read("app/login/page.tsx")
 const adminLayout = read("app/admin/layout.tsx")
 const proxy = read("proxy.ts")
@@ -31,11 +32,12 @@ assert.match(mainCapability, /allow-open-platform-admin/, "Only the main ERP win
 assert.match(adminCapability, /"windows": \["platform-admin"\][\s\S]*allow-desktop-platform-admin-proof/, "The admin window must receive only its narrow proof capability.")
 assert.doesNotMatch(adminCapability, /desktop-execute|desktop-select|read-secret|store-secret/, "The admin window must not receive SQLite or general secret-store commands.")
 
-assert.match(launcher, /getExplicitControlPlaneActionAuth/, "Button eligibility must start from the existing licensed Device ID.")
-assert.match(launcher, /authorizeThisPlatformAdminDevice/, "The Platform Admin button must be server-authorized before rendering and again before launch.")
+assert.match(launcher, /verifyThisPlatformAdminDevice/, "The Platform Admin button must be server-authorized before rendering and again before launch.")
+assert.doesNotMatch(launcher, /getExplicitControlPlaneActionAuth|localLicenseSnapshot/, "Platform Admin eligibility must not depend on ERP licence state.")
 assert.match(launcher, /if \(!desktop \|\| !authorized\) return null/, "Unauthorized devices must not render the button.")
 assert.match(launcher, /openPlatformAdmin\(\)/, "The launcher must open the in-app native window without a browser URL.")
 assert.doesNotMatch(launcher, /NEXT_PUBLIC_ADMIN_APP_URL|window\.open|openExternalUrl/, "The launcher must not target an external browser.")
+assert.match(appLockGate, /<PlatformAdminLauncher className="mt-5" \/>/, "An authorized Platform Admin device must retain its login entry on the App Lock/startup screen.")
 
 assert.match(login, /verifyThisPlatformAdminDevice/, "Admin login must verify the native device before accepting credentials.")
 assert.match(login, /supabase\.auth\.signInWithPassword/, "Admin account authentication must remain server-backed.")
@@ -55,6 +57,7 @@ assert.match(desktopProxy, /issueDesktopAdminPageSession/, "A successful native 
 assert.match(runtimeAdminSession, /createHmac[\s\S]*BEZGROW_RUNTIME_TOKEN[\s\S]*timingSafeEqual/, "Normal browsers must not be able to forge the per-launch local admin page session.")
 assert.match(adminLayout, /\/api\/platform-admin\/desktop-session[\s\S]*supabase\.auth\.signOut/, "Admin logout must clear both the local page grant and account session.")
 assert.match(client, /desktop_platform_admin_proof/, "Admin fetches must obtain proof from Tauri rather than frontend state.")
+assert.match(client, /verifyThisPlatformAdminDevice[\s\S]*DEVICE_STATUS_PATH/, "Admin entry eligibility must use the already-enrolled native key and registered-device authorization only.")
 assert.match(client, /Bearer \$\{accessToken\}/, "Admin fetches must also carry the authenticated account token.")
 assert.match(client, /credentials:\s*"same-origin"/, "The verified desktop response must install its HttpOnly local page grant.")
 assert.match(authorization, /verifyPlatformAdminDeviceRequest/, "Server APIs must verify the exact registered device.")

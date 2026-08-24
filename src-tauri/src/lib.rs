@@ -1168,14 +1168,25 @@ fn keychain_entry(key: &str) -> Result<keyring::Entry, String> {
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct DesktopDatabaseDiagnostics {
+    application_version: String,
     app_config_dir: String,
     app_data_dir: String,
     database_path: String,
+    device_id_source: String,
+    license_state_source: String,
+    legacy_migration_occurred: bool,
+    legacy_migration_source: Option<String>,
     parent_exists: bool,
     parent_created: bool,
     parent_writable: bool,
     database_exists: bool,
     database_bytes: u64,
+}
+
+#[derive(Default)]
+struct ManagedDataPreparation {
+    legacy_migration_occurred: bool,
+    legacy_migration_source: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -1350,7 +1361,140 @@ fn local_database_path<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> Result<P
     }
 }
 
-fn prepare_managed_data<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> Result<(), String> {
+#[cfg(any(target_os = "windows", test))]
+async fn verify_legacy_bezgrow_database(database_path: &Path) -> Result<(), String> {
+    if !database_path.is_file() {
+        return Err("The previous Bezgrow database file is missing.".to_string());
+    }
+    let options = SqliteConnectOptions::new()
+        .filename(database_path)
+        .create_if_missing(false)
+        .read_only(true)
+        .busy_timeout(Duration::from_secs(10));
+    let mut connection = SqliteConnection::connect_with(&options)
+        .await
+        .map_err(|error| format!("Unable to open the previous Bezgrow database: {error}"))?;
+    let quick = sqlx::query_scalar::<_, String>("PRAGMA quick_check")
+        .fetch_one(&mut connection)
+        .await
+        .map_err(|error| format!("Unable to verify the previous Bezgrow database: {error}"))?;
+    if !quick.eq_ignore_ascii_case("ok") {
+        return Err(format!(
+            "The previous Bezgrow database failed its integrity check: {quick}"
+        ));
+    }
+    let tables: HashSet<String> =
+        sqlx::query_scalar::<_, String>("SELECT name FROM sqlite_master WHERE type = 'table'")
+            .fetch_all(&mut connection)
+            .await
+            .map_err(|error| format!("Unable to inspect the previous Bezgrow schema: {error}"))?
+            .into_iter()
+            .collect();
+    let has_business_identity = tables.contains("organizations")
+        || tables.contains("local_organizations")
+        || tables.contains("local_workspace");
+    let has_bezgrow_state = [
+        "schema_migrations",
+        "license_state",
+        "products",
+        "local_products",
+        "sales_invoices",
+        "local_invoices",
+    ]
+    .iter()
+    .filter(|table| tables.contains(**table))
+    .count()
+        >= 2;
+    if !has_business_identity || !has_bezgrow_state {
+        return Err(
+            "The previous database does not contain a recognized Bezgrow schema; it was not migrated."
+                .to_string(),
+        );
+    }
+    connection
+        .close()
+        .await
+        .map_err(|error| format!("Unable to finish inspecting the previous database: {error}"))?;
+    Ok(())
+}
+
+#[cfg(any(target_os = "windows", test))]
+fn sqlite_sidecar_path(database_path: &Path, suffix: &str) -> PathBuf {
+    PathBuf::from(format!("{}{suffix}", database_path.to_string_lossy()))
+}
+
+#[cfg(any(target_os = "windows", test))]
+async fn migrate_legacy_database_missing(
+    legacy_database: &Path,
+    destination_database: &Path,
+) -> Result<bool, String> {
+    if destination_database.exists() || !legacy_database.is_file() {
+        return Ok(false);
+    }
+    verify_legacy_bezgrow_database(legacy_database).await?;
+    let parent = destination_database
+        .parent()
+        .ok_or_else(|| "The canonical Bezgrow database folder is invalid.".to_string())?;
+    fs::create_dir_all(parent)
+        .map_err(|error| format!("Unable to create the canonical database folder: {error}"))?;
+    let temporary = destination_database.with_extension(format!(
+        "migration-{}-{}.tmp",
+        std::process::id(),
+        unix_timestamp()
+    ));
+    fs::copy(legacy_database, &temporary)
+        .map_err(|error| format!("Unable to stage the previous Bezgrow database: {error}"))?;
+
+    let legacy_wal = sqlite_sidecar_path(legacy_database, "-wal");
+    let temporary_wal = sqlite_sidecar_path(&temporary, "-wal");
+    if legacy_wal.is_file() {
+        if let Err(error) = fs::copy(&legacy_wal, &temporary_wal) {
+            let _ = fs::remove_file(&temporary);
+            return Err(format!("Unable to stage the previous SQLite WAL: {error}"));
+        }
+    }
+    if temporary_wal.is_file() {
+        let options = SqliteConnectOptions::new()
+            .filename(&temporary)
+            .create_if_missing(false)
+            .read_only(false)
+            .busy_timeout(Duration::from_secs(10));
+        let mut staged = SqliteConnection::connect_with(&options)
+            .await
+            .map_err(|error| format!("Unable to open the staged Bezgrow database: {error}"))?;
+        sqlx::query("PRAGMA wal_checkpoint(FULL)")
+            .execute(&mut staged)
+            .await
+            .map_err(|error| format!("Unable to consolidate the staged SQLite WAL: {error}"))?;
+        sqlx::query("PRAGMA journal_mode = DELETE")
+            .execute(&mut staged)
+            .await
+            .map_err(|error| format!("Unable to finalize the staged SQLite snapshot: {error}"))?;
+        staged
+            .close()
+            .await
+            .map_err(|error| format!("Unable to close the staged Bezgrow database: {error}"))?;
+        let _ = fs::remove_file(&temporary_wal);
+        let _ = fs::remove_file(sqlite_sidecar_path(&temporary, "-shm"));
+    }
+    if let Err(error) = verify_legacy_bezgrow_database(&temporary).await {
+        let _ = fs::remove_file(&temporary);
+        let _ = fs::remove_file(&temporary_wal);
+        let _ = fs::remove_file(sqlite_sidecar_path(&temporary, "-shm"));
+        return Err(error);
+    }
+
+    fs::rename(&temporary, destination_database)
+        .map_err(|error| format!("Unable to activate the migrated Bezgrow database: {error}"))?;
+    let _ = fs::remove_file(sqlite_sidecar_path(&temporary, "-shm"));
+    Ok(true)
+}
+
+fn prepare_managed_data<R: tauri::Runtime>(
+    app: &tauri::AppHandle<R>,
+) -> Result<ManagedDataPreparation, String> {
+    #[allow(unused_mut)]
+    let mut preparation = ManagedDataPreparation::default();
     let root = managed_app_data_root(app)?;
     for directory in [
         "Database",
@@ -1374,7 +1518,43 @@ fn prepare_managed_data<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> Result<
         if let Some(roaming_app_data) = std::env::var_os("APPDATA") {
             let previous_root = PathBuf::from(roaming_app_data).join(WINDOWS_APP_DATA_DIR);
             if previous_root != root && previous_root.is_dir() {
-                copy_directory_missing(&previous_root, &root)?;
+                let previous_database = [
+                    previous_root.join("Database").join(LOCAL_DATABASE_NAME),
+                    previous_root.join(LOCAL_DATABASE_NAME),
+                ]
+                .into_iter()
+                .find(|path| path.is_file());
+                let previous_device = previous_root
+                    .join(INSTALLATION_DIRECTORY)
+                    .join(DEVICE_ID_FILENAME);
+                let database_recognized = previous_database
+                    .as_ref()
+                    .map(|path| {
+                        tauri::async_runtime::block_on(verify_legacy_bezgrow_database(path)).is_ok()
+                    })
+                    .unwrap_or(false);
+                let device_recognized = read_persisted_device_id(&previous_device)?.is_some();
+                if database_recognized || device_recognized {
+                    if let Some(previous_database) =
+                        previous_database.filter(|_| database_recognized)
+                    {
+                        let destination_database = root.join("Database").join(LOCAL_DATABASE_NAME);
+                        if tauri::async_runtime::block_on(migrate_legacy_database_missing(
+                            &previous_database,
+                            &destination_database,
+                        ))? {
+                            preparation.legacy_migration_occurred = true;
+                            preparation.legacy_migration_source =
+                                Some(previous_root.to_string_lossy().to_string());
+                        }
+                    }
+                    let copied = copy_directory_missing_without_sqlite(&previous_root, &root)?;
+                    if copied > 0 {
+                        preparation.legacy_migration_occurred = true;
+                        preparation.legacy_migration_source =
+                            Some(previous_root.to_string_lossy().to_string());
+                    }
+                }
             }
         }
         let legacy_config = app.path().app_config_dir().map_err(|error| {
@@ -1386,39 +1566,30 @@ fn prepare_managed_data<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> Result<
         let destination_database = root.join("Database").join(LOCAL_DATABASE_NAME);
         let legacy_database = legacy_config.join(LOCAL_DATABASE_NAME);
 
-        if !destination_database.exists() && legacy_database.is_file() {
-            for suffix in ["-wal", "-shm"] {
-                let source =
-                    PathBuf::from(format!("{}{suffix}", legacy_database.to_string_lossy()));
-                let destination = PathBuf::from(format!(
-                    "{}{suffix}",
-                    destination_database.to_string_lossy()
-                ));
-                if source.is_file() {
-                    fs::copy(&source, &destination).map_err(|error| {
-                        format!("Unable to migrate the previous SQLite {suffix} file: {error}")
-                    })?;
-                }
-            }
-            let temporary = destination_database.with_extension("migration.tmp");
-            fs::copy(&legacy_database, &temporary).map_err(|error| {
-                format!("Unable to migrate the previous Bezgrow database: {error}")
-            })?;
-            fs::rename(&temporary, &destination_database).map_err(|error| {
-                format!("Unable to activate the migrated Bezgrow database: {error}")
-            })?;
+        if tauri::async_runtime::block_on(migrate_legacy_database_missing(
+            &legacy_database,
+            &destination_database,
+        ))? {
+            preparation.legacy_migration_occurred = true;
+            preparation.legacy_migration_source = Some(legacy_config.to_string_lossy().to_string());
         }
 
         for directory in ["business-assets", "backups"] {
             let source = legacy_data.join(directory);
             let destination = root.join(directory);
             if source.is_dir() {
-                copy_directory_missing(&source, &destination)?;
+                let copied = copy_directory_missing(&source, &destination)?;
+                if copied > 0 {
+                    preparation.legacy_migration_occurred = true;
+                    preparation
+                        .legacy_migration_source
+                        .get_or_insert_with(|| legacy_data.to_string_lossy().to_string());
+                }
             }
         }
     }
 
-    Ok(())
+    Ok(preparation)
 }
 
 fn sha256_file(path: &PathBuf) -> Result<String, String> {
@@ -2573,11 +2744,12 @@ fn copy_directory(source: &Path, destination: &Path) -> Result<(), String> {
     Ok(())
 }
 
-#[cfg(any(target_os = "windows", test))]
-fn copy_directory_missing(source: &Path, destination: &Path) -> Result<(), String> {
+#[cfg(target_os = "windows")]
+fn copy_directory_missing(source: &Path, destination: &Path) -> Result<usize, String> {
     if !source.exists() {
-        return Ok(());
+        return Ok(0);
     }
+    let mut copied = 0_usize;
     fs::create_dir_all(destination)
         .map_err(|error| format!("Unable to create a migrated data folder: {error}"))?;
     for entry in fs::read_dir(source)
@@ -2588,13 +2760,53 @@ fn copy_directory_missing(source: &Path, destination: &Path) -> Result<(), Strin
         let source_path = entry.path();
         let destination_path = destination.join(entry.file_name());
         if source_path.is_dir() {
-            copy_directory_missing(&source_path, &destination_path)?;
+            copied += copy_directory_missing(&source_path, &destination_path)?;
         } else if source_path.is_file() && !destination_path.exists() {
             fs::copy(&source_path, &destination_path)
                 .map_err(|error| format!("Unable to migrate previous Bezgrow data: {error}"))?;
+            copied += 1;
         }
     }
-    Ok(())
+    Ok(copied)
+}
+
+#[cfg(any(target_os = "windows", test))]
+fn copy_directory_missing_without_sqlite(
+    source: &Path,
+    destination: &Path,
+) -> Result<usize, String> {
+    if !source.exists() {
+        return Ok(0);
+    }
+    let mut copied = 0_usize;
+    fs::create_dir_all(destination)
+        .map_err(|error| format!("Unable to create a migrated data folder: {error}"))?;
+    for entry in fs::read_dir(source)
+        .map_err(|error| format!("Unable to read a previous Bezgrow data folder: {error}"))?
+    {
+        let entry =
+            entry.map_err(|error| format!("Unable to inspect previous Bezgrow data: {error}"))?;
+        let source_path = entry.path();
+        let destination_path = destination.join(entry.file_name());
+        if source_path.is_dir() {
+            copied += copy_directory_missing_without_sqlite(&source_path, &destination_path)?;
+        } else if source_path.is_file() {
+            let filename = entry.file_name();
+            let filename = filename.to_string_lossy();
+            if filename == LOCAL_DATABASE_NAME
+                || filename == format!("{LOCAL_DATABASE_NAME}-wal")
+                || filename == format!("{LOCAL_DATABASE_NAME}-shm")
+            {
+                continue;
+            }
+            if !destination_path.exists() {
+                fs::copy(&source_path, &destination_path)
+                    .map_err(|error| format!("Unable to migrate previous Bezgrow data: {error}"))?;
+                copied += 1;
+            }
+        }
+    }
+    Ok(copied)
 }
 
 fn quoted_identifier(value: &str) -> String {
@@ -3159,11 +3371,32 @@ fn desktop_database_diagnostics<R: tauri::Runtime>(
     let _ = fs::remove_file(&probe_path);
 
     let metadata = fs::metadata(&database_path).ok();
+    let device_id_path =
+        managed_data_directory(&app, INSTALLATION_DIRECTORY)?.join(DEVICE_ID_FILENAME);
+    let migration = app.try_state::<ManagedDataPreparation>();
 
     Ok(DesktopDatabaseDiagnostics {
+        application_version: app.package_info().version.to_string(),
         app_config_dir: app_config_dir.to_string_lossy().to_string(),
         app_data_dir: app_data_dir.to_string_lossy().to_string(),
         database_path: database_path.to_string_lossy().to_string(),
+        device_id_source: if device_id_path.is_file() {
+            "canonical-installation-file".to_string()
+        } else {
+            "not-yet-persisted".to_string()
+        },
+        license_state_source: if metadata.as_ref().map(|value| value.len()).unwrap_or(0) > 0 {
+            "sqlite:license_state".to_string()
+        } else {
+            "not-yet-initialized".to_string()
+        },
+        legacy_migration_occurred: migration
+            .as_ref()
+            .map(|value| value.legacy_migration_occurred)
+            .unwrap_or(false),
+        legacy_migration_source: migration
+            .as_ref()
+            .and_then(|value| value.legacy_migration_source.clone()),
         parent_exists: app_config_dir.exists(),
         parent_created: !parent_existed && app_config_dir.exists(),
         parent_writable,
@@ -4034,9 +4267,26 @@ mod database_transaction_tests {
         fs::create_dir_all(&managed).expect("create managed fixture");
         fs::write(legacy.join("logo.png"), b"legacy").expect("write legacy fixture");
         fs::write(legacy.join("backup.db"), b"backup").expect("write legacy backup");
+        fs::write(legacy.join(LOCAL_DATABASE_NAME), b"sqlite-main")
+            .expect("write legacy SQLite fixture");
+        fs::write(
+            legacy.join(format!("{LOCAL_DATABASE_NAME}-wal")),
+            b"sqlite-wal",
+        )
+        .expect("write legacy SQLite WAL fixture");
         fs::write(managed.join("logo.png"), b"current").expect("write current fixture");
 
-        copy_directory_missing(&legacy, &managed).expect("migrate only missing files");
+        assert_eq!(
+            copy_directory_missing_without_sqlite(&legacy, &managed)
+                .expect("migrate only missing non-SQLite files"),
+            1
+        );
+        assert_eq!(
+            copy_directory_missing_without_sqlite(&legacy, &managed)
+                .expect("repeat idempotent migration"),
+            0,
+            "a repeated upgrade must not copy or duplicate files"
+        );
 
         assert_eq!(
             fs::read(managed.join("logo.png")).expect("read current fixture"),
@@ -4047,6 +4297,116 @@ mod database_transaction_tests {
             fs::read(managed.join("backup.db")).expect("read migrated backup"),
             b"backup"
         );
+        assert!(
+            !managed.join(LOCAL_DATABASE_NAME).exists()
+                && !managed.join(format!("{LOCAL_DATABASE_NAME}-wal")).exists(),
+            "generic directory recovery must never activate SQLite or its sidecars"
+        );
+        let _ = fs::remove_dir_all(fixture_root);
+    }
+
+    #[test]
+    fn legacy_sqlite_migration_is_verified_atomic_and_idempotent() {
+        let fixture_root = std::env::temp_dir().join(format!(
+            "bezgrow-sqlite-upgrade-{}-{}",
+            std::process::id(),
+            unix_timestamp()
+        ));
+        fs::create_dir_all(&fixture_root).expect("create SQLite upgrade fixture");
+        let legacy = fixture_root.join("legacy.db");
+        let canonical = fixture_root.join("canonical").join(LOCAL_DATABASE_NAME);
+
+        tauri::async_runtime::block_on(async {
+            let options = SqliteConnectOptions::new()
+                .filename(&legacy)
+                .create_if_missing(true)
+                .journal_mode(SqliteJournalMode::Wal);
+            let mut connection = SqliteConnection::connect_with(&options)
+                .await
+                .expect("create legacy Bezgrow database");
+            sqlx::query("PRAGMA wal_autocheckpoint = 0")
+                .execute(&mut connection)
+                .await
+                .expect("retain the legacy WAL fixture");
+            for statement in [
+                "CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, name TEXT NOT NULL)",
+                "CREATE TABLE organizations (id TEXT PRIMARY KEY, name TEXT NOT NULL)",
+                "CREATE TABLE license_state (id TEXT PRIMARY KEY, organization_id TEXT NOT NULL, license_key TEXT NOT NULL)",
+                "CREATE TABLE products (id TEXT PRIMARY KEY, organization_id TEXT NOT NULL, name TEXT NOT NULL)",
+                "INSERT INTO schema_migrations VALUES (17, 'upgrade-fixture')",
+                "INSERT INTO organizations VALUES ('business-a', 'Preserved Business')",
+                "INSERT INTO license_state VALUES ('license-a', 'business-a', 'signed-license-fixture')",
+                "INSERT INTO products VALUES ('product-a', 'business-a', 'Preserved Product')",
+            ] {
+                sqlx::query(statement)
+                    .execute(&mut connection)
+                    .await
+                    .expect("build recognized legacy schema");
+            }
+            assert!(migrate_legacy_database_missing(&legacy, &canonical)
+                .await
+                .expect("migrate verified legacy database"));
+            connection.close().await.expect("close legacy database");
+            assert!(!migrate_legacy_database_missing(&legacy, &canonical)
+                .await
+                .expect("repeat legacy migration"));
+            assert!(
+                !sqlite_sidecar_path(&canonical, "-wal").exists(),
+                "the activated snapshot must be a single atomic SQLite file"
+            );
+
+            let options = SqliteConnectOptions::new()
+                .filename(&canonical)
+                .create_if_missing(false)
+                .read_only(true);
+            let mut migrated = SqliteConnection::connect_with(&options)
+                .await
+                .expect("open migrated database");
+            let product_count: i64 =
+                sqlx::query_scalar("SELECT COUNT(*) FROM products WHERE id = 'product-a'")
+                    .fetch_one(&mut migrated)
+                    .await
+                    .expect("count migrated product");
+            let license_count: i64 =
+                sqlx::query_scalar("SELECT COUNT(*) FROM license_state WHERE id = 'license-a'")
+                    .fetch_one(&mut migrated)
+                    .await
+                    .expect("count migrated licence");
+            assert_eq!(product_count, 1);
+            assert_eq!(license_count, 1);
+            migrated.close().await.expect("close migrated database");
+        });
+
+        let _ = fs::remove_dir_all(fixture_root);
+    }
+
+    #[test]
+    fn unrelated_sqlite_is_rejected_as_a_legacy_bezgrow_database() {
+        let fixture_root = std::env::temp_dir().join(format!(
+            "bezgrow-unrelated-sqlite-{}-{}",
+            std::process::id(),
+            unix_timestamp()
+        ));
+        fs::create_dir_all(&fixture_root).expect("create unrelated SQLite fixture");
+        let unrelated = fixture_root.join("unrelated.db");
+        let canonical = fixture_root.join("canonical.db");
+        tauri::async_runtime::block_on(async {
+            let options = SqliteConnectOptions::new()
+                .filename(&unrelated)
+                .create_if_missing(true);
+            let mut connection = SqliteConnection::connect_with(&options)
+                .await
+                .expect("create unrelated database");
+            sqlx::query("CREATE TABLE notes (id INTEGER PRIMARY KEY, body TEXT)")
+                .execute(&mut connection)
+                .await
+                .expect("create unrelated table");
+            connection.close().await.expect("close unrelated database");
+            assert!(migrate_legacy_database_missing(&unrelated, &canonical)
+                .await
+                .is_err());
+            assert!(!canonical.exists());
+        });
         let _ = fs::remove_dir_all(fixture_root);
     }
 
@@ -5468,13 +5828,45 @@ pub fn run() {
             append_startup_log(app, "Tauri setup entered");
             app.manage(NextServerState::new());
             app.manage(DesktopOperationState::new());
-            if let Err(error) = prepare_managed_data(&app.handle()) {
-                append_startup_log(
-                    app,
-                    format!("Managed data preparation failed before server startup: {error}"),
-                );
-                return Err(error.into());
-            }
+            let managed_data = match prepare_managed_data(app.handle()) {
+                Ok(preparation) => preparation,
+                Err(error) => {
+                    append_startup_log(
+                        app,
+                        format!("Managed data preparation failed before server startup: {error}"),
+                    );
+                    return Err(error.into());
+                }
+            };
+            let migration_occurred = managed_data.legacy_migration_occurred;
+            let migration_source = managed_data
+                .legacy_migration_source
+                .clone()
+                .unwrap_or_else(|| "none".to_string());
+            app.manage(managed_data);
+            let app_data = managed_app_data_root(app.handle())?;
+            let database = local_database_path(app.handle())?;
+            let device_source = if app_data
+                .join(INSTALLATION_DIRECTORY)
+                .join(DEVICE_ID_FILENAME)
+                .is_file()
+            {
+                "canonical-installation-file"
+            } else {
+                "pending-native-or-signed-licence-recovery"
+            };
+            append_startup_log(
+                app,
+                format!(
+                    "Persistence diagnostics: version={} app_data={} database={} device_id_source={} license_state_source=sqlite:license_state legacy_migration_occurred={} legacy_migration_source={}",
+                    app.package_info().version,
+                    app_data.display(),
+                    database.display(),
+                    device_source,
+                    migration_occurred,
+                    migration_source,
+                ),
+            );
 
             let app_handle = app.handle().clone();
             match launch_desktop_ui(&app_handle) {

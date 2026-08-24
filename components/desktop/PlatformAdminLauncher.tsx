@@ -2,8 +2,7 @@
 
 import { useEffect, useState } from "react"
 import { isTauriRuntimeAsync, openPlatformAdmin } from "@/lib/desktop/tauri"
-import { getExplicitControlPlaneActionAuth } from "@/lib/offline/local/license"
-import { authorizeThisPlatformAdminDevice } from "@/lib/platform-admin/client"
+import { verifyThisPlatformAdminDevice } from "@/lib/platform-admin/client"
 
 export default function PlatformAdminLauncher({ className = "" }: { className?: string }) {
   const [desktop, setDesktop] = useState(false)
@@ -17,9 +16,7 @@ export default function PlatformAdminLauncher({ className = "" }: { className?: 
       if (!active) return
       setDesktop(value)
       if (!value || !navigator.onLine) return
-      const auth = await getExplicitControlPlaneActionAuth().catch(() => null)
-      if (!active || !auth) return
-      const allowed = await authorizeThisPlatformAdminDevice(auth).catch(() => false)
+      const allowed = await verifyThisPlatformAdminDevice().catch(() => false)
       if (active) setAuthorized(allowed)
     })
     return () => {
@@ -38,8 +35,7 @@ export default function PlatformAdminLauncher({ className = "" }: { className?: 
     setOpening(true)
     setNotice("")
     try {
-      const auth = await getExplicitControlPlaneActionAuth()
-      await authorizeThisPlatformAdminDevice(auth)
+      await verifyThisPlatformAdminDevice()
       await openPlatformAdmin()
       setNotice("Platform Administration opened securely inside Bezgrow.")
     } catch (error) {
