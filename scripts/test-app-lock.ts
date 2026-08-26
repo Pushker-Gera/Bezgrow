@@ -78,6 +78,7 @@ assert.equal((await verifyAppLockPassword(firstPassword, first)) && evaluateStor
 assert.equal((await verifyAppLockPassword(firstPassword, first)) && evaluateStoredLicense([{ ...licensedRow, expiry_date: "2020-01-01", grace_until: "2020-01-01T23:59:59.999Z" }], { deviceId }).allowed, false, "A correct app password must not bypass expiry.")
 
 const client = read("lib/app-lock/client.ts")
+const provisioningPolicy = read("lib/app-lock/provisioning-policy.ts")
 const server = read("lib/app-lock/server.ts")
 const gate = read("components/security/AppLockGate.tsx")
 const layout = read("app/dashboard/layout.tsx")
@@ -93,7 +94,7 @@ const customers = read("app/dashboard/customers/page.tsx")
 
 assert.match(server, /pbkdf2Sync[\s\S]*APP_LOCK_ITERATIONS[\s\S]*sha256/, "Initial passwords must become salted one-way verifiers on the server.")
 assert.match(client, /store_secret[\s\S]*APP_LOCK_SECRET_KEY/, "The local verifier must use the OS credential store, not SQLite business data.")
-assert.match(client, /APP_LOCK_WATERMARK_KEY[\s\S]*watermarkRecognizesSignedCredential/, "A non-secret persistence watermark must prevent an update or keychain loss from rolling a locally changed password back to the initial signed verifier.")
+assert.match(client + provisioningPolicy, /APP_LOCK_WATERMARK_KEY[\s\S]*watermarkRecognizesSignedCredential/, "A non-secret persistence watermark must prevent an update or keychain loss from rolling a locally changed password back to the initial signed verifier.")
 assert.doesNotMatch(client, /putOfflineData|localStorage\.setItem\([^\n]*password/, "The app password must not enter SQLite or browser storage.")
 assert.match(localLicense, /verifyLicenseSignature[\s\S]*provisionAppLockFromLicense/, "Only a verified signed licence may provision App Lock.")
 assert.match(adminRoute, /createAppLockProvisioning\(input\.app_password, input\.device_id\)/, "Licence generation must provision the first device password.")

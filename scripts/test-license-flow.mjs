@@ -30,7 +30,9 @@ async function transpileSource(relativePath) {
   const outputText = output.outputText.replace(
     /from "zod";/g,
     `from "${import.meta.resolve("zod")}";`,
-  ).replace(/from "@\/lib\/app-lock\/shared";/g, 'from "../app-lock/shared.mjs";');
+  )
+    .replace(/from "@\/lib\/app-lock\/shared";/g, 'from "../app-lock/shared.mjs";')
+    .replace(/from "@\/lib\/time\/canonical";/g, 'from "../time/canonical.mjs";');
   await writeFile(outputPath, outputText);
   return pathToFileURL(outputPath).href;
 }
@@ -112,6 +114,7 @@ function rowFromPayload(payload, licenseKey, signatureText) {
 
 async function main() {
   try {
+    await transpileSource("lib/time/canonical.ts");
     await transpileSource("lib/app-lock/shared.ts");
     const codec = await import(await transpileSource("lib/license/codec.ts"));
     const policy = await import(await transpileSource("lib/license/policy.ts"));

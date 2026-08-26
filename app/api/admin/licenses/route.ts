@@ -33,6 +33,8 @@ import { LICENSE_SCHEMA_VERSION, parseLicenseInput, type LicensePayload } from "
 import { createLicenseId, hasLicenseSigningKey, licenseSigningStatus, signLicensePayload } from "@/lib/license/server"
 import { adminSupabase } from "@/lib/supabase/admin"
 import { adminRequestTiming } from "@/lib/admin/request-timing"
+import { createAppLockResetAuthorization } from "@/lib/app-lock/reset-authorization"
+import { timestampsRepresentSameInstant } from "@/lib/time/canonical"
 
 export const dynamic = "force-dynamic"
 
@@ -520,7 +522,7 @@ export async function PATCH(request: Request) {
     // Fresh requests get a precise transition error before signing. A retry
     // intentionally reaches the RPC when the row timestamp moved so its
     // idempotency ledger can return the exact first response.
-    if (input.expected_updated_at === current.updated_at) {
+    if (timestampsRepresentSameInstant(input.expected_updated_at, current.updated_at)) {
       const stateError = licenseActionStateError(input.action, current.status)
       if (stateError) return adminFail(context, stateError, 409, { code: "INVALID_LICENSE_TRANSITION" })
     }
@@ -559,11 +561,11 @@ export async function PATCH(request: Request) {
     if (signatureChanges) {
       const next = { ...current, ...updates } as StoredLicense
       const appLock = input.action === "reset_app_password"
-        ? createAppLockProvisioning(input.app_password as string, current.device_id, {
-            id: crypto.randomUUID(),
-            issued_at: changedAt,
-            expires_at: new Date(Date.now() + 30 * 60_000).toISOString(),
-          })
+        ? createAppLockProvisioning(
+            input.app_password as string,
+            current.device_id,
+            createAppLockResetAuthorization(crypto.randomUUID(), new Date(changedAt)),
+          )
         : storedAppLock(current)
       if (!appLock) {
         return adminFail(context, "This licence has no app-access credential. Use Reset App Password to provision one.", 409)

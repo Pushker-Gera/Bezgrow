@@ -1,3 +1,5 @@
+import { isCanonicalDateTimeInput } from "@/lib/time/canonical"
+
 export const APP_LOCK_ALGORITHM = "pbkdf2-sha256" as const
 export const APP_LOCK_ITERATIONS = 600_000
 export const APP_LOCK_KEY_BYTES = 32
@@ -37,10 +39,8 @@ export function isAppLockProvisioning(value: unknown): value is AppLockProvision
     typeof reset === "object"
     && typeof reset.id === "string"
     && reset.id.length >= 8
-    && typeof reset.issued_at === "string"
-    && Number.isFinite(Date.parse(reset.issued_at))
-    && typeof reset.expires_at === "string"
-    && Number.isFinite(Date.parse(reset.expires_at))
+    && isCanonicalDateTimeInput(reset.issued_at)
+    && isCanonicalDateTimeInput(reset.expires_at)
     && Date.parse(reset.expires_at) > Date.parse(reset.issued_at)
   )
   return row.version === 1
@@ -55,7 +55,6 @@ export function isAppLockProvisioning(value: unknown): value is AppLockProvision
     && row.device_id.length >= 8
     && typeof row.credential_id === "string"
     && row.credential_id.length >= 8
-    && typeof row.issued_at === "string"
-    && Number.isFinite(Date.parse(row.issued_at))
+    && isCanonicalDateTimeInput(row.issued_at)
     && validReset
 }

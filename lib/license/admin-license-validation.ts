@@ -1,5 +1,6 @@
 import { z } from "zod"
 import { APP_LOCK_MIN_PASSWORD_LENGTH, appPasswordPolicyError } from "@/lib/app-lock/shared"
+import { canonicalUtcDateTimeSchema } from "@/lib/time/canonical"
 
 export const licenseFieldLabels = {
   customer_name: "Customer name",
@@ -96,7 +97,7 @@ export const updateLicenseSchema = z
       "notes",
     ]),
     idempotency_key: z.string().trim().min(8).max(160),
-    expected_updated_at: z.string().datetime(),
+    expected_updated_at: canonicalUtcDateTimeSchema,
     renew_months: z.coerce.number().int().refine(
       (value) => LICENSE_RENEWAL_MONTHS.includes(value as (typeof LICENSE_RENEWAL_MONTHS)[number]),
       "Select a supported renewal duration.",
