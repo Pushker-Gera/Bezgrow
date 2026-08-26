@@ -105,6 +105,7 @@ assert.match(updates, /verifiedInstallerRouteForCurrentPlatform/, "Manual update
 assert.match(updatesPanel, /Code signing:[\s\S]*SHA-256:/, "The update card must show signing and checksum status.")
 assert.match(downloadPage, /Windows 10 version 1809\+ or Windows 11/, "The download page must show the exact supported Windows range before installation.")
 assert.match(workflow, /npm run lint[\s\S]*npm run typecheck[\s\S]*npm test[\s\S]*npm run build/, "Windows CI must run the complete validation pipeline.")
+assert.match(workflow, /Verify canonical admin password reset across Windows locales and time zones[\s\S]*Asia\/Kolkata[\s\S]*America\/New_York[\s\S]*Europe\/London[\s\S]*Australia\/Sydney[\s\S]*test:admin-password-reset-contract/, "Windows CI must rerun the production password-reset datetime contract across the required locale and timezone matrix.")
 assert.match(
   workflow,
   /Build the secret-free production desktop bundle[\s\S]*BEZGROW_DESKTOP_BUILD: "1"[\s\S]*SUPABASE_SERVICE_ROLE_KEY: ""[\s\S]*BEZGROW_LICENSE_PRIVATE_KEY: ""/,

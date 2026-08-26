@@ -118,6 +118,11 @@ try {
     const mutation = JSON.parse(await page.locator("[data-last-license-mutation]").textContent())
     assert.equal(mutation.action, action)
     assert.match(mutation.idempotency_key, /^[0-9a-f-]{20,}$/i)
+    assert.equal(
+      mutation.expected_updated_at,
+      "2026-08-26T18:42:46.819046+00:00",
+      `${action} must preserve the exact PostgreSQL concurrency timestamp through the UI contract.`,
+    )
   }
 
   await suspendedRow.locator('[data-license-action="reactivate"]').click()

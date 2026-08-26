@@ -417,6 +417,23 @@ jobs:
       - run: npm run lint
       - run: npm run typecheck
       - run: npm test
+      - name: Verify canonical admin password reset across Windows locales and time zones
+        shell: pwsh
+        run: |
+          $cases = @(
+            @{ TimeZone = "UTC"; Locale = "en-US" },
+            @{ TimeZone = "Asia/Kolkata"; Locale = "en-IN" },
+            @{ TimeZone = "America/New_York"; Locale = "en-US" },
+            @{ TimeZone = "Europe/London"; Locale = "en-GB" },
+            @{ TimeZone = "Australia/Sydney"; Locale = "en-AU" }
+          )
+          foreach ($case in $cases) {
+            $env:TZ = $case.TimeZone
+            $env:LANG = $case.Locale
+            Write-Host "password-reset-contract timezone=$($case.TimeZone) locale=$($case.Locale)"
+            npm run test:admin-password-reset-contract
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          }
       - name: Build the secret-free production desktop bundle
         run: npm run build
         env:

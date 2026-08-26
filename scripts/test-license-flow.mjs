@@ -166,6 +166,48 @@ async function main() {
     assert.equal(activated.status.allowed, true);
     assert.equal(activated.status.status, "valid");
 
+    const resetPayloadBase = basePayload();
+    const resetPayload = {
+      ...resetPayloadBase,
+      app_lock: {
+        ...resetPayloadBase.app_lock,
+        credential_id: "credential-release-reset-0002",
+        issued_at: "2026-08-26T18:45:00.000Z",
+        reset_authorization: {
+          id: "reset-authorization-release-0002",
+          issued_at: "2026-08-26T18:45:00.000Z",
+          expires_at: "2026-08-26T19:15:00.000Z",
+        },
+      },
+    };
+    const reversedResetPayload = Object.fromEntries(Object.entries(resetPayload).reverse());
+    assert.equal(
+      codec.canonicalLicenseText(reversedResetPayload),
+      codec.canonicalLicenseText(resetPayload),
+      "Signed reset canonicalization must not depend on insertion order.",
+    );
+    assert.doesNotMatch(
+      codec.canonicalLicenseText({ ...resetPayload, future_optional_field: undefined }),
+      /future_optional_field/,
+      "Undefined signed fields must remain absent instead of becoming null.",
+    );
+    const signedReset = signPayload(resetPayload);
+    const activatedReset = await activateLikeDesktop(signedReset.licenseKey);
+    assert.deepEqual(
+      activatedReset.parsed.payload.app_lock.reset_authorization,
+      resetPayload.app_lock.reset_authorization,
+      "Signing and verification must preserve the exact canonical reset timestamps and key presence.",
+    );
+    const tamperedResetParts = signedReset.licenseKey.split(".");
+    const tamperedResetPayload = JSON.parse(new TextDecoder().decode(codec.base64UrlToBytes(tamperedResetParts[1])));
+    tamperedResetPayload.app_lock.reset_authorization.expires_at = "2026-08-26T19:16:00.000Z";
+    tamperedResetParts[1] = codec.bytesToBase64Url(new TextEncoder().encode(JSON.stringify(tamperedResetPayload)));
+    await assert.rejects(
+      () => activateLikeDesktop(tamperedResetParts.join(".")),
+      /tampered/,
+      "Changing a signed reset expiry must invalidate the Ed25519 signature.",
+    );
+
     const offlineCached = policy.evaluateStoredLicense([activated.row], {
       deviceId: DEVICE_ID,
       now: new Date("2026-07-09T00:00:00.000Z"),

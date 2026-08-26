@@ -11,6 +11,7 @@ import {
 import {
   LICENSE_RENEWAL_MONTHS,
   MODERN_LICENSE_FEATURES,
+  licenseMutationValidationMessage,
   updateLicenseSchema,
   type AdminLicenseAction,
   type ValidUpdateLicenseInput,
@@ -113,7 +114,8 @@ export function LicenseActionDialog({ action, row, onClose, onConfirm }: License
     }
     const parsed = updateLicenseSchema.safeParse(candidate)
     if (!parsed.success) {
-      setError(parsed.error.issues[0]?.message || "Check the licence change and try again.")
+      const issue = parsed.error.issues[0]
+      setError(issue ? licenseMutationValidationMessage(action, issue) : "Check the licence change and try again.")
       return
     }
     setPending(true)

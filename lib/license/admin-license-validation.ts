@@ -26,6 +26,7 @@ export const licenseFieldLabels = {
   status: "Status",
   idempotency_key: "Idempotency key",
   app_password: "App-access password",
+  expected_updated_at: "Server update timestamp",
 } as const
 
 export const MODERN_LICENSE_FEATURES = [
@@ -214,6 +215,15 @@ export function licenseValidationIssue(issue: z.core.$ZodIssue) {
     message: issue.message,
     error: `${fieldName}: ${issue.message}`,
   }
+}
+
+export function licenseMutationValidationMessage(action: unknown, issue: z.core.$ZodIssue) {
+  const detail = licenseValidationIssue(issue)
+  if (detail.field === "expected_updated_at") {
+    const operation = action === "reset_app_password" ? "Password reset" : "Licence change"
+    return `${operation} could not be authorized because the server returned an invalid licence update timestamp. Refresh Licenses and try again. Field: expected_updated_at; expected RFC3339.`
+  }
+  return detail.message
 }
 
 export function licenseValidationErrors(error: z.ZodError) {

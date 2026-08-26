@@ -16,6 +16,7 @@ import {
 } from "@/lib/admin/control-plane"
 import {
   createLicenseSchema,
+  licenseMutationValidationMessage,
   licenseValidationIssue,
   updateLicenseSchema,
   type ValidCreateLicenseInput,
@@ -508,9 +509,12 @@ export async function PATCH(request: Request) {
   const auth = await requireAdminControlPlane(request)
   if (!auth.ok) return adminFail({ requestId: crypto.randomUUID() }, auth.error, auth.status)
   const context = auth.context
-  const parsed = updateLicenseSchema.safeParse(await request.json().catch(() => null))
+  const body = await request.json().catch(() => null)
+  const parsed = updateLicenseSchema.safeParse(body)
   if (!parsed.success) {
-    return adminFail(context, parsed.error.issues[0]?.message || "Invalid license change.", 422)
+    const issue = parsed.error.issues[0]
+    const action = body && typeof body === "object" ? (body as { action?: unknown }).action : undefined
+    return adminFail(context, issue ? licenseMutationValidationMessage(action, issue) : "Invalid license change.", 422)
   }
 
   try {

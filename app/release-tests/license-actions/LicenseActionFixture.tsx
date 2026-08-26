@@ -24,7 +24,7 @@ const fixtureRow: Record<string, unknown> = {
   status: "active",
   effective_status: "active",
   issuer_key_id: "fixture-key",
-  updated_at: "2026-08-22T00:00:00.000Z",
+  updated_at: "2026-08-26T18:42:46.819046+00:00",
 }
 
 export function LicenseActionFixture() {

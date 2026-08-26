@@ -15,6 +15,9 @@ const embeddedArchitecture = process.env.NEXT_PUBLIC_BEZGROW_BUILD_ARCHITECTURE 
 const buildChannel = process.env.NEXT_PUBLIC_BEZGROW_BUILD_CHANNEL || "development"
 const shortBuildCommit = /^[a-f0-9]{7,40}$/i.test(buildCommit) ? buildCommit.slice(0, 7) : buildCommit
 const displayBuildPlatform = buildPlatform === "macos" ? "macOS" : buildPlatform === "windows" ? "Windows" : buildPlatform
+const safeBuildId = [buildVersion, shortBuildCommit, buildPlatform, embeddedArchitecture || "runtime", buildChannel]
+  .join("-")
+  .replace(/[^A-Za-z0-9._-]/g, "_")
 const displayBuildTimestamp = Number.isNaN(Date.parse(buildTimestamp))
   ? buildTimestamp
   : `${new Intl.DateTimeFormat("en-IN", {
@@ -109,6 +112,7 @@ export default function DesktopDiagnosticsPanel() {
       `Build date: ${buildTimestamp}`,
       `Platform: ${displayBuildPlatform} ${embeddedArchitecture || desktopArchitecture()}`,
       `Channel: ${buildChannel}`,
+      `Installation identity: ${safeBuildId}`,
     ].join("\n")
     try {
       await navigator.clipboard.writeText(safeIdentity)
@@ -144,7 +148,7 @@ export default function DesktopDiagnosticsPanel() {
         Identify the exact desktop build or save a technical report for support. These diagnostics never include passwords, tokens, licence keys,
         customers, products, invoices, or other business records.
       </p>
-      <div className="mt-5 grid gap-3 text-sm sm:grid-cols-2 lg:grid-cols-4" aria-label="Application build identity">
+      <div className="mt-5 grid gap-3 text-sm sm:grid-cols-2 lg:grid-cols-3" aria-label="Application build identity">
         <div className="rounded-2xl border border-white/10 bg-black/35 p-4">
           <p className="text-xs font-black uppercase tracking-[0.16em] text-neutral-500">Application</p>
           <p className="mt-2 font-black text-white">Bezgrow {buildVersion}</p>
@@ -160,6 +164,14 @@ export default function DesktopDiagnosticsPanel() {
         <div className="rounded-2xl border border-white/10 bg-black/35 p-4">
           <p className="text-xs font-black uppercase tracking-[0.16em] text-neutral-500">Platform</p>
           <p className="mt-2 font-semibold text-white">{displayBuildPlatform} {embeddedArchitecture || desktopArchitecture()}</p>
+        </div>
+        <div className="rounded-2xl border border-white/10 bg-black/35 p-4">
+          <p className="text-xs font-black uppercase tracking-[0.16em] text-neutral-500">Update channel</p>
+          <p className="mt-2 font-semibold text-white">{buildChannel}</p>
+        </div>
+        <div className="rounded-2xl border border-white/10 bg-black/35 p-4">
+          <p className="text-xs font-black uppercase tracking-[0.16em] text-neutral-500">Installation identity</p>
+          <code className="mt-2 block break-all text-xs font-black text-cyan-100">{safeBuildId}</code>
         </div>
       </div>
       <div className="mt-6 flex flex-wrap gap-3">
