@@ -31,7 +31,13 @@ const acceptedTimestamps = [
 for (const [name, input, expected] of acceptedTimestamps) {
   const parsed = updateLicenseSchema.safeParse({ ...commonReset, expected_updated_at: input })
   assert.equal(parsed.success, true, `${name} must be accepted.`)
-  if (parsed.success) assert.equal(parsed.data.expected_updated_at, expected, `${name} must normalize to UTC.`)
+  if (parsed.success) {
+    assert.equal(
+      parsed.data.expected_updated_at,
+      input,
+      `${name} must preserve the exact database concurrency token.`,
+    )
+  }
   assert.equal(canonicalUtcDateTime(input), expected)
 }
 
@@ -162,6 +168,7 @@ const safeAudit = licenseAuditSnapshot({
   signed_license_key: "must-not-enter-audit",
 })
 assert.match(route, /createAppLockResetAuthorization\(crypto\.randomUUID\(\), new Date\(changedAt\)\)/, "The API must derive reset validity from its server timestamp.")
+assert.match(route, /p_expected_updated_at: input\.expected_updated_at/, "The API must pass the exact validated PostgreSQL concurrency token to the atomic RPC.")
 assert.doesNotMatch(route, /Date\.now\(\)\s*\+\s*30\s*\*\s*60_000/, "Reset expiry must not use an unrelated clock read.")
 assert.match(client, /appLockProvisioningDecision[\s\S]*decision === "ignore"[\s\S]*return \{ provisioned: false, resetApplied: false \}/, "The desktop import path must enforce the tested reset policy.")
 assert.match(provisioningPolicy, /resetWasAlreadyApplied[\s\S]*applied_reset_authorization_id[\s\S]*return "ignore"/, "Consumed reset authorizations must not be replayed from the same signed licence.")

@@ -1,6 +1,13 @@
 import { z } from "zod"
 
 /**
+ * Database concurrency tokens are opaque wire values. PostgreSQL can emit
+ * timestamptz values with numeric offsets and microsecond precision, so they
+ * must be validated without converting through JavaScript's millisecond Date.
+ */
+export const databaseDateTimeSchema = z.string().datetime({ offset: true })
+
+/**
  * Machine timestamps may arrive from PostgreSQL with an explicit numeric
  * offset and microsecond precision. Accept RFC3339 input, then immediately
  * normalize it to the one representation Bezgrow signs and sends onward.
