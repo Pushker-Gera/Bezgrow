@@ -5,6 +5,7 @@ import {
   APP_LOCK_ALGORITHM,
   APP_LOCK_ITERATIONS,
   APP_LOCK_KEY_BYTES,
+  APP_LOCK_MIN_PASSWORD_LENGTH,
   appPasswordPolicyError,
   isAppLockProvisioning,
   type AppLockProvisioning,
@@ -49,8 +50,10 @@ const changed = provisioning(changedPassword)
 assert.equal(await verifyAppLockPassword(changedPassword, changed), true, "A changed password must verify against its new salt and hash.")
 assert.equal(await verifyAppLockPassword(firstPassword, changed), false, "The previous password must stop working after a password change.")
 assert.equal(await verifyAppLockPassword(changedPassword, JSON.parse(JSON.stringify(changed))), true, "The one-way credential must survive secure local persistence and app updates.")
-assert.equal(appPasswordPolicyError("weak"), "Use at least 10 characters.")
-assert.equal(appPasswordPolicyError("alllowercase9"), "Use at least one uppercase letter, one lowercase letter, and one number.")
+assert.equal(APP_LOCK_MIN_PASSWORD_LENGTH, 6, "The app-access password minimum must remain the user-approved six characters.")
+assert.equal(appPasswordPolicyError("Aa1bb"), "Use at least 6 characters.")
+assert.equal(appPasswordPolicyError("abcdef"), "Use at least one uppercase letter, one lowercase letter, and one number.")
+assert.equal(appPasswordPolicyError("Aa1bbb"), null, "Exactly six policy-compliant characters must be accepted.")
 assert.equal(appPasswordPolicyError(changedPassword), null)
 
 const signedReset: AppLockProvisioning = {
@@ -123,7 +126,7 @@ const customerSave = customers.slice(customers.indexOf("async function saveCusto
 assert.doesNotMatch(productSave, /router\.refresh|location\.reload|await refreshData/, "Product save must patch local state without a full refresh.")
 assert.doesNotMatch(customerSave, /router\.refresh|location\.reload|await fetchData/, "Customer save must patch local state without a full refresh.")
 
-console.log(`app-lock-contract-ok device=${deviceId} business=${businessId} password_hashing=pbkdf2-sha256 reset=audited`)
+console.log(`app-lock-contract-ok device=${deviceId} business=${businessId} minimum=${APP_LOCK_MIN_PASSWORD_LENGTH} password_hashing=pbkdf2-sha256 reset=audited`)
 }
 
 void main()

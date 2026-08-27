@@ -12,7 +12,7 @@ const commonReset = {
   action: "reset_app_password" as const,
   idempotency_key: "reset-request-0001",
   reason: "Customer-authorized recovery",
-  app_password: "Replacement9Password",
+  app_password: "Aa1bbb",
 }
 
 const acceptedTimestamps = [

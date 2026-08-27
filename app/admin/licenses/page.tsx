@@ -17,6 +17,7 @@ import {
 } from "@/components/admin/ControlPlaneUi"
 import { LicenseActionDialog } from "@/components/admin/LicenseActionDialog"
 import { LicenseActionButtons } from "@/components/admin/LicenseActionButtons"
+import { APP_LOCK_MIN_PASSWORD_LENGTH } from "@/lib/app-lock/shared"
 import { copyAdminText, downloadAdminFile, secureAdminFetch } from "@/lib/platform-admin/client"
 import {
   createLicenseSchema,
@@ -363,6 +364,7 @@ export default function LicensesPage() {
                 <input
                   type={type}
                   value={form[key as keyof typeof form]}
+                  minLength={key === "app_password" ? APP_LOCK_MIN_PASSWORD_LENGTH : undefined}
                   required={!["customer_phone", "customer_company", "customer_country", "workspace_id", "app_version"].includes(key)}
                   aria-invalid={Boolean(fieldErrors[key as LicenseFieldName])}
                   aria-describedby={fieldErrors[key as LicenseFieldName] ? `${key}-error` : undefined}
@@ -393,6 +395,7 @@ export default function LicensesPage() {
           <button type="button" onClick={() => { setForm((current) => ({ ...current, app_password: generateAppPassword() })); setFieldErrors((current) => ({ ...current, app_password: undefined })) }} className="h-11 rounded-xl border border-emerald-400/25 bg-emerald-400/10 px-4 text-sm font-black text-emerald-100">
             Generate strong app password
           </button>
+          <p className="text-xs leading-5 text-neutral-500">App-access passwords require at least {APP_LOCK_MIN_PASSWORD_LENGTH} characters with uppercase, lowercase, and a number.</p>
           <fieldset>
             <legend className="text-sm font-bold text-neutral-300">Allowed features</legend>
             <div className="mt-3 flex flex-wrap gap-2">

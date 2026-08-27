@@ -36,7 +36,7 @@ for (const candidate of [
   { ...common, action: "update_features", plan_name: "Growth", allowed_features: [...MODERN_LICENSE_FEATURES] },
   { ...common, action: "replace_device", new_device_id: "BZG-NEW-DEVICE-0001", confirmed_device_id: "BZG-NEW-DEVICE-0001", reason: "Hardware replacement", app_password: "StrongDevice9" },
   { ...common, action: "transfer", new_device_id: "BZG-NEW-DEVICE-0002", confirmed_device_id: "BZG-NEW-DEVICE-0002", reason: "Owner requested transfer", app_password: "StrongDevice8" },
-  { ...common, action: "reset_app_password", reason: "Owner recovery", app_password: "ResetDevice7" },
+  { ...common, action: "reset_app_password", reason: "Owner recovery", app_password: "Aa1bbb" },
   { ...common, action: "suspend", confirmation: "SUSPEND", reason: "Payment review" },
   { ...common, action: "reactivate", confirmation: "REACTIVATE", reason: "Payment cleared" },
   { ...common, action: "revoke", confirmation: "REVOKE", reason: "Confirmed licence termination" },

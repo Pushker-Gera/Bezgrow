@@ -91,7 +91,7 @@ try {
       await page.getByLabel("Reason").fill("Fixture transfer")
     }],
     ["reset_app_password", async () => {
-      await page.getByLabel("New app-access password").fill("ResetDevice7")
+      await page.getByLabel("New app-access password").fill("Aa1bbb")
       await page.getByLabel("Reset reason").fill("Fixture owner recovery")
     }],
     ["suspend", async () => { await page.getByLabel(/Type SUSPEND/).fill("SUSPEND") }],

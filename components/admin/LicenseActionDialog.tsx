@@ -3,6 +3,7 @@
 import type { FormEvent } from "react"
 import { useMemo, useState } from "react"
 import { AdminModal, AdminNotice, displayValue } from "@/components/admin/ControlPlaneUi"
+import { APP_LOCK_MIN_PASSWORD_LENGTH } from "@/lib/app-lock/shared"
 import {
   addLicenseDays,
   licenseActionStateError,
@@ -209,7 +210,8 @@ export function LicenseActionDialog({ action, row, onClose, onConfirm }: License
             </p>
             <label className="block text-sm font-bold text-neutral-300">Target Device ID<input autoFocus value={newDeviceId} onChange={(event) => setNewDeviceId(event.target.value)} className={inputClassName()} /></label>
             <label className="block text-sm font-bold text-neutral-300">Re-enter target Device ID<input value={confirmedDeviceId} onChange={(event) => setConfirmedDeviceId(event.target.value)} className={inputClassName()} /></label>
-            <label className="block text-sm font-bold text-neutral-300">Initial app-access password<input type="password" autoComplete="new-password" value={appPassword} onChange={(event) => setAppPassword(event.target.value)} className={inputClassName()} /></label>
+            <label className="block text-sm font-bold text-neutral-300">Initial app-access password<input type="password" autoComplete="new-password" minLength={APP_LOCK_MIN_PASSWORD_LENGTH} value={appPassword} onChange={(event) => setAppPassword(event.target.value)} className={inputClassName()} /></label>
+            <p className="text-xs leading-5 text-neutral-500">Use at least {APP_LOCK_MIN_PASSWORD_LENGTH} characters with uppercase, lowercase, and a number.</p>
             <button type="button" onClick={() => setAppPassword(generateAppPassword())} className="h-11 rounded-xl border border-emerald-400/25 bg-emerald-400/10 px-4 text-sm font-black text-emerald-100">Generate strong password</button>
             <label className="block text-sm font-bold text-neutral-300">Reason<textarea value={reason} onChange={(event) => setReason(event.target.value)} className="mt-2 min-h-24 w-full rounded-xl border border-white/10 bg-black/50 p-3 outline-none focus:border-cyan-400/50" /></label>
           </div>
@@ -220,7 +222,8 @@ export function LicenseActionDialog({ action, row, onClose, onConfirm }: License
             <p className="rounded-2xl border border-emerald-400/20 bg-emerald-500/10 p-4 text-sm leading-6 text-emerald-100">
               This creates a signed, device-bound reset authorization valid for 30 minutes. It never reveals the previous password and takes effect when this device next verifies the licence or imports the refreshed key.
             </p>
-            <label className="block text-sm font-bold text-neutral-300">New app-access password<input autoFocus type="password" autoComplete="new-password" value={appPassword} onChange={(event) => setAppPassword(event.target.value)} className={inputClassName()} /></label>
+            <label className="block text-sm font-bold text-neutral-300">New app-access password<input autoFocus type="password" autoComplete="new-password" minLength={APP_LOCK_MIN_PASSWORD_LENGTH} value={appPassword} onChange={(event) => setAppPassword(event.target.value)} className={inputClassName()} /></label>
+            <p className="text-xs leading-5 text-neutral-500">Use at least {APP_LOCK_MIN_PASSWORD_LENGTH} characters with uppercase, lowercase, and a number.</p>
             <button type="button" onClick={() => setAppPassword(generateAppPassword())} className="h-11 rounded-xl border border-emerald-400/25 bg-emerald-400/10 px-4 text-sm font-black text-emerald-100">Generate strong password</button>
             <label className="block text-sm font-bold text-neutral-300">Reset reason<textarea value={reason} onChange={(event) => setReason(event.target.value)} className="mt-2 min-h-20 w-full rounded-xl border border-white/10 bg-black/50 p-3 outline-none focus:border-emerald-400/50" /></label>
           </div>

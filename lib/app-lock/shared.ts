@@ -3,7 +3,7 @@ import { isCanonicalDateTimeInput } from "@/lib/time/canonical"
 export const APP_LOCK_ALGORITHM = "pbkdf2-sha256" as const
 export const APP_LOCK_ITERATIONS = 600_000
 export const APP_LOCK_KEY_BYTES = 32
-export const APP_LOCK_MIN_PASSWORD_LENGTH = 10
+export const APP_LOCK_MIN_PASSWORD_LENGTH = 6
 
 export type AppLockProvisioning = {
   version: 1

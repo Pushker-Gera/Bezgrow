@@ -20,7 +20,7 @@ import {
   requestAppLock,
   saveAutoLockDelay,
 } from "@/lib/app-lock/client"
-import { appPasswordPolicyError } from "@/lib/app-lock/shared"
+import { APP_LOCK_MIN_PASSWORD_LENGTH, appPasswordPolicyError } from "@/lib/app-lock/shared"
 import { getOrganizationId } from "@/lib/getOrganization"
 import { createOfflineId, exportOfflineBackup, getOfflineData, putOfflineData, queueOfflineAction, restoreOfflineBackup } from "@/lib/offline/db"
 import { shouldUseWebOfflineFallback } from "@/lib/offline/network"
@@ -963,7 +963,7 @@ export default function SettingsPage() {
                 <input type="password" autoComplete="new-password" value={newAppPassword} onChange={(event) => setNewAppPassword(event.target.value)} placeholder="New password" className="h-14 rounded-2xl border border-white/10 bg-black/50 px-5 outline-none focus:border-cyan-400/40" />
                 <input type="password" autoComplete="new-password" value={confirmAppPassword} onChange={(event) => setConfirmAppPassword(event.target.value)} placeholder="Confirm new password" className="h-14 rounded-2xl border border-white/10 bg-black/50 px-5 outline-none focus:border-cyan-400/40" />
               </div>
-              <p className="mt-3 text-xs leading-5 text-neutral-500">Use at least 10 characters with uppercase, lowercase, and a number.</p>
+              <p className="mt-3 text-xs leading-5 text-neutral-500">Use at least {APP_LOCK_MIN_PASSWORD_LENGTH} characters with uppercase, lowercase, and a number.</p>
               <div className="mt-5 flex flex-wrap gap-3">
                 <button type="button" data-enter-primary onClick={() => void updateAppPassword()} disabled={!appLockEnabled || changingAppPassword} className="h-12 rounded-2xl bg-white px-5 text-sm font-black text-black disabled:cursor-not-allowed disabled:opacity-40">
                   {changingAppPassword ? "Changing…" : "Change App Password"}

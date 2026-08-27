@@ -115,7 +115,7 @@ export const updateLicenseSchema = z
     confirmed_device_id: z.string().trim().min(8).max(180).optional(),
     confirmation: z.enum(["SUSPEND", "REACTIVATE", "REVOKE"]).optional(),
     reason: z.string().trim().max(500).optional(),
-    app_password: z.string().min(APP_LOCK_MIN_PASSWORD_LENGTH).max(256).optional(),
+    app_password: z.string().min(APP_LOCK_MIN_PASSWORD_LENGTH, `Use at least ${APP_LOCK_MIN_PASSWORD_LENGTH} characters.`).max(256).optional(),
   })
   .superRefine((value, context) => {
     const required = (condition: boolean, path: string, message: string) => {
