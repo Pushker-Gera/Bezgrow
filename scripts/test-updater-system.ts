@@ -41,8 +41,8 @@ assert.equal(compareVersions("0.1.14", "0.1.13"), 1)
 assert.equal(compareVersions("0.1.15", "0.1.14"), 1)
 assert.equal(compareVersions("1.0.0-beta.1", "1.0.0"), -1)
 
-const installedRelease = "0.2.3"
-const availableRelease = "0.2.4"
+const installedRelease = "0.2.4"
+const availableRelease = "0.2.5"
 const exactUpgradeManifest: DesktopReleaseManifest = {
   version: availableRelease,
   releaseNotes: ["Update persistence and legacy signed-licence recovery."],
@@ -89,12 +89,12 @@ const exactUpgradeManifest: DesktopReleaseManifest = {
     checksumVerified: true,
   },
 }
-assert.equal(compareVersions(availableRelease, installedRelease), 1, "0.2.4 must supersede installed 0.2.3")
-assert.equal(isDesktopUpdateAvailable(exactUpgradeManifest, installedRelease), true, "0.2.3 must detect the published 0.2.4 manual installer")
-assert.equal(isDesktopUpdateAvailable(exactUpgradeManifest, availableRelease), false, "0.2.4 must not update to itself")
+assert.equal(compareVersions(availableRelease, installedRelease), 1, "0.2.5 must supersede installed 0.2.4")
+assert.equal(isDesktopUpdateAvailable(exactUpgradeManifest, installedRelease), true, "0.2.4 must detect the published 0.2.5 manual installer")
+assert.equal(isDesktopUpdateAvailable(exactUpgradeManifest, availableRelease), false, "0.2.5 must not update to itself")
 const exactLaterDecision = remindLater(availableRelease, firstSeen)
 assert.equal(exactLaterDecision.version, availableRelease)
-assert.ok(exactLaterDecision.nextPromptAt > firstSeen, "Later must defer without dismissing 0.2.4 permanently")
+assert.ok(exactLaterDecision.nextPromptAt > firstSeen, "Later must defer without dismissing 0.2.5 permanently")
 
 const platformManifest: DesktopReleaseManifest = {
   version: "0.1.14",
@@ -165,7 +165,7 @@ async function run() {
     /SHA-256 mismatch/,
   )
 
-  console.log("updater-system-ok installed=0.2.3 available=0.2.4 decision=update-available later=deferred self-update=false safe-delay=48h platform-match=strict launch-confirmation=valid sha256=valid minisign-ed25519=valid tamper-rejected=true")
+  console.log("updater-system-ok installed=0.2.4 available=0.2.5 decision=update-available later=deferred self-update=false safe-delay=48h platform-match=strict launch-confirmation=valid sha256=valid minisign-ed25519=valid tamper-rejected=true")
 }
 
 void run()

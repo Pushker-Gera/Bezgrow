@@ -1,4 +1,4 @@
-# Bezgrow 0.2.4
+# Bezgrow 0.2.5
 
 Critical update-persistence and control-plane recovery.
 
@@ -9,10 +9,10 @@ Critical update-persistence and control-plane recovery.
 - Kept the canonical desktop identity fixed at `com.bezgrow.erp` / `Bezgrow`, preserving the existing macOS and Windows application-data roots, SQLite database, Device ID, credential-store entries, business assets, backups, and settings.
 - Made the Platform Admin Login entry depend only on the enrolled native device proof and server-side admin-device authorization, independently of ERP licence expiry, revocation, suspension, or temporary local absence; administrator authentication remains mandatory.
 - Hardened known Windows legacy storage recovery with recognizable Bezgrow schema and integrity validation, atomic SQLite staging, no-overwrite behavior, idempotent file migration, and safe startup diagnostics.
-- Added a v0.2.2-to-v0.2.4 regression fixture covering the fixed production Device ID, legacy signature, business profile, products, customers, invoice data, stock, settings, App Lock, financial year, logo, backup, and admin-device entry contract.
+- Added v0.2.2-to-v0.2.5, v0.2.3-to-v0.2.5, and v0.2.4-to-v0.2.5 regression fixtures covering the fixed production Device ID, legacy signature, business profile, products, customers, invoice data, stock, settings, App Lock, financial year, logo, backup, and admin-device entry contract.
 - Verified the existing production SQLite copy without changing it: all three stored Ed25519 licence rows, including the active licence for `BZG-23D76F50F880422489AF152B`, validate under the corrected parser.
 
-Public installer and updater metadata remains pinned to the genuine 0.2.3 artifacts until matching 0.2.4 Windows and macOS artifacts complete the release verification and publication gates.
+Public installer and updater metadata remains pinned to the genuine 0.2.3 artifacts until matching 0.2.5 Windows and macOS artifacts complete the release verification and publication gates.
 
 ## Previous 0.2.3 notes
 
