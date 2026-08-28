@@ -1,7 +1,10 @@
 # Bezgrow 0.2.4
 
-Critical update-persistence recovery.
+Critical update-persistence and control-plane recovery.
 
+- Fixed Platform Administration app-password reset authorization for PostgreSQL `timestamptz` concurrency values with numeric offsets and microsecond precision, while keeping signed reset timestamps canonical UTC with millisecond precision and a 30-minute lifetime.
+- Standardized app-access passwords across licence generation, administrator reset, Settings, App Lock, and desktop import: 6–64 ASCII letters/digits; numbers-only or mixed letters/numbers are valid, letters-only and special characters are rejected, and leading zeroes remain intact.
+- Kept password resets server-signed, device-bound, expiring, replay-resistant, and audit-safe without storing or logging plaintext passwords.
 - Restored verification of genuine licences issued before App Lock by preserving absent optional signed fields exactly during canonical payload reconstruction.
 - Kept the canonical desktop identity fixed at `com.bezgrow.erp` / `Bezgrow`, preserving the existing macOS and Windows application-data roots, SQLite database, Device ID, credential-store entries, business assets, backups, and settings.
 - Made the Platform Admin Login entry depend only on the enrolled native device proof and server-side admin-device authorization, independently of ERP licence expiry, revocation, suspension, or temporary local absence; administrator authentication remains mandatory.

@@ -91,8 +91,15 @@ try {
       await page.getByLabel("Reason").fill("Fixture transfer")
     }],
     ["reset_app_password", async () => {
-      await page.getByLabel("New app-access password").fill("Aa1bbb")
+      const authorize = page.getByRole("button", { name: "Authorize Password Reset" })
+      assert.equal(await authorize.isDisabled(), true, "Reset authorization must start disabled.")
+      await page.getByLabel("New app-access password").fill("abcdef")
+      assert.equal(await authorize.isDisabled(), true, "Letters-only reset passwords must keep authorization disabled.")
+      await page.getByText("Use either numbers only or include at least one number with the letters.").waitFor()
+      await page.getByLabel("New app-access password").fill("001234")
+      assert.equal(await authorize.isDisabled(), true, "A valid password without a reset reason must keep authorization disabled.")
       await page.getByLabel("Reset reason").fill("Fixture owner recovery")
+      assert.equal(await authorize.isEnabled(), true, "A valid password and reset reason must enable authorization.")
     }],
     ["suspend", async () => { await page.getByLabel(/Type SUSPEND/).fill("SUSPEND") }],
     ["revoke", async () => {

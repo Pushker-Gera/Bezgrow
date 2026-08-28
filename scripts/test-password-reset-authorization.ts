@@ -12,7 +12,26 @@ const commonReset = {
   action: "reset_app_password" as const,
   idempotency_key: "reset-request-0001",
   reason: "Customer-authorized recovery",
-  app_password: "Aa1bbb",
+  app_password: "001234",
+}
+
+const resetValidationBase = {
+  ...commonReset,
+  expected_updated_at: "2026-08-26T18:42:46.819046+00:00",
+}
+
+for (const password of ["123456", "000000", "001234", "999999999999", "abc123", "ABC123", "Bezgrow2026", "a1b2c3", `A1${"a".repeat(62)}`]) {
+  const result = updateLicenseSchema.safeParse({ ...resetValidationBase, app_password: password })
+  assert.equal(result.success, true, `Reset authorization must accept ${JSON.stringify(password)}.`)
+  if (result.success) assert.equal(result.data.app_password, password, "Reset passwords must remain exact strings.")
+}
+
+for (const password of ["12345", "abc12", "abcdef", "ABCDEF", "abc def", "123 456", "abc@123", "123456!", "", `A1${"a".repeat(63)}`]) {
+  const result = updateLicenseSchema.safeParse({ ...resetValidationBase, app_password: password })
+  assert.equal(result.success, false, `Reset authorization must reject ${JSON.stringify(password)}.`)
+  if (!result.success) {
+    assert.equal(result.error.issues[0]?.path[0], "app_password", "Password policy failures must identify the app-password field.")
+  }
 }
 
 const acceptedTimestamps = [

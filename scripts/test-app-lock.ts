@@ -5,9 +5,12 @@ import {
   APP_LOCK_ALGORITHM,
   APP_LOCK_ITERATIONS,
   APP_LOCK_KEY_BYTES,
+  APP_LOCK_MAX_PASSWORD_LENGTH,
   APP_LOCK_MIN_PASSWORD_LENGTH,
   appPasswordPolicyError,
+  generateAppPassword,
   isAppLockProvisioning,
+  isValidAppPassword,
   type AppLockProvisioning,
 } from "../lib/app-lock/shared"
 import { verifyAppLockPassword } from "../lib/app-lock/verification"
@@ -51,9 +54,65 @@ assert.equal(await verifyAppLockPassword(changedPassword, changed), true, "A cha
 assert.equal(await verifyAppLockPassword(firstPassword, changed), false, "The previous password must stop working after a password change.")
 assert.equal(await verifyAppLockPassword(changedPassword, JSON.parse(JSON.stringify(changed))), true, "The one-way credential must survive secure local persistence and app updates.")
 assert.equal(APP_LOCK_MIN_PASSWORD_LENGTH, 6, "The app-access password minimum must remain the user-approved six characters.")
-assert.equal(appPasswordPolicyError("Aa1bb"), "Use at least 6 characters.")
-assert.equal(appPasswordPolicyError("abcdef"), "Use at least one uppercase letter, one lowercase letter, and one number.")
-assert.equal(appPasswordPolicyError("Aa1bbb"), null, "Exactly six policy-compliant characters must be accepted.")
+assert.equal(APP_LOCK_MAX_PASSWORD_LENGTH, 64, "The app-access password maximum must remain 64 characters.")
+
+for (const password of [
+  "123456",
+  "000000",
+  "001234",
+  "999999999999",
+  "abc123",
+  "ABC123",
+  "Bezgrow2026",
+  "a1b2c3",
+]) {
+  assert.equal(appPasswordPolicyError(password), null, `${JSON.stringify(password)} must satisfy the canonical password rule.`)
+  assert.equal(isValidAppPassword(password), true)
+}
+
+for (const password of [
+  "12345",
+  "abc12",
+  "abcdef",
+  "ABCDEF",
+  "abc def",
+  "123 456",
+  "abc@123",
+  "123456!",
+  "",
+]) {
+  assert.notEqual(appPasswordPolicyError(password), null, `${JSON.stringify(password)} must fail the canonical password rule.`)
+  assert.equal(isValidAppPassword(password), false)
+}
+
+assert.equal(appPasswordPolicyError("12345"), "Password must contain at least 6 characters.")
+assert.equal(appPasswordPolicyError("abc@123"), "Password can contain only letters and numbers.")
+assert.equal(appPasswordPolicyError("abcdef"), "Use either numbers only or include at least one number with the letters.")
+assert.equal(appPasswordPolicyError(`A1${"a".repeat(62)}`), null, "A 64-character password must be accepted.")
+assert.equal(appPasswordPolicyError(`A1${"a".repeat(63)}`), "Password must contain no more than 64 characters.")
+for (let index = 0; index < 256; index += 1) {
+  const generated = generateAppPassword()
+  assert.equal(isValidAppPassword(generated), true, "Every generated password must satisfy the canonical rule.")
+  assert.ok(generated.length >= 10 && generated.length <= 14, "Generated passwords must remain readable in length.")
+  assert.doesNotMatch(generated, /[O0Iil1]/, "Generated passwords should omit confusing characters.")
+}
+
+const leadingZeroPassword = "001234"
+const leadingZeroCredential = provisioning(leadingZeroPassword)
+assert.equal(await verifyAppLockPassword(leadingZeroPassword, leadingZeroCredential), true, "Leading zeroes must be preserved during verification.")
+assert.equal(await verifyAppLockPassword("1234", leadingZeroCredential), false, "A numeric password must never be parsed as a number.")
+assert.equal(await verifyAppLockPassword(leadingZeroPassword, JSON.parse(JSON.stringify(leadingZeroCredential))), true, "Leading zeroes must survive app restart persistence.")
+const caseSensitiveCredential = provisioning("ABC123")
+assert.equal(await verifyAppLockPassword("ABC123", caseSensitiveCredential), true, "Password case must be preserved exactly.")
+assert.equal(await verifyAppLockPassword("abc123", caseSensitiveCredential), false, "Password verification must remain case-sensitive.")
+const completedResetCredential = JSON.parse(JSON.stringify(provisioning("654321"))) as AppLockProvisioning
+assert.equal(await verifyAppLockPassword("654321", completedResetCredential), true, "The reset password must work after app restart.")
+assert.equal(await verifyAppLockPassword("001234", completedResetCredential), false, "The old password must stop working after reset completion.")
+assert.equal(
+  await verifyAppLockPassword("654321", { ...completedResetCredential, device_id: "BZG-ANOTHER-DEVICE-0002" }),
+  false,
+  "The reset password verifier must remain bound to the target Device ID.",
+)
 assert.equal(appPasswordPolicyError(changedPassword), null)
 
 const signedReset: AppLockProvisioning = {
@@ -94,11 +153,19 @@ const localApi = read("lib/offline/local/api.ts")
 const repositories = read("lib/offline/local/repositories.ts")
 const products = read("app/dashboard/products/page.tsx")
 const customers = read("app/dashboard/customers/page.tsx")
+const adminLicensePage = read("app/admin/licenses/page.tsx")
+const adminLicenseDialog = read("components/admin/LicenseActionDialog.tsx")
 
 assert.match(server, /pbkdf2Sync[\s\S]*APP_LOCK_ITERATIONS[\s\S]*sha256/, "Initial passwords must become salted one-way verifiers on the server.")
 assert.match(client, /store_secret[\s\S]*APP_LOCK_SECRET_KEY/, "The local verifier must use the OS credential store, not SQLite business data.")
 assert.match(client + provisioningPolicy, /APP_LOCK_WATERMARK_KEY[\s\S]*watermarkRecognizesSignedCredential/, "A non-secret persistence watermark must prevent an update or keychain loss from rolling a locally changed password back to the initial signed verifier.")
 assert.doesNotMatch(client, /putOfflineData|localStorage\.setItem\([^\n]*password/, "The app password must not enter SQLite or browser storage.")
+assert.doesNotMatch(
+  [client, gate, settings, adminLicensePage, adminLicenseDialog, adminRoute].join("\n"),
+  /(?:parseInt|Number)\([^\n)]*(?:password|appPassword|app_password)/i,
+  "Passwords must never be converted to numbers.",
+)
+assert.doesNotMatch(adminLicensePage + adminLicenseDialog, /function generateAppPassword/, "Admin screens must use the canonical shared generator.")
 assert.match(localLicense, /verifyLicenseSignature[\s\S]*provisionAppLockFromLicense/, "Only a verified signed licence may provision App Lock.")
 assert.match(adminRoute, /createAppLockProvisioning\(input\.app_password, input\.device_id\)/, "Licence generation must provision the first device password.")
 assert.match(adminRoute, /APP_PASSWORD_RESET_AUTHORIZED/, "The control plane must expose an explicit audited password-reset action.")

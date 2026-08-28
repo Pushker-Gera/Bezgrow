@@ -7,7 +7,7 @@ import { pathToFileURL } from "node:url";
 import ts from "typescript";
 
 const DEVICE_ID = "BZG-54842A525D2A47A5BEB2CBD7";
-const APP_PASSWORD = "ReleaseSecure9";
+const APP_PASSWORD = "001234";
 const APP_SALT = Buffer.from("0123456789abcdef", "utf8");
 const outDir = await mkdtemp(join(tmpdir(), "bezgrow-license-flow-"));
 
@@ -333,6 +333,7 @@ async function main() {
               true,
               `${duration}/${platform}/${architecture}/${planName} must pass license validation.`,
             );
+            assert.equal(parsedForm.data.app_password, APP_PASSWORD, "Initial licence passwords must preserve leading zeroes.");
             assert.equal(parsedForm.data.workspace_id, undefined, "An empty optional Workspace ID must be omitted.");
             assert.equal(parsedForm.data.internal_notes, "", "Empty optional Internal notes must remain valid.");
             const signedArchitecture = platform === "windows" && parsedForm.data.architecture === "x64"

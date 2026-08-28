@@ -15,8 +15,11 @@
 
 # next.js
 /.next/
+/.next-stale-*/
 /.next.generated-stale-*/
 /out/
+/output/
+/tmp/
 
 # production
 /build
@@ -64,3 +67,9 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# Finder/iCloud conflict copies are not source files.
+**/* 2.ts
+**/* 2.tsx
+**/* 2.mjs
+**/* 2.json

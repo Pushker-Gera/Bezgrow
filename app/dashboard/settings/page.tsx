@@ -20,7 +20,12 @@ import {
   requestAppLock,
   saveAutoLockDelay,
 } from "@/lib/app-lock/client"
-import { APP_LOCK_MIN_PASSWORD_LENGTH, appPasswordPolicyError } from "@/lib/app-lock/shared"
+import {
+  APP_LOCK_MAX_PASSWORD_LENGTH,
+  APP_LOCK_MIN_PASSWORD_LENGTH,
+  APP_LOCK_PASSWORD_HELP,
+  appPasswordPolicyError,
+} from "@/lib/app-lock/shared"
 import { getOrganizationId } from "@/lib/getOrganization"
 import { createOfflineId, exportOfflineBackup, getOfflineData, putOfflineData, queueOfflineAction, restoreOfflineBackup } from "@/lib/offline/db"
 import { shouldUseWebOfflineFallback } from "@/lib/offline/network"
@@ -769,6 +774,17 @@ export default function SettingsPage() {
     router.replace("/offline?reason=logged_out&next=%2Fdashboard")
   }
 
+  const newAppPasswordError = newAppPassword ? appPasswordPolicyError(newAppPassword) : null
+  const appPasswordMismatch = Boolean(confirmAppPassword) && newAppPassword !== confirmAppPassword
+  const canChangeAppPassword = Boolean(
+    appLockEnabled
+      && currentAppPassword
+      && newAppPassword
+      && confirmAppPassword
+      && !newAppPasswordError
+      && !appPasswordMismatch
+  )
+
   return (
     <div className="relative min-h-dvh overflow-y-auto overflow-x-hidden bg-black text-white">
       <div className="pointer-events-none absolute inset-0 overflow-hidden">
@@ -959,13 +975,15 @@ export default function SettingsPage() {
               </div>
 
               <div className="mt-6 grid grid-cols-1 gap-4 md:grid-cols-3">
-                <input type="password" autoComplete="current-password" value={currentAppPassword} onChange={(event) => setCurrentAppPassword(event.target.value)} placeholder="Current password" className="h-14 rounded-2xl border border-white/10 bg-black/50 px-5 outline-none focus:border-cyan-400/40" />
-                <input type="password" autoComplete="new-password" value={newAppPassword} onChange={(event) => setNewAppPassword(event.target.value)} placeholder="New password" className="h-14 rounded-2xl border border-white/10 bg-black/50 px-5 outline-none focus:border-cyan-400/40" />
-                <input type="password" autoComplete="new-password" value={confirmAppPassword} onChange={(event) => setConfirmAppPassword(event.target.value)} placeholder="Confirm new password" className="h-14 rounded-2xl border border-white/10 bg-black/50 px-5 outline-none focus:border-cyan-400/40" />
+                <input aria-label="Current app-access password" type="password" autoComplete="current-password" value={currentAppPassword} onChange={(event) => setCurrentAppPassword(event.target.value)} placeholder="Current password" className="h-14 rounded-2xl border border-white/10 bg-black/50 px-5 outline-none focus:border-cyan-400/40" />
+                <input aria-label="New app-access password" type="password" autoComplete="new-password" minLength={APP_LOCK_MIN_PASSWORD_LENGTH} maxLength={APP_LOCK_MAX_PASSWORD_LENGTH} value={newAppPassword} onChange={(event) => setNewAppPassword(event.target.value)} placeholder="New password" aria-invalid={Boolean(newAppPasswordError)} aria-describedby="settings-app-password-help" className={`h-14 rounded-2xl border bg-black/50 px-5 outline-none focus:border-cyan-400/40 ${newAppPasswordError ? "border-red-400/50" : "border-white/10"}`} />
+                <input aria-label="Confirm new app-access password" type="password" autoComplete="new-password" minLength={APP_LOCK_MIN_PASSWORD_LENGTH} maxLength={APP_LOCK_MAX_PASSWORD_LENGTH} value={confirmAppPassword} onChange={(event) => setConfirmAppPassword(event.target.value)} placeholder="Confirm new password" aria-invalid={appPasswordMismatch} aria-describedby="settings-app-password-help" className={`h-14 rounded-2xl border bg-black/50 px-5 outline-none focus:border-cyan-400/40 ${appPasswordMismatch ? "border-red-400/50" : "border-white/10"}`} />
               </div>
-              <p className="mt-3 text-xs leading-5 text-neutral-500">Use at least {APP_LOCK_MIN_PASSWORD_LENGTH} characters with uppercase, lowercase, and a number.</p>
+              <p id="settings-app-password-help" className={`mt-3 text-xs leading-5 ${newAppPasswordError || appPasswordMismatch ? "text-red-200" : "text-neutral-500"}`}>
+                {newAppPasswordError || (appPasswordMismatch ? "The new app-access passwords do not match." : APP_LOCK_PASSWORD_HELP)}
+              </p>
               <div className="mt-5 flex flex-wrap gap-3">
-                <button type="button" data-enter-primary onClick={() => void updateAppPassword()} disabled={!appLockEnabled || changingAppPassword} className="h-12 rounded-2xl bg-white px-5 text-sm font-black text-black disabled:cursor-not-allowed disabled:opacity-40">
+                <button type="button" data-enter-primary onClick={() => void updateAppPassword()} disabled={!canChangeAppPassword || changingAppPassword} className="h-12 rounded-2xl bg-white px-5 text-sm font-black text-black disabled:cursor-not-allowed disabled:opacity-40">
                   {changingAppPassword ? "Changing…" : "Change App Password"}
                 </button>
                 <button type="button" onClick={requestAppLock} disabled={!appLockEnabled} className="h-12 rounded-2xl border border-cyan-300/30 bg-cyan-300/10 px-5 text-sm font-black text-cyan-100 disabled:opacity-40">Lock Now</button>

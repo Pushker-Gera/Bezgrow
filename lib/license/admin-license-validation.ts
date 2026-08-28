@@ -1,5 +1,5 @@
 import { z } from "zod"
-import { APP_LOCK_MIN_PASSWORD_LENGTH, appPasswordPolicyError } from "@/lib/app-lock/shared"
+import { appPasswordPolicyError } from "@/lib/app-lock/shared"
 import { databaseDateTimeSchema } from "@/lib/time/canonical"
 
 export const licenseFieldLabels = {
@@ -115,13 +115,13 @@ export const updateLicenseSchema = z
     confirmed_device_id: z.string().trim().min(8).max(180).optional(),
     confirmation: z.enum(["SUSPEND", "REACTIVATE", "REVOKE"]).optional(),
     reason: z.string().trim().max(500).optional(),
-    app_password: z.string().min(APP_LOCK_MIN_PASSWORD_LENGTH, `Use at least ${APP_LOCK_MIN_PASSWORD_LENGTH} characters.`).max(256).optional(),
+    app_password: z.string().optional(),
   })
   .superRefine((value, context) => {
     const required = (condition: boolean, path: string, message: string) => {
       if (!condition) context.addIssue({ code: "custom", path: [path], message })
     }
-    if (value.app_password) {
+    if (value.app_password !== undefined) {
       const passwordError = appPasswordPolicyError(value.app_password)
       if (passwordError) context.addIssue({ code: "custom", path: ["app_password"], message: passwordError })
     }
@@ -187,7 +187,7 @@ export const createLicenseSchema = z
     internal_notes: z.string().trim().max(2000, "Enter no more than 2,000 characters.").optional().default(""),
     status: z.enum(["draft", "active", "trial"], { error: "Select draft, active, or trial." }).default("active"),
     idempotency_key: optionalIdempotencyKey,
-    app_password: z.string().min(APP_LOCK_MIN_PASSWORD_LENGTH, `Use at least ${APP_LOCK_MIN_PASSWORD_LENGTH} characters.`).max(256),
+    app_password: z.string(),
   })
   .superRefine((value, context) => {
     const passwordError = appPasswordPolicyError(value.app_password)

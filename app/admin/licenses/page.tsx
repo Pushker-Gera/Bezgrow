@@ -17,7 +17,13 @@ import {
 } from "@/components/admin/ControlPlaneUi"
 import { LicenseActionDialog } from "@/components/admin/LicenseActionDialog"
 import { LicenseActionButtons } from "@/components/admin/LicenseActionButtons"
-import { APP_LOCK_MIN_PASSWORD_LENGTH } from "@/lib/app-lock/shared"
+import {
+  APP_LOCK_MAX_PASSWORD_LENGTH,
+  APP_LOCK_MIN_PASSWORD_LENGTH,
+  APP_LOCK_PASSWORD_HELP,
+  appPasswordPolicyError,
+  generateAppPassword,
+} from "@/lib/app-lock/shared"
 import { copyAdminText, downloadAdminFile, secureAdminFetch } from "@/lib/platform-admin/client"
 import {
   createLicenseSchema,
@@ -62,12 +68,6 @@ const initialForm = {
   maximum_branches: "1",
   internal_notes: "",
   app_password: "",
-}
-
-function generateAppPassword() {
-  const alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789"
-  const bytes = crypto.getRandomValues(new Uint8Array(14))
-  return `Bg9-${Array.from(bytes, (byte) => alphabet[byte % alphabet.length]).join("")}`
 }
 
 export default function LicensesPage() {
@@ -365,12 +365,17 @@ export default function LicensesPage() {
                   type={type}
                   value={form[key as keyof typeof form]}
                   minLength={key === "app_password" ? APP_LOCK_MIN_PASSWORD_LENGTH : undefined}
+                  maxLength={key === "app_password" ? APP_LOCK_MAX_PASSWORD_LENGTH : undefined}
                   required={!["customer_phone", "customer_company", "customer_country", "workspace_id", "app_version"].includes(key)}
                   aria-invalid={Boolean(fieldErrors[key as LicenseFieldName])}
                   aria-describedby={fieldErrors[key as LicenseFieldName] ? `${key}-error` : undefined}
                   onChange={(event) => {
-                    setForm((current) => ({ ...current, [key]: event.target.value }))
-                    setFieldErrors((current) => ({ ...current, [key]: undefined }))
+                    const value = event.target.value
+                    setForm((current) => ({ ...current, [key]: value }))
+                    setFieldErrors((current) => ({
+                      ...current,
+                      [key]: key === "app_password" && value ? appPasswordPolicyError(value) || undefined : undefined,
+                    }))
                   }}
                   className={`mt-2 h-11 w-full rounded-xl border bg-black/50 px-3 outline-none focus:border-cyan-400/40 ${fieldErrors[key as LicenseFieldName] ? "border-red-400/60" : "border-white/10"}`}
                 />
@@ -395,7 +400,7 @@ export default function LicensesPage() {
           <button type="button" onClick={() => { setForm((current) => ({ ...current, app_password: generateAppPassword() })); setFieldErrors((current) => ({ ...current, app_password: undefined })) }} className="h-11 rounded-xl border border-emerald-400/25 bg-emerald-400/10 px-4 text-sm font-black text-emerald-100">
             Generate strong app password
           </button>
-          <p className="text-xs leading-5 text-neutral-500">App-access passwords require at least {APP_LOCK_MIN_PASSWORD_LENGTH} characters with uppercase, lowercase, and a number.</p>
+          <p className="text-xs leading-5 text-neutral-500">{APP_LOCK_PASSWORD_HELP}</p>
           <fieldset>
             <legend className="text-sm font-bold text-neutral-300">Allowed features</legend>
             <div className="mt-3 flex flex-wrap gap-2">
