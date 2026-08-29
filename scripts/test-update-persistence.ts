@@ -26,7 +26,7 @@ const DEVICE_ID = "BZG-23D76F50F880422489AF152B"
 const APP_PASSWORD = "UpgradeSafe9"
 const BUSINESS_ID = "business-update-fixture"
 const LICENSE_ID = "license-update-fixture"
-const VERSION_N = "0.2.2"
+const LEGACY_VERSIONS = ["0.2.2", "0.2.3", "0.2.4"] as const
 
 type FixtureSnapshot = {
   deviceId: string
@@ -162,6 +162,8 @@ async function main() {
     assert.equal(baseConfig.version, packageJson.version)
 
     const keys = rawKeys()
+    const results: Array<{ from: string; quickCheck: string; foreignKeyViolations: number }> = []
+    for (const legacyVersion of LEGACY_VERSIONS) {
     const legacyPayload: LicensePayload = {
       schema_version: 1,
       license_id: LICENSE_ID,
@@ -173,7 +175,7 @@ async function main() {
       device_id: DEVICE_ID,
       platform: "macos",
       architecture: "arm64",
-      app_version: VERSION_N,
+      app_version: legacyVersion,
       plan_name: "Offline ERP",
       expiry_date: "2099-12-31",
       grace_period_days: 7,
@@ -190,19 +192,23 @@ async function main() {
     assert.equal(await verifyLicenseSignature(parsed, keys.publicKey), true, "The Version N signature must verify in Version N+1.")
 
     const appLock = appLockCredential()
-    const canonicalRoot = join(fixtureRoot, "Application Support", "com.bezgrow.erp")
+    const canonicalRoot = join(fixtureRoot, legacyVersion, "Application Support", "com.bezgrow.erp")
     createVersionNFixture(canonicalRoot, licenseKey, appLock)
     const before = snapshot(canonicalRoot)
 
     // macOS replaces Bezgrow.app but never this bundle-ID-derived data root.
     // This copy represents an independent support snapshot, not a migration or
     // a second live ERP database.
-    const supportSnapshot = join(fixtureRoot, "support-snapshot")
+    const supportSnapshot = join(fixtureRoot, legacyVersion, "support-snapshot")
     cpSync(canonicalRoot, supportSnapshot, { recursive: true })
 
     const database = new DatabaseSync(join(canonicalRoot, "bezgrow-offline.db"), { readOnly: true })
     const row = database.prepare("SELECT * FROM license_state WHERE id = ?").get(LICENSE_ID) as StoredLicenseRow
+    const quickCheck = String(database.prepare("PRAGMA quick_check").get()?.quick_check || "")
+    const foreignKeyViolations = database.prepare("PRAGMA foreign_key_check").all().length
     database.close()
+    assert.equal(quickCheck, "ok", `${legacyVersion} upgrade fixture failed SQLite quick_check.`)
+    assert.equal(foreignKeyViolations, 0, `${legacyVersion} upgrade fixture has foreign-key violations.`)
     const verified = await verifyStoredLicenseRows([row], { publicKey: keys.publicKey, deviceId: DEVICE_ID })
     assert.equal(verified.length, 1)
     assert.equal(evaluateStoredLicense(verified, { deviceId: DEVICE_ID, now: new Date("2026-08-24T00:00:00.000Z") }).allowed, true)
@@ -227,8 +233,10 @@ async function main() {
     const launcher = readFileSync(new URL("../components/desktop/PlatformAdminLauncher.tsx", import.meta.url), "utf8")
     assert.match(launcher, /verifyThisPlatformAdminDevice/)
     assert.doesNotMatch(launcher, /getExplicitControlPlaneActionAuth|localLicenseSnapshot/)
+    results.push({ from: legacyVersion, quickCheck, foreignKeyViolations })
+    }
 
-    console.log(`update-persistence-ok from=${VERSION_N} to=${packageJson.version} device=stable license=verified data=unchanged app_lock=unchanged admin_entry=license-independent`)
+    console.log(`update-persistence-ok from=${results.map((result) => result.from).join(",")} to=${packageJson.version} device=stable license=verified data=unchanged app_lock=unchanged admin_entry=license-independent quick_check=${results.every((result) => result.quickCheck === "ok") ? "ok" : "failed"} foreign_keys=${results.reduce((sum, result) => sum + result.foreignKeyViolations, 0)}`)
   } finally {
     rmSync(fixtureRoot, { recursive: true, force: true })
   }

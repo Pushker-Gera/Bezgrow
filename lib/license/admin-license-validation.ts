@@ -1,5 +1,6 @@
 import { z } from "zod"
-import { APP_LOCK_MIN_PASSWORD_LENGTH, appPasswordPolicyError } from "@/lib/app-lock/shared"
+import { appPasswordPolicyError } from "@/lib/app-lock/shared"
+import { databaseDateTimeSchema } from "@/lib/time/canonical"
 
 export const licenseFieldLabels = {
   customer_name: "Customer name",
@@ -25,6 +26,7 @@ export const licenseFieldLabels = {
   status: "Status",
   idempotency_key: "Idempotency key",
   app_password: "App-access password",
+  expected_updated_at: "Server update timestamp",
 } as const
 
 export const MODERN_LICENSE_FEATURES = [
@@ -96,7 +98,7 @@ export const updateLicenseSchema = z
       "notes",
     ]),
     idempotency_key: z.string().trim().min(8).max(160),
-    expected_updated_at: z.string().datetime(),
+    expected_updated_at: databaseDateTimeSchema,
     renew_months: z.coerce.number().int().refine(
       (value) => LICENSE_RENEWAL_MONTHS.includes(value as (typeof LICENSE_RENEWAL_MONTHS)[number]),
       "Select a supported renewal duration.",
@@ -113,13 +115,13 @@ export const updateLicenseSchema = z
     confirmed_device_id: z.string().trim().min(8).max(180).optional(),
     confirmation: z.enum(["SUSPEND", "REACTIVATE", "REVOKE"]).optional(),
     reason: z.string().trim().max(500).optional(),
-    app_password: z.string().min(APP_LOCK_MIN_PASSWORD_LENGTH).max(256).optional(),
+    app_password: z.string().optional(),
   })
   .superRefine((value, context) => {
     const required = (condition: boolean, path: string, message: string) => {
       if (!condition) context.addIssue({ code: "custom", path: [path], message })
     }
-    if (value.app_password) {
+    if (value.app_password !== undefined) {
       const passwordError = appPasswordPolicyError(value.app_password)
       if (passwordError) context.addIssue({ code: "custom", path: ["app_password"], message: passwordError })
     }
@@ -185,7 +187,7 @@ export const createLicenseSchema = z
     internal_notes: z.string().trim().max(2000, "Enter no more than 2,000 characters.").optional().default(""),
     status: z.enum(["draft", "active", "trial"], { error: "Select draft, active, or trial." }).default("active"),
     idempotency_key: optionalIdempotencyKey,
-    app_password: z.string().min(APP_LOCK_MIN_PASSWORD_LENGTH, `Use at least ${APP_LOCK_MIN_PASSWORD_LENGTH} characters.`).max(256),
+    app_password: z.string(),
   })
   .superRefine((value, context) => {
     const passwordError = appPasswordPolicyError(value.app_password)
@@ -213,6 +215,15 @@ export function licenseValidationIssue(issue: z.core.$ZodIssue) {
     message: issue.message,
     error: `${fieldName}: ${issue.message}`,
   }
+}
+
+export function licenseMutationValidationMessage(action: unknown, issue: z.core.$ZodIssue) {
+  const detail = licenseValidationIssue(issue)
+  if (detail.field === "expected_updated_at") {
+    const operation = action === "reset_app_password" ? "Password reset" : "Licence change"
+    return `${operation} could not be authorized because the server returned an invalid licence update timestamp. Refresh Licenses and try again. Field: expected_updated_at; expected RFC3339.`
+  }
+  return detail.message
 }
 
 export function licenseValidationErrors(error: z.ZodError) {

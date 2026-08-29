@@ -11,6 +11,7 @@ const readinessMigration = read("supabase/migrations/20260821010000_current_admi
 const runtimeCompatibilityMigration = read("supabase/migrations/20260821020000_license_control_plane_runtime_compatibility.sql")
 const atomicLicenseMigration = read("supabase/migrations/20260822010000_atomic_license_mutations.sql")
 const atomicReleaseMigration = read("supabase/migrations/20260822030000_atomic_desktop_release_state.sql")
+const chainRepairMigration = read("supabase/migrations/20260824020000_admin_control_plane_chain_repair.sql")
 const dashboard = read("app/api/admin/dashboard/route.ts")
 const checkin = read("app/api/devices/checkin/route.ts")
 const deviceAuth = read("lib/device/report-auth.ts")
@@ -54,7 +55,7 @@ assert.match(publication, /SUPABASE_SERVICE_ROLE_KEY/, "CI publication must use 
 assert.doesNotMatch(workflow, /NEXT_PUBLIC_SUPABASE_SERVICE_ROLE/, "Service role must never be exposed as NEXT_PUBLIC.")
 
 assert.match(originalMigration, /force row level security/, "Control-plane tables must keep forced RLS.")
-assert.doesNotMatch(originalMigration + correctiveMigration + updaterMigration + deviceMigration + provenanceMigration + readinessMigration + runtimeCompatibilityMigration + atomicLicenseMigration, /disable row level security/i, "No migration may disable RLS.")
+assert.doesNotMatch(originalMigration + correctiveMigration + updaterMigration + deviceMigration + provenanceMigration + readinessMigration + runtimeCompatibilityMigration + atomicLicenseMigration + atomicReleaseMigration + chainRepairMigration, /disable row level security/i, "No migration may disable RLS.")
 assert.match(originalMigration, /admin_audit_logs_append_only/, "Audit log must remain append-only.")
 for (const field of ["mandatory_after", "updater_url", "updater_sha256", "updater_signature_status"]) {
   assert.match(updaterMigration, new RegExp(field), `Updater control-plane field missing: ${field}`)
@@ -79,6 +80,10 @@ assert.match(atomicReleaseMigration, /2026082203/, "Atomic desktop release schem
 assert.match(atomicReleaseMigration, /building'[\s\S]*validating'[\s\S]*ready'[\s\S]*published'[\s\S]*failed'/, "Professional release lifecycle states are incomplete.")
 assert.match(atomicReleaseMigration, /publication_mode[\s\S]*cross-platform[\s\S]*staged/, "Release publication policy is missing.")
 assert.match(atomicReleaseMigration, /trust_mode[\s\S]*internal[\s\S]*stable/, "Release trust policy is missing.")
+assert.match(chainRepairMigration, /2026082402/, "Corrective migration-chain schema version is missing.")
+assert.match(chainRepairMigration, /admin_license_mutations[\s\S]*admin_mutate_license[\s\S]*admin_reset_app_password/, "Corrective readiness must directly verify the skipped atomic licence contract.")
+assert.match(chainRepairMigration, /idx_desktop_releases_publication_cohort[\s\S]*desktop_releases_status_check_v3/, "Corrective readiness must retain atomic release verification.")
+assert.doesNotMatch(chainRepairMigration, /(?:delete\s+from|truncate|drop\s+table|public\.(?:customers|products|invoices|orders|organizations)\b)/i, "Corrective readiness must remain additive and control-plane-only.")
 assert.match(atomicLicenseMigration, /force row level security/, "Licence idempotency records must keep forced RLS.")
 assert.doesNotMatch(atomicLicenseMigration, /public\.(?:customers|products|invoices|orders|organizations)\b/i, "Licence mutations must not touch customer ERP tables.")
 assert.match(readinessMigration, /missing_privileges/, "Current readiness must verify service-role-only table privileges.")

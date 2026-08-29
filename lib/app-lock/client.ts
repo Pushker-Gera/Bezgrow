@@ -13,6 +13,7 @@ import {
   deriveAppLockVerifier,
   verifyAppLockPassword,
 } from "@/lib/app-lock/verification"
+import { appLockProvisioningDecision } from "@/lib/app-lock/provisioning-policy"
 import { getOfflineMeta, setOfflineMeta } from "@/lib/offline/db"
 
 const APP_LOCK_SECRET_KEY = "bezgrow-app-lock-v1"
@@ -93,40 +94,30 @@ export async function provisionAppLockFromLicense(
   if (!isAppLockProvisioning(appLock)) {
     throw new Error("This licence does not contain an app-access password. Ask the platform administrator to reset the App Password for this device.")
   }
-  if (appLock.device_id !== expectedDeviceId) {
-    throw new Error("The app-access credential was issued for another device.")
-  }
-
   const existing = await readCredential()
   const watermark = await readWatermark()
-  const sameLicenseBinding = existing?.license_id === licenseId && existing?.business_id === businessId
-  const sameWatermarkBinding = watermark?.license_id === licenseId && watermark?.business_id === businessId
-  const watermarkRecognizesSignedCredential = sameWatermarkBinding && watermark?.credential_id === appLock.credential_id
-  const reset = appLock.reset_authorization
-  const freshReset = Boolean(reset && Date.parse(reset.expires_at) > Date.now())
-  if (!existing && sameWatermarkBinding && !watermarkRecognizesSignedCredential && !freshReset) {
-    throw new Error("The locally changed app password cannot be recovered from this older signed licence. Ask the platform administrator to authorize an App Password reset.")
+  const decision = appLockProvisioningDecision({
+    appLock,
+    expectedDeviceId,
+    licenseId,
+    businessId,
+    existing,
+    watermark,
+  })
+  if (decision === "ignore") {
+    return { provisioned: false, resetApplied: false }
   }
-  if (!sameLicenseBinding && reset && Date.parse(reset.expires_at) <= Date.now() && !watermarkRecognizesSignedCredential) {
-    throw new Error("This app-password reset authorization has expired. Ask the platform administrator to issue a new reset.")
-  }
-  const resetIsUsable = Boolean(
-    reset?.id
-      && Date.parse(reset.expires_at) > Date.now()
-      && (!sameLicenseBinding || existing?.applied_reset_authorization_id !== reset.id)
-  )
-  if (sameLicenseBinding && !resetIsUsable) return { provisioned: false, resetApplied: false }
 
   const credential: AppLockCredential = {
     ...appLock,
     license_id: licenseId,
     business_id: businessId,
-    applied_reset_authorization_id: reset?.id || null,
+    applied_reset_authorization_id: appLock.reset_authorization?.id || null,
   }
   await writeCredential(credential)
   await writeWatermark(credential)
   window.dispatchEvent(new Event(APP_LOCK_CREDENTIAL_CHANGED_EVENT))
-  return { provisioned: true, resetApplied: Boolean(reset) }
+  return { provisioned: true, resetApplied: Boolean(appLock.reset_authorization) }
 }
 
 export async function verifyAppPassword(password: string) {

@@ -4,6 +4,13 @@ import type { FormEvent } from "react"
 import { useMemo, useState } from "react"
 import { AdminModal, AdminNotice, displayValue } from "@/components/admin/ControlPlaneUi"
 import {
+  APP_LOCK_MAX_PASSWORD_LENGTH,
+  APP_LOCK_MIN_PASSWORD_LENGTH,
+  APP_LOCK_PASSWORD_HELP,
+  appPasswordPolicyError,
+  generateAppPassword,
+} from "@/lib/app-lock/shared"
+import {
   addLicenseDays,
   licenseActionStateError,
   renewedExpiry,
@@ -11,6 +18,7 @@ import {
 import {
   LICENSE_RENEWAL_MONTHS,
   MODERN_LICENSE_FEATURES,
+  licenseMutationValidationMessage,
   updateLicenseSchema,
   type AdminLicenseAction,
   type ValidUpdateLicenseInput,
@@ -55,12 +63,6 @@ function inputClassName(danger = false) {
   return `mt-2 h-11 w-full rounded-xl border bg-black/50 px-3 outline-none focus:border-cyan-400/50 ${danger ? "border-red-400/40" : "border-white/10"}`
 }
 
-function generateAppPassword() {
-  const alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789"
-  const bytes = crypto.getRandomValues(new Uint8Array(14))
-  return `Bg9-${Array.from(bytes, (byte) => alphabet[byte % alphabet.length]).join("")}`
-}
-
 export function LicenseActionDialog({ action, row, onClose, onConfirm }: LicenseActionDialogProps) {
   const currentFeatures = useMemo(
     () => Array.isArray(row.allowed_features)
@@ -89,36 +91,38 @@ export function LicenseActionDialog({ action, row, onClose, onConfirm }: License
     : action === "extend"
       ? addLicenseDays(currentExpiry, extendDays)
       : ""
+  const candidate = {
+    id: String(row.id),
+    action,
+    idempotency_key: idempotencyKey,
+    expected_updated_at: String(row.updated_at),
+    renew_months: action === "renew" ? renewMonths : undefined,
+    extend_days: action === "extend" ? extendDays : undefined,
+    grace_days: action === "change_grace" ? graceDays : undefined,
+    allowed_features: action === "update_features" ? features : undefined,
+    plan_name: action === "update_features" ? planName : undefined,
+    new_device_id: action === "replace_device" || action === "transfer" ? newDeviceId : undefined,
+    confirmed_device_id: action === "replace_device" || action === "transfer" ? confirmedDeviceId : undefined,
+    confirmation: ["suspend", "reactivate", "revoke"].includes(action) ? confirmation : undefined,
+    reason: ["replace_device", "transfer", "suspend", "reactivate", "revoke", "reset_app_password"].includes(action) ? reason : undefined,
+    app_password: ["replace_device", "transfer", "reset_app_password"].includes(action) ? appPassword : undefined,
+    internal_notes: action === "notes" ? internalNotes : undefined,
+  }
+  const candidateValidation = updateLicenseSchema.safeParse(candidate)
+  const appPasswordError = appPassword ? appPasswordPolicyError(appPassword) : null
 
   async function submit(event: FormEvent) {
     event.preventDefault()
     if (pending || stateError) return
     setError("")
-    const candidate = {
-      id: String(row.id),
-      action,
-      idempotency_key: idempotencyKey,
-      expected_updated_at: String(row.updated_at),
-      renew_months: action === "renew" ? renewMonths : undefined,
-      extend_days: action === "extend" ? extendDays : undefined,
-      grace_days: action === "change_grace" ? graceDays : undefined,
-      allowed_features: action === "update_features" ? features : undefined,
-      plan_name: action === "update_features" ? planName : undefined,
-      new_device_id: action === "replace_device" || action === "transfer" ? newDeviceId : undefined,
-      confirmed_device_id: action === "replace_device" || action === "transfer" ? confirmedDeviceId : undefined,
-      confirmation: ["suspend", "reactivate", "revoke"].includes(action) ? confirmation : undefined,
-      reason: ["replace_device", "transfer", "suspend", "reactivate", "revoke", "reset_app_password"].includes(action) ? reason : undefined,
-      app_password: ["replace_device", "transfer", "reset_app_password"].includes(action) ? appPassword : undefined,
-      internal_notes: action === "notes" ? internalNotes : undefined,
-    }
-    const parsed = updateLicenseSchema.safeParse(candidate)
-    if (!parsed.success) {
-      setError(parsed.error.issues[0]?.message || "Check the licence change and try again.")
+    if (!candidateValidation.success) {
+      const issue = candidateValidation.error.issues[0]
+      setError(issue ? licenseMutationValidationMessage(action, issue) : "Check the licence change and try again.")
       return
     }
     setPending(true)
     try {
-      await onConfirm(parsed.data)
+      await onConfirm(candidateValidation.data)
     } catch (submitError) {
       setError(submitError instanceof Error ? submitError.message : "Licence action failed.")
       setPending(false)
@@ -207,8 +211,12 @@ export function LicenseActionDialog({ action, row, onClose, onConfirm }: License
             </p>
             <label className="block text-sm font-bold text-neutral-300">Target Device ID<input autoFocus value={newDeviceId} onChange={(event) => setNewDeviceId(event.target.value)} className={inputClassName()} /></label>
             <label className="block text-sm font-bold text-neutral-300">Re-enter target Device ID<input value={confirmedDeviceId} onChange={(event) => setConfirmedDeviceId(event.target.value)} className={inputClassName()} /></label>
-            <label className="block text-sm font-bold text-neutral-300">Initial app-access password<input type="password" autoComplete="new-password" value={appPassword} onChange={(event) => setAppPassword(event.target.value)} className={inputClassName()} /></label>
-            <button type="button" onClick={() => setAppPassword(generateAppPassword())} className="h-11 rounded-xl border border-emerald-400/25 bg-emerald-400/10 px-4 text-sm font-black text-emerald-100">Generate strong password</button>
+            <label className="block text-sm font-bold text-neutral-300">
+              Initial app-access password
+              <input type="password" autoComplete="new-password" minLength={APP_LOCK_MIN_PASSWORD_LENGTH} maxLength={APP_LOCK_MAX_PASSWORD_LENGTH} required value={appPassword} onChange={(event) => setAppPassword(event.target.value)} aria-invalid={Boolean(appPasswordError)} aria-describedby="device-password-help" className={inputClassName(Boolean(appPasswordError))} />
+            </label>
+            <p id="device-password-help" className={`text-xs leading-5 ${appPasswordError ? "text-red-200" : "text-neutral-500"}`}>{appPasswordError || APP_LOCK_PASSWORD_HELP}</p>
+            <button type="button" onClick={() => { setAppPassword(generateAppPassword()); setError("") }} className="h-11 rounded-xl border border-emerald-400/25 bg-emerald-400/10 px-4 text-sm font-black text-emerald-100">Generate strong password</button>
             <label className="block text-sm font-bold text-neutral-300">Reason<textarea value={reason} onChange={(event) => setReason(event.target.value)} className="mt-2 min-h-24 w-full rounded-xl border border-white/10 bg-black/50 p-3 outline-none focus:border-cyan-400/50" /></label>
           </div>
         )}
@@ -218,9 +226,13 @@ export function LicenseActionDialog({ action, row, onClose, onConfirm }: License
             <p className="rounded-2xl border border-emerald-400/20 bg-emerald-500/10 p-4 text-sm leading-6 text-emerald-100">
               This creates a signed, device-bound reset authorization valid for 30 minutes. It never reveals the previous password and takes effect when this device next verifies the licence or imports the refreshed key.
             </p>
-            <label className="block text-sm font-bold text-neutral-300">New app-access password<input autoFocus type="password" autoComplete="new-password" value={appPassword} onChange={(event) => setAppPassword(event.target.value)} className={inputClassName()} /></label>
-            <button type="button" onClick={() => setAppPassword(generateAppPassword())} className="h-11 rounded-xl border border-emerald-400/25 bg-emerald-400/10 px-4 text-sm font-black text-emerald-100">Generate strong password</button>
-            <label className="block text-sm font-bold text-neutral-300">Reset reason<textarea value={reason} onChange={(event) => setReason(event.target.value)} className="mt-2 min-h-20 w-full rounded-xl border border-white/10 bg-black/50 p-3 outline-none focus:border-emerald-400/50" /></label>
+            <label className="block text-sm font-bold text-neutral-300">
+              New app-access password
+              <input autoFocus type="password" autoComplete="new-password" minLength={APP_LOCK_MIN_PASSWORD_LENGTH} maxLength={APP_LOCK_MAX_PASSWORD_LENGTH} required value={appPassword} onChange={(event) => setAppPassword(event.target.value)} aria-invalid={Boolean(appPasswordError)} aria-describedby="reset-password-help" className={inputClassName(Boolean(appPasswordError))} />
+            </label>
+            <p id="reset-password-help" className={`text-xs leading-5 ${appPasswordError ? "text-red-200" : "text-neutral-500"}`}>{appPasswordError || APP_LOCK_PASSWORD_HELP}</p>
+            <button type="button" onClick={() => { setAppPassword(generateAppPassword()); setError("") }} className="h-11 rounded-xl border border-emerald-400/25 bg-emerald-400/10 px-4 text-sm font-black text-emerald-100">Generate strong password</button>
+            <label className="block text-sm font-bold text-neutral-300">Reset reason<textarea required value={reason} onChange={(event) => setReason(event.target.value)} className="mt-2 min-h-20 w-full rounded-xl border border-white/10 bg-black/50 p-3 outline-none focus:border-emerald-400/50" /></label>
           </div>
         )}
 
@@ -249,7 +261,7 @@ export function LicenseActionDialog({ action, row, onClose, onConfirm }: License
         {error && <AdminNotice tone="danger">{error}</AdminNotice>}
         <div className="desktop-interactive flex flex-col-reverse gap-3 sm:flex-row sm:justify-end">
           <button type="button" disabled={pending} onClick={onClose} className="h-11 rounded-xl border border-white/10 px-5 text-sm font-black disabled:opacity-40">Cancel</button>
-          <button type="submit" disabled={pending || Boolean(stateError)} className={`h-11 rounded-xl px-5 text-sm font-black disabled:opacity-40 ${destructive ? "bg-red-400 text-black" : "bg-cyan-300 text-black"}`}>
+          <button type="submit" disabled={pending || Boolean(stateError) || (action === "reset_app_password" && !candidateValidation.success)} className={`h-11 rounded-xl px-5 text-sm font-black disabled:cursor-not-allowed disabled:opacity-40 ${destructive ? "bg-red-400 text-black" : "bg-cyan-300 text-black"}`}>
             {pending ? "Applying…" : actionButtons[action]}
           </button>
         </div>

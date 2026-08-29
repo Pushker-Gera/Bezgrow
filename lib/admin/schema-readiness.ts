@@ -51,7 +51,7 @@ function normalizeStatus(value: unknown): AdminControlPlaneSchemaStatus {
   return {
     ready:
       raw.ready === true &&
-      expectedVersion === ADMIN_CONTROL_PLANE_SCHEMA_VERSION &&
+      expectedVersion >= ADMIN_CONTROL_PLANE_SCHEMA_VERSION &&
       actualVersion !== null &&
       actualVersion >= ADMIN_CONTROL_PLANE_SCHEMA_VERSION,
     expectedVersion,

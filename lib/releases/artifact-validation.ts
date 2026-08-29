@@ -10,6 +10,7 @@ import {
   type ReleaseMode,
   type ReleaseTrustState,
 } from "@/lib/releases/trust"
+import { isRfc3339DateTimeInput } from "@/lib/time/canonical"
 
 export type InstallerPlatform = "macos" | "windows"
 export type InstallerArchitecture = "arm64" | "x64" | "x86_64"
@@ -165,7 +166,7 @@ function commitLike(value: string | null | undefined) {
 }
 
 function timestampLike(value: string | null | undefined) {
-  return Boolean(value && !Number.isNaN(Date.parse(value)))
+  return isRfc3339DateTimeInput(value)
 }
 
 function candidateHref(candidate: InstallerCandidate) {

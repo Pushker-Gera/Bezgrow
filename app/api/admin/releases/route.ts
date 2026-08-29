@@ -15,6 +15,7 @@ import {
 import { validateInstallerCandidate } from "@/lib/releases/artifact-validation"
 import { verifyUpdaterArtifact } from "@/lib/releases/updater-signature"
 import { adminSupabase } from "@/lib/supabase/admin"
+import { canonicalUtcDateTimeSchema } from "@/lib/time/canonical"
 
 export const dynamic = "force-dynamic"
 
@@ -28,7 +29,7 @@ const createReleaseSchema = z.object({
   release_channel: z.string().trim().min(2).max(40).default("stable"),
   publication_mode: z.enum(["cross-platform", "staged"]).default("cross-platform"),
   build_commit: z.string().trim().regex(/^[a-fA-F0-9]{40}$/),
-  build_timestamp: z.string().datetime({ offset: true }),
+  build_timestamp: canonicalUtcDateTimeSchema,
   file_url: httpsUrl,
   file_size: z.coerce.number().int().min(1).optional(),
   sha256: z.string().trim().regex(/^[a-fA-F0-9]{64}$/).optional(),
@@ -42,7 +43,7 @@ const createReleaseSchema = z.object({
   release_notes: z.string().trim().max(10000).optional(),
   rollout_percentage: z.coerce.number().int().min(0).max(100).default(100),
   mandatory: z.boolean().default(false),
-  mandatory_after: z.string().datetime({ offset: true }).optional(),
+  mandatory_after: canonicalUtcDateTimeSchema.optional(),
 })
 
 const releaseActionSchema = z.object({

@@ -35,6 +35,15 @@ const navItems = [
 
 const mobilePrimary = navItems.slice(0, 3)
 const mobileMore = navItems.slice(3)
+const adminBuildVersion = process.env.NEXT_PUBLIC_BEZGROW_BUILD_VERSION || "development"
+const adminBuildCommit = process.env.NEXT_PUBLIC_BEZGROW_BUILD_COMMIT || "unavailable"
+const adminShortCommit = /^[a-f0-9]{7,40}$/i.test(adminBuildCommit) ? adminBuildCommit.slice(0, 7) : adminBuildCommit
+const adminBuildPlatform = process.env.NEXT_PUBLIC_BEZGROW_BUILD_PLATFORM || "web"
+const adminBuildArchitecture = process.env.NEXT_PUBLIC_BEZGROW_BUILD_ARCHITECTURE || "runtime"
+const adminBuildChannel = process.env.NEXT_PUBLIC_BEZGROW_BUILD_CHANNEL || "development"
+const adminSafeBuildId = [adminBuildVersion, adminShortCommit, adminBuildPlatform, adminBuildArchitecture, adminBuildChannel]
+  .join("-")
+  .replace(/[^A-Za-z0-9._-]/g, "_")
 
 export default function AdminLayout({ children }: { children: ReactNode }) {
   const router = useRouter()
@@ -144,6 +153,9 @@ export default function AdminLayout({ children }: { children: ReactNode }) {
             <p className="text-xs font-bold uppercase tracking-[0.22em] text-cyan-200">Platform Admin</p>
             <h1 className="mt-3 text-3xl font-black">Bezgrow</h1>
             <p className="mt-2 text-sm text-neutral-500">Online control plane</p>
+            <code className="mt-3 block break-all text-[10px] font-bold text-cyan-100" data-admin-build-identity>
+              {adminSafeBuildId}
+            </code>
           </div>
 
           <nav className="mt-5 flex-1 space-y-1 overflow-y-auto pr-1">
@@ -196,6 +208,9 @@ export default function AdminLayout({ children }: { children: ReactNode }) {
                   <p className="mt-1 flex items-center gap-2 text-xs text-neutral-500">
                     <span className={`h-2 w-2 rounded-full ${online ? "bg-emerald-300" : "bg-red-300"}`} />
                     {online ? "Connected to the Bezgrow control plane" : "Internet connection required"}
+                  </p>
+                  <p className="mt-1 truncate text-[10px] font-semibold text-cyan-100" data-admin-build-identity title={adminSafeBuildId}>
+                    Bezgrow {adminBuildVersion} · {adminShortCommit} · {adminBuildPlatform} {adminBuildArchitecture} · {adminBuildChannel}
                   </p>
                 </div>
               </div>

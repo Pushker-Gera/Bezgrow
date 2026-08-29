@@ -7,7 +7,7 @@ import { pathToFileURL } from "node:url";
 import ts from "typescript";
 
 const DEVICE_ID = "BZG-54842A525D2A47A5BEB2CBD7";
-const APP_PASSWORD = "ReleaseSecure9";
+const APP_PASSWORD = "001234";
 const APP_SALT = Buffer.from("0123456789abcdef", "utf8");
 const outDir = await mkdtemp(join(tmpdir(), "bezgrow-license-flow-"));
 
@@ -30,7 +30,9 @@ async function transpileSource(relativePath) {
   const outputText = output.outputText.replace(
     /from "zod";/g,
     `from "${import.meta.resolve("zod")}";`,
-  ).replace(/from "@\/lib\/app-lock\/shared";/g, 'from "../app-lock/shared.mjs";');
+  )
+    .replace(/from "@\/lib\/app-lock\/shared";/g, 'from "../app-lock/shared.mjs";')
+    .replace(/from "@\/lib\/time\/canonical";/g, 'from "../time/canonical.mjs";');
   await writeFile(outputPath, outputText);
   return pathToFileURL(outputPath).href;
 }
@@ -112,6 +114,7 @@ function rowFromPayload(payload, licenseKey, signatureText) {
 
 async function main() {
   try {
+    await transpileSource("lib/time/canonical.ts");
     await transpileSource("lib/app-lock/shared.ts");
     const codec = await import(await transpileSource("lib/license/codec.ts"));
     const policy = await import(await transpileSource("lib/license/policy.ts"));
@@ -162,6 +165,48 @@ async function main() {
     assert.equal(activated.parsed.payload.device_id, DEVICE_ID);
     assert.equal(activated.status.allowed, true);
     assert.equal(activated.status.status, "valid");
+
+    const resetPayloadBase = basePayload();
+    const resetPayload = {
+      ...resetPayloadBase,
+      app_lock: {
+        ...resetPayloadBase.app_lock,
+        credential_id: "credential-release-reset-0002",
+        issued_at: "2026-08-26T18:45:00.000Z",
+        reset_authorization: {
+          id: "reset-authorization-release-0002",
+          issued_at: "2026-08-26T18:45:00.000Z",
+          expires_at: "2026-08-26T19:15:00.000Z",
+        },
+      },
+    };
+    const reversedResetPayload = Object.fromEntries(Object.entries(resetPayload).reverse());
+    assert.equal(
+      codec.canonicalLicenseText(reversedResetPayload),
+      codec.canonicalLicenseText(resetPayload),
+      "Signed reset canonicalization must not depend on insertion order.",
+    );
+    assert.doesNotMatch(
+      codec.canonicalLicenseText({ ...resetPayload, future_optional_field: undefined }),
+      /future_optional_field/,
+      "Undefined signed fields must remain absent instead of becoming null.",
+    );
+    const signedReset = signPayload(resetPayload);
+    const activatedReset = await activateLikeDesktop(signedReset.licenseKey);
+    assert.deepEqual(
+      activatedReset.parsed.payload.app_lock.reset_authorization,
+      resetPayload.app_lock.reset_authorization,
+      "Signing and verification must preserve the exact canonical reset timestamps and key presence.",
+    );
+    const tamperedResetParts = signedReset.licenseKey.split(".");
+    const tamperedResetPayload = JSON.parse(new TextDecoder().decode(codec.base64UrlToBytes(tamperedResetParts[1])));
+    tamperedResetPayload.app_lock.reset_authorization.expires_at = "2026-08-26T19:16:00.000Z";
+    tamperedResetParts[1] = codec.bytesToBase64Url(new TextEncoder().encode(JSON.stringify(tamperedResetPayload)));
+    await assert.rejects(
+      () => activateLikeDesktop(tamperedResetParts.join(".")),
+      /tampered/,
+      "Changing a signed reset expiry must invalidate the Ed25519 signature.",
+    );
 
     const offlineCached = policy.evaluateStoredLicense([activated.row], {
       deviceId: DEVICE_ID,
@@ -288,6 +333,7 @@ async function main() {
               true,
               `${duration}/${platform}/${architecture}/${planName} must pass license validation.`,
             );
+            assert.equal(parsedForm.data.app_password, APP_PASSWORD, "Initial licence passwords must preserve leading zeroes.");
             assert.equal(parsedForm.data.workspace_id, undefined, "An empty optional Workspace ID must be omitted.");
             assert.equal(parsedForm.data.internal_notes, "", "Empty optional Internal notes must remain valid.");
             const signedArchitecture = platform === "windows" && parsedForm.data.architecture === "x64"

@@ -5,6 +5,7 @@ import { z } from "zod"
 import { authenticateDeviceReport } from "@/lib/device/report-auth"
 import { getDesktopReleaseAvailability } from "@/lib/releases/public"
 import { adminSupabase } from "@/lib/supabase/admin"
+import { canonicalUtcDateTimeSchema } from "@/lib/time/canonical"
 
 export const dynamic = "force-dynamic"
 
@@ -19,7 +20,7 @@ const checkinSchema = z.object({
   release_channel: z.string().trim().min(1).max(40).default("stable"),
   activation_status: z.enum(["active", "inactive", "pending"]).default("active"),
   license_status: z.string().trim().min(1).max(80).optional(),
-  timestamp: z.string().datetime().optional(),
+  timestamp: canonicalUtcDateTimeSchema.optional(),
   update_check_result: z.enum(["success", "failed", "no_update", "update_available"]).optional(),
   diagnostics_available: z.boolean().default(false),
 }).strict()
