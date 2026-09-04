@@ -163,13 +163,18 @@ function Enable-BezgrowOfflineMode {
   }
 }
 
-function Invoke-InstalledSqliteCrud([string]$Mode) {
+function Invoke-InstalledSqliteCrud([string]$Mode, [string]$ExpectedSchema = "") {
   Assert-Path $installedSqliteTest "Installed SQLite CRUD test script is missing."
-  & $installedNode `
-    --disable-warning=ExperimentalWarning `
-    $installedSqliteTest `
-    --database $database `
-    --mode $Mode
+  $arguments = @(
+    "--disable-warning=ExperimentalWarning",
+    $installedSqliteTest,
+    "--database", $database,
+    "--mode", $Mode
+  )
+  if (-not [string]::IsNullOrWhiteSpace($ExpectedSchema)) {
+    $arguments += @("--expected-schema", $ExpectedSchema)
+  }
+  & $installedNode $arguments
   if ($LASTEXITCODE -ne 0) {
     throw "Installed SQLite CRUD verification failed in $Mode mode."
   }
@@ -470,12 +475,12 @@ if (-not [string]::IsNullOrWhiteSpace($previousInstaller)) {
   Assert-InstalledBuildIdentity $ExpectedVersion $ExpectedCommit
 }
 Invoke-AppLaunchCycle 2 -LaunchPath $startMenuShortcut
-Invoke-InstalledSqliteCrud "verify"
+Invoke-InstalledSqliteCrud "verify" "19"
 
 try {
   Enable-BezgrowOfflineMode
   Invoke-AppLaunchCycle 3
-  Invoke-InstalledSqliteCrud "verify"
+  Invoke-InstalledSqliteCrud "verify" "19"
 } finally {
   Remove-BezgrowOfflineRules
 }
@@ -483,7 +488,7 @@ try {
 Invoke-Installer @("/S", "/UPDATE")
 Assert-Path $sentinel "The update removed Bezgrow user data."
 Assert-Path $database "The update removed the Bezgrow SQLite database."
-Invoke-InstalledSqliteCrud "verify"
+Invoke-InstalledSqliteCrud "verify" "19"
 
 $uninstallProcess = Start-Process -FilePath $uninstaller -ArgumentList @("/S") -Wait -PassThru
 if ($uninstallProcess.ExitCode -ne 0) {
@@ -505,10 +510,10 @@ Assert-Path $application "Reinstall did not restore the application."
 Assert-Path $sentinel "Reinstall did not preserve Bezgrow user data."
 Assert-Path $database "Reinstall did not preserve the Bezgrow SQLite database."
 Invoke-AppLaunchCycle 4 -LaunchPath $desktopShortcut
-Invoke-InstalledSqliteCrud "verify"
+Invoke-InstalledSqliteCrud "verify" "19"
 
 Write-SmokeDiagnostics "All installer smoke checks completed successfully." $null
-Write-Host "windows-installer-smoke-ok cycles=4 start_menu=ok desktop_shortcut=ok console_windows=none fixed_port=43124 health=ok route=ok sqlite_crud=ok license_persistence=ok offline=ok runtime_recovery=ok window_controls=ok external_browser=none orphan_processes=0 previous_version_upgrade=$(-not [string]::IsNullOrWhiteSpace($previousInstaller)) update_preservation=ok uninstall_preservation=ok reinstall=ok"
+Write-Host "windows-installer-smoke-ok cycles=4 start_menu=ok desktop_shortcut=ok console_windows=none fixed_port=43124 health=ok route=ok sqlite_crud=ok accounting_schema=19 accounting_defaults=32 accounting_migration_idempotent=ok historical_invoice_backpost=none license_persistence=ok offline=ok runtime_recovery=ok window_controls=ok external_browser=none orphan_processes=0 previous_version_upgrade=$(-not [string]::IsNullOrWhiteSpace($previousInstaller)) update_preservation=ok uninstall_preservation=ok reinstall=ok"
 } catch {
   Write-SmokeDiagnostics "Installer smoke failed: $($_.Exception.Message)" $null
   throw

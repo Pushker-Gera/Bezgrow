@@ -26,7 +26,7 @@ const DEVICE_ID = "BZG-23D76F50F880422489AF152B"
 const APP_PASSWORD = "UpgradeSafe9"
 const BUSINESS_ID = "business-update-fixture"
 const LICENSE_ID = "license-update-fixture"
-const LEGACY_VERSIONS = ["0.2.2", "0.2.3", "0.2.4"] as const
+const LEGACY_VERSIONS = ["0.2.2", "0.2.3", "0.2.4", "0.2.5"] as const
 
 type FixtureSnapshot = {
   deviceId: string

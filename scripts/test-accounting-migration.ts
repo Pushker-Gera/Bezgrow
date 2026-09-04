@@ -57,6 +57,28 @@ try {
   assert.equal(count(db, "SELECT COUNT(*) count FROM pragma_foreign_key_check"), 0)
   assert.equal(String((db.prepare("PRAGMA quick_check").get() as { quick_check: string }).quick_check), "ok")
 
+  const migrationSnapshot = {
+    accounts: count(db, "SELECT COUNT(*) count FROM chart_of_accounts WHERE organization_id = 'org:migration'"),
+    systemAccounts: count(db, "SELECT COUNT(*) count FROM chart_of_accounts WHERE organization_id = 'org:migration' AND system_role IS NOT NULL"),
+    settings: count(db, "SELECT COUNT(*) count FROM accounting_settings WHERE organization_id = 'org:migration'"),
+    financialYears: count(db, "SELECT COUNT(*) count FROM financial_years WHERE organization_id = 'org:migration'"),
+    invoices: count(db, "SELECT COUNT(*) count FROM sales_invoices WHERE organization_id = 'org:migration'"),
+    movements: count(db, "SELECT COUNT(*) count FROM stock_movements WHERE organization_id = 'org:migration'"),
+  }
+  db.close()
+  db = new DatabaseSync(databasePath)
+  db.exec("PRAGMA foreign_keys=ON")
+  const currentVersion = Number((db.prepare("PRAGMA user_version").get() as { user_version: number }).user_version)
+  for (const migration of localMigrations.filter((candidate) => candidate.version > currentVersion)) applyMigration(db, migration.version)
+  assert.deepEqual({
+    accounts: count(db, "SELECT COUNT(*) count FROM chart_of_accounts WHERE organization_id = 'org:migration'"),
+    systemAccounts: count(db, "SELECT COUNT(*) count FROM chart_of_accounts WHERE organization_id = 'org:migration' AND system_role IS NOT NULL"),
+    settings: count(db, "SELECT COUNT(*) count FROM accounting_settings WHERE organization_id = 'org:migration'"),
+    financialYears: count(db, "SELECT COUNT(*) count FROM financial_years WHERE organization_id = 'org:migration'"),
+    invoices: count(db, "SELECT COUNT(*) count FROM sales_invoices WHERE organization_id = 'org:migration'"),
+    movements: count(db, "SELECT COUNT(*) count FROM stock_movements WHERE organization_id = 'org:migration'"),
+  }, migrationSnapshot, "Reopening an already-upgraded 0.3.0 database must not duplicate accounting or ERP state.")
+
   const insertVoucher = db.prepare(`INSERT INTO accounting_vouchers (
     id, organization_id, voucher_number, voucher_type, voucher_date, total_debit, total_credit,
     status, financial_year_id, source_type, source_id, total_debit_minor, total_credit_minor, created_at, updated_at
@@ -91,7 +113,7 @@ try {
   assert.equal(count(db, "SELECT COUNT(*) count FROM accounting_voucher_entries"), 4)
   assert.equal(count(db, "SELECT COUNT(*) count FROM pragma_foreign_key_check"), 0)
   assert.equal(String((db.prepare("PRAGMA quick_check").get() as { quick_check: string }).quick_check), "ok")
-  console.log(JSON.stringify({ status: "ok", upgradedFrom: 17, schemaVersion: LOCAL_DB_VERSION, defaultAccounts: 32, immutablePosting: true, sourceIdempotency: true, backupRestore: "ok" }))
+  console.log(JSON.stringify({ status: "ok", upgradedFromRelease: "0.2.5", upgradedFromSchema: 17, schemaVersion: LOCAL_DB_VERSION, defaultAccounts: 32, migrationIdempotency: true, immutablePosting: true, sourceIdempotency: true, backupRestore: "ok" }))
 } finally {
   db.close()
   rmSync(directory, { recursive: true, force: true })

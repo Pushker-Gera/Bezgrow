@@ -12,6 +12,7 @@ function arg(name, fallback = "") {
 
 const databasePath = resolve(arg("--database"))
 const mode = arg("--mode", "verify")
+const expectedSchema = Number(arg("--expected-schema", "0"))
 if (!databasePath || !existsSync(databasePath)) {
   throw new Error(`The installed Bezgrow SQLite database is missing: ${databasePath}`)
 }
@@ -39,6 +40,32 @@ function openDatabase() {
 function verify(database) {
   const version = Number(database.prepare("PRAGMA user_version").get().user_version)
   assert.ok(version >= 8, `Expected installed schema version 8 or newer, received ${version}.`)
+  if (expectedSchema > 0) {
+    assert.equal(version, expectedSchema, `Expected the upgraded packaged database to be schema ${expectedSchema}.`)
+    const accountingTables = database.prepare(`SELECT COUNT(*) count FROM sqlite_master
+      WHERE type = 'table' AND name IN ('chart_of_accounts', 'accounting_settings', 'accounting_vouchers', 'accounting_voucher_entries', 'accounting_sequences', 'accounting_warnings')`).get().count
+    assert.equal(Number(accountingTables), 6, "Accounting Phase 1 tables are incomplete in the installed database.")
+    assert.equal(
+      Number(database.prepare("SELECT COUNT(*) count FROM chart_of_accounts WHERE organization_id = ? AND system_role IS NOT NULL").get(ids.organization).count),
+      32,
+      "The upgraded business must have exactly one complete system Chart of Accounts."
+    )
+    assert.equal(
+      Number(database.prepare("SELECT COUNT(*) count FROM accounting_settings WHERE organization_id = ?").get(ids.organization).count),
+      1,
+      "The upgraded business must have exactly one accounting initialization record."
+    )
+    assert.equal(
+      Number(database.prepare("SELECT COUNT(*) count FROM accounting_vouchers WHERE organization_id = ? AND source_type = 'SALES_INVOICE' AND source_id = ?").get(ids.organization, ids.invoice).count),
+      0,
+      "The 0.2.5 historical invoice must not be silently back-posted during migration."
+    )
+    assert.equal(
+      Number(database.prepare("SELECT COUNT(*) count FROM (SELECT system_role FROM chart_of_accounts WHERE organization_id = ? AND system_role IS NOT NULL GROUP BY system_role HAVING COUNT(*) > 1)").get(ids.organization).count),
+      0,
+      "The upgraded Chart of Accounts contains duplicated system roles."
+    )
+  }
   assert.equal(
     database.prepare("SELECT name FROM products WHERE id = ?").get(ids.product)?.name,
     "Windows Smoke Product Edited",
@@ -171,7 +198,7 @@ database = openDatabase()
 try {
   const version = verify(database)
   console.log(
-    `windows-installed-sqlite-crud-ok mode=${mode} schema=${version} product=create-edit customer=create-edit invoice=create-save stock=updated persistence=reopen license=preserved printing=preserved`
+    `windows-installed-sqlite-crud-ok mode=${mode} schema=${version} expected_schema=${expectedSchema || "legacy"} product=create-edit customer=create-edit invoice=create-save stock=updated persistence=reopen license=preserved printing=preserved accounting_migration=${expectedSchema > 0 ? "verified-idempotent" : "pending-runtime-launch"}`
   )
 } finally {
   database.close()
