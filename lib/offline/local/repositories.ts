@@ -4,6 +4,8 @@ import { getLocalDatabaseService, type SqlExecutor, type SqlValue } from "@/lib/
 import { normalizedTables } from "@/lib/offline/local/schema"
 import type { OfflineAction, OfflineActionStatus, OfflineCollection } from "@/lib/offline/db"
 import { financialYearIdForDate } from "@/lib/financial-years"
+import { appendJournal } from "@/lib/offline/local/journal-posting"
+import type { JournalDraft, ValidatedJournal } from "@/lib/accounting/journal"
 
 type DataRow = Record<string, unknown>
 
@@ -68,6 +70,9 @@ const collectionOrder: Partial<Record<OfflineCollection, string>> = {
   chart_of_accounts: "account_code ASC",
   accounting_vouchers: "voucher_date DESC, datetime(created_at) DESC",
   accounting_voucher_entries: "voucher_id ASC, line_no ASC",
+  accounting_settings: "updated_at DESC",
+  accounting_sequences: "updated_at DESC",
+  accounting_warnings: "created_at DESC",
   bank_accounts: "datetime(updated_at) DESC",
   print_templates: "datetime(updated_at) DESC",
   license: "datetime(updated_at) DESC",
@@ -92,6 +97,9 @@ const financialCollectionTables: Partial<Record<OfflineCollection, string>> = {
   financial_year_opening_balances: "financial_year_opening_balances",
   financial_year_inventory_openings: "financial_year_inventory_openings",
   financial_year_invoice_sequences: "financial_year_invoice_sequences",
+  accounting_settings: "accounting_settings",
+  accounting_sequences: "accounting_sequences",
+  accounting_warnings: "accounting_warnings",
 }
 
 function nowIso() {
@@ -165,21 +173,21 @@ function datedFinancialYearId(input: DataRow, organizationId: string, dateKeys: 
   return financialYearIdForDate(organizationId, value)
 }
 
-async function upsert(db: SqlExecutor, table: string, row: DataRow) {
+async function upsert(db: SqlExecutor, table: string, row: DataRow, conflictColumn = "id") {
   const entries = Object.entries(row).filter(([, value]) => value !== undefined)
   if (!entries.length) return
 
   const columns = entries.map(([key]) => key)
   const placeholders = columns.map(() => "?").join(", ")
   const updates = columns
-    .filter((column) => column !== "id")
+    .filter((column) => column !== conflictColumn)
     .map((column) => `${column} = excluded.${column}`)
     .join(", ")
   const values = entries.map(([, value]) => sqlValue(value))
 
   await db.execute(
     `INSERT INTO ${table} (${columns.join(", ")}) VALUES (${placeholders})
-     ON CONFLICT(id) DO UPDATE SET ${updates || "id = excluded.id"}`,
+     ON CONFLICT(${conflictColumn}) DO UPDATE SET ${updates || `${conflictColumn} = excluded.${conflictColumn}`}`,
     values
   )
 }
@@ -369,6 +377,9 @@ function invoiceItemRow(input: DataRow, organizationId: string, index = 0) {
     cgst_amount: number(input, ["cgst_amount"], 0),
     sgst_amount: number(input, ["sgst_amount"], 0),
     igst_amount: number(input, ["igst_amount"], 0),
+    cost_rate_minor: input.cost_rate_minor === null ? null : number(input, ["cost_rate_minor"], 0),
+    cost_amount_minor: input.cost_amount_minor === null ? null : number(input, ["cost_amount_minor"], 0),
+    cost_status: text(input, ["cost_status"]),
   }
 }
 
@@ -438,6 +449,8 @@ function paymentReceiptRow(input: DataRow, organizationId: string, index = 0) {
     received_at: text(input, ["received_at", "payment_date"]) || nowIso(),
     notes: text(input, ["notes"]),
     financial_year_id: datedFinancialYearId(input, organizationId, ["received_at", "payment_date"]),
+    reversed_at: text(input, ["reversed_at"]),
+    reversal_voucher_id: text(input, ["reversal_voucher_id"]),
   }
 }
 
@@ -473,6 +486,10 @@ function chartAccountRow(input: DataRow, organizationId: string, index = 0) {
     is_bank_account: bool(input, ["is_bank_account"], false),
     is_active: bool(input, ["is_active"], true),
     notes: text(input, ["notes"]),
+    system_role: text(input, ["system_role"]),
+    tax_role: text(input, ["tax_role"]),
+    customer_id: text(input, ["customer_id"]),
+    supplier_id: text(input, ["supplier_id"]),
   }
 }
 
@@ -504,6 +521,16 @@ function accountingVoucherRow(input: DataRow, organizationId: string, index = 0)
     total_credit: number(input, ["total_credit"], 0),
     status: text(input, ["status"], "posted"),
     financial_year_id: datedFinancialYearId(input, organizationId, ["voucher_date", "date"]),
+    source_type: text(input, ["source_type"]),
+    source_id: text(input, ["source_id"]),
+    reversal_of_voucher_id: text(input, ["reversal_of_voucher_id"]),
+    reversed_by_voucher_id: text(input, ["reversed_by_voucher_id"]),
+    total_debit_minor: number(input, ["total_debit_minor"], Math.round(number(input, ["total_debit"], 0) * 100)),
+    total_credit_minor: number(input, ["total_credit_minor"], Math.round(number(input, ["total_credit"], 0) * 100)),
+    is_system_generated: bool(input, ["is_system_generated"], false),
+    accounting_version: number(input, ["accounting_version"], 1),
+    finalized_at: text(input, ["finalized_at"]),
+    created_by: text(input, ["created_by"]),
   }
 }
 
@@ -519,6 +546,11 @@ function accountingVoucherEntryRow(input: DataRow, organizationId: string, index
     debit: number(input, ["debit"], 0),
     credit: number(input, ["credit"], 0),
     description: text(input, ["description", "narration"]),
+    debit_minor: number(input, ["debit_minor"], Math.round(number(input, ["debit"], 0) * 100)),
+    credit_minor: number(input, ["credit_minor"], Math.round(number(input, ["credit"], 0) * 100)),
+    customer_id: text(input, ["customer_id"]),
+    supplier_id: text(input, ["supplier_id"]),
+    reference: text(input, ["reference"]),
   }
 }
 
@@ -695,6 +727,9 @@ function stockMovementRow(input: DataRow, organizationId: string, index = 0) {
     reference_id: text(input, ["reference_id"]),
     movement_date: text(input, ["movement_date"]) || (text(input, ["created_at"]) || nowIso()).slice(0, 10),
     financial_year_id: datedFinancialYearId(input, organizationId, ["movement_date"]),
+    unit_cost_minor: input.unit_cost_minor === null ? null : number(input, ["unit_cost_minor"], 0),
+    total_cost_minor: input.total_cost_minor === null ? null : number(input, ["total_cost_minor"], 0),
+    cost_status: text(input, ["cost_status"]),
   }
 }
 
@@ -1015,6 +1050,18 @@ export class ExpenseRepository extends TableRepository {
       payment_method: text(row, ["payment_method"]),
       reference_no: text(row, ["reference_no"]),
       financial_year_id: datedFinancialYearId(row, organizationId, ["expense_date"]),
+      expense_account_id: text(row, ["expense_account_id"]),
+      payment_account_id: text(row, ["payment_account_id"]),
+      accounting_voucher_id: text(row, ["accounting_voucher_id"]),
+      vendor_name: text(row, ["vendor_name"]),
+      amount_minor: row.amount_minor === null ? null : number(row, ["amount_minor"], Math.round(number(row, ["amount"], 0) * 100)),
+      cgst_minor: number(row, ["cgst_minor"], 0),
+      sgst_minor: number(row, ["sgst_minor"], 0),
+      igst_minor: number(row, ["igst_minor"], 0),
+      revision: number(row, ["revision"], 1),
+      reversed_at: text(row, ["reversed_at"]),
+      replaces_expense_id: text(row, ["replaces_expense_id"]),
+      replaced_by_expense_id: text(row, ["replaced_by_expense_id"]),
     }))
   }
 }
@@ -1035,6 +1082,10 @@ export class PaymentRepository extends TableRepository {
       cleared_at: text(row, ["cleared_at"]),
       notes: text(row, ["notes"]),
       financial_year_id: datedFinancialYearId(row, organizationId, ["payment_date", "received_at"]),
+      accounting_voucher_id: text(row, ["accounting_voucher_id"]),
+      idempotency_key: text(row, ["idempotency_key"]),
+      reversed_at: text(row, ["reversed_at"]),
+      reversal_voucher_id: text(row, ["reversal_voucher_id"]),
     }))
   }
 
@@ -1476,7 +1527,7 @@ async function putNormalizedCollectionWithDb(db: SqlExecutor, organizationId: st
   await ensureOrganization(db, organizationId)
   const financialTable = financialCollectionTables[collection]
   if (financialTable) {
-    for (const row of rows) await upsert(db, financialTable, { ...row, organization_id: organizationId })
+    for (const row of rows) await upsert(db, financialTable, { ...row, organization_id: organizationId }, collection === "accounting_settings" ? "organization_id" : "id")
     return
   }
   // Runtime collection snapshots are local working sets, not authoritative
@@ -1545,7 +1596,7 @@ export async function readNormalizedInvoiceCreationContext(
           [organizationId, offlineClientId]
         )
       : Promise.resolve([]),
-    db.select<DataRow>("SELECT id, invoice_prefix, next_invoice_number FROM organizations WHERE id = ? LIMIT 1", [organizationId]),
+    db.select<DataRow>("SELECT id, invoice_prefix, next_invoice_number, state, gst_number FROM organizations WHERE id = ? LIMIT 1", [organizationId]),
     db.select<DataRow>("SELECT * FROM customers WHERE organization_id = ? AND id = ? AND deleted_at IS NULL LIMIT 1", [organizationId, customerId]),
     uniqueProductIds.length
       ? db.select<DataRow>(
@@ -1648,6 +1699,8 @@ export type NormalizedInvoiceAtomicInput = {
   invoiceSequence: number
   numberingMode: "CONTINUE" | "RESTART"
   financialYearId: string
+  journal: JournalDraft | ValidatedJournal
+  accountingWarnings?: Array<{ id: string; productId: string; message: string }>
 }
 
 export type NormalizedInvoiceDeletionInput = {
@@ -1662,6 +1715,7 @@ export type NormalizedInvoiceDeletionInput = {
   batchDeltas: Array<{ batchId: string; quantity: number; updatedAt: string }>
   restoreMovements: DataRow[]
   deletedAt: string
+  reversalJournals: Array<JournalDraft | ValidatedJournal>
 }
 
 export type NormalizedPaymentAtomicInput = {
@@ -1677,6 +1731,7 @@ export type NormalizedPaymentAtomicInput = {
   amount: number
   updatedAt: string
   financialYearId: string
+  journal: JournalDraft | ValidatedJournal
 }
 
 export async function createNormalizedInvoiceAtomic(input: NormalizedInvoiceAtomicInput) {
@@ -1737,8 +1792,17 @@ export async function createNormalizedInvoiceAtomic(input: NormalizedInvoiceAtom
     for (let index = 0; index < input.ledgerEntries.length; index += 1) {
       await upsert(db, "ledger_entries", ledgerEntryRow(input.ledgerEntries[index], input.organizationId, index))
     }
+    await appendJournal(db, input.journal)
+    for (const warning of input.accountingWarnings || []) {
+      await db.execute(
+        `INSERT OR IGNORE INTO accounting_warnings (
+           id, organization_id, financial_year_id, source_type, source_id, warning_code, message, status, created_at
+         ) VALUES (?, ?, ?, 'SALES_INVOICE', ?, 'MISSING_INVENTORY_COST', ?, 'OPEN', ?)`,
+        [warning.id, input.organizationId, input.financialYearId, warning.productId, warning.message, input.invoice.updated_at as SqlValue]
+      )
+    }
     if (input.receipt) await upsert(db, "payment_receipts", paymentReceiptRow(input.receipt, input.organizationId))
-    if (input.payment) await upsert(db, "payments", input.payment)
+    if (input.payment) await upsert(db, "payments", { ...input.payment, accounting_voucher_id: input.journal.id })
     await db.execute(
       `UPDATE customers
        SET total_sales = COALESCE(total_sales, 0) + ?,
@@ -1779,51 +1843,14 @@ export async function createNormalizedInvoiceAtomic(input: NormalizedInvoiceAtom
 export async function createNormalizedPaymentAtomic(input: NormalizedPaymentAtomicInput) {
   await service.transaction(async (db) => {
     await ensureOrganization(db, input.organizationId)
-    if (input.partyId && input.partyType === "customer") {
-      const party = await db.select<DataRow>(
-        "SELECT id FROM customers WHERE organization_id = ? AND id = ? AND deleted_at IS NULL LIMIT 1",
-        [input.organizationId, input.partyId]
-      )
-      if (!party.length) throw new Error("Customer was not found.")
-    }
-    if (input.partyId && input.partyType === "supplier") {
-      const party = await db.select<DataRow>(
-        "SELECT id FROM suppliers WHERE organization_id = ? AND id = ? AND deleted_at IS NULL LIMIT 1",
-        [input.organizationId, input.partyId]
-      )
-      if (!party.length) throw new Error("Supplier was not found.")
-    }
-    if (input.documentId && ["sales_invoice", "purchase_invoice", "expense"].includes(input.documentType)) {
-      const table = input.documentType === "sales_invoice" ? "sales_invoices" : input.documentType === "purchase_invoice" ? "purchase_invoices" : "expenses"
-      const totalExpression = input.documentType === "expense"
-        ? "COALESCE(amount, 0)"
-        : input.documentType === "purchase_invoice"
-          ? "COALESCE(grand_total, 0)"
-          : "COALESCE(grand_total, total_amount, total, 0)"
-      const partyColumn = input.documentType === "sales_invoice" ? "customer_id" : input.documentType === "purchase_invoice" ? "supplier_id" : "supplier_id"
-      const documents = await db.select<DataRow>(
-        `SELECT ${partyColumn} AS party_id, ${totalExpression} AS total,
-           MAX(0, COALESCE(outstanding_amount, ${totalExpression} - COALESCE(paid_amount, 0))) AS outstanding
-         FROM ${table} WHERE organization_id = ? AND id = ? AND deleted_at IS NULL LIMIT 1`,
-        [input.organizationId, input.documentId]
-      )
-      const document = documents[0]
-      if (!document) throw new Error("The document being paid was not found.")
-      if (input.partyId && document.party_id && String(document.party_id) !== input.partyId) {
-        throw new Error("The payment party does not match the selected document.")
-      }
-      const outstanding = Math.max(0, Number(document.outstanding || 0))
-      if (input.amount > outstanding + 0.0001) {
-        throw new Error(`Only ${Math.round(outstanding * 100) / 100} remains outstanding on this document.`)
-      }
-    }
-    await upsert(db, "payments", { ...input.payment, financial_year_id: input.financialYearId })
+    await upsert(db, "payments", { ...input.payment, financial_year_id: input.financialYearId, accounting_voucher_id: input.journal.id })
     if (input.receipt) {
       await upsert(db, "payment_receipts", paymentReceiptRow({ ...input.receipt, financial_year_id: input.financialYearId }, input.organizationId))
     }
     for (let index = 0; index < input.ledgerEntries.length; index += 1) {
       await upsert(db, "ledger_entries", ledgerEntryRow({ ...input.ledgerEntries[index], financial_year_id: input.financialYearId }, input.organizationId, index))
     }
+    await appendJournal(db, input.journal)
 
     if (input.documentId && input.documentType === "sales_invoice") {
       await db.execute(
@@ -1923,6 +1950,7 @@ export async function deleteNormalizedInvoiceAtomic(input: NormalizedInvoiceDele
     for (let index = 0; index < input.restoreMovements.length; index += 1) {
       await upsert(db, "stock_movements", stockMovementRow(input.restoreMovements[index], input.organizationId, index))
     }
+    for (const reversal of input.reversalJournals) await appendJournal(db, reversal)
     await db.execute(
       `UPDATE sales_invoices SET deleted_at = ?, sync_status = 'pending_delete', updated_at = ?
        WHERE organization_id = ? AND id = ? AND deleted_at IS NULL`,
@@ -2844,9 +2872,22 @@ export async function clearNormalizedData() {
 
 export async function mergeNormalizedOrganization(sourceOrganizationId: string, targetOrganizationId: string) {
   if (!sourceOrganizationId || !targetOrganizationId || sourceOrganizationId === targetOrganizationId) return
+  const readDb = await service.requireConnection("read")
+  const yearStates = await readDb.select<{ id: string; status: string }>("SELECT id, status FROM financial_years WHERE organization_id = ?", [sourceOrganizationId])
+  const [sourceAccounting, targetAccounting] = await Promise.all([
+    readDb.select<{ count: number }>("SELECT COUNT(*) AS count FROM accounting_vouchers WHERE organization_id = ?", [sourceOrganizationId]),
+    readDb.select<{ count: number }>("SELECT COUNT(*) AS count FROM accounting_vouchers WHERE organization_id = ?", [targetOrganizationId]),
+  ])
+  if (Number(sourceAccounting[0]?.count || 0) > 0 && Number(targetAccounting[0]?.count || 0) > 0) {
+    throw new Error("Both business identities contain accounting history. Automatic identity merge was stopped to preserve both audit trails.")
+  }
   const businessTables = [
     "financial_years",
     "financial_year_invoice_sequences",
+    "chart_of_accounts",
+    "accounting_settings",
+    "accounting_sequences",
+    "accounting_warnings",
     "products",
     "inventory_items",
     "stock_batches",
@@ -2882,7 +2923,6 @@ export async function mergeNormalizedOrganization(sourceOrganizationId: string, 
   await service.transaction(async (db) => {
     await ensureOrganization(db, targetOrganizationId)
     await db.execute("PRAGMA defer_foreign_keys = ON")
-    const yearStates = await db.select<{ id: string; status: string }>("SELECT id, status FROM financial_years WHERE organization_id = ?", [sourceOrganizationId])
     await db.execute("UPDATE financial_years SET status = 'OPEN' WHERE organization_id = ?", [sourceOrganizationId])
     for (const table of businessTables) {
       await db.execute(`UPDATE ${table} SET organization_id = ? WHERE organization_id = ?`, [targetOrganizationId, sourceOrganizationId])

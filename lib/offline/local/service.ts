@@ -524,6 +524,11 @@ export class LocalDatabaseService {
       "sales_invoices",
       "sales_invoice_items",
       "ledger_entries",
+      "chart_of_accounts",
+      "accounting_vouchers",
+      "accounting_voucher_entries",
+      "accounting_settings",
+      "accounting_warnings",
       "offline_sync_queue",
       "database_health",
     ]

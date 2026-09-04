@@ -12,15 +12,30 @@ export default function PlatformAdminLauncher({ className = "" }: { className?: 
 
   useEffect(() => {
     let active = true
-    void isTauriRuntimeAsync().then(async (value) => {
+    let running = false
+    let desktopRuntime = false
+    const verifyAuthorization = async () => {
+      if (!active || !desktopRuntime || running || !navigator.onLine) return
+      running = true
+      try {
+        const allowed = await verifyThisPlatformAdminDevice().catch(() => false)
+        if (active) setAuthorized(allowed)
+      } finally {
+        running = false
+      }
+    }
+    void isTauriRuntimeAsync().then((value) => {
       if (!active) return
+      desktopRuntime = value
       setDesktop(value)
-      if (!value || !navigator.onLine) return
-      const allowed = await verifyThisPlatformAdminDevice().catch(() => false)
-      if (active) setAuthorized(allowed)
-    })
+      if (value) void verifyAuthorization()
+    }).catch(() => { if (active) setDesktop(false) })
+    window.addEventListener("online", verifyAuthorization)
+    window.addEventListener("focus", verifyAuthorization)
     return () => {
       active = false
+      window.removeEventListener("online", verifyAuthorization)
+      window.removeEventListener("focus", verifyAuthorization)
     }
   }, [])
 

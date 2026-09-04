@@ -4,6 +4,7 @@ export type AppLockBindingMarker = {
   license_id: string
   business_id: string
   credential_id: string
+  issued_at?: string | null
   applied_reset_authorization_id?: string | null
 }
 
@@ -36,6 +37,15 @@ export function appLockProvisioningDecision(input: {
   )
 
   if (resetWasAlreadyApplied) return "ignore" as const
+  const installedIssuedAt = Math.max(
+    sameLicenseBinding ? Date.parse(existing?.issued_at || "") || 0 : 0,
+    sameWatermarkBinding ? Date.parse(watermark?.issued_at || "") || 0 : 0,
+  )
+  if (reset && installedIssuedAt && Date.parse(reset.issued_at) <= installedIssuedAt) {
+    // Concurrent/reordered refresh responses must not roll a newer reset or
+    // a local password change back to an older, still-unexpired reset.
+    return "ignore" as const
+  }
   if (reset && !freshReset) {
     throw new Error("This app-password reset authorization has expired. Ask the platform administrator to issue a new reset.")
   }

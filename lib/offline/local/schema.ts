@@ -1,6 +1,6 @@
 "use client"
 
-export const LOCAL_DB_VERSION = 17
+export const LOCAL_DB_VERSION = 19
 export const LOCAL_DB_URL = "sqlite:bezgrow-offline.db"
 
 export const normalizedTables = [
@@ -46,6 +46,9 @@ export const normalizedTables = [
   "chart_of_accounts",
   "accounting_vouchers",
   "accounting_voucher_entries",
+  "accounting_settings",
+  "accounting_sequences",
+  "accounting_warnings",
   "bank_accounts",
   "gst_tax_rates",
   "gst_invoice_summary",
@@ -1712,6 +1715,251 @@ export const localMigrations: Array<{ version: number; name: string; sql: string
        FROM fy_v17_settlement_repairs repair
        WHERE repair.sales_invoice_count > 0 OR repair.purchase_invoice_count > 0`,
       "DROP TABLE fy_v17_settlement_repairs",
+    ],
+  },
+  {
+    version: 18,
+    name: "phase_one_double_entry_accounting_foundation",
+    sql: [
+      `CREATE TABLE IF NOT EXISTS accounting_settings (
+        organization_id TEXT PRIMARY KEY REFERENCES organizations(id) ON DELETE CASCADE,
+        accounting_version INTEGER NOT NULL DEFAULT 1,
+        activation_date TEXT NOT NULL,
+        opening_date TEXT NOT NULL,
+        historical_policy TEXT NOT NULL DEFAULT 'CONTROLLED_OPENING',
+        initialization_status TEXT NOT NULL DEFAULT 'PENDING' CHECK (initialization_status IN ('PENDING', 'INITIALIZED', 'NEEDS_REVIEW')),
+        opening_voucher_id TEXT REFERENCES accounting_vouchers(id) ON DELETE SET NULL,
+        warning_count INTEGER NOT NULL DEFAULT 0,
+        initialized_at TEXT,
+        created_at TEXT NOT NULL DEFAULT (datetime('now')),
+        updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+      )`,
+      `CREATE TABLE IF NOT EXISTS accounting_sequences (
+        id TEXT PRIMARY KEY,
+        organization_id TEXT NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+        financial_year_id TEXT NOT NULL REFERENCES financial_years(id) ON DELETE CASCADE,
+        voucher_type TEXT NOT NULL,
+        prefix TEXT NOT NULL,
+        next_number INTEGER NOT NULL DEFAULT 1 CHECK (next_number > 0),
+        updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+        UNIQUE (organization_id, financial_year_id, voucher_type)
+      )`,
+      `CREATE TABLE IF NOT EXISTS accounting_warnings (
+        id TEXT PRIMARY KEY,
+        organization_id TEXT NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+        financial_year_id TEXT REFERENCES financial_years(id) ON DELETE SET NULL,
+        source_type TEXT NOT NULL,
+        source_id TEXT,
+        warning_code TEXT NOT NULL,
+        message TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'OPEN' CHECK (status IN ('OPEN', 'RESOLVED')),
+        created_at TEXT NOT NULL DEFAULT (datetime('now')),
+        resolved_at TEXT,
+        UNIQUE (organization_id, source_type, source_id, warning_code)
+      )`,
+      "ALTER TABLE chart_of_accounts ADD COLUMN system_role TEXT",
+      "ALTER TABLE chart_of_accounts ADD COLUMN tax_role TEXT",
+      "ALTER TABLE chart_of_accounts ADD COLUMN customer_id TEXT REFERENCES customers(id) ON DELETE SET NULL",
+      "ALTER TABLE chart_of_accounts ADD COLUMN supplier_id TEXT REFERENCES suppliers(id) ON DELETE SET NULL",
+      "ALTER TABLE accounting_vouchers ADD COLUMN source_type TEXT",
+      "ALTER TABLE accounting_vouchers ADD COLUMN source_id TEXT",
+      "ALTER TABLE accounting_vouchers ADD COLUMN reversal_of_voucher_id TEXT REFERENCES accounting_vouchers(id) ON DELETE RESTRICT",
+      "ALTER TABLE accounting_vouchers ADD COLUMN reversed_by_voucher_id TEXT REFERENCES accounting_vouchers(id) ON DELETE RESTRICT",
+      "ALTER TABLE accounting_vouchers ADD COLUMN total_debit_minor INTEGER NOT NULL DEFAULT 0",
+      "ALTER TABLE accounting_vouchers ADD COLUMN total_credit_minor INTEGER NOT NULL DEFAULT 0",
+      "ALTER TABLE accounting_vouchers ADD COLUMN is_system_generated INTEGER NOT NULL DEFAULT 0",
+      "ALTER TABLE accounting_vouchers ADD COLUMN accounting_version INTEGER NOT NULL DEFAULT 1",
+      "ALTER TABLE accounting_vouchers ADD COLUMN finalized_at TEXT",
+      "ALTER TABLE accounting_vouchers ADD COLUMN created_by TEXT",
+      "ALTER TABLE accounting_voucher_entries ADD COLUMN debit_minor INTEGER NOT NULL DEFAULT 0",
+      "ALTER TABLE accounting_voucher_entries ADD COLUMN credit_minor INTEGER NOT NULL DEFAULT 0",
+      "ALTER TABLE accounting_voucher_entries ADD COLUMN customer_id TEXT REFERENCES customers(id) ON DELETE SET NULL",
+      "ALTER TABLE accounting_voucher_entries ADD COLUMN supplier_id TEXT REFERENCES suppliers(id) ON DELETE SET NULL",
+      "ALTER TABLE accounting_voucher_entries ADD COLUMN reference TEXT",
+      "ALTER TABLE sales_invoice_items ADD COLUMN cost_rate_minor INTEGER",
+      "ALTER TABLE sales_invoice_items ADD COLUMN cost_amount_minor INTEGER",
+      "ALTER TABLE sales_invoice_items ADD COLUMN cost_status TEXT",
+      "ALTER TABLE stock_movements ADD COLUMN unit_cost_minor INTEGER",
+      "ALTER TABLE stock_movements ADD COLUMN total_cost_minor INTEGER",
+      "ALTER TABLE stock_movements ADD COLUMN cost_status TEXT",
+      "ALTER TABLE payments ADD COLUMN accounting_voucher_id TEXT REFERENCES accounting_vouchers(id) ON DELETE SET NULL",
+      "ALTER TABLE payments ADD COLUMN idempotency_key TEXT",
+      "ALTER TABLE payments ADD COLUMN reversed_at TEXT",
+      "ALTER TABLE payments ADD COLUMN reversal_voucher_id TEXT REFERENCES accounting_vouchers(id) ON DELETE SET NULL",
+      "ALTER TABLE payment_receipts ADD COLUMN reversed_at TEXT",
+      "ALTER TABLE payment_receipts ADD COLUMN reversal_voucher_id TEXT REFERENCES accounting_vouchers(id) ON DELETE SET NULL",
+      "ALTER TABLE expenses ADD COLUMN expense_account_id TEXT REFERENCES chart_of_accounts(id) ON DELETE RESTRICT",
+      "ALTER TABLE expenses ADD COLUMN payment_account_id TEXT REFERENCES chart_of_accounts(id) ON DELETE RESTRICT",
+      "ALTER TABLE expenses ADD COLUMN accounting_voucher_id TEXT REFERENCES accounting_vouchers(id) ON DELETE SET NULL",
+      "ALTER TABLE expenses ADD COLUMN vendor_name TEXT",
+      "ALTER TABLE expenses ADD COLUMN amount_minor INTEGER",
+      "ALTER TABLE expenses ADD COLUMN cgst_minor INTEGER NOT NULL DEFAULT 0",
+      "ALTER TABLE expenses ADD COLUMN sgst_minor INTEGER NOT NULL DEFAULT 0",
+      "ALTER TABLE expenses ADD COLUMN igst_minor INTEGER NOT NULL DEFAULT 0",
+      "ALTER TABLE expenses ADD COLUMN revision INTEGER NOT NULL DEFAULT 1",
+      "ALTER TABLE expenses ADD COLUMN reversed_at TEXT",
+      "ALTER TABLE expenses ADD COLUMN replaces_expense_id TEXT REFERENCES expenses(id) ON DELETE SET NULL",
+      "ALTER TABLE expenses ADD COLUMN replaced_by_expense_id TEXT REFERENCES expenses(id) ON DELETE SET NULL",
+      `UPDATE accounting_vouchers
+       SET total_debit_minor = CAST(ROUND(COALESCE(total_debit, 0) * 100) AS INTEGER),
+           total_credit_minor = CAST(ROUND(COALESCE(total_credit, 0) * 100) AS INTEGER),
+           source_type = COALESCE(source_type, 'LEGACY_VOUCHER'),
+           source_id = COALESCE(source_id, id),
+           finalized_at = CASE WHEN status = 'posted' THEN COALESCE(finalized_at, updated_at, created_at) ELSE finalized_at END`,
+      `UPDATE accounting_voucher_entries
+       SET debit_minor = CAST(ROUND(COALESCE(debit, 0) * 100) AS INTEGER),
+           credit_minor = CAST(ROUND(COALESCE(credit, 0) * 100) AS INTEGER)`,
+      `UPDATE expenses SET amount_minor = CAST(ROUND(COALESCE(amount, 0) * 100) AS INTEGER) WHERE amount_minor IS NULL`,
+      `UPDATE chart_of_accounts SET
+         system_role = CASE account_code
+           WHEN '1000' THEN 'CASH' WHEN '1010' THEN 'BANK' WHEN '1100' THEN 'ACCOUNTS_RECEIVABLE'
+           WHEN '1200' THEN 'INVENTORY' WHEN '2000' THEN 'ACCOUNTS_PAYABLE' WHEN '2100' THEN 'OUTPUT_CGST'
+           WHEN '2200' THEN 'INPUT_CGST' WHEN '3000' THEN 'CAPITAL' WHEN '4000' THEN 'SALES'
+           WHEN '6000' THEN 'MISCELLANEOUS_EXPENSES' ELSE system_role END,
+         tax_role = CASE account_code WHEN '2100' THEN 'OUTPUT_CGST' WHEN '2200' THEN 'INPUT_CGST' ELSE tax_role END
+       WHERE is_system = 1`,
+      `UPDATE chart_of_accounts SET account_name = 'Output CGST', account_group = 'TAX_LIABILITY', account_type = 'LIABILITY', normal_balance = 'credit' WHERE is_system = 1 AND account_code = '2100'`,
+      `UPDATE chart_of_accounts SET account_name = 'Input CGST', account_group = 'CURRENT_ASSET', account_type = 'ASSET', normal_balance = 'debit' WHERE is_system = 1 AND account_code = '2200'`,
+      `INSERT OR IGNORE INTO chart_of_accounts (
+         id, organization_id, account_code, account_name, account_type, account_group, normal_balance,
+         opening_balance, current_balance, is_system, is_cash_account, is_bank_account, is_active,
+         system_role, tax_role, sync_status, created_at, updated_at
+       )
+       SELECT 'account:' || organization.id || ':' || seed.code, organization.id, seed.code, seed.name,
+         seed.type, seed.group_name, seed.normal, 0, 0, 1, seed.is_cash, seed.is_bank, 1,
+         seed.system_role, seed.tax_role, 'local', datetime('now'), datetime('now')
+       FROM organizations organization
+       CROSS JOIN (
+         SELECT '1000' code, 'Cash' name, 'ASSET' type, 'CASH' group_name, 'debit' normal, 1 is_cash, 0 is_bank, 'CASH' system_role, NULL tax_role
+         UNION ALL SELECT '1010', 'Bank', 'ASSET', 'BANK', 'debit', 0, 1, 'BANK', NULL
+         UNION ALL SELECT '1100', 'Accounts Receivable', 'ASSET', 'RECEIVABLE', 'debit', 0, 0, 'ACCOUNTS_RECEIVABLE', NULL
+         UNION ALL SELECT '1200', 'Inventory', 'ASSET', 'INVENTORY', 'debit', 0, 0, 'INVENTORY', NULL
+         UNION ALL SELECT '2200', 'Input CGST', 'ASSET', 'CURRENT_ASSET', 'debit', 0, 0, 'INPUT_CGST', 'INPUT_CGST'
+         UNION ALL SELECT '2210', 'Input SGST', 'ASSET', 'CURRENT_ASSET', 'debit', 0, 0, 'INPUT_SGST', 'INPUT_SGST'
+         UNION ALL SELECT '2220', 'Input IGST', 'ASSET', 'CURRENT_ASSET', 'debit', 0, 0, 'INPUT_IGST', 'INPUT_IGST'
+         UNION ALL SELECT '1300', 'Other Current Assets', 'ASSET', 'CURRENT_ASSET', 'debit', 0, 0, 'OTHER_CURRENT_ASSETS', NULL
+         UNION ALL SELECT '1500', 'Fixed Assets', 'ASSET', 'FIXED_ASSET', 'debit', 0, 0, 'FIXED_ASSETS', NULL
+         UNION ALL SELECT '2000', 'Accounts Payable', 'LIABILITY', 'PAYABLE', 'credit', 0, 0, 'ACCOUNTS_PAYABLE', NULL
+         UNION ALL SELECT '2100', 'Output CGST', 'LIABILITY', 'TAX_LIABILITY', 'credit', 0, 0, 'OUTPUT_CGST', 'OUTPUT_CGST'
+         UNION ALL SELECT '2110', 'Output SGST', 'LIABILITY', 'TAX_LIABILITY', 'credit', 0, 0, 'OUTPUT_SGST', 'OUTPUT_SGST'
+         UNION ALL SELECT '2120', 'Output IGST', 'LIABILITY', 'TAX_LIABILITY', 'credit', 0, 0, 'OUTPUT_IGST', 'OUTPUT_IGST'
+         UNION ALL SELECT '2190', 'Other Current Liabilities', 'LIABILITY', 'CURRENT_LIABILITY', 'credit', 0, 0, 'OTHER_CURRENT_LIABILITIES', NULL
+         UNION ALL SELECT '3000', 'Capital', 'EQUITY', 'CAPITAL', 'credit', 0, 0, 'CAPITAL', NULL
+         UNION ALL SELECT '3100', 'Retained Earnings / Opening Equity', 'EQUITY', 'CAPITAL', 'credit', 0, 0, 'OPENING_EQUITY', NULL
+         UNION ALL SELECT '3200', 'Drawings', 'EQUITY', 'CAPITAL', 'debit', 0, 0, 'DRAWINGS', NULL
+         UNION ALL SELECT '4000', 'Sales', 'INCOME', 'SALES_INCOME', 'credit', 0, 0, 'SALES', NULL
+         UNION ALL SELECT '4200', 'Other Income', 'INCOME', 'OTHER_INCOME', 'credit', 0, 0, 'OTHER_INCOME', NULL
+         UNION ALL SELECT '5000', 'Cost of Goods Sold', 'EXPENSE', 'COGS', 'debit', 0, 0, 'COGS', NULL
+         UNION ALL SELECT '5100', 'Discount Allowed / Sales Discount', 'EXPENSE', 'DIRECT_EXPENSE', 'debit', 0, 0, 'SALES_DISCOUNT', NULL
+         UNION ALL SELECT '5200', 'Freight / Delivery Expense', 'EXPENSE', 'DIRECT_EXPENSE', 'debit', 0, 0, 'FREIGHT_EXPENSE', NULL
+         UNION ALL SELECT '6000', 'Miscellaneous Expenses', 'EXPENSE', 'INDIRECT_EXPENSE', 'debit', 0, 0, 'MISCELLANEOUS_EXPENSES', NULL
+         UNION ALL SELECT '6010', 'Rent', 'EXPENSE', 'INDIRECT_EXPENSE', 'debit', 0, 0, 'RENT_EXPENSE', NULL
+         UNION ALL SELECT '6020', 'Electricity', 'EXPENSE', 'INDIRECT_EXPENSE', 'debit', 0, 0, 'ELECTRICITY_EXPENSE', NULL
+         UNION ALL SELECT '6030', 'Salary / Wages', 'EXPENSE', 'INDIRECT_EXPENSE', 'debit', 0, 0, 'SALARY_EXPENSE', NULL
+         UNION ALL SELECT '6040', 'Fuel', 'EXPENSE', 'INDIRECT_EXPENSE', 'debit', 0, 0, 'FUEL_EXPENSE', NULL
+         UNION ALL SELECT '6050', 'Advertising', 'EXPENSE', 'INDIRECT_EXPENSE', 'debit', 0, 0, 'ADVERTISING_EXPENSE', NULL
+         UNION ALL SELECT '6060', 'Repairs', 'EXPENSE', 'INDIRECT_EXPENSE', 'debit', 0, 0, 'REPAIRS_EXPENSE', NULL
+         UNION ALL SELECT '6070', 'Internet / Communication', 'EXPENSE', 'INDIRECT_EXPENSE', 'debit', 0, 0, 'COMMUNICATION_EXPENSE', NULL
+         UNION ALL SELECT '6080', 'Professional Fees', 'EXPENSE', 'INDIRECT_EXPENSE', 'debit', 0, 0, 'PROFESSIONAL_FEES', NULL
+         UNION ALL SELECT '6990', 'Round Off / Rounding Adjustment', 'EXPENSE', 'INDIRECT_EXPENSE', 'debit', 0, 0, 'ROUND_OFF', NULL
+       ) seed
+       WHERE organization.deleted_at IS NULL`,
+      `UPDATE chart_of_accounts SET
+         account_type = upper(account_type),
+         account_group = upper(account_group)
+       WHERE account_type IS NOT NULL`,
+      `INSERT OR IGNORE INTO accounting_settings (
+         organization_id, accounting_version, activation_date, opening_date, historical_policy,
+         initialization_status, created_at, updated_at
+       )
+       SELECT id, 1, date('now', 'localtime'), date('now', 'localtime'), 'CONTROLLED_OPENING',
+         'PENDING', datetime('now'), datetime('now')
+       FROM organizations WHERE deleted_at IS NULL`,
+      "CREATE UNIQUE INDEX IF NOT EXISTS idx_chart_accounts_org_system_role ON chart_of_accounts (organization_id, system_role) WHERE system_role IS NOT NULL",
+      "CREATE UNIQUE INDEX IF NOT EXISTS idx_vouchers_org_source ON accounting_vouchers (organization_id, source_type, source_id) WHERE source_type IS NOT NULL AND source_id IS NOT NULL AND status <> 'void'",
+      "CREATE INDEX IF NOT EXISTS idx_vouchers_org_fy_date_status ON accounting_vouchers (organization_id, financial_year_id, voucher_date, status, id)",
+      "CREATE INDEX IF NOT EXISTS idx_vouchers_org_reversal ON accounting_vouchers (organization_id, reversal_of_voucher_id)",
+      "CREATE INDEX IF NOT EXISTS idx_voucher_entries_account_minor ON accounting_voucher_entries (organization_id, account_id, voucher_id, debit_minor, credit_minor)",
+      "CREATE INDEX IF NOT EXISTS idx_voucher_entries_customer ON accounting_voucher_entries (organization_id, customer_id, voucher_id)",
+      "CREATE INDEX IF NOT EXISTS idx_voucher_entries_supplier ON accounting_voucher_entries (organization_id, supplier_id, voucher_id)",
+      "CREATE INDEX IF NOT EXISTS idx_accounting_warnings_open ON accounting_warnings (organization_id, status, financial_year_id, created_at DESC)",
+      "CREATE UNIQUE INDEX IF NOT EXISTS idx_payments_org_idempotency ON payments (organization_id, idempotency_key) WHERE idempotency_key IS NOT NULL",
+      `CREATE TRIGGER IF NOT EXISTS trg_accounting_line_minor_values_insert
+       BEFORE INSERT ON accounting_voucher_entries FOR EACH ROW
+       WHEN NEW.debit_minor < 0 OR NEW.credit_minor < 0
+         OR (NEW.debit_minor > 0 AND NEW.credit_minor > 0)
+         OR (NEW.debit_minor = 0 AND NEW.credit_minor = 0)
+       BEGIN SELECT RAISE(ABORT, 'journal_line_invalid'); END`,
+      `CREATE TRIGGER IF NOT EXISTS trg_accounting_line_minor_values_update
+       BEFORE UPDATE ON accounting_voucher_entries FOR EACH ROW
+       WHEN NEW.debit_minor < 0 OR NEW.credit_minor < 0
+         OR (NEW.debit_minor > 0 AND NEW.credit_minor > 0)
+         OR (NEW.debit_minor = 0 AND NEW.credit_minor = 0)
+       BEGIN SELECT RAISE(ABORT, 'journal_line_invalid'); END`,
+      `CREATE TRIGGER IF NOT EXISTS trg_accounting_line_account_scope
+       BEFORE INSERT ON accounting_voucher_entries FOR EACH ROW
+       WHEN NEW.account_id IS NULL OR NOT EXISTS (
+         SELECT 1 FROM chart_of_accounts account
+         WHERE account.id = NEW.account_id AND account.organization_id = NEW.organization_id AND account.is_active = 1
+       ) OR NOT EXISTS (
+         SELECT 1 FROM accounting_vouchers voucher
+         WHERE voucher.id = NEW.voucher_id AND voucher.organization_id = NEW.organization_id AND voucher.status = 'draft'
+       )
+       BEGIN SELECT RAISE(ABORT, 'journal_account_invalid'); END`,
+      `CREATE TRIGGER IF NOT EXISTS trg_accounting_post_balanced
+       BEFORE UPDATE OF status ON accounting_vouchers FOR EACH ROW
+       WHEN NEW.status = 'posted' AND OLD.status <> 'posted' AND (
+         NEW.total_debit_minor <= 0 OR NEW.total_debit_minor <> NEW.total_credit_minor
+         OR (SELECT COUNT(*) FROM accounting_voucher_entries line WHERE line.organization_id = NEW.organization_id AND line.voucher_id = NEW.id) < 2
+         OR COALESCE((SELECT SUM(line.debit_minor) FROM accounting_voucher_entries line WHERE line.organization_id = NEW.organization_id AND line.voucher_id = NEW.id), 0) <> NEW.total_debit_minor
+         OR COALESCE((SELECT SUM(line.credit_minor) FROM accounting_voucher_entries line WHERE line.organization_id = NEW.organization_id AND line.voucher_id = NEW.id), 0) <> NEW.total_credit_minor
+       )
+       BEGIN SELECT RAISE(ABORT, 'journal_entry_not_balanced'); END`,
+      `CREATE TRIGGER IF NOT EXISTS trg_accounting_post_financial_year
+       BEFORE UPDATE OF status ON accounting_vouchers FOR EACH ROW
+       WHEN NEW.status = 'posted' AND OLD.status <> 'posted' AND NOT EXISTS (
+         SELECT 1 FROM financial_years fy WHERE fy.id = NEW.financial_year_id AND fy.organization_id = NEW.organization_id
+           AND fy.status = 'OPEN' AND date(NEW.voucher_date) BETWEEN date(fy.start_date) AND date(fy.end_date)
+       )
+       BEGIN SELECT RAISE(ABORT, 'selected_financial_year_closed_or_mismatched'); END`,
+      `CREATE TRIGGER IF NOT EXISTS trg_accounting_posted_line_update
+       BEFORE UPDATE ON accounting_voucher_entries FOR EACH ROW
+       WHEN EXISTS (SELECT 1 FROM accounting_vouchers voucher WHERE voucher.id = OLD.voucher_id AND voucher.status = 'posted')
+       BEGIN SELECT RAISE(ABORT, 'posted_journal_is_immutable'); END`,
+      `CREATE TRIGGER IF NOT EXISTS trg_accounting_posted_line_delete
+       BEFORE DELETE ON accounting_voucher_entries FOR EACH ROW
+       WHEN EXISTS (SELECT 1 FROM accounting_vouchers voucher WHERE voucher.id = OLD.voucher_id AND voucher.status = 'posted')
+       BEGIN SELECT RAISE(ABORT, 'posted_journal_is_immutable'); END`,
+      `CREATE TRIGGER IF NOT EXISTS trg_accounting_posted_voucher_delete
+       BEFORE DELETE ON accounting_vouchers FOR EACH ROW WHEN OLD.status = 'posted'
+       BEGIN SELECT RAISE(ABORT, 'posted_journal_is_immutable'); END`,
+      `CREATE TRIGGER IF NOT EXISTS trg_accounting_system_account_delete
+       BEFORE DELETE ON chart_of_accounts FOR EACH ROW WHEN OLD.is_system = 1
+       BEGIN SELECT RAISE(ABORT, 'system_account_cannot_be_deleted'); END`,
+    ],
+  },
+  {
+    version: 19,
+    name: "phase_one_posted_header_hardening",
+    sql: [
+      `UPDATE accounting_vouchers
+       SET status = 'legacy', updated_at = COALESCE(updated_at, datetime('now'))
+       WHERE status = 'posted' AND source_type = 'LEGACY_VOUCHER'`,
+      `CREATE TRIGGER IF NOT EXISTS trg_accounting_line_minor_integer_insert
+       BEFORE INSERT ON accounting_voucher_entries FOR EACH ROW
+       WHEN typeof(NEW.debit_minor) <> 'integer' OR typeof(NEW.credit_minor) <> 'integer'
+       BEGIN SELECT RAISE(ABORT, 'journal_line_minor_units_must_be_integer'); END`,
+      `CREATE TRIGGER IF NOT EXISTS trg_accounting_line_minor_integer_update
+       BEFORE UPDATE ON accounting_voucher_entries FOR EACH ROW
+       WHEN typeof(NEW.debit_minor) <> 'integer' OR typeof(NEW.credit_minor) <> 'integer'
+       BEGIN SELECT RAISE(ABORT, 'journal_line_minor_units_must_be_integer'); END`,
+      `CREATE TRIGGER IF NOT EXISTS trg_accounting_posted_header_immutable
+       BEFORE UPDATE OF organization_id, voucher_number, voucher_type, voucher_date, reference_no,
+         narration, total_debit, total_credit, total_debit_minor, total_credit_minor, status,
+         financial_year_id, source_type, source_id, reversal_of_voucher_id, is_system_generated,
+         accounting_version, finalized_at, created_by
+       ON accounting_vouchers FOR EACH ROW WHEN OLD.status = 'posted'
+       BEGIN SELECT RAISE(ABORT, 'posted_journal_is_immutable'); END`,
     ],
   },
 ]

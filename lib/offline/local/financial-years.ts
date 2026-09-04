@@ -16,6 +16,8 @@ import {
 } from "@/lib/financial-years"
 import { createOfflineId } from "@/lib/offline/db"
 import { getLocalDatabaseService, type SqlValue } from "@/lib/offline/local/service"
+import { validateJournal, type JournalLine } from "@/lib/accounting/journal"
+import { appendJournal } from "@/lib/offline/local/journal-posting"
 
 type DataRow = Record<string, unknown>
 
@@ -80,9 +82,10 @@ function normalizeYear(row: DataRow): FinancialYear {
 async function ensureCurrentFinancialYear(organizationId: string, currentDate: string | Date = new Date()) {
   const current = financialYearForDate(organizationId, currentDate)
   const timestamp = new Date().toISOString()
+  const db = await service.requireConnection("read")
+  const [organization] = await db.select<DataRow>("SELECT id, next_invoice_number FROM organizations WHERE id = ? LIMIT 1", [organizationId])
+  if (!organization) throw new Error("The licensed business was not found in the local database.")
   await service.transaction(async (tx) => {
-    const [organization] = await tx.select<DataRow>("SELECT id, next_invoice_number FROM organizations WHERE id = ? LIMIT 1", [organizationId])
-    if (!organization) throw new Error("The licensed business was not found in the local database.")
     await tx.execute(
       `INSERT OR IGNORE INTO financial_years (
          id, organization_id, label, start_date, end_date, start_month, status, is_active,
@@ -392,6 +395,70 @@ export async function createNextFinancialYear(
   const summary = await financialYearSummary(organizationId, source.id)
   const backup = await createFinancialYearSafetyBackup(next.label)
   const createdAt = nowIso()
+  const accountingDb = await service.requireConnection("read")
+  const [accountingSetting] = await accountingDb.select<DataRow>(
+    "SELECT initialization_status FROM accounting_settings WHERE organization_id = ? LIMIT 1",
+    [organizationId]
+  )
+  const closingAccounts = String(accountingSetting?.initialization_status || "PENDING") === "PENDING"
+    ? []
+    : await accountingDb.select<DataRow>(
+        `SELECT account.id, account.account_type, account.system_role,
+           CASE WHEN account.system_role = 'ACCOUNTS_RECEIVABLE' THEN line.customer_id END AS customer_id,
+           CASE WHEN account.system_role = 'ACCOUNTS_PAYABLE' THEN line.supplier_id END AS supplier_id,
+           COALESCE(SUM(line.debit_minor - line.credit_minor), 0) AS balance_minor
+         FROM chart_of_accounts account
+         LEFT JOIN accounting_vouchers voucher ON voucher.organization_id = account.organization_id
+           AND voucher.status = 'posted' AND voucher.financial_year_id = ? AND voucher.voucher_date <= ?
+         LEFT JOIN accounting_voucher_entries line ON line.voucher_id = voucher.id
+           AND line.account_id = account.id AND line.organization_id = account.organization_id
+         WHERE account.organization_id = ? AND account.deleted_at IS NULL
+           AND account.account_type IN ('ASSET', 'LIABILITY', 'EQUITY')
+         GROUP BY account.id, customer_id, supplier_id HAVING balance_minor <> 0 ORDER BY account.account_code, customer_id, supplier_id`,
+        [source.id, source.end_date, organizationId]
+      )
+  const retainedAccount = closingAccounts.find((row) => row.system_role === "OPENING_EQUITY")
+    || (String(accountingSetting?.initialization_status || "PENDING") !== "PENDING"
+      ? (await accountingDb.select<DataRow>("SELECT id, account_type, system_role FROM chart_of_accounts WHERE organization_id = ? AND system_role = 'OPENING_EQUITY' LIMIT 1", [organizationId]))[0]
+      : null)
+  const carryLines: JournalLine[] = closingAccounts.map((row) => {
+    const balance = Number(row.balance_minor || 0)
+    return {
+      accountId: String(row.id), accountType: String(row.account_type),
+      debitMinor: Math.max(0, balance), creditMinor: Math.max(0, -balance),
+      customerId: row.customer_id ? String(row.customer_id) : null,
+      supplierId: row.supplier_id ? String(row.supplier_id) : null,
+      description: `Balance brought forward from ${source.label}`,
+    }
+  })
+  const carriedSignedBalance = carryLines.reduce((sum, line) => sum + line.debitMinor - line.creditMinor, 0)
+  if (carriedSignedBalance !== 0) {
+    if (!retainedAccount) throw new Error("Retained earnings account is missing. The financial year was not started.")
+    const existingRetained = carryLines.find((line) => line.accountId === retainedAccount.id)
+    if (existingRetained) {
+      if (carriedSignedBalance > 0) existingRetained.creditMinor += carriedSignedBalance
+      else existingRetained.debitMinor += -carriedSignedBalance
+      const net = existingRetained.debitMinor - existingRetained.creditMinor
+      existingRetained.debitMinor = Math.max(0, net)
+      existingRetained.creditMinor = Math.max(0, -net)
+      if (!existingRetained.debitMinor && !existingRetained.creditMinor) carryLines.splice(carryLines.indexOf(existingRetained), 1)
+    } else {
+      carryLines.push({
+        accountId: String(retainedAccount.id), accountType: String(retainedAccount.account_type),
+        debitMinor: Math.max(0, -carriedSignedBalance), creditMinor: Math.max(0, carriedSignedBalance),
+        description: `Retained result through ${source.label}`,
+      })
+    }
+  }
+  const carryJournal = carryLines.length >= 2
+    ? validateJournal({
+        id: `year-opening-voucher:${next.id}`, organizationId, financialYearId: next.id,
+        voucherNumber: `OPEN-${next.label.replace(/[^0-9A-Za-z]/g, "-")}`, voucherType: "opening", voucherDate: next.startDate,
+        sourceType: "YEAR_OPENING", sourceId: next.id, referenceNo: source.label,
+        narration: `Auditable balance-sheet carry-forward from ${source.label}. Income and expense accounts start at zero.`,
+        systemGenerated: true, lines: carryLines,
+      })
+    : null
   const snapshot = JSON.stringify({
     sourceFinancialYearId: source.id,
     createdAt,
@@ -431,6 +498,7 @@ export async function createNextFinancialYear(
          prefix = excluded.prefix, next_number = excluded.next_number, updated_at = excluded.updated_at`,
       [`fy-seq:${next.id}`, organizationId, next.id, source.invoice_numbering_mode, createdAt, organizationId]
     )
+    if (carryJournal) await appendJournal(db, carryJournal)
     await db.execute(
       `INSERT INTO financial_year_opening_balances (
         id, organization_id, financial_year_id, source_financial_year_id, party_type, party_id, balance_type, amount, created_at
@@ -525,6 +593,8 @@ export async function financialYearClosingChecks(organizationId: string, financi
     overlappingYears,
     activeRows,
     unpaid,
+    invalidJournals,
+    orphanJournalLines,
   ] = await Promise.all([
     db.select<DataRow>("SELECT id FROM products WHERE organization_id = ? AND deleted_at IS NULL AND stock < 0 LIMIT 20", [organizationId]),
     db.select<DataRow>("SELECT id FROM stock_batches WHERE organization_id = ? AND deleted_at IS NULL AND quantity < 0 LIMIT 20", [organizationId]),
@@ -613,6 +683,30 @@ export async function financialYearClosingChecks(organizationId: string, financi
     ),
     db.select<DataRow>("SELECT id FROM financial_years WHERE organization_id = ? AND is_active = 1", [organizationId]),
     db.select<DataRow>("SELECT COUNT(*) AS count FROM sales_invoices WHERE organization_id = ? AND financial_year_id = ? AND deleted_at IS NULL AND outstanding_amount > 0", [organizationId, financialYearIdValue]),
+    db.select<DataRow>(
+      `SELECT voucher.id FROM accounting_vouchers voucher
+       LEFT JOIN accounting_voucher_entries line ON line.voucher_id = voucher.id AND line.organization_id = voucher.organization_id
+       LEFT JOIN financial_years year ON year.id = voucher.financial_year_id AND year.organization_id = voucher.organization_id
+       WHERE voucher.organization_id = ? AND voucher.financial_year_id = ? AND voucher.status = 'posted'
+       GROUP BY voucher.id HAVING COUNT(line.id) < 2
+         OR COALESCE(SUM(line.debit_minor), 0) <> COALESCE(SUM(line.credit_minor), 0)
+         OR COALESCE(SUM(line.debit_minor), 0) <> voucher.total_debit_minor
+         OR COALESCE(SUM(line.credit_minor), 0) <> voucher.total_credit_minor
+         OR MAX(CASE WHEN year.id IS NULL OR voucher.voucher_date < year.start_date OR voucher.voucher_date > year.end_date THEN 1 ELSE 0 END) = 1
+         OR MAX(CASE WHEN line.debit_minor < 0 OR line.credit_minor < 0
+                      OR (line.debit_minor = 0 AND line.credit_minor = 0)
+                      OR (line.debit_minor > 0 AND line.credit_minor > 0)
+                      OR typeof(line.debit_minor) <> 'integer' OR typeof(line.credit_minor) <> 'integer'
+                     THEN 1 ELSE 0 END) = 1 LIMIT 20`,
+      [organizationId, financialYearIdValue]
+    ),
+    db.select<DataRow>(
+      `SELECT line.id FROM accounting_voucher_entries line
+       LEFT JOIN accounting_vouchers voucher ON voucher.id = line.voucher_id AND voucher.organization_id = line.organization_id
+       LEFT JOIN chart_of_accounts account ON account.id = line.account_id AND account.organization_id = line.organization_id
+       WHERE line.organization_id = ? AND (voucher.id IS NULL OR account.id IS NULL) LIMIT 20`,
+      [organizationId]
+    ),
   ])
   const blockers: string[] = []
   if (!integrity.ok) blockers.push("SQLite quick check or foreign-key integrity failed.")
@@ -627,6 +721,8 @@ export async function financialYearClosingChecks(organizationId: string, financi
   if (duplicateInventoryOpenings.length) blockers.push("Duplicate financial-year inventory openings were detected.")
   if (overlappingYears.length) blockers.push("Overlapping financial-year date ranges were detected.")
   if (activeRows.length > 1) blockers.push("More than one financial year is active for this business.")
+  if (invalidJournals.length) blockers.push(`${invalidJournals.length} posted journals are incomplete or not exactly balanced.`)
+  if (orphanJournalLines.length) blockers.push(`${orphanJournalLines.length} journal lines refer to missing vouchers or accounts.`)
   const warnings = numeric(unpaid[0], "count") > 0 ? [`${numeric(unpaid[0], "count")} unpaid or partially paid invoices remain.`] : []
   return { integrity, blockers, warnings }
 }
@@ -724,6 +820,58 @@ export async function setFinancialYearNumberingMode(
 
 export async function customerFinancialYearLedger(organizationId: string, customerId: string, financialYearIdValue?: string | null) {
   const db = await service.requireConnection("read")
+  const [accountingSetting] = await db.select<DataRow>(
+    "SELECT initialization_status, opening_date FROM accounting_settings WHERE organization_id = ? LIMIT 1",
+    [organizationId]
+  )
+  if (String(accountingSetting?.initialization_status || "PENDING") !== "PENDING") {
+    const yearClause = financialYearIdValue ? "AND voucher.financial_year_id = ?" : ""
+    const values: SqlValue[] = financialYearIdValue
+      ? [organizationId, customerId, financialYearIdValue]
+      : [organizationId, customerId]
+    const [customerRows, journalLines] = await Promise.all([
+      db.select<DataRow>("SELECT * FROM customers WHERE organization_id = ? AND id = ? AND deleted_at IS NULL LIMIT 1", [organizationId, customerId]),
+      db.select<DataRow>(
+        `SELECT line.id, voucher.voucher_date AS entry_date, voucher.voucher_number,
+           voucher.voucher_type AS document_type, voucher.source_type, voucher.reference_no,
+           COALESCE(NULLIF(line.description, ''), NULLIF(voucher.narration, ''), voucher.voucher_number) AS description,
+           line.debit_minor, line.credit_minor, voucher.created_at
+         FROM accounting_voucher_entries line
+         JOIN accounting_vouchers voucher ON voucher.id = line.voucher_id AND voucher.organization_id = line.organization_id
+         WHERE line.organization_id = ? AND line.customer_id = ? AND voucher.status = 'posted' ${yearClause}
+         ORDER BY voucher.voucher_date, voucher.created_at, line.line_no, line.id`,
+        values
+      ),
+    ])
+    const openingLines = journalLines.filter((line) => financialYearIdValue
+      ? line.document_type === "opening"
+      : line.source_type === "ACCOUNTING_ACTIVATION")
+    const entries = journalLines.filter((line) => line.document_type !== "opening")
+    const openingMinor = openingLines.reduce((sum, line) => sum + Number(line.debit_minor || 0) - Number(line.credit_minor || 0), 0)
+    let runningMinor = openingMinor
+    const normalizedEntries: DataRow[] = entries.map((entry): DataRow => {
+      runningMinor += Number(entry.debit_minor || 0) - Number(entry.credit_minor || 0)
+      return {
+        ...entry,
+        debit: Number(entry.debit_minor || 0) / 100,
+        credit: Number(entry.credit_minor || 0) / 100,
+        running_balance: runningMinor / 100,
+      }
+    })
+    const invoiceMinor = entries.filter((entry) => entry.source_type === "SALES_INVOICE").reduce((sum, entry) => sum + Number(entry.debit_minor || 0), 0)
+    const receiptMinor = entries.filter((entry) => entry.source_type === "PAYMENT").reduce((sum, entry) => sum + Number(entry.credit_minor || 0), 0)
+    return {
+      customer: customerRows[0] || null,
+      financialYearId: financialYearIdValue || null,
+      accountingBasis: "posted-journal",
+      activationDate: accountingSetting?.opening_date || null,
+      openingBalance: openingMinor / 100,
+      invoices: invoiceMinor / 100,
+      payments: receiptMinor / 100,
+      closingBalance: runningMinor / 100,
+      entries: normalizedEntries,
+    }
+  }
   const yearClause = financialYearIdValue ? "AND financial_year_id = ?" : ""
   const values: SqlValue[] = financialYearIdValue ? [organizationId, customerId, financialYearIdValue] : [organizationId, customerId]
   const [customerRows, openingRows, entries, invoices, payments] = await Promise.all([

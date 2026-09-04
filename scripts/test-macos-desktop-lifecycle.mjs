@@ -104,9 +104,17 @@ function sqliteSnapshot() {
 function persistenceSnapshot() {
   const deviceId = existsSync(deviceIdPath) ? sha256(readFileSync(deviceIdPath)) : null
   const license = spawnSync("/usr/bin/security", ["find-generic-password", "-s", "com.bezgrow.erp", "-a", "bezgrow-offline-license-key", "-w"], { encoding: "utf8" })
+  const appLock = spawnSync("/usr/bin/security", ["find-generic-password", "-s", "com.bezgrow.erp", "-a", "bezgrow-app-lock-v1", "-w"], { encoding: "utf8" })
+  // Compare internally; no secret or verifier material is emitted in results.
+  const signedLicences = existsSync(databasePath)
+    ? spawnSync("/usr/bin/sqlite3", [databasePath, "SELECT id, license_key FROM license_state ORDER BY id"], { encoding: "utf8" })
+    : { status: 0, stdout: "" }
+  if (signedLicences.status !== 0) throw new Error("Unable to compare persisted signed licences.")
   return {
     deviceId,
     license: license.status === 0 ? sha256(license.stdout.trim()) : null,
+    signedLicences: sha256(signedLicences.stdout),
+    appLock: appLock.status === 0 ? sha256(appLock.stdout.trim()) : null,
     sqlite: sqliteSnapshot(),
   }
 }
@@ -114,6 +122,8 @@ function persistenceSnapshot() {
 function assertPersistence(before, after) {
   if (before.deviceId !== after.deviceId) throw new Error("Device ID changed during lifecycle testing.")
   if (before.license !== after.license) throw new Error("Local license changed during lifecycle testing.")
+  if (before.signedLicences !== after.signedLicences) throw new Error("The signed SQLite licences changed during lifecycle testing.")
+  if (before.appLock !== after.appLock) throw new Error("The secure App Lock credential changed during lifecycle testing.")
   if (before.sqlite.exists !== after.sqlite.exists) throw new Error("SQLite database presence changed during lifecycle testing.")
   if (after.sqlite.exists && after.sqlite.integrity !== "ok") throw new Error(`SQLite integrity is ${after.sqlite.integrity}.`)
   for (const [table, count] of Object.entries(before.sqlite.counts)) {
@@ -245,4 +255,7 @@ console.log(JSON.stringify({
   sqliteCounts: after.sqlite.counts,
   deviceIdPreserved: before.deviceId === after.deviceId,
   licensePreserved: before.license === after.license,
+  signedLicencesPreserved: before.signedLicences === after.signedLicences,
+  appLockCredentialPresent: Boolean(after.appLock),
+  appLockCredentialPreserved: before.appLock === after.appLock,
 }))

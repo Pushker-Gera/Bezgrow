@@ -50,6 +50,8 @@ assert.match(wixTemplate, /REMOVE="ALL" OR \(VersionNT64 >= 1000 AND WindowsBuil
 assert.match(portableTemplate, /Function \.onInit[\s\S]*RunningX64[\s\S]*CurrentBuildNumber[\s\S]*IntCmpU \$R9 17763[\s\S]*SetErrorLevel 1150/, "Portable Windows builds must reject unsupported systems before launching Bezgrow.")
 assert.match(config.app.trayIcon.iconPath, /32x32\.png$/, "Notification-area icon is missing.")
 assert.match(cargo, /"tray-icon"[\s\S]*"image-png"/, "The Windows notification-area icon features are not compiled.")
+assert.match(cargo, /keyring = \{[^\n]*"windows-native"/, "Windows must compile Credential Manager rather than keyring's nonpersistent mock.")
+assert.match(workflow, /Verify real Windows Credential Manager persistence across processes[\s\S]*native_credential_survives_process_restart -- --ignored/, "Windows CI must exercise the real native credential store across processes.")
 
 assert.match(rust, /var_os\("LOCALAPPDATA"\)[\s\S]*WINDOWS_APP_DATA_DIR/, "Windows data must resolve from %LOCALAPPDATA%\\Bezgrow.")
 assert.match(rust, /var_os\("APPDATA"\)[\s\S]*copy_directory_missing/, "Legacy %APPDATA% data must migrate without deletion.")

@@ -50,6 +50,9 @@ export type OfflineCollection =
   | "chart_of_accounts"
   | "accounting_vouchers"
   | "accounting_voucher_entries"
+  | "accounting_settings"
+  | "accounting_sequences"
+  | "accounting_warnings"
   | "bank_accounts"
   | "print_templates"
   | "license"
@@ -171,6 +174,9 @@ const offlineCollections: OfflineCollection[] = [
   "chart_of_accounts",
   "accounting_vouchers",
   "accounting_voucher_entries",
+  "accounting_settings",
+  "accounting_sequences",
+  "accounting_warnings",
   "bank_accounts",
   "print_templates",
   "license",

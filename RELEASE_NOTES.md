@@ -1,4 +1,21 @@
-# Bezgrow 0.2.5
+# Bezgrow 0.3.0
+
+Phase 1 core accounting foundation.
+
+- Added an exact integer-minor double-entry journal in the existing local SQLite database, with business/financial-year scoping, immutable posted lines, exact balance triggers, protected source idempotency, and linked reversals.
+- Added an idempotent 32-ledger default Chart of Accounts, safe custom-ledger creation/rename/deactivation, system account protection, GST input/output roles, COGS, sales discount, freight, common operating expenses, and round-off.
+- Added a controlled accounting activation boundary for existing businesses: receivables/payables are opened by party, inventory uses only genuine recorded batch/product purchase cost, legacy invoices remain untouched, and unknown costs are disclosed rather than guessed.
+- Made new sales invoices atomically post Cash/Bank/AR, Sales, exact CGST/SGST/IGST, discount, round-off, COGS, and Inventory alongside invoice items and physical stock movements. Invoice cancellation atomically restores stock and appends idempotent reversals for the sale and later receipts.
+- Added auditable partial/full customer receipts, paid-status conversion through a real receipt, paid or liability-backed unpaid expenses, expense replacement/reversal history, and unified Journal/Receipt/Payment/Contra/Opening entry validation.
+- Added local Accounting Overview, Chart of Accounts, Journal drilldown, General Ledger, Trial Balance, Profit & Loss, Balance Sheet, Cash Flow, Expenses, Opening Balances, CSV/print actions, date/voucher filters, search, sort, and bounded pagination.
+- Switched post-activation customer statements to customer-dimensioned posted journals and preserved customer/supplier dimensions in idempotent year-opening carry-forward entries. Income/expense balances restart at zero with the completed result flowing to retained/opening equity.
+- Extended financial-year close and native backup/restore verification to reject invalid year mappings, invalid currency lines, orphaned/duplicate sources, and broken/unbalanced journals, while preserving the installation Device ID, licence credentials, App Lock, and business assets.
+- Added migration, journal invariant, GST, COGS, payment, expense, reversal, report/reconciliation, backup round-trip, privacy/architecture, and 2,000-product / 5,000-customer / 20,000-invoice / 12,000-journal performance coverage.
+- Kept Phase 2 purchasing/GST-return/bank-reconciliation workflows and Phase 3 compliance/accountant workflows out of this release.
+
+The locally built macOS candidate is ad-hoc signed for legitimate manual installation. It is not Developer ID signed or notarized. Public download/updater metadata remains pinned to the last genuine published artifacts until matching 0.3.0 macOS and Windows artifacts are independently produced and pass publication gates.
+
+## Previous 0.2.5 notes
 
 Critical update-persistence and control-plane recovery.
 
@@ -12,7 +29,7 @@ Critical update-persistence and control-plane recovery.
 - Added v0.2.2-to-v0.2.5, v0.2.3-to-v0.2.5, and v0.2.4-to-v0.2.5 regression fixtures covering the fixed production Device ID, legacy signature, business profile, products, customers, invoice data, stock, settings, App Lock, financial year, logo, backup, and admin-device entry contract.
 - Verified the existing production SQLite copy without changing it: all three stored Ed25519 licence rows, including the active licence for `BZG-23D76F50F880422489AF152B`, validate under the corrected parser.
 
-Public installer and updater metadata remains pinned to the genuine 0.2.3 artifacts until matching 0.2.5 Windows and macOS artifacts complete the release verification and publication gates.
+The integrity-verified 0.2.5 macOS and Windows cohort is the currently published fallback while 0.3.0 remains in local release-candidate verification.
 
 ## Previous 0.2.3 notes
 

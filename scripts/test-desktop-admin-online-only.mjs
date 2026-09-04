@@ -33,6 +33,7 @@ assert.match(adminCapability, /"windows": \["platform-admin"\][\s\S]*allow-deskt
 assert.doesNotMatch(adminCapability, /desktop-execute|desktop-select|read-secret|store-secret/, "The admin window must not receive SQLite or general secret-store commands.")
 
 assert.match(launcher, /verifyThisPlatformAdminDevice/, "The Platform Admin button must be server-authorized before rendering and again before launch.")
+assert.match(launcher, /window\.addEventListener\("online", verifyAuthorization\)[\s\S]*window\.addEventListener\("focus", verifyAuthorization\)/, "An authorized admin device must recover its launcher after reconnect or return without depending on ERP App Lock state.")
 assert.doesNotMatch(launcher, /getExplicitControlPlaneActionAuth|localLicenseSnapshot/, "Platform Admin eligibility must not depend on ERP licence state.")
 assert.match(launcher, /if \(!desktop \|\| !authorized\) return null/, "Unauthorized devices must not render the button.")
 assert.match(launcher, /openPlatformAdmin\(\)/, "The launcher must open the in-app native window without a browser URL.")

@@ -35,7 +35,7 @@ assert.match(localApi, /allocateAuthoritativeStock\(products, batches, items, no
 assert.match(localApi, /batchDeltas,/)
 assert.match(localApi, /deleteNormalizedInvoiceAtomic\(/, "Invoice deletion must reverse stock in one bounded SQLite transaction.")
 assert.match(localApi, /reference_type: "invoice_delete"/)
-assert.match(schema, /LOCAL_DB_VERSION = 17/)
+assert.match(schema, /LOCAL_DB_VERSION = 19/)
 assert.match(schema, /ALTER TABLE organizations ADD COLUMN joined_at TEXT/)
 assert.match(schema, /trg_products_nonnegative_stock_update/, "SQLite must abort concurrent invoice stock underflow.")
 assert.match(localApi, /inventoryDeltas: consumedBatches\.allocations/, "Invoice stock must update one matching inventory lot per allocation.")

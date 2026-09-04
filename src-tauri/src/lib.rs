@@ -1162,7 +1162,11 @@ fn create_startup_error_window<R: tauri::Runtime>(
 }
 
 fn keychain_entry(key: &str) -> Result<keyring::Entry, String> {
-    keyring::Entry::new(KEYCHAIN_SERVICE, key).map_err(|error| error.to_string())
+    let entry = keyring::Entry::new(KEYCHAIN_SERVICE, key).map_err(|error| error.to_string())?;
+    if entry.get_credential().is::<keyring::mock::MockCredential>() {
+        return Err("The native secure credential store is unavailable in this build.".to_string());
+    }
+    Ok(entry)
 }
 
 #[derive(Serialize)]
@@ -2832,6 +2836,67 @@ async fn sqlite_schema_version(database_path: &Path) -> Result<i64, String> {
         .map_err(|error| format!("Unable to read the backup schema version: {error}"))
 }
 
+async fn verify_accounting_integrity(
+    connection: &mut SqliteConnection,
+    context: &str,
+) -> Result<(), String> {
+    let accounting_tables = sqlx::query_scalar::<_, i64>(
+        "SELECT COUNT(*) FROM sqlite_master
+         WHERE type = 'table' AND name IN ('accounting_vouchers', 'accounting_voucher_entries', 'financial_years')",
+    )
+    .fetch_one(&mut *connection)
+    .await
+    .map_err(|error| format!("Unable to inspect {context} accounting schema: {error}"))?;
+    if accounting_tables != 3 {
+        return Ok(());
+    }
+
+    let invalid_postings = sqlx::query_scalar::<_, i64>(
+        "SELECT COUNT(*)
+         FROM accounting_vouchers voucher
+         LEFT JOIN financial_years year
+           ON year.id = voucher.financial_year_id AND year.organization_id = voucher.organization_id
+         LEFT JOIN (
+           SELECT voucher_id, organization_id, COUNT(*) AS line_count,
+             COALESCE(SUM(debit_minor), 0) AS debit_minor,
+             COALESCE(SUM(credit_minor), 0) AS credit_minor,
+             SUM(CASE WHEN debit_minor < 0 OR credit_minor < 0
+                       OR (debit_minor = 0 AND credit_minor = 0)
+                       OR (debit_minor > 0 AND credit_minor > 0)
+                       OR typeof(debit_minor) <> 'integer' OR typeof(credit_minor) <> 'integer'
+                      THEN 1 ELSE 0 END) AS invalid_lines
+           FROM accounting_voucher_entries GROUP BY voucher_id, organization_id
+         ) totals ON totals.voucher_id = voucher.id AND totals.organization_id = voucher.organization_id
+         WHERE voucher.status = 'posted' AND (
+           year.id IS NULL OR voucher.voucher_date < year.start_date OR voucher.voucher_date > year.end_date
+           OR COALESCE(totals.line_count, 0) < 2 OR COALESCE(totals.invalid_lines, 0) > 0
+           OR totals.debit_minor <= 0 OR totals.debit_minor <> totals.credit_minor
+           OR totals.debit_minor <> voucher.total_debit_minor
+           OR totals.credit_minor <> voucher.total_credit_minor
+         )",
+    )
+    .fetch_one(&mut *connection)
+    .await
+    .map_err(|error| format!("Unable to verify {context} accounting journals: {error}"))?;
+    let duplicate_sources = sqlx::query_scalar::<_, i64>(
+        "SELECT COUNT(*) FROM (
+           SELECT organization_id, source_type, source_id
+           FROM accounting_vouchers
+           WHERE status = 'posted' AND source_type IS NOT NULL AND source_id IS NOT NULL
+           GROUP BY organization_id, source_type, source_id HAVING COUNT(*) > 1
+         )",
+    )
+    .fetch_one(&mut *connection)
+    .await
+    .map_err(|error| format!("Unable to verify {context} accounting source identities: {error}"))?;
+    if invalid_postings > 0 || duplicate_sources > 0 {
+        return Err(format!(
+            "The {context} contains invalid accounting data ({invalid_postings} broken journals, {duplicate_sources} duplicate sources)."
+        ));
+    }
+    Ok(())
+}
+
 async fn verify_backup_database(
     database_path: &Path,
     organization_id: &str,
@@ -2860,6 +2925,7 @@ async fn verify_backup_database(
     if !foreign_keys.is_empty() {
         return Err("The backup contains invalid database relationships.".to_string());
     }
+    verify_accounting_integrity(&mut connection, "backup").await?;
     let business_count = sqlx::query_scalar::<_, i64>(
         "SELECT COUNT(*) FROM organizations WHERE id = ? AND deleted_at IS NULL",
     )
@@ -2977,6 +3043,7 @@ async fn restore_database_contents(
         if !foreign_key_rows.is_empty() {
             return Err("The restored database would contain invalid relationships.".to_string());
         }
+        verify_accounting_integrity(&mut connection, "restored database").await?;
         Ok(())
     }
     .await;
@@ -4497,6 +4564,10 @@ mod database_transaction_tests {
                 .expect("create backup fixture");
             for statement in [
                 "CREATE TABLE organizations (id TEXT PRIMARY KEY, name TEXT NOT NULL, deleted_at TEXT)",
+                "CREATE TABLE financial_years (id TEXT PRIMARY KEY, organization_id TEXT NOT NULL REFERENCES organizations(id), start_date TEXT NOT NULL, end_date TEXT NOT NULL)",
+                "CREATE TABLE chart_of_accounts (id TEXT PRIMARY KEY, organization_id TEXT NOT NULL REFERENCES organizations(id), account_name TEXT NOT NULL)",
+                "CREATE TABLE accounting_vouchers (id TEXT PRIMARY KEY, organization_id TEXT NOT NULL REFERENCES organizations(id), financial_year_id TEXT NOT NULL REFERENCES financial_years(id), voucher_date TEXT NOT NULL, source_type TEXT, source_id TEXT, status TEXT NOT NULL, total_debit_minor INTEGER NOT NULL, total_credit_minor INTEGER NOT NULL)",
+                "CREATE TABLE accounting_voucher_entries (id TEXT PRIMARY KEY, organization_id TEXT NOT NULL REFERENCES organizations(id), voucher_id TEXT NOT NULL REFERENCES accounting_vouchers(id), account_id TEXT NOT NULL REFERENCES chart_of_accounts(id), debit_minor INTEGER NOT NULL, credit_minor INTEGER NOT NULL)",
                 "CREATE TABLE products (id TEXT PRIMARY KEY, organization_id TEXT NOT NULL REFERENCES organizations(id), name TEXT NOT NULL, stock REAL NOT NULL)",
                 "CREATE TABLE customers (id TEXT PRIMARY KEY, organization_id TEXT NOT NULL REFERENCES organizations(id), name TEXT NOT NULL)",
                 "CREATE TABLE sales_invoices (id TEXT PRIMARY KEY, organization_id TEXT NOT NULL REFERENCES organizations(id), customer_id TEXT NOT NULL REFERENCES customers(id), invoice_number TEXT NOT NULL, total REAL NOT NULL)",
@@ -4504,6 +4575,12 @@ mod database_transaction_tests {
                 "CREATE TABLE license_state (id TEXT PRIMARY KEY, organization_id TEXT NOT NULL REFERENCES organizations(id), signed_license_key TEXT NOT NULL)",
                 "CREATE TABLE device_activations (id TEXT PRIMARY KEY, organization_id TEXT NOT NULL REFERENCES organizations(id), device_id TEXT NOT NULL)",
                 "INSERT INTO organizations VALUES ('org-a', 'Backed-up Business', NULL)",
+                "INSERT INTO financial_years VALUES ('fy-a', 'org-a', '2026-04-01', '2027-03-31')",
+                "INSERT INTO chart_of_accounts VALUES ('cash-a', 'org-a', 'Cash')",
+                "INSERT INTO chart_of_accounts VALUES ('capital-a', 'org-a', 'Capital')",
+                "INSERT INTO accounting_vouchers VALUES ('opening-a', 'org-a', 'fy-a', '2026-04-01', 'ACCOUNTING_ACTIVATION', 'org-a', 'posted', 12500, 12500)",
+                "INSERT INTO accounting_voucher_entries VALUES ('opening-line-1', 'org-a', 'opening-a', 'cash-a', 12500, 0)",
+                "INSERT INTO accounting_voucher_entries VALUES ('opening-line-2', 'org-a', 'opening-a', 'capital-a', 0, 12500)",
                 "INSERT INTO products VALUES ('product-a', 'org-a', 'Backed-up Product', 12)",
                 "INSERT INTO customers VALUES ('customer-a', 'org-a', 'Backed-up Customer')",
                 "INSERT INTO sales_invoices VALUES ('invoice-a', 'org-a', 'customer-a', 'INV-00001', 750)",
@@ -4539,6 +4616,8 @@ mod database_transaction_tests {
                 "UPDATE products SET name = 'Changed Product', stock = 1 WHERE id = 'product-a'",
                 "DELETE FROM sales_invoice_items WHERE invoice_id = 'invoice-a'",
                 "DELETE FROM sales_invoices WHERE id = 'invoice-a'",
+                "DELETE FROM accounting_voucher_entries WHERE voucher_id = 'opening-a'",
+                "DELETE FROM accounting_vouchers WHERE id = 'opening-a'",
                 "UPDATE license_state SET signed_license_key = 'current-installation-license' WHERE id = 'license-a'",
                 "UPDATE device_activations SET device_id = 'current-installation-device' WHERE id = 'device-a'",
             ] {
@@ -4572,6 +4651,16 @@ mod database_transaction_tests {
             .await
             .expect("verify restored invoice relationships");
             assert_eq!(relationship_count.0, 1);
+            let accounting_count: (i64, i64) = sqlx::query_as(
+                "SELECT (SELECT COUNT(*) FROM accounting_vouchers WHERE id = 'opening-a'), (SELECT COUNT(*) FROM accounting_voucher_entries WHERE voucher_id = 'opening-a')",
+            )
+            .fetch_one(&mut connection)
+            .await
+            .expect("verify restored accounting journal");
+            assert_eq!(accounting_count, (1, 2));
+            verify_accounting_integrity(&mut connection, "restored test database")
+                .await
+                .expect("verify restored accounting integrity");
             let installation_state: (String, String) = sqlx::query_as(
                 "SELECT license_state.signed_license_key, device_activations.device_id FROM license_state CROSS JOIN device_activations",
             )
@@ -4614,7 +4703,16 @@ mod database_transaction_tests {
 fn store_secret(key: String, value: String) -> Result<(), String> {
     keychain_entry(&key)?
         .set_password(&value)
-        .map_err(|error| error.to_string())
+        .map_err(|error| error.to_string())?;
+    // Re-open the entry: a successful write on an ephemeral/mock handle is
+    // not proof of persistence. Never include credential contents in errors.
+    let persisted = keychain_entry(&key)?
+        .get_password()
+        .map_err(|_| "The secure credential could not be read after saving.".to_string())?;
+    if persisted != value {
+        return Err("The secure credential could not be verified after saving.".to_string());
+    }
+    Ok(())
 }
 
 #[tauri::command]

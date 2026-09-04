@@ -14,6 +14,12 @@ import {
   type AppLockProvisioning,
 } from "../lib/app-lock/shared"
 import { verifyAppLockPassword } from "../lib/app-lock/verification"
+import { appLockProvisioningDecision } from "../lib/app-lock/provisioning-policy"
+import {
+  APP_LOCK_STATES,
+  appLockStateFrom,
+  transitionAppLockState,
+} from "../lib/app-lock/state"
 import { evaluateStoredLicense } from "../lib/license/policy"
 
 const read = (path: string) => readFileSync(path, "utf8")
@@ -126,6 +132,62 @@ const signedReset: AppLockProvisioning = {
 assert.equal(isAppLockProvisioning(signedReset), true)
 assert.equal(isAppLockProvisioning({ ...signedReset, reset_authorization: { ...signedReset.reset_authorization, expires_at: "invalid" } }), false)
 
+let regressionState = appLockStateFrom({ licenceValid: true, credentialExists: false })
+assert.equal(regressionState, APP_LOCK_STATES.provisioningRequired, "A licensed device without a local verifier must require provisioning.")
+assert.equal(
+  appLockProvisioningDecision({
+    appLock: signedReset,
+    expectedDeviceId: deviceId,
+    licenseId,
+    businessId,
+    existing: null,
+    watermark: null,
+    nowMs: Date.parse("2026-08-24T00:10:00.000Z"),
+  }),
+  "apply",
+  "A fresh device-bound reset credential must be accepted for secure installation.",
+)
+const persistedReset = JSON.parse(JSON.stringify(signedReset)) as AppLockProvisioning
+regressionState = transitionAppLockState(regressionState, "CREDENTIAL_INSTALLED")
+assert.equal(regressionState, APP_LOCK_STATES.locked, "Installing a verified credential must immediately leave provisioning and enter LOCKED.")
+regressionState = transitionAppLockState(regressionState, "PASSWORD_REJECTED")
+assert.equal(regressionState, APP_LOCK_STATES.locked, "A wrong password must keep the device locked.")
+assert.equal(await verifyAppLockPassword("WrongReset7", persistedReset), false)
+assert.equal(await verifyAppLockPassword("ResetSecure7", persistedReset), true)
+regressionState = transitionAppLockState(regressionState, "PASSWORD_ACCEPTED")
+assert.equal(regressionState, APP_LOCK_STATES.unlocked, "The new password must unlock without reloading the app.")
+const restartedState = appLockStateFrom({ licenceValid: true, credentialExists: Boolean(persistedReset) })
+assert.equal(restartedState, APP_LOCK_STATES.locked, "Restart and update must reuse the persisted credential and return to LOCKED.")
+assert.equal(await verifyAppLockPassword("ResetSecure7", JSON.parse(JSON.stringify(persistedReset))), true, "Offline restart must verify using only the persisted local credential.")
+assert.equal(appLockStateFrom({ licenceValid: false, credentialExists: true }), APP_LOCK_STATES.noValidLicence, "An app password must never bypass an invalid licence.")
+
+const originalPasswordCredential = provisioning("123456")
+originalPasswordCredential.issued_at = "2026-08-23T00:00:00.000Z"
+const replacementPasswordCredential: AppLockProvisioning = {
+  ...provisioning("ABC123"),
+  reset_authorization: signedReset.reset_authorization,
+}
+assert.equal(
+  appLockProvisioningDecision({
+    appLock: replacementPasswordCredential,
+    expectedDeviceId: deviceId,
+    licenseId,
+    businessId,
+    existing: { ...originalPasswordCredential, license_id: licenseId, business_id: businessId },
+    watermark: { ...originalPasswordCredential, license_id: licenseId, business_id: businessId },
+    nowMs: Date.parse("2026-08-24T00:10:00.000Z"),
+  }),
+  "apply",
+  "A fresh admin reset must replace the old credential for the same licence and Device ID.",
+)
+assert.equal(await verifyAppLockPassword("123456", replacementPasswordCredential), false, "The original password must fail after reset.")
+assert.equal(await verifyAppLockPassword("ABC123", replacementPasswordCredential), true, "The replacement password must unlock after reset.")
+for (const state of [APP_LOCK_STATES.noValidLicence, APP_LOCK_STATES.provisioningRequired]) {
+  assert.equal(transitionAppLockState(state, "PASSWORD_REJECTED"), state, "A stale rejection must never bypass licence or credential gating.")
+  assert.equal(transitionAppLockState(state, "PASSWORD_ACCEPTED"), state, "Only LOCKED can accept a password.")
+}
+assert.equal(transitionAppLockState(APP_LOCK_STATES.unlocked, "CREDENTIAL_INSTALLED"), APP_LOCK_STATES.locked, "A reset must lock an already-unlocked workspace.")
+
 const licensedRow = {
   id: licenseId,
   device_id: deviceId,
@@ -155,10 +217,16 @@ const products = read("app/dashboard/products/page.tsx")
 const customers = read("app/dashboard/customers/page.tsx")
 const adminLicensePage = read("app/admin/licenses/page.tsx")
 const adminLicenseDialog = read("components/admin/LicenseActionDialog.tsx")
+const nativeManifest = read("src-tauri/Cargo.toml")
+const native = read("src-tauri/src/lib.rs")
+assert.match(nativeManifest, /keyring = \{[^\n]*features = \["apple-native", "windows-native"\]/, "Both native backends must be explicitly enabled; keyring v3 otherwise uses a nonpersistent mock.")
+assert.match(native, /get_credential\(\)\.is::<keyring::mock::MockCredential>\(\)/, "Native code must fail closed if the wrong backend is compiled.")
+assert.match(client, /const persisted = await readCredential\(\)/, "Installation must verify read-back before dispatching readiness.")
 
 assert.match(server, /pbkdf2Sync[\s\S]*APP_LOCK_ITERATIONS[\s\S]*sha256/, "Initial passwords must become salted one-way verifiers on the server.")
 assert.match(client, /store_secret[\s\S]*APP_LOCK_SECRET_KEY/, "The local verifier must use the OS credential store, not SQLite business data.")
 assert.match(client + provisioningPolicy, /APP_LOCK_WATERMARK_KEY[\s\S]*watermarkRecognizesSignedCredential/, "A non-secret persistence watermark must prevent an update or keychain loss from rolling a locally changed password back to the initial signed verifier.")
+assert.match(client, /setOfflineMeta\(APP_LOCK_WATERMARK_KEY, JSON\.stringify\(watermark\), "global"\)/, "The non-secret object watermark must be serialized into normalized SQLite metadata instead of becoming a NULL row.")
 assert.doesNotMatch(client, /putOfflineData|localStorage\.setItem\([^\n]*password/, "The app password must not enter SQLite or browser storage.")
 assert.doesNotMatch(
   [client, gate, settings, adminLicensePage, adminLicenseDialog, adminRoute].join("\n"),
@@ -167,13 +235,20 @@ assert.doesNotMatch(
 )
 assert.doesNotMatch(adminLicensePage + adminLicenseDialog, /function generateAppPassword/, "Admin screens must use the canonical shared generator.")
 assert.match(localLicense, /verifyLicenseSignature[\s\S]*provisionAppLockFromLicense/, "Only a verified signed licence may provision App Lock.")
+assert.match(localLicense, /reconcileLocalAppLockCredential[\s\S]*verifyLicenseSignature[\s\S]*isAppLockProvisioning[\s\S]*provisionAppLockFromLicense/, "A locally stored verified licence must repair a missing secure credential even when control-plane check-in returns the same signed key.")
 assert.match(adminRoute, /createAppLockProvisioning\(input\.app_password, input\.device_id\)/, "Licence generation must provision the first device password.")
 assert.match(adminRoute, /APP_PASSWORD_RESET_AUTHORIZED/, "The control plane must expose an explicit audited password-reset action.")
 assert.match(resetMigration, /pg_advisory_xact_lock[\s\S]*admin_license_mutations[\s\S]*license_events[\s\S]*admin_audit_logs/, "Password reset must be atomic, idempotent, and audited.")
 assert.match(resetMigration, /service_role/, "Only the server-side service role may execute reset authorization.")
 assert.doesNotMatch(resetMigration, /plaintext_password|password_hash\s+(?:text|varchar)/i, "The reset control plane must not add a plaintext or reusable password column.")
 
-assert.match(gate, /GateState = "checking" \| "missing" \| "locked" \| "unlocked"/, "ERP content must remain unmounted until App Lock succeeds.")
+assert.match(gate, /GateState = AppLockState \| "CHECKING" \| "FAILED"/, "ERP content must remain unmounted until the explicit App Lock state machine succeeds.")
+assert.match(gate, /revalidateLocalLicenseWithControlPlane/, "The provisioning screen must fetch the authoritative refreshed signed licence.")
+assert.match(gate, /window\.addEventListener\("online"[\s\S]*window\.addEventListener\("focus"[\s\S]*setInterval\(refreshWhenAvailable, 30_000\)/, "Provisioning must retry automatically at startup, on reconnect, on return from Platform Admin, and while waiting.")
+assert.match(gate, /Refresh App Lock[\s\S]*Import \/ Refresh Licence/, "Provisioning must expose both secure online refresh and signed licence import recovery actions.")
+assert.match(gate, /Credential received\.[\s\S]*Installing secure credential…[\s\S]*App Lock ready\./, "Provisioning must expose useful credential delivery and installation statuses.")
+assert.match(gate, /Enter App Password[\s\S]*Forgot password\? Contact your administrator\./, "The locked state must render the production password-entry screen.")
+assert.doesNotMatch(gate, /location\.reload|router\.refresh/, "App Lock provisioning and unlock must not reload the application.")
 assert.match(gate, /window\.addEventListener\("blur"[\s\S]*window\.addEventListener\("focus"/, "App Lock must respond to background/focus transitions.")
 assert.match(gate, /window\.addEventListener\(APP_LOCK_CREDENTIAL_CHANGED_EVENT, credentialChanged\)/, "A reset credential must move a missing or locked screen back to password entry.")
 assert.match(gate, /document\.addEventListener\("visibilitychange"/, "App Lock must detect minimize and hidden-window transitions.")

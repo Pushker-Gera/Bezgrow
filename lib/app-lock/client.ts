@@ -21,18 +21,32 @@ const APP_LOCK_WATERMARK_KEY = "bezgrow_app_lock_watermark_v1"
 const AUTO_LOCK_KEY = "bezgrow:app-lock-delay-ms"
 export const APP_LOCK_EVENT = "bezgrow:app-lock"
 export const APP_LOCK_CREDENTIAL_CHANGED_EVENT = "bezgrow:app-lock-credential-changed"
+export const APP_LOCK_PROVISIONING_STATUS_EVENT = "bezgrow:app-lock-provisioning-status"
 export const DEFAULT_AUTO_LOCK_DELAY_MS = 30_000
+
+export type AppLockProvisioningStatus = "credential-received" | "installing" | "ready"
 
 export type AppLockCredential = AppLockProvisioning & {
   license_id: string
   business_id: string
+  installed_at?: string | null
   locally_changed_at?: string | null
   applied_reset_authorization_id?: string | null
 }
 
 type AppLockWatermark = Pick<AppLockCredential, "license_id" | "business_id" | "credential_id"> & {
+  issued_at?: string | null
+  installed_at?: string | null
   locally_changed_at?: string | null
   applied_reset_authorization_id?: string | null
+}
+
+let credentialMutation: Promise<unknown> = Promise.resolve()
+
+function serializeCredentialMutation<T>(operation: () => Promise<T>): Promise<T> {
+  const pending = credentialMutation.then(operation, operation)
+  credentialMutation = pending.catch(() => undefined)
+  return pending
 }
 
 async function requireDesktopRuntime() {
@@ -59,10 +73,26 @@ async function writeCredential(credential: AppLockCredential) {
     key: APP_LOCK_SECRET_KEY,
     value: JSON.stringify(credential),
   })
+  const persisted = await readCredential()
+  if (!persisted || JSON.stringify(persisted) !== JSON.stringify(credential)) {
+    throw new Error("The secure app-access credential could not be saved. Retry App Lock or contact support.")
+  }
 }
 
 async function readWatermark() {
-  return getOfflineMeta<AppLockWatermark | null>(APP_LOCK_WATERMARK_KEY, null, "global").catch(() => null)
+  const stored = await getOfflineMeta<unknown>(APP_LOCK_WATERMARK_KEY, null, "global").catch(() => null)
+  try {
+    const parsed = typeof stored === "string" ? JSON.parse(stored) as AppLockWatermark : stored as AppLockWatermark | null
+    if (
+      !parsed
+      || typeof parsed.license_id !== "string"
+      || typeof parsed.business_id !== "string"
+      || typeof parsed.credential_id !== "string"
+    ) return null
+    return parsed
+  } catch {
+    return null
+  }
 }
 
 async function writeWatermark(credential: AppLockCredential) {
@@ -70,10 +100,26 @@ async function writeWatermark(credential: AppLockCredential) {
     license_id: credential.license_id,
     business_id: credential.business_id,
     credential_id: credential.credential_id,
+    issued_at: credential.issued_at,
+    installed_at: credential.installed_at || null,
     locally_changed_at: credential.locally_changed_at || null,
     applied_reset_authorization_id: credential.applied_reset_authorization_id || null,
   }
-  await setOfflineMeta(APP_LOCK_WATERMARK_KEY, watermark, "global")
+  // Normalized SQLite metadata has scalar columns, so object metadata must be
+  // serialized explicitly. Persisting the object directly created a row with
+  // three NULL value columns and silently discarded the replay watermark.
+  await setOfflineMeta(APP_LOCK_WATERMARK_KEY, JSON.stringify(watermark), "global")
+}
+
+function dispatchProvisioningStatus(status: AppLockProvisioningStatus) {
+  window.dispatchEvent(new CustomEvent(APP_LOCK_PROVISIONING_STATUS_EVENT, { detail: status }))
+}
+
+function secureStorageBackend() {
+  if (typeof navigator === "undefined") return "OS credential store"
+  return /windows/i.test(`${navigator.platform} ${navigator.userAgent}`)
+    ? "Windows Credential Manager"
+    : "macOS Keychain"
 }
 
 export async function getAppLockStatus() {
@@ -85,12 +131,36 @@ export async function getAppLockStatus() {
   }
 }
 
-export async function provisionAppLockFromLicense(
+export async function getAppLockDiagnostics(options: { unlocked?: boolean } = {}) {
+  const [credential, watermark] = await Promise.all([readCredential(), readWatermark()])
+  const reset = credential?.reset_authorization
+  return {
+    state: credential ? (options.unlocked ? "UNLOCKED" : "LOCKED") : "PROVISIONING_REQUIRED",
+    localCredentialExists: Boolean(credential),
+    lastCredentialInstallAt: credential?.installed_at || watermark?.installed_at || null,
+    resetAuthorizationPresent: Boolean(reset),
+    resetAuthorizationExpiryStatus: !reset
+      ? "not-present"
+      : Date.parse(reset.expires_at) > Date.now()
+        ? "valid"
+        : "expired-or-consumed",
+    secureStorageBackend: secureStorageBackend(),
+  }
+}
+
+export function provisionAppLockFromLicense(
   appLock: unknown,
   expectedDeviceId: string,
   licenseId: string,
   businessId: string
 ) {
+  return serializeCredentialMutation(() => installAppLockCredential(appLock, expectedDeviceId, licenseId, businessId))
+}
+
+async function installAppLockCredential(appLock: unknown, expectedDeviceId: string, licenseId: string, businessId: string) {
+  // A valid legacy licence remains valid, but cannot unlock an unprovisioned
+  // device. Never synthesize app_lock:null in the signed payload itself.
+  if (appLock === undefined || appLock === null) return { provisioned: false, resetApplied: false }
   if (!isAppLockProvisioning(appLock)) {
     throw new Error("This licence does not contain an app-access password. Ask the platform administrator to reset the App Password for this device.")
   }
@@ -105,28 +175,46 @@ export async function provisionAppLockFromLicense(
     watermark,
   })
   if (decision === "ignore") {
+    // Repair old NULL metadata and interrupted watermark writes without
+    // replacing an already-installed (possibly locally changed) password.
+    if (existing) await writeWatermark(existing)
     return { provisioned: false, resetApplied: false }
   }
 
+  dispatchProvisioningStatus("credential-received")
   const credential: AppLockCredential = {
     ...appLock,
     license_id: licenseId,
     business_id: businessId,
+    installed_at: new Date().toISOString(),
     applied_reset_authorization_id: appLock.reset_authorization?.id || null,
   }
+  dispatchProvisioningStatus("installing")
   await writeCredential(credential)
-  await writeWatermark(credential)
+  // The secure credential is authoritative. Lock immediately after read-back,
+  // even if a later non-secret metadata write fails and needs a retry.
   window.dispatchEvent(new Event(APP_LOCK_CREDENTIAL_CHANGED_EVENT))
+  await writeWatermark(credential)
+  dispatchProvisioningStatus("ready")
   return { provisioned: true, resetApplied: Boolean(appLock.reset_authorization) }
 }
 
 export async function verifyAppPassword(password: string) {
   const credential = await readCredential()
   if (!credential) return false
-  return verifyAppLockPassword(password, credential)
+  if (!(await verifyAppLockPassword(password, credential))) return false
+  // A reset can arrive while PBKDF2 is running. Never accept the previous
+  // password after the canonical secure credential has been replaced.
+  const current = await readCredential()
+  return current?.credential_id === credential.credential_id
+    && current.verifier === credential.verifier
 }
 
-export async function changeAppPassword(currentPassword: string, newPassword: string) {
+export function changeAppPassword(currentPassword: string, newPassword: string) {
+  return serializeCredentialMutation(() => replaceAppPassword(currentPassword, newPassword))
+}
+
+async function replaceAppPassword(currentPassword: string, newPassword: string) {
   const policyError = appPasswordPolicyError(newPassword)
   if (policyError) throw new Error(policyError)
   const credential = await readCredential()
@@ -147,8 +235,8 @@ export async function changeAppPassword(currentPassword: string, newPassword: st
   }
   next.verifier = await deriveAppLockVerifier(newPassword, next)
   await writeCredential(next)
-  await writeWatermark(next)
   window.dispatchEvent(new Event(APP_LOCK_CREDENTIAL_CHANGED_EVENT))
+  await writeWatermark(next)
 }
 
 export function requestAppLock() {

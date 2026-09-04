@@ -2,6 +2,7 @@
 
 import { normalizeLicenseEnvKey, parseLicenseInput, verifyLicenseSignature, type LicensePayload } from "@/lib/license/codec"
 import { provisionAppLockFromLicense } from "@/lib/app-lock/client"
+import { isAppLockProvisioning } from "@/lib/app-lock/shared"
 import { evaluateStoredLicense, type LicensePolicyResult, type StoredLicenseRow } from "@/lib/license/policy"
 import { verifyStoredLicenseRows } from "@/lib/license/verification"
 import { clearDesktopAuthMarker, markDesktopSessionActive, setDesktopAuthMarker } from "@/lib/desktop/session"
@@ -665,6 +666,97 @@ export async function assertLocalWriteAllowed(organizationId: string, actionName
 export async function localLicenseSnapshot(organizationId = workspaceOrganizationId() || "global") {
   const [deviceId, status] = await Promise.all([getOrCreateDeviceId(), getLocalLicenseStatus(organizationId)])
   return { device_id: deviceId, ...status }
+}
+
+export async function reconcileLocalAppLockCredential(
+  organizationId = workspaceOrganizationId() || "global",
+) {
+  const snapshot = await localLicenseSnapshot(organizationId)
+  if (!snapshot.allowed || !snapshot.license) {
+    return { reconciled: false, reason: "no-valid-licence" as const, snapshot }
+  }
+
+  const licenseKey = stringValue(snapshot.license.license_key)
+    || await readDesktopSecret(LICENSE_SECRET_KEY)
+    || ""
+  if (!licenseKey) {
+    return { reconciled: false, reason: "signed-key-unavailable" as const, snapshot }
+  }
+
+  const parsed = parseLicenseInput(licenseKey)
+  if (parsed.payload.device_id !== snapshot.device_id) {
+    throw new Error("The stored licence does not match this Device ID.")
+  }
+  if (!(await verifyLicenseSignature(parsed, PUBLIC_KEY))) {
+    throw new Error("The stored licence signature is invalid.")
+  }
+  if (!isAppLockProvisioning(parsed.payload.app_lock)) {
+    return { reconciled: false, reason: "signed-credential-missing" as const, snapshot }
+  }
+
+  const result = await provisionAppLockFromLicense(
+    parsed.payload.app_lock,
+    snapshot.device_id,
+    parsed.payload.license_id,
+    parsed.payload.business_id,
+  )
+  return {
+    reconciled: result.provisioned,
+    reason: result.provisioned ? "installed" as const : "already-reconciled" as const,
+    snapshot,
+  }
+}
+
+export async function localLicenseAppLockDiagnostics(
+  organizationId = workspaceOrganizationId() || "global",
+) {
+  const snapshot = await localLicenseSnapshot(organizationId)
+  if (!snapshot.license) {
+    return {
+      provisioningStatus: "not-activated",
+      resetAuthorizationPresent: false,
+      resetAuthorizationExpiryStatus: "not-present",
+    }
+  }
+
+  const licenseKey = stringValue(snapshot.license.license_key)
+    || await readDesktopSecret(LICENSE_SECRET_KEY)
+    || ""
+  if (!licenseKey) {
+    return {
+      provisioningStatus: "signed-key-unavailable",
+      resetAuthorizationPresent: false,
+      resetAuthorizationExpiryStatus: "unknown",
+    }
+  }
+
+  try {
+    const parsed = parseLicenseInput(licenseKey)
+    const appLock = parsed.payload.app_lock
+    if (!isAppLockProvisioning(appLock)) {
+      return {
+        provisioningStatus: "not-provisioned",
+        resetAuthorizationPresent: false,
+        resetAuthorizationExpiryStatus: "not-present",
+      }
+    }
+    const reset = appLock.reset_authorization
+    return {
+      provisioningStatus: "signed-credential-present",
+      resetAuthorizationPresent: Boolean(reset),
+      resetAuthorizationExpiryStatus: !reset
+        ? "not-present"
+        : Date.parse(reset.expires_at) > Date.now()
+          ? "valid"
+          : "expired-or-consumed",
+    }
+  } catch {
+    return {
+      provisioningStatus: "invalid-signed-key",
+      resetAuthorizationPresent: false,
+      resetAuthorizationExpiryStatus: "unknown",
+    }
+  }
 }
 
 export async function getExplicitControlPlaneActionAuth(

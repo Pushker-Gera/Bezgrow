@@ -5,15 +5,12 @@ import { createOfflineId, getCachedWorkspaceBootstrap, getOfflineData, putOfflin
 import { isLicenseRestrictedEndpoint } from "@/lib/license/policy"
 import { localFirstRepositoryAdapter } from "@/lib/offline/local/adapters"
 import {
-  createAccountingVoucher,
   createCreditNote,
   createDebitNote,
-  createExpenseRecord,
   createInventoryMovement,
   createPaymentTransaction,
   createPurchaseDocument,
   deleteSupplierMaster,
-  ensureDefaultChartOfAccounts,
   getOfflineReport,
   rowsToCsv,
   runProfessionalIntegrityChecks,
@@ -41,13 +38,15 @@ import {
   saveNormalizedCustomerAtomic,
   saveNormalizedProductAtomic,
   updateNormalizedCustomerStatusAtomic,
-  updateNormalizedInvoicePaymentStatus,
   type NormalizedListPage,
   type NormalizedListQuery,
 } from "@/lib/offline/local/repositories"
 import { getLocalDatabaseService, LocalDatabaseUnavailableError } from "@/lib/offline/local/service"
 import { FinancialYearDomainError, isoLocalDate, normalizeLocalDate, type InvoiceNumberingMode } from "@/lib/financial-years"
 import { allocateAuthoritativeStock } from "@/lib/inventory-availability"
+import { buildReversalJournal, buildSaleJournal, splitOutputGst } from "@/lib/accounting/journal"
+import { minorToMoney, moneyToMinor, multiplyMoneyToMinor } from "@/lib/accounting/money"
+import { accountingAccounts, accountingIntegrity, accountingReport, accountingStatus, createAccountingExpense, deactivateAccountingAccount, initializeAccounting, loadPostedSourceJournal, postManualJournal, replaceAccountingExpense, reverseAccountingExpense, reverseJournal, saveAccountingAccount, systemAccountMap } from "@/lib/offline/local/accounting"
 import {
   assertFinancialYearWriteAllowed,
   closeFinancialYear,
@@ -105,15 +104,22 @@ const dailyEndpoints = new Set([
   "/api/payments/create",
   "/api/accounting/chart",
   "/api/accounting/chart/save",
+  "/api/accounting/chart/deactivate",
+  "/api/accounting/status",
+  "/api/accounting/initialize",
   "/api/accounting/bank-accounts",
   "/api/accounting/bank-accounts/save",
   "/api/accounting/vouchers",
   "/api/accounting/vouchers/create",
+  "/api/accounting/vouchers/reverse",
   "/api/accounting/reports",
+  "/api/accounting/integrity",
   "/api/notes/credit",
   "/api/notes/debit",
   "/api/expenses/list",
   "/api/expenses/create",
+  "/api/expenses/reverse",
+  "/api/expenses/replace",
   "/api/inventory/simple-movement",
   "/api/inventory/professional-movement",
   "/api/reports/local",
@@ -287,9 +293,12 @@ const datedMutationKeys: Record<string, string[]> = {
   "/api/sales/returns/create": ["note_date"],
   "/api/payments/create": ["payment_date"],
   "/api/accounting/vouchers/create": ["voucher_date"],
+  "/api/accounting/vouchers/reverse": ["reversal_date"],
   "/api/notes/credit": ["note_date"],
   "/api/notes/debit": ["note_date"],
   "/api/expenses/create": ["expense_date"],
+  "/api/expenses/reverse": ["reversal_date"],
+  "/api/expenses/replace": ["expense_date"],
   "/api/inventory/simple-movement": ["movement_date"],
   "/api/inventory/professional-movement": ["movement_date"],
 }
@@ -571,6 +580,7 @@ async function createInvoice(body: DataRow, organizationId: string) {
   const now = nowIso()
   const invoiceDate = normalizeLocalDate(localString(body.invoice_date || body.date, isoLocalDate()))
   const financialYear = await assertFinancialYearWriteAllowed(organizationId, invoiceDate, localString(body.financial_year_id) || null)
+  await initializeAccounting(organizationId, invoiceDate)
   const items = Array.isArray(body.items) ? (body.items as DataRow[]) : []
   if (!items.length) return fail("Invalid invoice.", 422)
 
@@ -642,7 +652,7 @@ async function createInvoice(body: DataRow, organizationId: string) {
     created_at: now,
     updated_at: now,
   }
-  const nextItems: DataRow[] = items.map((item) => {
+  let nextItems: DataRow[] = items.map((item) => {
     const product = products.find((row) => row.id === item.product_id)
     return {
       ...item,
@@ -666,8 +676,102 @@ async function createInvoice(body: DataRow, organizationId: string) {
   } catch (error) {
     return fail(error instanceof Error ? error.message : "The selected stock batch is unavailable.", 409)
   }
+  const costByAllocation = consumedBatches.allocations.map((allocation) => {
+    const product = products.find((row) => row.id === allocation.productId)
+    const batch = allocation.batchId ? batches.find((row) => row.id === allocation.batchId) : null
+    const recordedRate = batch?.purchase_rate !== null && batch?.purchase_rate !== undefined && String(batch.purchase_rate) !== ""
+      ? batch.purchase_rate
+      : product?.purchase_rate !== null && product?.purchase_rate !== undefined && String(product.purchase_rate) !== ""
+        ? product.purchase_rate
+        : null
+    return {
+      ...allocation,
+      unitCostMinor: recordedRate === null ? null : moneyToMinor(recordedRate, `Recorded cost for ${localString(product?.name, allocation.productId)}`),
+      totalCostMinor: recordedRate === null ? null : multiplyMoneyToMinor(allocation.quantity, recordedRate, `Recorded cost for ${localString(product?.name, allocation.productId)}`),
+    }
+  })
+  const productCost = new Map<string, { knownMinor: number; quantity: number; missing: boolean }>()
+  for (const allocation of costByAllocation) {
+    const current = productCost.get(allocation.productId) || { knownMinor: 0, quantity: 0, missing: false }
+    current.quantity += allocation.quantity
+    current.knownMinor += allocation.totalCostMinor || 0
+    current.missing ||= allocation.totalCostMinor === null
+    productCost.set(allocation.productId, current)
+  }
+  const assignedCost = new Map<string, number>()
+  const itemCountByProduct = new Map<string, number>()
+  const itemIndexByProduct = new Map<string, number>()
+  for (const item of nextItems) itemCountByProduct.set(localString(item.product_id), (itemCountByProduct.get(localString(item.product_id)) || 0) + 1)
+  const intraState = !(localString(context.organization?.state) && localString(customer.state) && localString(context.organization?.state).toUpperCase() !== localString(customer.state).toUpperCase())
+  nextItems = nextItems.map((item) => {
+    const productId = localString(item.product_id)
+    const cost = productCost.get(productId) || { knownMinor: 0, quantity: 0, missing: true }
+    const currentIndex = (itemIndexByProduct.get(productId) || 0) + 1
+    itemIndexByProduct.set(productId, currentIndex)
+    const alreadyAssigned = assignedCost.get(productId) || 0
+    const isLast = currentIndex === (itemCountByProduct.get(productId) || 1)
+    const costAmountMinor = isLast
+      ? cost.knownMinor - alreadyAssigned
+      : Math.round(cost.knownMinor * (Math.max(0, localNumber(item.quantity)) / Math.max(cost.quantity, 0.000001)))
+    assignedCost.set(productId, alreadyAssigned + costAmountMinor)
+    const itemTax = moneyToMinor(localNumber(item.gst_amount, localNumber(item.tax_amount)), "Invoice line GST")
+    const hasExplicitItemGst = ["cgst_amount", "sgst_amount", "igst_amount"].some((key) => Object.prototype.hasOwnProperty.call(item, key))
+    const explicitItemGst = {
+      cgstMinor: moneyToMinor(item.cgst_amount || 0, "Invoice line CGST"),
+      sgstMinor: moneyToMinor(item.sgst_amount || 0, "Invoice line SGST"),
+      igstMinor: moneyToMinor(item.igst_amount || 0, "Invoice line IGST"),
+    }
+    const gst = hasExplicitItemGst && explicitItemGst.cgstMinor + explicitItemGst.sgstMinor + explicitItemGst.igstMinor === itemTax
+      ? { ...explicitItemGst, mode: explicitItemGst.igstMinor ? "INTER_STATE" as const : "INTRA_STATE" as const }
+      : splitOutputGst(itemTax, intraState ? "SAME" : "ORIGIN", intraState ? "SAME" : "DESTINATION")
+    return {
+      ...item,
+      cost_rate_minor: cost.quantity > 0 ? Math.round(cost.knownMinor / cost.quantity) : null,
+      cost_amount_minor: costAmountMinor,
+      cost_status: cost.missing ? (cost.knownMinor > 0 ? "PARTIAL" : "MISSING") : "RECORDED",
+      cgst_amount: minorToMoney(gst.cgstMinor),
+      sgst_amount: minorToMoney(gst.sgstMinor),
+      igst_amount: minorToMoney(gst.igstMinor),
+    }
+  })
+  const cogsMinor = Array.from(productCost.values()).reduce((sum, cost) => sum + cost.knownMinor, 0)
+  const accountingWarnings = Array.from(productCost.entries()).flatMap(([productId, cost]) => cost.missing
+    ? [{
+        id: `accounting-warning:${organizationId}:invoice-cost:${invoiceId}:${productId}`,
+        productId,
+        message: `${localString(products.find((row) => row.id === productId)?.name, "Product")} had sold quantity without a recorded purchase cost on ${invoiceNumber}. COGS includes only genuine recorded cost.`,
+      }]
+    : [])
+  const accounts = await systemAccountMap(organizationId)
+  const discountMinor = moneyToMinor(localNumber(body.discount_total, localNumber(body.discount_amount)), "Invoice discount")
+  const taxableMinor = moneyToMinor(taxableAmount, "Invoice taxable amount")
+  const explicitGst = {
+    cgstMinor: moneyToMinor(body.cgst_amount ?? nextItems.reduce((sum, item) => sum + localNumber(item.cgst_amount), 0), "Invoice CGST"),
+    sgstMinor: moneyToMinor(body.sgst_amount ?? nextItems.reduce((sum, item) => sum + localNumber(item.sgst_amount), 0), "Invoice SGST"),
+    igstMinor: moneyToMinor(body.igst_amount ?? nextItems.reduce((sum, item) => sum + localNumber(item.igst_amount), 0), "Invoice IGST"),
+  }
+  const taxMinor = moneyToMinor(taxTotal, "Invoice GST")
+  const hasExplicitGst = explicitGst.cgstMinor + explicitGst.sgstMinor + explicitGst.igstMinor === taxMinor
+  const journal = buildSaleJournal({
+    id: createOfflineId("sale-voucher"), organizationId, financialYearId: financialYear.id,
+    voucherNumber: `SALE-${invoiceNumber}`, voucherType: "sale", voucherDate: invoiceDate,
+    sourceType: "SALES_INVOICE", sourceId: invoiceId, referenceNo: invoiceNumber,
+    narration: `Sales invoice ${invoiceNumber}`, systemGenerated: true, accounts,
+    customerId: localString(body.customer_id),
+    paymentAccountRole: ["bank", "bank_transfer"].includes(localString(body.payment_method).toLowerCase()) ? "BANK" : "CASH",
+    subtotalMinor: taxableMinor + discountMinor,
+    discountMinor,
+    taxableMinor,
+    taxMinor,
+    totalMinor: moneyToMinor(totalAmount, "Invoice total"),
+    paidMinor: moneyToMinor(paidAmount, "Invoice paid amount"),
+    organizationState: localString(context.organization?.state) || null,
+    customerState: localString(customer.state) || null,
+    cogsMinor,
+    gstSplit: hasExplicitGst ? explicitGst : undefined,
+  }).journal
   const runningStock = new Map(products.map((product) => [String(product.id || ""), localNumber(product.stock)]))
-  const nextMovements = consumedBatches.allocations.map(({ productId, batchId, warehouseId, quantity }) => {
+  const nextMovements = costByAllocation.map(({ productId, batchId, warehouseId, quantity, unitCostMinor, totalCostMinor }) => {
       const product = products.find((row) => row.id === productId)
       const previousStock = runningStock.get(productId) ?? localNumber(product?.stock)
       const newStock = previousStock - quantity
@@ -689,6 +793,9 @@ async function createInvoice(body: DataRow, organizationId: string) {
         reference_id: invoiceId,
         movement_date: invoiceDate,
         financial_year_id: financialYear.id,
+        unit_cost_minor: unitCostMinor,
+        total_cost_minor: totalCostMinor,
+        cost_status: totalCostMinor === null ? "MISSING" : "RECORDED",
         sync_status: "pending_create",
         created_at: now,
         updated_at: now,
@@ -852,6 +959,8 @@ async function createInvoice(body: DataRow, organizationId: string) {
     invoiceSequence,
     numberingMode: context.numberingMode as "CONTINUE" | "RESTART",
     financialYearId: financialYear.id,
+    journal,
+    accountingWarnings,
   })
 
   return ok({ invoice_id: invoiceId, invoice_number: invoiceNumber })
@@ -861,15 +970,39 @@ async function updateInvoiceStatus(body: DataRow, organizationId: string) {
   const invoiceId = localString(body.invoice_id)
   const paymentStatus = localString(body.payment_status || body.status)
   if (!invoiceId || !paymentStatus) return fail("Invalid invoice status update.", 422)
-  const [invoice] = await databaseManager.select<DataRow>("SELECT financial_year_id FROM sales_invoices WHERE organization_id = ? AND id = ? AND deleted_at IS NULL LIMIT 1", [organizationId, invoiceId])
+  const [invoice] = await databaseManager.select<DataRow>(
+    `SELECT financial_year_id, customer_id, COALESCE(outstanding_amount, 0) outstanding_amount
+     FROM sales_invoices WHERE organization_id = ? AND id = ? AND deleted_at IS NULL LIMIT 1`,
+    [organizationId, invoiceId]
+  )
+  if (!invoice) return fail("Invoice was not found.", 404)
   if (invoice?.financial_year_id) {
     const year = await getFinancialYear(organizationId, String(invoice.financial_year_id))
     if (year?.status !== "OPEN") return fail(`${year?.label || "This financial year"} is closed. Invoice status cannot be edited.`, 409)
   }
-  const now = nowIso()
-  const updated = await updateNormalizedInvoicePaymentStatus(organizationId, invoiceId, paymentStatus, now)
-  if (!updated) return fail("Invoice was not found.", 404)
-  return ok({ invoiceId, payment_status: paymentStatus })
+  if (paymentStatus !== "paid") {
+    return fail("Payment status is derived from posted receipts. Record a receipt to settle an invoice; reverse the receipt to undo it.", 409)
+  }
+  const amount = localNumber(invoice.outstanding_amount)
+  if (amount <= 0) return ok({ invoiceId, payment_status: "paid", idempotent: true })
+  const paymentDate = isoLocalDate()
+  const financialYear = await assertFinancialYearWriteAllowed(organizationId, paymentDate)
+  const result = await createPaymentTransaction(organizationId, {
+    amount,
+    direction: "in",
+    payment_type: "customer_receipt",
+    payment_method: body.payment_method || "cash",
+    party_type: "customer",
+    party_id: invoice.customer_id,
+    document_type: "sales_invoice",
+    document_id: invoiceId,
+    payment_date: paymentDate,
+    financial_year_id: financialYear.id,
+    reference_no: body.reference_no || null,
+    notes: "Invoice marked paid through an auditable receipt.",
+    idempotency_key: `invoice-status-paid:${invoiceId}`,
+  })
+  return ok({ invoiceId, payment_status: "paid", ...result })
 }
 
 async function deleteInvoice(body: DataRow, organizationId: string) {
@@ -883,6 +1016,33 @@ async function deleteInvoice(body: DataRow, organizationId: string) {
     const year = await getFinancialYear(organizationId, String(invoice.financial_year_id))
     if (year?.status !== "OPEN") return fail(`${year?.label || "This financial year"} is closed. Historical invoices cannot be deleted.`, 409)
   }
+  const originalJournal = await loadPostedSourceJournal(organizationId, "SALES_INVOICE", invoiceId)
+  if (!originalJournal) {
+    return fail("This invoice predates the controlled accounting opening and cannot be deleted automatically. Preserve it as history and post a reviewed adjustment if needed.", 409)
+  }
+  const reversalDate = normalizeLocalDate(isoLocalDate())
+  const reversalYear = await assertFinancialYearWriteAllowed(organizationId, reversalDate)
+  const reversalJournal = buildReversalJournal(originalJournal, {
+    id: createOfflineId("sale-reversal"),
+    voucherNumber: `REV-${originalJournal.voucherNumber}`,
+    voucherDate: reversalDate,
+    financialYearId: reversalYear.id,
+    sourceType: "SALES_INVOICE_REVERSAL",
+    sourceId: invoiceId,
+    narration: `Invoice ${localString(invoice.display_invoice_number, localString(invoice.invoice_number, invoiceId))} cancelled with stock restoration.`,
+    createdBy: null,
+  })
+  const invoicePayments = await databaseManager.select<DataRow>(
+    "SELECT id FROM payments WHERE organization_id = ? AND document_type = 'sales_invoice' AND document_id = ? AND deleted_at IS NULL",
+    [organizationId, invoiceId]
+  )
+  const receiptOriginals = (await Promise.all(invoicePayments.map((payment) => loadPostedSourceJournal(organizationId, "PAYMENT", localString(payment.id))))).filter((journal): journal is NonNullable<typeof journal> => Boolean(journal))
+  const receiptReversals = receiptOriginals.map((journal) => buildReversalJournal(journal, {
+    id: createOfflineId("receipt-reversal"), voucherNumber: `REV-${journal.voucherNumber}`, voucherDate: reversalDate,
+    financialYearId: reversalYear.id, sourceType: "PAYMENT_REVERSAL", sourceId: journal.sourceId,
+    narration: `Receipt reversed because invoice ${localString(invoice.display_invoice_number, localString(invoice.invoice_number, invoiceId))} was cancelled.`,
+    createdBy: null,
+  }))
   const invoiceQuantityByProduct = new Map<string, number>()
   for (const item of items) {
     const productId = localString(item.product_id)
@@ -993,6 +1153,7 @@ async function deleteInvoice(body: DataRow, organizationId: string) {
     batchDeltas: Array.from(batchRestoreById.entries()).map(([batchId, quantity]) => ({ batchId, quantity, updatedAt: now })),
     restoreMovements,
     deletedAt: now,
+    reversalJournals: [reversalJournal, ...receiptReversals],
   })
   return ok({ invoiceId, restoredItems: items.length })
 }
@@ -1283,34 +1444,30 @@ async function paymentCreate(body: DataRow, organizationId: string) {
 
 async function listChartOfAccounts(url: URL, organizationId: string) {
   const search = url.searchParams.get("search") || ""
-  let rows = await ensureDefaultChartOfAccounts(organizationId)
+  let rows = await accountingAccounts(organizationId, url.searchParams.get("include_inactive") === "true")
   rows = rows.filter((row) => rowMatches(row, ["account_code", "account_name", "account_type", "account_group"], search))
   rows = sortRows(rows, url.searchParams.get("sort") || "account_code", url.searchParams.get("direction") || "asc")
   return jsonResponse(paginate(url, rows))
 }
 
 async function saveChartAccount(body: DataRow, organizationId: string) {
-  const now = nowIso()
-  const accounts = await ensureDefaultChartOfAccounts(organizationId)
-  const id = localString(body.id) || createOfflineId("account")
-  const account = {
-    ...accounts.find((row) => row.id === id),
-    ...body,
-    id,
-    organization_id: organizationId,
-    account_code: localString(body.account_code, localString(body.code, `ACC-${Date.now()}`)),
-    account_name: localString(body.account_name, localString(body.name, "Account")),
-    account_type: localString(body.account_type, localString(body.type, "asset")),
-    account_group: localString(body.account_group, localString(body.group)),
-    normal_balance: localString(body.normal_balance, "debit"),
-    is_active: body.is_active === undefined ? true : Boolean(body.is_active),
-    sync_status: "pending_update",
-    created_at: localString(body.created_at) || now,
-    updated_at: now,
-    deleted_at: null,
-  }
-  await writeCollections(organizationId, [{ collection: "chart_of_accounts", value: [account, ...accounts.filter((row) => row.id !== id)] }])
-  return ok({ account })
+  const id = await saveAccountingAccount({
+    organizationId,
+    id: localString(body.id) || undefined,
+    accountCode: localString(body.account_code, localString(body.code)),
+    accountName: localString(body.account_name, localString(body.name)),
+    accountType: localString(body.account_type, localString(body.type, "EXPENSE")).toUpperCase() as "ASSET" | "LIABILITY" | "EQUITY" | "INCOME" | "EXPENSE",
+    accountGroup: localString(body.account_group, localString(body.group)),
+    normalBalance: localString(body.normal_balance, "debit").toLowerCase() as "debit" | "credit",
+    notes: localString(body.notes),
+  })
+  return ok({ account_id: id })
+}
+
+async function deactivateChartAccount(body: DataRow, organizationId: string) {
+  const id = localString(body.id || body.account_id)
+  if (!id) return fail("Account id is required.", 422)
+  return ok({ account_id: id, ...(await deactivateAccountingAccount(organizationId, id)) })
 }
 
 async function listBankAccounts(url: URL, organizationId: string) {
@@ -1352,9 +1509,18 @@ async function listAccountingVouchers(url: URL, organizationId: string) {
 }
 
 async function createVoucher(body: DataRow, organizationId: string) {
-  const result = await createAccountingVoucher(organizationId, body)
-  await queueProfessionalAction("create_accounting_voucher", organizationId, { voucher: body, result })
-  return ok(result)
+  const entries = Array.isArray(body.entries) ? body.entries as DataRow[] : []
+  const result = await postManualJournal({
+    organizationId,
+    financialYearId: localString(body.financial_year_id),
+    voucherDate: normalizeLocalDate(localString(body.voucher_date || body.date, isoLocalDate())),
+    voucherType: localString(body.voucher_type, "journal").toLowerCase() as "journal" | "receipt" | "payment" | "contra" | "opening",
+    referenceNo: localString(body.reference_no),
+    narration: localString(body.narration, "Manual journal"),
+    createdBy: localString(body.created_by),
+    lines: entries.map((entry) => ({ accountId: localString(entry.account_id), debit: entry.debit ?? 0, credit: entry.credit ?? 0, description: localString(entry.description) })),
+  })
+  return ok({ voucher: result })
 }
 
 async function noteCreate(body: DataRow, organizationId: string, kind: "credit" | "debit") {
@@ -1374,9 +1540,56 @@ async function listExpenses(url: URL, organizationId: string) {
 }
 
 async function expenseCreate(body: DataRow, organizationId: string) {
-  const result = await createExpenseRecord(organizationId, body)
-  await queueProfessionalAction("create_expense", organizationId, { expense: body, result })
+  const result = await createAccountingExpense({
+    organizationId,
+    expenseDate: normalizeLocalDate(localString(body.expense_date || body.date, isoLocalDate())),
+    description: localString(body.description, "Expense"),
+    vendorName: localString(body.vendor_name), category: localString(body.category),
+    expenseAccountId: localString(body.expense_account_id), paymentAccountId: localString(body.payment_account_id),
+    amount: body.amount, cgst: body.cgst ?? body.cgst_amount ?? 0, sgst: body.sgst ?? body.sgst_amount ?? 0, igst: body.igst ?? body.igst_amount ?? 0,
+    paymentMethod: localString(body.payment_method, "cash"), referenceNo: localString(body.reference_no),
+  })
   return ok(result)
+}
+
+function accountingExpenseInput(body: DataRow, organizationId: string) {
+  return {
+    organizationId,
+    expenseDate: normalizeLocalDate(localString(body.expense_date || body.date, isoLocalDate())),
+    description: localString(body.description, "Expense"), vendorName: localString(body.vendor_name), category: localString(body.category),
+    expenseAccountId: localString(body.expense_account_id), paymentAccountId: localString(body.payment_account_id),
+    amount: body.amount, cgst: body.cgst ?? body.cgst_amount ?? 0, sgst: body.sgst ?? body.sgst_amount ?? 0, igst: body.igst ?? body.igst_amount ?? 0,
+    paymentMethod: localString(body.payment_method, "cash"), referenceNo: localString(body.reference_no),
+  }
+}
+
+async function expenseReverse(body: DataRow, organizationId: string) {
+  const id = localString(body.expense_id || body.id)
+  if (!id) return fail("Expense id is required.", 422)
+  const voucher = await reverseAccountingExpense(organizationId, id, normalizeLocalDate(localString(body.reversal_date, isoLocalDate())), localString(body.reason))
+  return ok({ expense_id: id, reversal_voucher_id: voucher?.id })
+}
+
+async function expenseReplace(body: DataRow, organizationId: string) {
+  const id = localString(body.expense_id || body.id)
+  if (!id) return fail("Expense id is required.", 422)
+  return ok(await replaceAccountingExpense(id, accountingExpenseInput(body, organizationId), localString(body.reason)) as DataRow)
+}
+
+async function phaseOneAccountingReport(url: URL, organizationId: string) {
+  const financialYearId = url.searchParams.get("financial_year_id") || ""
+  if (!financialYearId) return fail("Financial year is required.", 422)
+  const requested = (url.searchParams.get("report") || url.searchParams.get("type") || "overview").replace("dashboard", "overview")
+  const allowed = new Set(["overview", "journals", "general-ledger", "trial-balance", "profit-loss", "balance-sheet", "cash-flow", "expenses", "warnings"])
+  if (!allowed.has(requested)) return fail("Unknown accounting report.", 422)
+  return jsonResponse({ success: true, ...(await accountingReport({
+    organizationId, financialYearId, report: requested as Parameters<typeof accountingReport>[0]["report"],
+    from: url.searchParams.get("from") || undefined, to: url.searchParams.get("to") || undefined,
+    accountId: url.searchParams.get("account_id") || undefined, page: Number(url.searchParams.get("page") || 1), limit: Number(url.searchParams.get("limit") || 100),
+    transactionType: url.searchParams.get("transaction_type") || undefined,
+    direction: url.searchParams.get("direction") === "desc" ? "desc" : "asc",
+    search: url.searchParams.get("search") || undefined,
+  })) })
 }
 
 async function professionalInventoryMovement(body: DataRow, organizationId: string) {
@@ -1605,6 +1818,9 @@ function userSafeLocalError(error: unknown, pathname: string) {
   if (pathname === "/api/customers/save") {
     return "Bezgrow could not save this customer. The local database is temporarily unavailable. Nothing was changed; please retry."
   }
+  if ((pathname.startsWith("/api/accounting/") || pathname.startsWith("/api/expenses/")) && !/constraint|sqlite|database is locked|transaction/i.test(message)) {
+    return message
+  }
   if (/constraint|sqlite|sql plugin|database is locked|transaction/i.test(message)) {
     return "The local database could not save this change. Nothing was changed; please try again."
   }
@@ -1671,15 +1887,22 @@ export async function localApiFetch(input: RequestInfo | URL, init: RequestInit 
     if (method === "POST" && url.pathname === "/api/payments/create") return { handled: true, response: await paymentCreate(body || {}, organizationId) }
     if (method === "GET" && url.pathname === "/api/accounting/chart") return { handled: true, response: await listChartOfAccounts(url, organizationId) }
     if (method === "POST" && url.pathname === "/api/accounting/chart/save") return { handled: true, response: await saveChartAccount(body || {}, organizationId) }
+    if (method === "POST" && url.pathname === "/api/accounting/chart/deactivate") return { handled: true, response: await deactivateChartAccount(body || {}, organizationId) }
+    if (method === "GET" && url.pathname === "/api/accounting/status") return { handled: true, response: ok({ status: await accountingStatus(organizationId) }) }
+    if (method === "POST" && url.pathname === "/api/accounting/initialize") return { handled: true, response: ok({ status: await initializeAccounting(organizationId, normalizeLocalDate(localString(body?.opening_date, isoLocalDate()))) }) }
     if (method === "GET" && url.pathname === "/api/accounting/bank-accounts") return { handled: true, response: await listBankAccounts(url, organizationId) }
     if (method === "POST" && url.pathname === "/api/accounting/bank-accounts/save") return { handled: true, response: await saveBankAccount(body || {}, organizationId) }
     if (method === "GET" && url.pathname === "/api/accounting/vouchers") return { handled: true, response: await listAccountingVouchers(url, organizationId) }
     if (method === "POST" && url.pathname === "/api/accounting/vouchers/create") return { handled: true, response: await createVoucher(body || {}, organizationId) }
-    if (method === "GET" && url.pathname === "/api/accounting/reports") return { handled: true, response: await localReport(url, organizationId) }
+    if (method === "POST" && url.pathname === "/api/accounting/vouchers/reverse") return { handled: true, response: ok({ voucher: await reverseJournal({ organizationId, voucherId: localString(body?.voucher_id), reversalDate: normalizeLocalDate(localString(body?.reversal_date, isoLocalDate())), reason: localString(body?.reason) }) }) }
+    if (method === "GET" && url.pathname === "/api/accounting/reports") return { handled: true, response: await phaseOneAccountingReport(url, organizationId) }
+    if (method === "GET" && url.pathname === "/api/accounting/integrity") return { handled: true, response: ok({ integrity: await accountingIntegrity(organizationId, url.searchParams.get("financial_year_id")) }) }
     if (method === "POST" && url.pathname === "/api/notes/credit") return { handled: true, response: await noteCreate(body || {}, organizationId, "credit") }
     if (method === "POST" && url.pathname === "/api/notes/debit") return { handled: true, response: await noteCreate(body || {}, organizationId, "debit") }
     if (method === "GET" && url.pathname === "/api/expenses/list") return { handled: true, response: await listExpenses(url, organizationId) }
     if (method === "POST" && url.pathname === "/api/expenses/create") return { handled: true, response: await expenseCreate(body || {}, organizationId) }
+    if (method === "POST" && url.pathname === "/api/expenses/reverse") return { handled: true, response: await expenseReverse(body || {}, organizationId) }
+    if (method === "POST" && url.pathname === "/api/expenses/replace") return { handled: true, response: await expenseReplace(body || {}, organizationId) }
     if (method === "POST" && url.pathname === "/api/inventory/simple-movement") return { handled: true, response: await stockMovement(body || {}, organizationId) }
     if (method === "POST" && url.pathname === "/api/inventory/professional-movement") return { handled: true, response: await professionalInventoryMovement(body || {}, organizationId) }
     if (method === "GET" && url.pathname === "/api/reports/local") return { handled: true, response: await localReport(url, organizationId) }

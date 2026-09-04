@@ -5,6 +5,9 @@ import { isDesktopRuntime } from "@/lib/desktop/tauri"
 import { createNormalizedPaymentAtomic, exportNormalizedBackup, putNormalizedCollectionsInTransaction } from "@/lib/offline/local/repositories"
 import { getLocalDatabaseService } from "@/lib/offline/local/service"
 import { allocateAuthoritativeStock } from "@/lib/inventory-availability"
+import { buildReceiptJournal } from "@/lib/accounting/journal"
+import { moneyToMinor } from "@/lib/accounting/money"
+import { initializeAccounting, systemAccountMap } from "@/lib/offline/local/accounting"
 
 type DataRow = Record<string, unknown> & { id?: string }
 
@@ -513,6 +516,15 @@ export async function createPaymentTransaction(organizationId: string, input: Da
   const documentId = localString(input.document_id, localString(input.invoice_id, localString(input.purchase_invoice_id)))
   const paymentId = createOfflineId("payment")
   const paymentDate = localDate(input.payment_date, now.slice(0, 10))
+  await initializeAccounting(organizationId, paymentDate)
+  const idempotencyKey = localString(input.idempotency_key)
+  if (idempotencyKey) {
+    const [existing] = await service.select<DataRow>(
+      "SELECT id, amount, direction, document_id FROM payments WHERE organization_id = ? AND idempotency_key = ? AND deleted_at IS NULL LIMIT 1",
+      [organizationId, idempotencyKey]
+    )
+    if (existing) return { payment_id: existing.id, amount: localNumber(existing.amount), direction: localString(existing.direction), document_id: existing.document_id || null, idempotent: true }
+  }
 
   const [receipts, invoices, purchases, expenses, customers, suppliers] = await Promise.all([
     readRows(organizationId, "payment_receipts"),
@@ -545,6 +557,30 @@ export async function createPaymentTransaction(organizationId: string, input: Da
   if (partyType === "supplier" && partyId && !suppliers.some((row) => row.id === partyId && !row.deleted_at)) throw new Error("Supplier was not found.")
   const financialYearId = localString(input.financial_year_id)
   if (!financialYearId) throw new Error("The payment accounting period was not resolved.")
+  if (!partyId || !(["customer", "supplier"].includes(partyType))) throw new Error("A customer or supplier is required for a posted receipt or payment.")
+  if ((direction === "in" && partyType !== "customer") || (direction === "out" && partyType !== "supplier")) {
+    throw new Error("Phase 1 supports customer receipts and supplier payments. Use a manual journal for other fund movements.")
+  }
+  const accounts = await systemAccountMap(organizationId)
+  const journal = buildReceiptJournal({
+    id: createOfflineId("payment-voucher"),
+    organizationId,
+    financialYearId,
+    voucherNumber: `${direction === "in" ? "RV" : "PV"}-${paymentId.slice(-8).toUpperCase()}`,
+    voucherType: direction === "in" ? "receipt" : "payment",
+    voucherDate: paymentDate,
+    sourceType: "PAYMENT",
+    sourceId: paymentId,
+    referenceNo: localString(input.reference_no) || null,
+    narration: localString(input.notes, direction === "in" ? "Customer receipt" : "Supplier payment"),
+    systemGenerated: true,
+    accounts,
+    direction: direction as "in" | "out",
+    partyType: partyType as "customer" | "supplier",
+    partyId,
+    paymentAccountRole: accountType === "bank" ? "BANK" : "CASH",
+    amountMinor: moneyToMinor(amount, "Payment amount"),
+  })
 
   const payment = {
     id: paymentId,
@@ -564,6 +600,8 @@ export async function createPaymentTransaction(organizationId: string, input: Da
     created_at: now,
     updated_at: now,
     financial_year_id: financialYearId,
+    accounting_voucher_id: journal.id,
+    idempotency_key: idempotencyKey || paymentId,
   }
 
   const receipt =
@@ -610,6 +648,7 @@ export async function createPaymentTransaction(organizationId: string, input: Da
     amount,
     updatedAt: now,
     financialYearId,
+    journal,
   })
 
   return { payment_id: paymentId, amount, direction, document_id: documentId || null }

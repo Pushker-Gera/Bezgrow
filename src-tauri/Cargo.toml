@@ -1,6 +1,6 @@
 [package]
 name = "bezgrow-erp"
-version = "0.2.5"
+version = "0.3.0"
 description = "Bezgrow ERP desktop shell"
 authors = ["Bezgrow"]
 edition = "2021"
@@ -17,7 +17,8 @@ ed25519-dalek = "2"
 futures-channel = "0.3"
 getrandom = "0.3"
 image = { version = "0.25", default-features = false, features = ["jpeg", "png", "webp"] }
-keyring = "3"
+# v3 has no native backend enabled by default (it otherwise uses a mock).
+keyring = { version = "3", features = ["apple-native", "windows-native"] }
 rfd = "0.15"
 reqwest = { version = "0.13", default-features = false, features = ["rustls"] }
 serde = { version = "1", features = ["derive"] }

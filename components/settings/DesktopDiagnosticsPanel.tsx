@@ -4,7 +4,12 @@ import { useState } from "react"
 import packageJson from "@/package.json"
 import { saveDesktopBytes } from "@/lib/desktop-file-export"
 import { desktopArchitecture } from "@/lib/desktop/tauri"
-import { localLicenseSnapshot } from "@/lib/offline/local/license"
+import { getAppLockDiagnostics } from "@/lib/app-lock/client"
+import {
+  getOrCreateDeviceId,
+  localLicenseAppLockDiagnostics,
+  localLicenseSnapshot,
+} from "@/lib/offline/local/license"
 import { getLocalDatabaseService } from "@/lib/offline/local/service"
 
 const buildCommit = process.env.NEXT_PUBLIC_BEZGROW_BUILD_COMMIT || "unavailable"
@@ -39,15 +44,29 @@ function localServerSummary() {
 }
 
 async function buildSafeDiagnostics() {
-  const [database, license] = await Promise.all([
+  const [database, license, deviceId, appLock, licenceAppLock] = await Promise.all([
     getLocalDatabaseService().diagnostics(),
     localLicenseSnapshot().catch(() => null),
+    getOrCreateDeviceId().catch(() => "unavailable"),
+    getAppLockDiagnostics({ unlocked: true }).catch(() => ({
+      state: "unavailable",
+      localCredentialExists: false,
+      lastCredentialInstallAt: null,
+      resetAuthorizationPresent: false,
+      resetAuthorizationExpiryStatus: "unknown",
+      secureStorageBackend: "unavailable",
+    })),
+    localLicenseAppLockDiagnostics().catch(() => ({
+      provisioningStatus: "unavailable",
+      resetAuthorizationPresent: false,
+      resetAuthorizationExpiryStatus: "unknown",
+    })),
   ])
   const integrityStage = database.startupStages.find((stage) => stage.stage === "integrity_check")
 
   return {
     privacy:
-      "This export contains technical metadata only. It excludes passwords, tokens, license keys, customer records, invoices, products, and business data.",
+      "This export contains technical metadata only. It excludes passwords, password verifiers, tokens, licence keys, signing secrets, customer records, invoices, products, and business data.",
     capturedAt: new Date().toISOString(),
     application: {
       name: "Bezgrow",
@@ -62,6 +81,22 @@ async function buildSafeDiagnostics() {
       platform: typeof navigator === "undefined" ? "" : navigator.platform,
       userAgent: typeof navigator === "undefined" ? "" : navigator.userAgent,
       language: typeof navigator === "undefined" ? "" : navigator.language,
+    },
+    device: {
+      deviceId,
+    },
+    appLock: {
+      state: license && !license.allowed ? "NO_VALID_LICENCE" : appLock.state,
+      localCredentialExists: appLock.localCredentialExists,
+      licenceProvisioningStatus: licenceAppLock.provisioningStatus,
+      lastCredentialInstallAt: appLock.lastCredentialInstallAt,
+      resetAuthorizationPresent:
+        appLock.resetAuthorizationPresent || licenceAppLock.resetAuthorizationPresent,
+      resetAuthorizationExpiryStatus:
+        licenceAppLock.resetAuthorizationPresent
+          ? licenceAppLock.resetAuthorizationExpiryStatus
+          : appLock.resetAuthorizationExpiryStatus,
+      secureStorageBackend: appLock.secureStorageBackend,
     },
     bundledServer: localServerSummary(),
     database: {

@@ -13,6 +13,8 @@ const adminLayout = read("app/admin/layout.tsx")
 assert.match(settings, /DesktopDiagnosticsPanel/, "Desktop diagnostics must be available from Settings.")
 assert.match(panel, /database[\s\S]*integrityStatus[\s\S]*startupStages/, "Diagnostics must report SQLite health and startup state.")
 assert.match(panel, /license[\s\S]*expiresAt[\s\S]*graceDays/, "Diagnostics must include only a redacted license summary.")
+assert.match(panel, /device[\s\S]*deviceId/, "Support diagnostics must include the stable non-secret Device ID.")
+assert.match(panel, /appLock[\s\S]*state[\s\S]*localCredentialExists[\s\S]*licenceProvisioningStatus[\s\S]*lastCredentialInstallAt[\s\S]*resetAuthorizationExpiryStatus[\s\S]*secureStorageBackend/, "Support diagnostics must expose only safe App Lock state and persistence metadata.")
 assert.match(rust, /application_version[\s\S]*device_id_source[\s\S]*license_state_source[\s\S]*legacy_migration_occurred/, "Native support diagnostics must identify the application version and persistence sources.")
 assert.match(rust, /Persistence diagnostics:[\s\S]*app_data=[\s\S]*database=[\s\S]*device_id_source=[\s\S]*license_state_source=/, "Startup logs must record safe persistence-path diagnostics.")
 assert.match(panel, /NEXT_PUBLIC_BEZGROW_BUILD_COMMIT/, "Diagnostics must expose the artifact's Git commit identity.")
@@ -33,6 +35,9 @@ assert.match(health, /build\.gitCommit !== nativeBuildCommit[\s\S]*build\.builtA
 assert.match(prepare, /platform:\s*buildPlatform[\s\S]*architecture:\s*targetArchitecture/, "The embedded build manifest must record platform and architecture.")
 for (const forbidden of ["license_key", "device_id", "SUPABASE_SERVICE_ROLE_KEY", "BEZGROW_LICENSE_PRIVATE_KEY"]) {
   assert.doesNotMatch(panel, new RegExp(forbidden), `Diagnostic export must not include ${forbidden}.`)
+}
+for (const forbidden of ["verifier", "signed_license_key", "private_key", "reset_secret"]) {
+  assert.doesNotMatch(panel, new RegExp(`\\b${forbidden}\\s*:`, "i"), `Diagnostic fields must not expose ${forbidden}.`)
 }
 assert.match(panel, /customers, products, invoices/, "The diagnostic privacy promise must name excluded business data.")
 assert.match(exportApi, /"csv" \| "pdf" \| "json"/, "The shared save API must support JSON diagnostics.")

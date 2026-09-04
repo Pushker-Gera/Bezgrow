@@ -23,6 +23,7 @@ const navItems = [
     ["Billing", "/dashboard/billing"],
     ["Stock", "/dashboard/inventory"],
     ["Reports", "/dashboard/charts"],
+    ["Accounting", "/dashboard/accounting"],
     ["Settings", "/dashboard/settings"],
 ]
 
@@ -35,6 +36,7 @@ const mobilePrimaryNav = [
 
 const mobileMoreNav = [
     ["Reports", "/dashboard/charts"],
+    ["Accounting", "/dashboard/accounting"],
     ["Billing", "/dashboard/billing"],
     ["Stock", "/dashboard/inventory"],
     ["Settings", "/dashboard/settings"],
@@ -244,7 +246,7 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
 
                 <nav className="mt-6 flex-1 space-y-2 overflow-y-auto pr-1">
                     {navItems.map(([name, href]) => {
-                        const active = pathname === href
+                        const active = isActivePath(href)
                         return (
                             <Link
                                 key={href}
