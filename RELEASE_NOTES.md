@@ -13,7 +13,7 @@ Phase 1 core accounting foundation.
 - Added migration, journal invariant, GST, COGS, payment, expense, reversal, report/reconciliation, backup round-trip, privacy/architecture, and 2,000-product / 5,000-customer / 20,000-invoice / 12,000-journal performance coverage.
 - Kept Phase 2 purchasing/GST-return/bank-reconciliation workflows and Phase 3 compliance/accountant workflows out of this release.
 
-The locally built macOS candidate is ad-hoc signed for legitimate manual installation. It is not Developer ID signed or notarized. Public download/updater metadata remains pinned to the last genuine published artifacts until matching 0.3.0 macOS and Windows artifacts are independently produced and pass publication gates.
+Publication is cross-platform and atomic: public download/updater metadata advances to 0.3.0 only after matching macOS and Windows artifacts from the same commit independently pass the release gates. Manual-install artifacts remain explicitly labelled with their real signing and notarization state.
 
 ## Previous 0.2.5 notes
 

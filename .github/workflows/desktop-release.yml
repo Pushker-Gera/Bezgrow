@@ -836,6 +836,9 @@ jobs:
           if [ "$CHANNEL" = "stable" ]; then PRERELEASE=false; else PRERELEASE=true; fi
           NOTES="${{ inputs.release_notes }}"
           if [ -z "$NOTES" ]; then
+            NOTES="$(awk 'NR == 1 { next } /^## Previous / { exit } { print }' RELEASE_NOTES.md)"
+          fi
+          if [ -z "$(printf '%s' "$NOTES" | tr -d '[:space:]')" ]; then
             NOTES="Bezgrow $VERSION desktop release with integrity-verified installers."
           fi
           MINIMUM_VERSION="${{ inputs.minimum_supported_version }}"

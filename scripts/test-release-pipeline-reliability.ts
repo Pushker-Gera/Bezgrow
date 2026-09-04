@@ -85,6 +85,10 @@ assert.match(downloadPage, /macInstaller\.version[\s\S]*windowsInstaller\.versio
 assert.match(updaterRoute, /\.eq\("release_status", "published"\)/)
 assert.match(updaterRoute, /artifact\?\.validation_status === "valid"/)
 assert.match(workflow, /needs\.mac\.result == 'success'[\s\S]*needs\.windows\.result == 'success'/)
+assert.ok(
+  workflow.includes("awk 'NR == 1 { next } /^## Previous / { exit } { print }' RELEASE_NOTES.md"),
+  "Tag-triggered releases must publish the checked-in notes for the current release."
+)
 assert.match(publication, /publicationMode === "cross-platform"[\s\S]*artifactPlatforms\.has\("macos"\)[\s\S]*artifactPlatforms\.has\("windows"\)/)
 
 console.log("release-pipeline-reliability-ok source-public-separated=true fallback=0.1.15 drafts-hidden=true atomic-cohort=true updater-published-only=true")
