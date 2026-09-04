@@ -180,6 +180,21 @@ function Invoke-InstalledSqliteCrud([string]$Mode, [string]$ExpectedSchema = "")
   }
 }
 
+function Get-InstalledSchemaVersion {
+  if (-not (Test-Path -LiteralPath $database) -or -not (Test-Path -LiteralPath $installedNode)) {
+    return 0
+  }
+  $schema = & $installedNode `
+    --disable-warning=ExperimentalWarning `
+    -e "const { DatabaseSync } = require('node:sqlite'); const db = new DatabaseSync(process.argv[1]); console.log(db.prepare('PRAGMA user_version').get().user_version); db.close();" `
+    $database `
+    2>$null
+  if ($LASTEXITCODE -ne 0 -or "$schema" -notmatch '^\d+$') {
+    return 0
+  }
+  return [int]"$schema"
+}
+
 function Test-BezgrowWindowControls([System.Diagnostics.Process]$ApplicationProcess, [int]$Cycle) {
   Wait-Until {
     $ApplicationProcess.Refresh()
@@ -302,6 +317,7 @@ function Write-SmokeDiagnostics(
 function Invoke-AppLaunchCycle(
   [int]$Cycle,
   [string]$LaunchPath = $application,
+  [int]$ExpectedSchema = 0,
   [switch]$TestRuntimeRecovery,
   [switch]$TestWindowControls
 ) {
@@ -390,6 +406,12 @@ function Invoke-AppLaunchCycle(
     (Get-Item -LiteralPath $database).Length -gt 0
   } 30 "Launch cycle $Cycle did not create or reopen the authoritative SQLite database."
 
+  if ($ExpectedSchema -gt 0) {
+    Wait-Until {
+      (Get-InstalledSchemaVersion) -eq $ExpectedSchema
+    } 45 "Launch cycle $Cycle did not finish migrating the authoritative SQLite database to schema $ExpectedSchema."
+  }
+
   if ($TestWindowControls) {
     Test-BezgrowWindowControls $appProcess $Cycle
   }
@@ -474,12 +496,12 @@ if (-not [string]::IsNullOrWhiteSpace($previousInstaller)) {
   Invoke-InstalledSqliteCrud "verify"
   Assert-InstalledBuildIdentity $ExpectedVersion $ExpectedCommit
 }
-Invoke-AppLaunchCycle 2 -LaunchPath $startMenuShortcut
+Invoke-AppLaunchCycle 2 -LaunchPath $startMenuShortcut -ExpectedSchema 19
 Invoke-InstalledSqliteCrud "verify" "19"
 
 try {
   Enable-BezgrowOfflineMode
-  Invoke-AppLaunchCycle 3
+  Invoke-AppLaunchCycle 3 -ExpectedSchema 19
   Invoke-InstalledSqliteCrud "verify" "19"
 } finally {
   Remove-BezgrowOfflineRules
@@ -509,7 +531,7 @@ Invoke-Installer @("/S")
 Assert-Path $application "Reinstall did not restore the application."
 Assert-Path $sentinel "Reinstall did not preserve Bezgrow user data."
 Assert-Path $database "Reinstall did not preserve the Bezgrow SQLite database."
-Invoke-AppLaunchCycle 4 -LaunchPath $desktopShortcut
+Invoke-AppLaunchCycle 4 -LaunchPath $desktopShortcut -ExpectedSchema 19
 Invoke-InstalledSqliteCrud "verify" "19"
 
 Write-SmokeDiagnostics "All installer smoke checks completed successfully." $null
