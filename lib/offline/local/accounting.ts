@@ -24,15 +24,19 @@ export const DEFAULT_ACCOUNTS = [
   ["1100", "Accounts Receivable", "ASSET", "RECEIVABLE", "debit", "ACCOUNTS_RECEIVABLE"],
   ["1200", "Inventory", "ASSET", "INVENTORY", "debit", "INVENTORY"],
   ["1300", "Other Current Assets", "ASSET", "CURRENT_ASSET", "debit", "OTHER_CURRENT_ASSETS"],
+  ["1310", "Advances to Suppliers", "ASSET", "CURRENT_ASSET", "debit", "SUPPLIER_ADVANCES"],
   ["1500", "Fixed Assets", "ASSET", "FIXED_ASSET", "debit", "FIXED_ASSETS"],
   ["2000", "Accounts Payable", "LIABILITY", "PAYABLE", "credit", "ACCOUNTS_PAYABLE"],
+  ["2010", "Advances from Customers", "LIABILITY", "CURRENT_LIABILITY", "credit", "CUSTOMER_ADVANCES"],
   ["2100", "Output CGST", "LIABILITY", "TAX_LIABILITY", "credit", "OUTPUT_CGST"],
   ["2110", "Output SGST", "LIABILITY", "TAX_LIABILITY", "credit", "OUTPUT_SGST"],
   ["2120", "Output IGST", "LIABILITY", "TAX_LIABILITY", "credit", "OUTPUT_IGST"],
+  ["2130", "Output Cess", "LIABILITY", "TAX_LIABILITY", "credit", "OUTPUT_CESS"],
   ["2190", "Other Current Liabilities", "LIABILITY", "CURRENT_LIABILITY", "credit", "OTHER_CURRENT_LIABILITIES"],
   ["2200", "Input CGST", "ASSET", "CURRENT_ASSET", "debit", "INPUT_CGST"],
   ["2210", "Input SGST", "ASSET", "CURRENT_ASSET", "debit", "INPUT_SGST"],
   ["2220", "Input IGST", "ASSET", "CURRENT_ASSET", "debit", "INPUT_IGST"],
+  ["2230", "Input Cess", "ASSET", "CURRENT_ASSET", "debit", "INPUT_CESS"],
   ["3000", "Capital", "EQUITY", "CAPITAL", "credit", "CAPITAL"],
   ["3100", "Retained Earnings / Opening Equity", "EQUITY", "CAPITAL", "credit", "OPENING_EQUITY"],
   ["3200", "Drawings", "EQUITY", "CAPITAL", "debit", "DRAWINGS"],
@@ -41,6 +45,7 @@ export const DEFAULT_ACCOUNTS = [
   ["5000", "Cost of Goods Sold", "EXPENSE", "COGS", "debit", "COGS"],
   ["5100", "Discount Allowed / Sales Discount", "EXPENSE", "DIRECT_EXPENSE", "debit", "SALES_DISCOUNT"],
   ["5200", "Freight / Delivery Expense", "EXPENSE", "DIRECT_EXPENSE", "debit", "FREIGHT_EXPENSE"],
+  ["5300", "Purchases / Direct Expense", "EXPENSE", "DIRECT_EXPENSE", "debit", "PURCHASES"],
   ["6000", "Miscellaneous Expenses", "EXPENSE", "INDIRECT_EXPENSE", "debit", "MISCELLANEOUS_EXPENSES"],
   ["6010", "Rent", "EXPENSE", "INDIRECT_EXPENSE", "debit", "RENT_EXPENSE"],
   ["6020", "Electricity", "EXPENSE", "INDIRECT_EXPENSE", "debit", "ELECTRICITY_EXPENSE"],
@@ -512,6 +517,17 @@ export type AccountingExpenseInput = {
   cgst?: unknown
   sgst?: unknown
   igst?: unknown
+  cess?: unknown
+  taxableValue?: unknown
+  gstRate?: unknown
+  partyGstin?: string
+  supplierInvoiceNumber?: string
+  hsnCode?: string
+  placeOfSupply?: string
+  supplyType?: "INTRA_STATE" | "INTER_STATE"
+  taxCategory?: "TAXABLE" | "EXEMPT" | "NIL_RATED" | "NON_GST"
+  reverseCharge?: boolean
+  itcStatus?: "ELIGIBLE" | "INELIGIBLE" | "REVIEW_REQUIRED"
   paymentMethod?: string
   referenceNo?: string
 }
@@ -533,6 +549,11 @@ async function prepareAccountingExpense(input: AccountingExpenseInput) {
   const inputCgst = system.get("INPUT_CGST")
   const inputSgst = system.get("INPUT_SGST")
   const inputIgst = system.get("INPUT_IGST")
+  const inputCess = system.get("INPUT_CESS")
+  const outputCgst = system.get("OUTPUT_CGST")
+  const outputSgst = system.get("OUTPUT_SGST")
+  const outputIgst = system.get("OUTPUT_IGST")
+  const outputCess = system.get("OUTPUT_CESS")
   if (!inputCgst || !inputSgst || !inputIgst) throw new Error("Input GST accounts are missing.")
   const expenseId = createOfflineId("expense")
   const expensePosting = buildExpenseJournal({
@@ -542,9 +563,16 @@ async function prepareAccountingExpense(input: AccountingExpenseInput) {
     narration: input.description.trim() || "Expense", systemGenerated: true,
     expenseAccount: rowAccount(expenseAccount), paymentAccount: rowAccount(paymentAccount),
     inputCgstAccount: inputCgst, inputSgstAccount: inputSgst, inputIgstAccount: inputIgst,
+    inputCessAccount: inputCess, outputCgstAccount: outputCgst, outputSgstAccount: outputSgst,
+    outputIgstAccount: outputIgst, outputCessAccount: outputCess,
     amountMinor: moneyToMinor(input.amount, "Expense amount"), cgstMinor: moneyToMinor(input.cgst || 0, "CGST"),
     sgstMinor: moneyToMinor(input.sgst || 0, "SGST"), igstMinor: moneyToMinor(input.igst || 0, "IGST"),
+    cessMinor: moneyToMinor(input.cess || 0, "Cess"), itcEligible: input.itcStatus === "ELIGIBLE",
+    reverseCharge: input.reverseCharge === true,
   })
+  if (input.taxableValue !== undefined && input.taxableValue !== null && input.taxableValue !== "" && moneyToMinor(input.taxableValue, "Expense taxable value") !== expensePosting.taxableMinor) {
+    throw new Error("Expense taxable value must reconcile with total and GST components.")
+  }
   const journal = expensePosting.journal
   const timestamp = nowIso()
   const isUnpaid = String(paymentAccount.account_type) === "LIABILITY"
@@ -558,18 +586,30 @@ async function insertAccountingExpense(tx: SqlExecutor, input: AccountingExpense
        id, organization_id, category, description, amount, tax_amount, expense_date, payment_status,
        paid_amount, outstanding_amount, payment_method, reference_no, financial_year_id, expense_account_id,
        payment_account_id, accounting_voucher_id, vendor_name, amount_minor, cgst_minor, sgst_minor, igst_minor,
-       revision, replaces_expense_id, sync_status, created_at, updated_at
-     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'local', ?, ?)`,
+       taxable_minor, gst_rate_basis_points, cess_minor, party_gstin, supplier_invoice_number, hsn_code, place_of_supply,
+       supply_type, tax_category, reverse_charge, itc_status, revision, replaces_expense_id, sync_status, created_at, updated_at
+     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'local', ?, ?)`,
     [
       expenseId, input.organizationId, input.category?.trim() || null, input.description.trim(), minorToMoney(expensePosting.amountMinor),
       minorToMoney(expensePosting.cgstMinor + expensePosting.sgstMinor + expensePosting.igstMinor), input.expenseDate,
-      isUnpaid ? "unpaid" : "paid", isUnpaid ? 0 : minorToMoney(expensePosting.amountMinor), isUnpaid ? minorToMoney(expensePosting.amountMinor) : 0,
+      isUnpaid ? "unpaid" : "paid", isUnpaid ? 0 : minorToMoney(expensePosting.settlementMinor), isUnpaid ? minorToMoney(expensePosting.settlementMinor) : 0,
       input.paymentMethod || "cash", input.referenceNo?.trim() || null, financialYearId, input.expenseAccountId, input.paymentAccountId,
       journal.id, input.vendorName?.trim() || null, expensePosting.amountMinor, expensePosting.cgstMinor, expensePosting.sgstMinor, expensePosting.igstMinor,
-      revision, replacesExpenseId, timestamp, timestamp,
+      expensePosting.taxableMinor, moneyToMinor(input.gstRate || 0, "Expense GST rate"), expensePosting.cessMinor,
+      input.partyGstin?.trim().toUpperCase() || null, input.supplierInvoiceNumber?.trim() || null, input.hsnCode?.trim() || null, input.placeOfSupply?.trim() || null,
+      input.supplyType || "INTRA_STATE", input.taxCategory || "TAXABLE", input.reverseCharge ? 1 : 0,
+      input.itcStatus || "REVIEW_REQUIRED", revision, replacesExpenseId, timestamp, timestamp,
     ]
   )
   await appendJournal(tx, journal)
+  await tx.execute(
+    `INSERT INTO gst_transaction_classifications (id, organization_id, financial_year_id, source_type, source_id,
+      registration_type, transaction_type, supply_type, tax_category, reverse_charge, itc_status, created_at, updated_at)
+     VALUES (?, ?, ?, 'EXPENSE', ?, ?, 'B2B', ?, ?, ?, ?, ?, ?)`,
+    [createOfflineId("gst-classification"), input.organizationId, financialYearId, expenseId,
+      input.partyGstin ? "REGISTERED" : "UNREGISTERED", input.supplyType || "INTRA_STATE",
+      input.taxCategory || "TAXABLE", input.reverseCharge ? 1 : 0, input.itcStatus || "REVIEW_REQUIRED", timestamp, timestamp]
+  )
 }
 
 export async function createAccountingExpense(input: AccountingExpenseInput) {

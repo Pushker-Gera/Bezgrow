@@ -84,6 +84,19 @@ const runtimeHealth = async (runtime) => {
     health.serverPid === runtime.serverPid
 }
 
+const accountingRouteHealth = async (runtime) => {
+  const response = await fetch(`http://127.0.0.1:${runtime.port}/dashboard/accounting/purchases`, {
+    redirect: "manual",
+    signal: AbortSignal.timeout(3000),
+  })
+  if (response.status >= 500) throw new Error(`Accounting purchases route returned ${response.status}.`)
+  const body = await response.text()
+  if (/This page could not be displayed/i.test(body)) {
+    throw new Error("Accounting purchases route rendered the page recovery state.")
+  }
+  return response.status >= 200 && response.status < 400
+}
+
 function sqliteSnapshot() {
   if (!existsSync(databasePath)) return { exists: false, integrity: "missing", counts: {} }
   const tablesResult = spawnSync("/usr/bin/sqlite3", ["-json", databasePath, "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name"], { encoding: "utf8" })
@@ -140,6 +153,7 @@ async function launch() {
   }, 20_000, `Bezgrow shell ${child.pid} did not establish runtime ownership.`)
   const runtime = readRuntime()
   await waitUntil(() => runtimeHealth(runtime), 10_000, `Bezgrow runtime ${runtime.serverPid} did not pass authenticated health.`)
+  await waitUntil(() => accountingRouteHealth(runtime), 10_000, "Packaged Accounting purchases route did not render successfully.")
   const owners = listenerPids(runtime.port)
   if (owners.length !== 1 || owners[0] !== runtime.serverPid) {
     throw new Error(`Runtime port ${runtime.port} owners ${owners.join(",")} did not match server PID ${runtime.serverPid}.`)

@@ -136,7 +136,7 @@ assert.match(installerTest, /Invoke-AppLaunchCycle 1 -TestRuntimeRecovery -TestW
 assert.match(installerTest, /Get-ExternalBrowserProcessIds[\s\S]*opened an external browser process/, "Installer QA must reject an externally opened browser.")
 assert.match(installerTest, /New-NetFirewallRule[\s\S]*RemoteAddress Internet/, "Installer QA must prove startup with external network access blocked.")
 assert.match(installerTest, /test-windows-installed-sqlite\.mjs[\s\S]*sqlite_crud=ok[\s\S]*license_persistence=ok/, "Installer QA must exercise installed SQLite CRUD and license persistence.")
-assert.match(installerTest, /Get-InstalledSchemaVersion[\s\S]*Wait-Until[\s\S]*ExpectedSchema[\s\S]*Invoke-AppLaunchCycle 2[\s\S]*ExpectedSchema 19/, "Installer QA must wait for the packaged front end to finish the Accounting Phase 1 migration before closing the upgraded app.")
+assert.match(installerTest, /Get-InstalledSchemaVersion[\s\S]*Wait-Until[\s\S]*ExpectedSchema[\s\S]*Invoke-AppLaunchCycle 2[\s\S]*ExpectedSchema 21/, "Installer QA must wait for the packaged front end to finish the Accounting Phase 2 migration before closing the upgraded app.")
 assert.match(installerTest, /All installer smoke checks completed successfully/, "Successful installer QA must export workflow diagnostics.")
 assert.match(
   iconGenerator,

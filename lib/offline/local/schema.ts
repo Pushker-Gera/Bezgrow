@@ -1,6 +1,6 @@
 "use client"
 
-export const LOCAL_DB_VERSION = 19
+export const LOCAL_DB_VERSION = 21
 export const LOCAL_DB_URL = "sqlite:bezgrow-offline.db"
 
 export const normalizedTables = [
@@ -41,6 +41,9 @@ export const normalizedTables = [
   "debit_note_items",
   "expenses",
   "payments",
+  "payment_allocations",
+  "party_advances",
+  "advance_allocations",
   "payment_receipts",
   "ledger_entries",
   "chart_of_accounts",
@@ -50,6 +53,10 @@ export const normalizedTables = [
   "accounting_sequences",
   "accounting_warnings",
   "bank_accounts",
+  "bank_reconciliations",
+  "accounting_period_locks",
+  "gst_transaction_classifications",
+  "purchase_attachments",
   "gst_tax_rates",
   "gst_invoice_summary",
   "gst_hsn_summary",
@@ -1960,6 +1967,429 @@ export const localMigrations: Array<{ version: number; name: string; sql: string
          accounting_version, finalized_at, created_by
        ON accounting_vouchers FOR EACH ROW WHEN OLD.status = 'posted'
        BEGIN SELECT RAISE(ABORT, 'posted_journal_is_immutable'); END`,
+    ],
+  },
+  {
+    version: 20,
+    name: "accounting_phase_two_purchases_banking_and_gst",
+    sql: [
+      "ALTER TABLE suppliers ADD COLUMN contact_person TEXT",
+      "ALTER TABLE suppliers ADD COLUMN billing_address TEXT",
+      "ALTER TABLE suppliers ADD COLUMN pin_code TEXT",
+      "ALTER TABLE suppliers ADD COLUMN pan TEXT",
+      "ALTER TABLE suppliers ADD COLUMN payment_terms TEXT",
+      "ALTER TABLE suppliers ADD COLUMN credit_days INTEGER NOT NULL DEFAULT 0",
+      "ALTER TABLE suppliers ADD COLUMN opening_balance_minor INTEGER NOT NULL DEFAULT 0",
+      "ALTER TABLE suppliers ADD COLUMN opening_balance_type TEXT NOT NULL DEFAULT 'payable'",
+      "ALTER TABLE suppliers ADD COLUMN notes TEXT",
+
+      "ALTER TABLE purchase_invoices ADD COLUMN supplier_invoice_number TEXT",
+      "ALTER TABLE purchase_invoices ADD COLUMN supplier_invoice_date TEXT",
+      "ALTER TABLE purchase_invoices ADD COLUMN purchase_date TEXT",
+      "ALTER TABLE purchase_invoices ADD COLUMN payment_terms TEXT",
+      "ALTER TABLE purchase_invoices ADD COLUMN reference_no TEXT",
+      "ALTER TABLE purchase_invoices ADD COLUMN warehouse_id TEXT REFERENCES warehouses(id) ON DELETE SET NULL",
+      "ALTER TABLE purchase_invoices ADD COLUMN place_of_supply TEXT",
+      "ALTER TABLE purchase_invoices ADD COLUMN supplier_gstin TEXT",
+      "ALTER TABLE purchase_invoices ADD COLUMN supplier_registration_type TEXT NOT NULL DEFAULT 'UNREGISTERED'",
+      "ALTER TABLE purchase_invoices ADD COLUMN transaction_type TEXT NOT NULL DEFAULT 'B2B'",
+      "ALTER TABLE purchase_invoices ADD COLUMN supply_type TEXT NOT NULL DEFAULT 'INTRA_STATE'",
+      "ALTER TABLE purchase_invoices ADD COLUMN tax_category TEXT NOT NULL DEFAULT 'TAXABLE'",
+      "ALTER TABLE purchase_invoices ADD COLUMN reverse_charge INTEGER NOT NULL DEFAULT 0",
+      "ALTER TABLE purchase_invoices ADD COLUMN purchase_classification TEXT NOT NULL DEFAULT 'INVENTORY'",
+      "ALTER TABLE purchase_invoices ADD COLUMN purchase_account_id TEXT REFERENCES chart_of_accounts(id) ON DELETE RESTRICT",
+      "ALTER TABLE purchase_invoices ADD COLUMN payment_account_id TEXT REFERENCES chart_of_accounts(id) ON DELETE RESTRICT",
+      "ALTER TABLE purchase_invoices ADD COLUMN gross_minor INTEGER NOT NULL DEFAULT 0",
+      "ALTER TABLE purchase_invoices ADD COLUMN discount_minor INTEGER NOT NULL DEFAULT 0",
+      "ALTER TABLE purchase_invoices ADD COLUMN taxable_minor INTEGER NOT NULL DEFAULT 0",
+      "ALTER TABLE purchase_invoices ADD COLUMN cgst_minor INTEGER NOT NULL DEFAULT 0",
+      "ALTER TABLE purchase_invoices ADD COLUMN sgst_minor INTEGER NOT NULL DEFAULT 0",
+      "ALTER TABLE purchase_invoices ADD COLUMN igst_minor INTEGER NOT NULL DEFAULT 0",
+      "ALTER TABLE purchase_invoices ADD COLUMN cess_minor INTEGER NOT NULL DEFAULT 0",
+      "ALTER TABLE purchase_invoices ADD COLUMN other_charges_minor INTEGER NOT NULL DEFAULT 0",
+      "ALTER TABLE purchase_invoices ADD COLUMN round_off_minor INTEGER NOT NULL DEFAULT 0",
+      "ALTER TABLE purchase_invoices ADD COLUMN grand_total_minor INTEGER NOT NULL DEFAULT 0",
+      "ALTER TABLE purchase_invoices ADD COLUMN paid_minor INTEGER NOT NULL DEFAULT 0",
+      "ALTER TABLE purchase_invoices ADD COLUMN outstanding_minor INTEGER NOT NULL DEFAULT 0",
+      "ALTER TABLE purchase_invoices ADD COLUMN accounting_voucher_id TEXT REFERENCES accounting_vouchers(id) ON DELETE SET NULL",
+      "ALTER TABLE purchase_invoices ADD COLUMN reversal_voucher_id TEXT REFERENCES accounting_vouchers(id) ON DELETE SET NULL",
+      "ALTER TABLE purchase_invoices ADD COLUMN document_status TEXT NOT NULL DEFAULT 'DRAFT'",
+      "ALTER TABLE purchase_invoices ADD COLUMN revision INTEGER NOT NULL DEFAULT 1",
+      "ALTER TABLE purchase_invoices ADD COLUMN reversed_at TEXT",
+      "ALTER TABLE purchase_invoices ADD COLUMN cancellation_reason TEXT",
+      "ALTER TABLE purchase_invoices ADD COLUMN itc_status TEXT NOT NULL DEFAULT 'REVIEW_REQUIRED'",
+      "ALTER TABLE purchase_invoices ADD COLUMN idempotency_key TEXT",
+
+      "ALTER TABLE purchase_invoice_items ADD COLUMN description TEXT",
+      "ALTER TABLE purchase_invoice_items ADD COLUMN hsn_code TEXT",
+      "ALTER TABLE purchase_invoice_items ADD COLUMN unit TEXT",
+      "ALTER TABLE purchase_invoice_items ADD COLUMN purchase_classification TEXT NOT NULL DEFAULT 'INVENTORY'",
+      "ALTER TABLE purchase_invoice_items ADD COLUMN purchase_account_id TEXT REFERENCES chart_of_accounts(id) ON DELETE RESTRICT",
+      "ALTER TABLE purchase_invoice_items ADD COLUMN unit_cost_minor INTEGER NOT NULL DEFAULT 0",
+      "ALTER TABLE purchase_invoice_items ADD COLUMN gross_minor INTEGER NOT NULL DEFAULT 0",
+      "ALTER TABLE purchase_invoice_items ADD COLUMN discount_percent_basis_points INTEGER NOT NULL DEFAULT 0",
+      "ALTER TABLE purchase_invoice_items ADD COLUMN discount_minor INTEGER NOT NULL DEFAULT 0",
+      "ALTER TABLE purchase_invoice_items ADD COLUMN taxable_minor INTEGER NOT NULL DEFAULT 0",
+      "ALTER TABLE purchase_invoice_items ADD COLUMN gst_rate_basis_points INTEGER NOT NULL DEFAULT 0",
+      "ALTER TABLE purchase_invoice_items ADD COLUMN cgst_minor INTEGER NOT NULL DEFAULT 0",
+      "ALTER TABLE purchase_invoice_items ADD COLUMN sgst_minor INTEGER NOT NULL DEFAULT 0",
+      "ALTER TABLE purchase_invoice_items ADD COLUMN igst_minor INTEGER NOT NULL DEFAULT 0",
+      "ALTER TABLE purchase_invoice_items ADD COLUMN cess_minor INTEGER NOT NULL DEFAULT 0",
+      "ALTER TABLE purchase_invoice_items ADD COLUMN line_total_minor INTEGER NOT NULL DEFAULT 0",
+      "ALTER TABLE purchase_invoice_items ADD COLUMN return_against_item_id TEXT REFERENCES purchase_invoice_items(id) ON DELETE RESTRICT",
+      "ALTER TABLE purchase_invoice_items ADD COLUMN stock_batch_id TEXT REFERENCES stock_batches(id) ON DELETE SET NULL",
+
+      "ALTER TABLE stock_batches ADD COLUMN supplier_id TEXT REFERENCES suppliers(id) ON DELETE SET NULL",
+      "ALTER TABLE stock_batches ADD COLUMN source_type TEXT",
+      "ALTER TABLE stock_batches ADD COLUMN source_id TEXT",
+      "ALTER TABLE stock_batches ADD COLUMN source_line_id TEXT",
+      "ALTER TABLE stock_batches ADD COLUMN purchase_rate_minor INTEGER",
+      "ALTER TABLE stock_batches ADD COLUMN original_quantity REAL",
+
+      "ALTER TABLE payments ADD COLUMN amount_minor INTEGER NOT NULL DEFAULT 0",
+      "ALTER TABLE payments ADD COLUMN payment_account_id TEXT REFERENCES chart_of_accounts(id) ON DELETE RESTRICT",
+      "ALTER TABLE payments ADD COLUMN unallocated_minor INTEGER NOT NULL DEFAULT 0",
+      "ALTER TABLE payments ADD COLUMN payment_mode TEXT",
+
+      "ALTER TABLE bank_accounts ADD COLUMN display_name TEXT",
+      "ALTER TABLE bank_accounts ADD COLUMN account_type TEXT",
+      "ALTER TABLE bank_accounts ADD COLUMN masked_identifier TEXT",
+      "ALTER TABLE bank_accounts ADD COLUMN opening_balance_minor INTEGER NOT NULL DEFAULT 0",
+      "ALTER TABLE bank_accounts ADD COLUMN opening_date TEXT",
+      "ALTER TABLE bank_accounts ADD COLUMN opening_voucher_id TEXT REFERENCES accounting_vouchers(id) ON DELETE SET NULL",
+
+      "ALTER TABLE expenses ADD COLUMN party_gstin TEXT",
+      "ALTER TABLE expenses ADD COLUMN supplier_invoice_number TEXT",
+      "ALTER TABLE expenses ADD COLUMN hsn_code TEXT",
+      "ALTER TABLE expenses ADD COLUMN taxable_minor INTEGER NOT NULL DEFAULT 0",
+      "ALTER TABLE expenses ADD COLUMN gst_rate_basis_points INTEGER NOT NULL DEFAULT 0",
+      "ALTER TABLE expenses ADD COLUMN cess_minor INTEGER NOT NULL DEFAULT 0",
+      "ALTER TABLE expenses ADD COLUMN place_of_supply TEXT",
+      "ALTER TABLE expenses ADD COLUMN supply_type TEXT NOT NULL DEFAULT 'INTRA_STATE'",
+      "ALTER TABLE expenses ADD COLUMN tax_category TEXT NOT NULL DEFAULT 'TAXABLE'",
+      "ALTER TABLE expenses ADD COLUMN reverse_charge INTEGER NOT NULL DEFAULT 0",
+      "ALTER TABLE expenses ADD COLUMN itc_status TEXT NOT NULL DEFAULT 'REVIEW_REQUIRED'",
+
+      "ALTER TABLE sales_invoices ADD COLUMN taxable_minor INTEGER NOT NULL DEFAULT 0",
+      "ALTER TABLE sales_invoices ADD COLUMN cgst_minor INTEGER NOT NULL DEFAULT 0",
+      "ALTER TABLE sales_invoices ADD COLUMN sgst_minor INTEGER NOT NULL DEFAULT 0",
+      "ALTER TABLE sales_invoices ADD COLUMN igst_minor INTEGER NOT NULL DEFAULT 0",
+      "ALTER TABLE sales_invoices ADD COLUMN cess_minor INTEGER NOT NULL DEFAULT 0",
+      "ALTER TABLE sales_invoices ADD COLUMN grand_total_minor INTEGER NOT NULL DEFAULT 0",
+      "ALTER TABLE sales_invoices ADD COLUMN paid_minor INTEGER NOT NULL DEFAULT 0",
+      "ALTER TABLE sales_invoices ADD COLUMN outstanding_minor INTEGER NOT NULL DEFAULT 0",
+      "ALTER TABLE sales_invoices ADD COLUMN place_of_supply TEXT",
+      "ALTER TABLE sales_invoices ADD COLUMN customer_gstin TEXT",
+      "ALTER TABLE sales_invoices ADD COLUMN supply_type TEXT",
+      "ALTER TABLE sales_invoices ADD COLUMN transaction_type TEXT",
+      "ALTER TABLE sales_invoices ADD COLUMN tax_category TEXT",
+      "ALTER TABLE sales_invoice_items ADD COLUMN taxable_minor INTEGER NOT NULL DEFAULT 0",
+      "ALTER TABLE sales_invoice_items ADD COLUMN cgst_minor INTEGER NOT NULL DEFAULT 0",
+      "ALTER TABLE sales_invoice_items ADD COLUMN sgst_minor INTEGER NOT NULL DEFAULT 0",
+      "ALTER TABLE sales_invoice_items ADD COLUMN igst_minor INTEGER NOT NULL DEFAULT 0",
+      "ALTER TABLE sales_invoice_items ADD COLUMN cess_minor INTEGER NOT NULL DEFAULT 0",
+      "ALTER TABLE sales_invoice_items ADD COLUMN gst_rate_basis_points INTEGER NOT NULL DEFAULT 0",
+
+      "ALTER TABLE credit_notes ADD COLUMN accounting_voucher_id TEXT REFERENCES accounting_vouchers(id) ON DELETE SET NULL",
+      "ALTER TABLE credit_notes ADD COLUMN subtotal_minor INTEGER NOT NULL DEFAULT 0",
+      "ALTER TABLE credit_notes ADD COLUMN cgst_minor INTEGER NOT NULL DEFAULT 0",
+      "ALTER TABLE credit_notes ADD COLUMN sgst_minor INTEGER NOT NULL DEFAULT 0",
+      "ALTER TABLE credit_notes ADD COLUMN igst_minor INTEGER NOT NULL DEFAULT 0",
+      "ALTER TABLE credit_notes ADD COLUMN grand_total_minor INTEGER NOT NULL DEFAULT 0",
+      "ALTER TABLE credit_notes ADD COLUMN document_status TEXT NOT NULL DEFAULT 'DRAFT'",
+      "ALTER TABLE credit_note_items ADD COLUMN taxable_minor INTEGER NOT NULL DEFAULT 0",
+      "ALTER TABLE credit_note_items ADD COLUMN cgst_minor INTEGER NOT NULL DEFAULT 0",
+      "ALTER TABLE credit_note_items ADD COLUMN sgst_minor INTEGER NOT NULL DEFAULT 0",
+      "ALTER TABLE credit_note_items ADD COLUMN igst_minor INTEGER NOT NULL DEFAULT 0",
+      "ALTER TABLE credit_note_items ADD COLUMN cost_amount_minor INTEGER NOT NULL DEFAULT 0",
+      "ALTER TABLE credit_note_items ADD COLUMN stock_batch_id TEXT REFERENCES stock_batches(id) ON DELETE SET NULL",
+      "ALTER TABLE credit_note_items ADD COLUMN hsn_code TEXT",
+      "ALTER TABLE credit_note_items ADD COLUMN gst_rate_basis_points INTEGER NOT NULL DEFAULT 0",
+      "ALTER TABLE credit_note_items ADD COLUMN sales_invoice_item_id TEXT REFERENCES sales_invoice_items(id) ON DELETE RESTRICT",
+
+      `CREATE TABLE IF NOT EXISTS payment_allocations (
+        id TEXT PRIMARY KEY,
+        organization_id TEXT NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+        financial_year_id TEXT NOT NULL REFERENCES financial_years(id) ON DELETE RESTRICT,
+        payment_id TEXT NOT NULL REFERENCES payments(id) ON DELETE RESTRICT,
+        party_type TEXT NOT NULL CHECK (party_type IN ('supplier', 'customer')),
+        party_id TEXT NOT NULL,
+        document_type TEXT NOT NULL CHECK (document_type IN ('purchase_invoice', 'sales_invoice')),
+        document_id TEXT NOT NULL,
+        allocation_minor INTEGER NOT NULL CHECK (allocation_minor > 0),
+        allocated_at TEXT NOT NULL,
+        reversed_at TEXT,
+        created_at TEXT NOT NULL DEFAULT (datetime('now')),
+        UNIQUE (organization_id, payment_id, document_type, document_id)
+      )`,
+      `CREATE TABLE IF NOT EXISTS party_advances (
+        id TEXT PRIMARY KEY,
+        organization_id TEXT NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+        financial_year_id TEXT NOT NULL REFERENCES financial_years(id) ON DELETE RESTRICT,
+        party_type TEXT NOT NULL CHECK (party_type IN ('supplier', 'customer')),
+        party_id TEXT NOT NULL,
+        payment_id TEXT REFERENCES payments(id) ON DELETE RESTRICT,
+        source_type TEXT NOT NULL,
+        source_id TEXT NOT NULL,
+        advance_minor INTEGER NOT NULL CHECK (advance_minor > 0),
+        applied_minor INTEGER NOT NULL DEFAULT 0 CHECK (applied_minor >= 0 AND applied_minor <= advance_minor),
+        status TEXT NOT NULL DEFAULT 'OPEN' CHECK (status IN ('OPEN', 'APPLIED', 'REVERSED')),
+        created_at TEXT NOT NULL DEFAULT (datetime('now')),
+        updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+        UNIQUE (organization_id, source_type, source_id)
+      )`,
+      `CREATE TABLE IF NOT EXISTS advance_allocations (
+        id TEXT PRIMARY KEY,
+        organization_id TEXT NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+        financial_year_id TEXT NOT NULL REFERENCES financial_years(id) ON DELETE RESTRICT,
+        advance_id TEXT NOT NULL REFERENCES party_advances(id) ON DELETE RESTRICT,
+        document_type TEXT NOT NULL CHECK (document_type IN ('purchase_invoice', 'sales_invoice')),
+        document_id TEXT NOT NULL,
+        allocation_minor INTEGER NOT NULL CHECK (allocation_minor > 0),
+        accounting_voucher_id TEXT NOT NULL REFERENCES accounting_vouchers(id) ON DELETE RESTRICT,
+        created_at TEXT NOT NULL DEFAULT (datetime('now')),
+        UNIQUE (organization_id, advance_id, document_type, document_id)
+      )`,
+      `CREATE TABLE IF NOT EXISTS bank_reconciliations (
+        id TEXT PRIMARY KEY,
+        organization_id TEXT NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+        bank_account_id TEXT NOT NULL REFERENCES bank_accounts(id) ON DELETE CASCADE,
+        voucher_entry_id TEXT NOT NULL REFERENCES accounting_voucher_entries(id) ON DELETE RESTRICT,
+        status TEXT NOT NULL DEFAULT 'UNRECONCILED' CHECK (status IN ('UNRECONCILED', 'CLEARED', 'REVIEW')),
+        cleared_date TEXT,
+        bank_reference TEXT,
+        notes TEXT,
+        reconciled_by TEXT,
+        created_at TEXT NOT NULL DEFAULT (datetime('now')),
+        updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+        UNIQUE (organization_id, bank_account_id, voucher_entry_id)
+      )`,
+      `CREATE TABLE IF NOT EXISTS accounting_period_locks (
+        id TEXT PRIMARY KEY,
+        organization_id TEXT NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+        locked_through TEXT NOT NULL,
+        reason TEXT,
+        locked_by TEXT,
+        unlocked_at TEXT,
+        unlocked_by TEXT,
+        unlock_reason TEXT,
+        created_at TEXT NOT NULL DEFAULT (datetime('now')),
+        updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+      )`,
+      `CREATE TABLE IF NOT EXISTS gst_transaction_classifications (
+        id TEXT PRIMARY KEY,
+        organization_id TEXT NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+        financial_year_id TEXT NOT NULL REFERENCES financial_years(id) ON DELETE RESTRICT,
+        source_type TEXT NOT NULL,
+        source_id TEXT NOT NULL,
+        registration_type TEXT,
+        transaction_type TEXT,
+        supply_type TEXT,
+        tax_category TEXT,
+        reverse_charge INTEGER NOT NULL DEFAULT 0,
+        itc_status TEXT NOT NULL DEFAULT 'REVIEW_REQUIRED',
+        review_notes TEXT,
+        reviewed_at TEXT,
+        reviewed_by TEXT,
+        created_at TEXT NOT NULL DEFAULT (datetime('now')),
+        updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+        UNIQUE (organization_id, source_type, source_id)
+      )`,
+      `CREATE TABLE IF NOT EXISTS purchase_attachments (
+        id TEXT PRIMARY KEY,
+        organization_id TEXT NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+        purchase_invoice_id TEXT NOT NULL REFERENCES purchase_invoices(id) ON DELETE CASCADE,
+        local_relative_path TEXT NOT NULL,
+        file_name TEXT NOT NULL,
+        media_type TEXT NOT NULL,
+        size_bytes INTEGER NOT NULL CHECK (size_bytes >= 0),
+        sha256 TEXT NOT NULL,
+        created_at TEXT NOT NULL DEFAULT (datetime('now'))
+      )`,
+
+      `UPDATE suppliers SET opening_balance_minor = CAST(ROUND(COALESCE(opening_balance, 0) * 100) AS INTEGER)
+       WHERE opening_balance_minor = 0 AND COALESCE(opening_balance, 0) <> 0`,
+      `UPDATE purchase_invoices SET
+         supplier_invoice_number = COALESCE(NULLIF(trim(supplier_invoice_number), ''), bill_number),
+         supplier_invoice_date = COALESCE(supplier_invoice_date, bill_date),
+         purchase_date = COALESCE(purchase_date, bill_date),
+         gross_minor = CAST(ROUND(COALESCE(subtotal, 0) * 100) AS INTEGER),
+         discount_minor = CAST(ROUND(COALESCE(discount_total, 0) * 100) AS INTEGER),
+         taxable_minor = CAST(ROUND(COALESCE(taxable_amount, 0) * 100) AS INTEGER),
+         grand_total_minor = CAST(ROUND(COALESCE(grand_total, 0) * 100) AS INTEGER),
+         paid_minor = CAST(ROUND(COALESCE(paid_amount, 0) * 100) AS INTEGER),
+         outstanding_minor = CAST(ROUND(COALESCE(outstanding_amount, 0) * 100) AS INTEGER)
+       WHERE invoice_kind IN ('purchase_invoice', 'purchase_return')`,
+      `UPDATE sales_invoices SET
+         taxable_minor = CAST(ROUND(COALESCE(taxable_amount, 0) * 100) AS INTEGER),
+         grand_total_minor = CAST(ROUND(COALESCE(grand_total, total_amount, total, 0) * 100) AS INTEGER),
+         paid_minor = CAST(ROUND(COALESCE(paid_amount, 0) * 100) AS INTEGER),
+         outstanding_minor = CAST(ROUND(COALESCE(outstanding_amount, 0) * 100) AS INTEGER)
+       WHERE deleted_at IS NULL`,
+      // Exact tax fields must be backfilled for historical closed-year lines.
+      // The migration is one atomic transaction; restore the closed-year guard
+      // immediately after this data-only conversion.
+      "DROP TRIGGER IF EXISTS trg_fy_guard_sales_invoice_item_update",
+      `UPDATE sales_invoice_items SET
+         taxable_minor = CAST(ROUND(MAX(0, COALESCE(line_total, 0) - COALESCE(gst_amount, 0)) * 100) AS INTEGER),
+         cgst_minor = CAST(ROUND(COALESCE(cgst_amount, 0) * 100) AS INTEGER),
+         sgst_minor = CAST(ROUND(COALESCE(sgst_amount, 0) * 100) AS INTEGER),
+         igst_minor = CAST(ROUND(COALESCE(igst_amount, 0) * 100) AS INTEGER),
+         gst_rate_basis_points = CAST(ROUND(COALESCE(tax_percent, 0) * 100) AS INTEGER)
+       WHERE deleted_at IS NULL`,
+      ...closedFinancialYearChildTriggers("sales_invoice_items", "sales_invoices", "invoice_id", "sales_invoice_item"),
+      `UPDATE sales_invoices SET
+         cgst_minor = COALESCE((SELECT SUM(item.cgst_minor) FROM sales_invoice_items item WHERE item.invoice_id = sales_invoices.id AND item.deleted_at IS NULL), 0),
+         sgst_minor = COALESCE((SELECT SUM(item.sgst_minor) FROM sales_invoice_items item WHERE item.invoice_id = sales_invoices.id AND item.deleted_at IS NULL), 0),
+         igst_minor = COALESCE((SELECT SUM(item.igst_minor) FROM sales_invoice_items item WHERE item.invoice_id = sales_invoices.id AND item.deleted_at IS NULL), 0)
+       WHERE deleted_at IS NULL`,
+
+      `INSERT OR IGNORE INTO chart_of_accounts (
+         id, organization_id, account_code, account_name, account_type, account_group, normal_balance,
+         opening_balance, current_balance, is_system, is_cash_account, is_bank_account, is_active,
+         system_role, tax_role, sync_status, created_at, updated_at
+       )
+       SELECT 'account:' || organization.id || ':' || seed.code, organization.id, seed.code, seed.name,
+         seed.type, seed.group_name, seed.normal, 0, 0, 1, 0, 0, 1, seed.system_role,
+         seed.tax_role, 'local', datetime('now'), datetime('now')
+       FROM organizations organization CROSS JOIN (
+         SELECT '1310' code, 'Advances to Suppliers' name, 'ASSET' type, 'CURRENT_ASSET' group_name, 'debit' normal, 'SUPPLIER_ADVANCES' system_role, NULL tax_role
+         UNION ALL SELECT '2010', 'Advances from Customers', 'LIABILITY', 'CURRENT_LIABILITY', 'credit', 'CUSTOMER_ADVANCES', NULL
+         UNION ALL SELECT '2130', 'Output Cess', 'LIABILITY', 'TAX_LIABILITY', 'credit', 'OUTPUT_CESS', 'OUTPUT_CESS'
+         UNION ALL SELECT '2230', 'Input Cess', 'ASSET', 'CURRENT_ASSET', 'debit', 'INPUT_CESS', 'INPUT_CESS'
+         UNION ALL SELECT '5300', 'Purchases / Direct Expense', 'EXPENSE', 'DIRECT_EXPENSE', 'debit', 'PURCHASES', NULL
+       ) seed WHERE organization.deleted_at IS NULL`,
+      "UPDATE accounting_settings SET accounting_version = MAX(accounting_version, 2), updated_at = datetime('now')",
+
+      "CREATE UNIQUE INDEX IF NOT EXISTS idx_purchase_supplier_invoice_fy ON purchase_invoices (organization_id, supplier_id, supplier_invoice_number COLLATE NOCASE, financial_year_id) WHERE invoice_kind = 'purchase_invoice' AND document_status <> 'CANCELLED' AND deleted_at IS NULL",
+      "CREATE UNIQUE INDEX IF NOT EXISTS idx_purchase_idempotency ON purchase_invoices (organization_id, idempotency_key) WHERE idempotency_key IS NOT NULL",
+      "CREATE INDEX IF NOT EXISTS idx_purchase_phase2_list ON purchase_invoices (organization_id, financial_year_id, document_status, purchase_date DESC, id DESC)",
+      "CREATE INDEX IF NOT EXISTS idx_purchase_phase2_supplier_due ON purchase_invoices (organization_id, supplier_id, outstanding_minor, due_date)",
+      "CREATE INDEX IF NOT EXISTS idx_purchase_items_phase2_product ON purchase_invoice_items (organization_id, product_id, purchase_invoice_id)",
+      "CREATE INDEX IF NOT EXISTS idx_payment_allocations_document ON payment_allocations (organization_id, document_type, document_id, reversed_at)",
+      "CREATE INDEX IF NOT EXISTS idx_payment_allocations_party ON payment_allocations (organization_id, party_type, party_id, allocated_at DESC)",
+      "CREATE INDEX IF NOT EXISTS idx_party_advances_open ON party_advances (organization_id, party_type, party_id, status, created_at)",
+      "CREATE INDEX IF NOT EXISTS idx_bank_reconciliation_status ON bank_reconciliations (organization_id, bank_account_id, status, cleared_date)",
+      "CREATE INDEX IF NOT EXISTS idx_period_locks_active ON accounting_period_locks (organization_id, unlocked_at, locked_through DESC)",
+      "CREATE INDEX IF NOT EXISTS idx_gst_classification_period ON gst_transaction_classifications (organization_id, financial_year_id, source_type, supply_type, transaction_type)",
+      "CREATE INDEX IF NOT EXISTS idx_purchase_attachments_document ON purchase_attachments (organization_id, purchase_invoice_id)",
+      "CREATE UNIQUE INDEX IF NOT EXISTS idx_purchase_attachments_path ON purchase_attachments (organization_id, local_relative_path)",
+
+      `CREATE TRIGGER IF NOT EXISTS trg_purchase_posted_header_immutable
+       BEFORE UPDATE OF supplier_id, supplier_name, supplier_invoice_number, supplier_invoice_date, purchase_date,
+         bill_date, due_date, payment_terms, reference_no, warehouse_id, place_of_supply, supplier_gstin,
+         reverse_charge, purchase_classification, purchase_account_id, gross_minor, discount_minor, taxable_minor,
+         cgst_minor, sgst_minor, igst_minor, cess_minor, other_charges_minor, round_off_minor, grand_total_minor,
+         financial_year_id, accounting_voucher_id
+       ON purchase_invoices FOR EACH ROW
+       WHEN OLD.document_status IN ('POSTED', 'CANCELLED')
+       BEGIN SELECT RAISE(ABORT, 'posted_purchase_is_immutable'); END`,
+      `CREATE TRIGGER IF NOT EXISTS trg_purchase_posted_item_insert
+       BEFORE INSERT ON purchase_invoice_items FOR EACH ROW
+       WHEN EXISTS (SELECT 1 FROM purchase_invoices purchase WHERE purchase.id = NEW.purchase_invoice_id AND purchase.document_status = 'POSTED')
+       BEGIN SELECT RAISE(ABORT, 'posted_purchase_is_immutable'); END`,
+      `CREATE TRIGGER IF NOT EXISTS trg_purchase_posted_item_update
+       BEFORE UPDATE ON purchase_invoice_items FOR EACH ROW
+       WHEN EXISTS (SELECT 1 FROM purchase_invoices purchase WHERE purchase.id = OLD.purchase_invoice_id AND purchase.document_status = 'POSTED')
+       BEGIN SELECT RAISE(ABORT, 'posted_purchase_is_immutable'); END`,
+      `CREATE TRIGGER IF NOT EXISTS trg_purchase_posted_item_delete
+       BEFORE DELETE ON purchase_invoice_items FOR EACH ROW
+       WHEN EXISTS (SELECT 1 FROM purchase_invoices purchase WHERE purchase.id = OLD.purchase_invoice_id AND purchase.document_status = 'POSTED')
+       BEGIN SELECT RAISE(ABORT, 'posted_purchase_is_immutable'); END`,
+      `CREATE TRIGGER IF NOT EXISTS trg_sales_posted_exact_header_immutable
+       BEFORE UPDATE OF customer_id, customer_name, invoice_number, display_invoice_number, invoice_type,
+         invoice_date, date, due_date, subtotal, discount_amount, discount_total, taxable_amount, tax_amount,
+         tax_total, total_amount, grand_total, total, financial_year_id, taxable_minor, cgst_minor, sgst_minor,
+         igst_minor, cess_minor, grand_total_minor, place_of_supply, customer_gstin, supply_type,
+         transaction_type, tax_category
+       ON sales_invoices FOR EACH ROW
+       WHEN EXISTS (SELECT 1 FROM accounting_vouchers voucher WHERE voucher.organization_id=OLD.organization_id
+         AND voucher.source_type='SALES_INVOICE' AND voucher.source_id=OLD.id AND voucher.status='posted')
+       BEGIN SELECT RAISE(ABORT, 'posted_sales_invoice_is_immutable'); END`,
+      `CREATE TRIGGER IF NOT EXISTS trg_sales_posted_item_update
+       BEFORE UPDATE ON sales_invoice_items FOR EACH ROW
+       WHEN EXISTS (SELECT 1 FROM accounting_vouchers voucher JOIN sales_invoices invoice ON invoice.id=OLD.invoice_id
+         WHERE voucher.organization_id=OLD.organization_id AND voucher.source_type='SALES_INVOICE'
+           AND voucher.source_id=invoice.id AND voucher.status='posted')
+       BEGIN SELECT RAISE(ABORT, 'posted_sales_invoice_is_immutable'); END`,
+      `CREATE TRIGGER IF NOT EXISTS trg_sales_posted_item_delete
+       BEFORE DELETE ON sales_invoice_items FOR EACH ROW
+       WHEN EXISTS (SELECT 1 FROM accounting_vouchers voucher JOIN sales_invoices invoice ON invoice.id=OLD.invoice_id
+         WHERE voucher.organization_id=OLD.organization_id AND voucher.source_type='SALES_INVOICE'
+           AND voucher.source_id=invoice.id AND voucher.status='posted')
+       BEGIN SELECT RAISE(ABORT, 'posted_sales_invoice_is_immutable'); END`,
+      `CREATE TRIGGER IF NOT EXISTS trg_period_lock_voucher_insert
+       BEFORE INSERT ON accounting_vouchers FOR EACH ROW
+       WHEN EXISTS (SELECT 1 FROM accounting_period_locks lock WHERE lock.organization_id = NEW.organization_id AND lock.unlocked_at IS NULL AND date(NEW.voucher_date) <= date(lock.locked_through))
+       BEGIN SELECT RAISE(ABORT, 'accounting_period_locked'); END`,
+      `CREATE TRIGGER IF NOT EXISTS trg_period_lock_purchase_insert
+       BEFORE INSERT ON purchase_invoices FOR EACH ROW
+       WHEN EXISTS (SELECT 1 FROM accounting_period_locks lock WHERE lock.organization_id = NEW.organization_id AND lock.unlocked_at IS NULL AND date(COALESCE(NEW.purchase_date, NEW.bill_date)) <= date(lock.locked_through))
+       BEGIN SELECT RAISE(ABORT, 'accounting_period_locked'); END`,
+      `CREATE TRIGGER IF NOT EXISTS trg_period_lock_payment_insert
+       BEFORE INSERT ON payments FOR EACH ROW
+       WHEN EXISTS (SELECT 1 FROM accounting_period_locks lock WHERE lock.organization_id = NEW.organization_id AND lock.unlocked_at IS NULL AND date(NEW.payment_date) <= date(lock.locked_through))
+       BEGIN SELECT RAISE(ABORT, 'accounting_period_locked'); END`,
+      `CREATE TRIGGER IF NOT EXISTS trg_period_lock_expense_insert
+       BEFORE INSERT ON expenses FOR EACH ROW
+       WHEN EXISTS (SELECT 1 FROM accounting_period_locks lock WHERE lock.organization_id = NEW.organization_id AND lock.unlocked_at IS NULL AND date(NEW.expense_date) <= date(lock.locked_through))
+       BEGIN SELECT RAISE(ABORT, 'accounting_period_locked'); END`,
+      `CREATE TRIGGER IF NOT EXISTS trg_period_lock_credit_note_insert
+       BEFORE INSERT ON credit_notes FOR EACH ROW
+       WHEN EXISTS (SELECT 1 FROM accounting_period_locks lock WHERE lock.organization_id = NEW.organization_id AND lock.unlocked_at IS NULL AND date(NEW.note_date) <= date(lock.locked_through))
+       BEGIN SELECT RAISE(ABORT, 'accounting_period_locked'); END`,
+    ],
+  },
+  {
+    version: 21,
+    name: "accounting_phase_two_opening_party_allocations",
+    sql: [
+      `CREATE TABLE payment_allocations_v21 (
+        id TEXT PRIMARY KEY,
+        organization_id TEXT NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+        financial_year_id TEXT NOT NULL REFERENCES financial_years(id) ON DELETE RESTRICT,
+        payment_id TEXT NOT NULL REFERENCES payments(id) ON DELETE RESTRICT,
+        party_type TEXT NOT NULL CHECK (party_type IN ('supplier', 'customer')),
+        party_id TEXT NOT NULL,
+        document_type TEXT NOT NULL CHECK (document_type IN ('purchase_invoice', 'sales_invoice', 'supplier_opening', 'customer_opening')),
+        document_id TEXT NOT NULL,
+        allocation_minor INTEGER NOT NULL CHECK (allocation_minor > 0),
+        allocated_at TEXT NOT NULL,
+        reversed_at TEXT,
+        created_at TEXT NOT NULL DEFAULT (datetime('now')),
+        UNIQUE (organization_id, payment_id, document_type, document_id)
+      )`,
+      `INSERT INTO payment_allocations_v21 (
+        id, organization_id, financial_year_id, payment_id, party_type, party_id, document_type,
+        document_id, allocation_minor, allocated_at, reversed_at, created_at
+       ) SELECT id, organization_id, financial_year_id, payment_id, party_type, party_id, document_type,
+         document_id, allocation_minor, allocated_at, reversed_at, created_at FROM payment_allocations`,
+      "DROP TABLE payment_allocations",
+      "ALTER TABLE payment_allocations_v21 RENAME TO payment_allocations",
+
+      `CREATE TABLE advance_allocations_v21 (
+        id TEXT PRIMARY KEY,
+        organization_id TEXT NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+        financial_year_id TEXT NOT NULL REFERENCES financial_years(id) ON DELETE RESTRICT,
+        advance_id TEXT NOT NULL REFERENCES party_advances(id) ON DELETE RESTRICT,
+        document_type TEXT NOT NULL CHECK (document_type IN ('purchase_invoice', 'sales_invoice', 'supplier_opening', 'customer_opening')),
+        document_id TEXT NOT NULL,
+        allocation_minor INTEGER NOT NULL CHECK (allocation_minor > 0),
+        accounting_voucher_id TEXT NOT NULL REFERENCES accounting_vouchers(id) ON DELETE RESTRICT,
+        created_at TEXT NOT NULL DEFAULT (datetime('now')),
+        UNIQUE (organization_id, advance_id, document_type, document_id)
+      )`,
+      `INSERT INTO advance_allocations_v21 (
+        id, organization_id, financial_year_id, advance_id, document_type, document_id,
+        allocation_minor, accounting_voucher_id, created_at
+       ) SELECT id, organization_id, financial_year_id, advance_id, document_type, document_id,
+         allocation_minor, accounting_voucher_id, created_at FROM advance_allocations`,
+      "DROP TABLE advance_allocations",
+      "ALTER TABLE advance_allocations_v21 RENAME TO advance_allocations",
+
+      "CREATE INDEX idx_payment_allocations_document ON payment_allocations (organization_id, document_type, document_id, reversed_at)",
+      "CREATE INDEX idx_payment_allocations_party ON payment_allocations (organization_id, party_type, party_id, allocated_at DESC)",
+      "CREATE INDEX idx_advance_allocations_document ON advance_allocations (organization_id, document_type, document_id)",
     ],
   },
 ]

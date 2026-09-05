@@ -37,12 +37,23 @@ try {
   for (let index = 0; index < 2_000; index += 1) product.run(`product:${index}`, `Product ${index}`, `SKU-${index}`)
   const customer = db.prepare("INSERT INTO customers(id, organization_id, name, current_balance, created_at, updated_at) VALUES (?, 'org:scale', ?, 0, datetime('now'), datetime('now'))")
   for (let index = 0; index < 5_000; index += 1) customer.run(`customer:${index}`, `Customer ${index}`)
+  const supplier = db.prepare("INSERT INTO suppliers(id, organization_id, name, current_balance, created_at, updated_at) VALUES (?, 'org:scale', ?, 0, datetime('now'), datetime('now'))")
+  for (let index = 0; index < 2_000; index += 1) supplier.run(`supplier:${index}`, `Supplier ${index}`)
   const invoice = db.prepare("INSERT INTO sales_invoices(id, organization_id, customer_id, invoice_number, invoice_date, subtotal, taxable_amount, tax_amount, grand_total, total_amount, total, paid_amount, outstanding_amount, payment_status, status, financial_year_id, created_at, updated_at) VALUES (?, 'org:scale', ?, ?, ?, 100, 100, 18, 118, 118, 118, 118, 0, 'paid', 'paid', 'fy:scale', datetime('now'), datetime('now'))")
   const invoiceItem = db.prepare("INSERT INTO sales_invoice_items(id, organization_id, invoice_id, product_id, product_name, quantity, unit_price, line_total, gst_amount, created_at, updated_at) VALUES (?, 'org:scale', ?, ?, ?, 1, 50, 59, 9, datetime('now'), datetime('now'))")
   for (let index = 0; index < 20_000; index += 1) {
     invoice.run(`invoice:${index}`, `customer:${index % 5_000}`, `INV-${index}`, `2026-${String(4 + (index % 9)).padStart(2, "0")}-${String(1 + (index % 27)).padStart(2, "0")}`)
     invoiceItem.run(`invoice-item:${index}:1`, `invoice:${index}`, `product:${index % 2_000}`, `Product ${index % 2_000}`)
     invoiceItem.run(`invoice-item:${index}:2`, `invoice:${index}`, `product:${(index + 1) % 2_000}`, `Product ${(index + 1) % 2_000}`)
+  }
+  const purchase = db.prepare(`INSERT INTO purchase_invoices(id,organization_id,supplier_id,supplier_name,invoice_kind,bill_number,bill_date,due_date,subtotal,taxable_amount,tax_total,grand_total,outstanding_amount,status,financial_year_id,supplier_invoice_number,purchase_date,document_status,gross_minor,taxable_minor,cgst_minor,sgst_minor,grand_total_minor,outstanding_minor,created_at,updated_at)
+    VALUES (?,'org:scale',?,?,'purchase_invoice',?,?,?,100,100,18,118,118,'unpaid','fy:scale',?,?,'POSTED',10000,10000,900,900,11800,11800,datetime('now'),datetime('now'))`)
+  const supplierPayment = db.prepare(`INSERT INTO payments(id,organization_id,party_type,party_id,amount,amount_minor,direction,payment_date,financial_year_id,created_at,updated_at)
+    VALUES (?,'org:scale','supplier',?,118,11800,'out',?,'fy:scale',datetime('now'),datetime('now'))`)
+  for (let index = 0; index < 20_000; index += 1) {
+    const date = `2026-${String(4 + (index % 9)).padStart(2, "0")}-${String(1 + (index % 27)).padStart(2, "0")}`
+    purchase.run(`purchase:${index}`, `supplier:${index % 2_000}`, `Supplier ${index % 2_000}`, `PUR-${index}`, date, date, `SUP-${index}`, date)
+    supplierPayment.run(`supplier-payment:${index}`, `supplier:${index % 2_000}`, date)
   }
   const accountInsert = db.prepare("INSERT INTO chart_of_accounts(id, organization_id, account_code, account_name, account_type, account_group, normal_balance, is_system, is_cash_account, is_active, system_role, created_at, updated_at) VALUES (?, 'org:scale', ?, ?, ?, ?, ?, 1, ?, 1, ?, datetime('now'), datetime('now'))")
   accountInsert.run("account:cash", "1000", "Cash", "ASSET", "CASH", "debit", 1, "CASH")
@@ -82,6 +93,10 @@ try {
   const customerSearch = timed(() => db.prepare("SELECT id, name, current_balance FROM customers WHERE organization_id = 'org:scale' AND deleted_at IS NULL AND name LIKE '%Customer 4999%' LIMIT 50").all())
   const invoiceList = timed(() => db.prepare("SELECT id, invoice_number, invoice_date, grand_total FROM sales_invoices WHERE organization_id = 'org:scale' AND financial_year_id = 'fy:scale' AND deleted_at IS NULL ORDER BY invoice_date DESC, created_at DESC LIMIT 100").all())
   const journalList = timed(() => db.prepare("SELECT id, voucher_number, voucher_date, total_debit_minor FROM accounting_vouchers WHERE organization_id = 'org:scale' AND financial_year_id = 'fy:scale' AND status = 'posted' ORDER BY voucher_date DESC, created_at DESC LIMIT 100").all())
+  const supplierSearch = timed(() => db.prepare("SELECT id,name,current_balance FROM suppliers WHERE organization_id='org:scale' AND deleted_at IS NULL AND name LIKE '%Supplier 1999%' LIMIT 50").all())
+  const purchaseList = timed(() => db.prepare("SELECT id,supplier_invoice_number,purchase_date,supplier_name,grand_total_minor,outstanding_minor FROM purchase_invoices WHERE organization_id='org:scale' AND financial_year_id='fy:scale' AND document_status='POSTED' AND deleted_at IS NULL ORDER BY purchase_date DESC,created_at DESC LIMIT 100").all())
+  const payableAging = timed(() => db.prepare("SELECT supplier_id,SUM(outstanding_minor) outstanding_minor,SUM(CASE WHEN due_date<'2026-12-31' THEN outstanding_minor ELSE 0 END) overdue_minor FROM purchase_invoices WHERE organization_id='org:scale' AND financial_year_id='fy:scale' AND invoice_kind='purchase_invoice' AND document_status='POSTED' AND outstanding_minor>0 GROUP BY supplier_id ORDER BY overdue_minor DESC LIMIT 100").all())
+  const supplierPaymentList = timed(() => db.prepare("SELECT id,party_id,payment_date,amount_minor FROM payments WHERE organization_id='org:scale' AND financial_year_id='fy:scale' AND party_type='supplier' AND direction='out' AND deleted_at IS NULL ORDER BY payment_date DESC,created_at DESC LIMIT 100").all())
   const balanceSheet = timed(() => db.prepare(`SELECT account.account_type, SUM(line.debit_minor-line.credit_minor) signed_minor
     FROM accounting_voucher_entries line JOIN accounting_vouchers voucher ON voucher.id = line.voucher_id
     JOIN chart_of_accounts account ON account.id = line.account_id WHERE line.organization_id = 'org:scale'
@@ -93,10 +108,10 @@ try {
   assert.ok(profitLoss.milliseconds < 1_500, `P&L took ${profitLoss.milliseconds.toFixed(1)}ms`)
   assert.ok(generalLedger.milliseconds < 1_500, `General ledger took ${generalLedger.milliseconds.toFixed(1)}ms`)
   assert.ok(integrity.milliseconds < 1_500, `Integrity scan took ${integrity.milliseconds.toFixed(1)}ms`)
-  for (const [name, measurement] of Object.entries({ productSearch, customerSearch, invoiceList, journalList, balanceSheet })) assert.ok(measurement.milliseconds < 1_500, `${name} took ${measurement.milliseconds.toFixed(1)}ms`)
+  for (const [name, measurement] of Object.entries({ productSearch, customerSearch, supplierSearch, invoiceList, purchaseList, payableAging, supplierPaymentList, journalList, balanceSheet })) assert.ok(measurement.milliseconds < 1_500, `${name} took ${measurement.milliseconds.toFixed(1)}ms`)
   const reopen = timed(() => { const connection = new DatabaseSync(databasePath, { readOnly: true }); connection.prepare("SELECT 1").get(); connection.close() })
   assert.ok(reopen.milliseconds < 1_500, `Database reopen took ${reopen.milliseconds.toFixed(1)}ms`)
-  console.log(JSON.stringify({ dataset: { products: 2_000, customers: 5_000, invoices: 20_000, invoiceLines: 40_000, journals: 12_000, journalLines: 24_000 }, milliseconds: { databaseReopen: +reopen.milliseconds.toFixed(2), productSearch: +productSearch.milliseconds.toFixed(2), customerSearch: +customerSearch.milliseconds.toFixed(2), invoiceList: +invoiceList.milliseconds.toFixed(2), journalList: +journalList.milliseconds.toFixed(2), generalLedger: +generalLedger.milliseconds.toFixed(2), trialBalance: +trialBalance.milliseconds.toFixed(2), profitLoss: +profitLoss.milliseconds.toFixed(2), balanceSheet: +balanceSheet.milliseconds.toFixed(2), integrity: +integrity.milliseconds.toFixed(2) } }, null, 2))
+  console.log(JSON.stringify({ dataset: { products: 2_000, customers: 5_000, suppliers: 2_000, invoices: 20_000, invoiceLines: 40_000, purchases: 20_000, supplierPayments: 20_000, journals: 12_000, journalLines: 24_000 }, milliseconds: { databaseReopen: +reopen.milliseconds.toFixed(2), productSearch: +productSearch.milliseconds.toFixed(2), customerSearch: +customerSearch.milliseconds.toFixed(2), supplierSearch: +supplierSearch.milliseconds.toFixed(2), invoiceList: +invoiceList.milliseconds.toFixed(2), purchaseList: +purchaseList.milliseconds.toFixed(2), payableAging: +payableAging.milliseconds.toFixed(2), supplierPaymentList: +supplierPaymentList.milliseconds.toFixed(2), journalList: +journalList.milliseconds.toFixed(2), generalLedger: +generalLedger.milliseconds.toFixed(2), trialBalance: +trialBalance.milliseconds.toFixed(2), profitLoss: +profitLoss.milliseconds.toFixed(2), balanceSheet: +balanceSheet.milliseconds.toFixed(2), integrity: +integrity.milliseconds.toFixed(2) } }, null, 2))
 } finally {
   db.close()
   rmSync(directory, { recursive: true, force: true })

@@ -496,13 +496,13 @@ if (-not [string]::IsNullOrWhiteSpace($previousInstaller)) {
   Invoke-InstalledSqliteCrud "verify"
   Assert-InstalledBuildIdentity $ExpectedVersion $ExpectedCommit
 }
-Invoke-AppLaunchCycle 2 -LaunchPath $startMenuShortcut -ExpectedSchema 19
-Invoke-InstalledSqliteCrud "verify" "19"
+Invoke-AppLaunchCycle 2 -LaunchPath $startMenuShortcut -ExpectedSchema 21
+Invoke-InstalledSqliteCrud "verify" "21"
 
 try {
   Enable-BezgrowOfflineMode
-  Invoke-AppLaunchCycle 3 -ExpectedSchema 19
-  Invoke-InstalledSqliteCrud "verify" "19"
+  Invoke-AppLaunchCycle 3 -ExpectedSchema 21
+  Invoke-InstalledSqliteCrud "verify" "21"
 } finally {
   Remove-BezgrowOfflineRules
 }
@@ -510,7 +510,7 @@ try {
 Invoke-Installer @("/S", "/UPDATE")
 Assert-Path $sentinel "The update removed Bezgrow user data."
 Assert-Path $database "The update removed the Bezgrow SQLite database."
-Invoke-InstalledSqliteCrud "verify" "19"
+Invoke-InstalledSqliteCrud "verify" "21"
 
 $uninstallProcess = Start-Process -FilePath $uninstaller -ArgumentList @("/S") -Wait -PassThru
 if ($uninstallProcess.ExitCode -ne 0) {
@@ -531,11 +531,11 @@ Invoke-Installer @("/S")
 Assert-Path $application "Reinstall did not restore the application."
 Assert-Path $sentinel "Reinstall did not preserve Bezgrow user data."
 Assert-Path $database "Reinstall did not preserve the Bezgrow SQLite database."
-Invoke-AppLaunchCycle 4 -LaunchPath $desktopShortcut -ExpectedSchema 19
-Invoke-InstalledSqliteCrud "verify" "19"
+Invoke-AppLaunchCycle 4 -LaunchPath $desktopShortcut -ExpectedSchema 21
+Invoke-InstalledSqliteCrud "verify" "21"
 
 Write-SmokeDiagnostics "All installer smoke checks completed successfully." $null
-Write-Host "windows-installer-smoke-ok cycles=4 start_menu=ok desktop_shortcut=ok console_windows=none fixed_port=43124 health=ok route=ok sqlite_crud=ok accounting_schema=19 accounting_defaults=32 accounting_migration_idempotent=ok historical_invoice_backpost=none license_persistence=ok offline=ok runtime_recovery=ok window_controls=ok external_browser=none orphan_processes=0 previous_version_upgrade=$(-not [string]::IsNullOrWhiteSpace($previousInstaller)) update_preservation=ok uninstall_preservation=ok reinstall=ok"
+Write-Host "windows-installer-smoke-ok cycles=4 start_menu=ok desktop_shortcut=ok console_windows=none fixed_port=43124 health=ok route=ok sqlite_crud=ok accounting_schema=21 accounting_defaults=37 accounting_migration_idempotent=ok historical_invoice_backpost=none license_persistence=ok offline=ok runtime_recovery=ok window_controls=ok external_browser=none orphan_processes=0 previous_version_upgrade=$(-not [string]::IsNullOrWhiteSpace($previousInstaller)) update_preservation=ok uninstall_preservation=ok reinstall=ok"
 } catch {
   Write-SmokeDiagnostics "Installer smoke failed: $($_.Exception.Message)" $null
   throw

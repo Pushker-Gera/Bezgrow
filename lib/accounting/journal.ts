@@ -222,30 +222,60 @@ export type ExpenseJournalInput = Omit<JournalDraft, "lines"> & {
   inputCgstAccount: AccountingAccount
   inputSgstAccount: AccountingAccount
   inputIgstAccount: AccountingAccount
+  inputCessAccount?: AccountingAccount
+  outputCgstAccount?: AccountingAccount
+  outputSgstAccount?: AccountingAccount
+  outputIgstAccount?: AccountingAccount
+  outputCessAccount?: AccountingAccount
   amountMinor: number
   cgstMinor: number
   sgstMinor: number
   igstMinor: number
+  cessMinor?: number
+  itcEligible?: boolean
+  reverseCharge?: boolean
 }
 
 export function buildExpenseJournal(input: ExpenseJournalInput) {
-  for (const [label, amount] of [["Expense", input.amountMinor], ["CGST", input.cgstMinor], ["SGST", input.sgstMinor], ["IGST", input.igstMinor]] as const) {
+  const cessMinor = input.cessMinor || 0
+  for (const [label, amount] of [["Expense", input.amountMinor], ["CGST", input.cgstMinor], ["SGST", input.sgstMinor], ["IGST", input.igstMinor], ["Cess", cessMinor]] as const) {
     assertNonNegativeMinor(amount, label)
   }
   if (!input.amountMinor) throw new Error("Expense amount must be greater than zero.")
-  const taxMinor = input.cgstMinor + input.sgstMinor + input.igstMinor
+  const taxMinor = input.cgstMinor + input.sgstMinor + input.igstMinor + cessMinor
   if (taxMinor > input.amountMinor) throw new Error("Input GST cannot exceed the total expense amount.")
-  const lines = [line(input.expenseAccount, input.amountMinor - taxMinor, 0, { description: input.narration })]
-  if (input.cgstMinor) lines.push(line(input.inputCgstAccount, input.cgstMinor, 0, { description: "Input CGST" }))
-  if (input.sgstMinor) lines.push(line(input.inputSgstAccount, input.sgstMinor, 0, { description: "Input SGST" }))
-  if (input.igstMinor) lines.push(line(input.inputIgstAccount, input.igstMinor, 0, { description: "Input IGST" }))
-  lines.push(line(input.paymentAccount, 0, input.amountMinor, { description: "Expense payment" }))
+  const itcEligible = input.itcEligible !== false
+  const taxableMinor = input.amountMinor - taxMinor
+  const lines = [line(input.expenseAccount, taxableMinor + (itcEligible ? 0 : taxMinor), 0, { description: input.narration })]
+  if (itcEligible && input.cgstMinor) lines.push(line(input.inputCgstAccount, input.cgstMinor, 0, { description: "Input CGST" }))
+  if (itcEligible && input.sgstMinor) lines.push(line(input.inputSgstAccount, input.sgstMinor, 0, { description: "Input SGST" }))
+  if (itcEligible && input.igstMinor) lines.push(line(input.inputIgstAccount, input.igstMinor, 0, { description: "Input IGST" }))
+  if (itcEligible && cessMinor) {
+    if (!input.inputCessAccount) throw new Error("Input cess account is missing.")
+    lines.push(line(input.inputCessAccount, cessMinor, 0, { description: "Input cess" }))
+  }
+  lines.push(line(input.paymentAccount, 0, input.reverseCharge ? taxableMinor : input.amountMinor, { description: "Expense payment / payable" }))
+  if (input.reverseCharge) {
+    const outputTaxes = [
+      [input.outputCgstAccount, input.cgstMinor, "Output CGST under reverse charge"],
+      [input.outputSgstAccount, input.sgstMinor, "Output SGST under reverse charge"],
+      [input.outputIgstAccount, input.igstMinor, "Output IGST under reverse charge"],
+      [input.outputCessAccount, cessMinor, "Output cess under reverse charge"],
+    ] as const
+    for (const [account, amount, description] of outputTaxes) {
+      if (amount && !account) throw new Error("Reverse-charge output tax account is missing.")
+      if (amount && account) lines.push(line(account, 0, amount, { description }))
+    }
+  }
   return {
     journal: validateJournal({ ...input, lines }),
     amountMinor: input.amountMinor,
+    taxableMinor,
+    settlementMinor: input.reverseCharge ? taxableMinor : input.amountMinor,
     cgstMinor: input.cgstMinor,
     sgstMinor: input.sgstMinor,
     igstMinor: input.igstMinor,
+    cessMinor,
   }
 }
 

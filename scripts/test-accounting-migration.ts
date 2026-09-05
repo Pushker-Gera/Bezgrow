@@ -47,11 +47,10 @@ try {
       ('legacy-line-1', 'org:migration', 'legacy-voucher', 'legacy-a', 'asset', 1, 1, 0, datetime('now'), datetime('now')),
       ('legacy-line-2', 'org:migration', 'legacy-voucher', 'legacy-b', 'equity', 2, 0, 1, datetime('now'), datetime('now'));
   `)
-  applyMigration(db, 18)
-  applyMigration(db, 19)
+  for (const migration of localMigrations.filter((candidate) => candidate.version > 17)) applyMigration(db, migration.version)
 
   assert.equal(Number((db.prepare("PRAGMA user_version").get() as { user_version: number }).user_version), LOCAL_DB_VERSION)
-  assert.equal(count(db, "SELECT COUNT(*) count FROM chart_of_accounts WHERE organization_id = 'org:migration' AND system_role IS NOT NULL"), 32)
+  assert.equal(count(db, "SELECT COUNT(*) count FROM chart_of_accounts WHERE organization_id = 'org:migration' AND system_role IS NOT NULL"), 37)
   assert.equal(count(db, "SELECT COUNT(*) count FROM accounting_settings WHERE organization_id = 'org:migration' AND initialization_status = 'PENDING'"), 1)
   assert.equal(String((db.prepare("SELECT status FROM accounting_vouchers WHERE id = 'legacy-voucher'").get() as { status: string }).status), "legacy")
   assert.equal(count(db, "SELECT COUNT(*) count FROM pragma_foreign_key_check"), 0)
@@ -113,7 +112,7 @@ try {
   assert.equal(count(db, "SELECT COUNT(*) count FROM accounting_voucher_entries"), 4)
   assert.equal(count(db, "SELECT COUNT(*) count FROM pragma_foreign_key_check"), 0)
   assert.equal(String((db.prepare("PRAGMA quick_check").get() as { quick_check: string }).quick_check), "ok")
-  console.log(JSON.stringify({ status: "ok", upgradedFromRelease: "0.2.5", upgradedFromSchema: 17, schemaVersion: LOCAL_DB_VERSION, defaultAccounts: 32, migrationIdempotency: true, immutablePosting: true, sourceIdempotency: true, backupRestore: "ok" }))
+  console.log(JSON.stringify({ status: "ok", upgradedFromRelease: "0.2.5", upgradedFromSchema: 17, schemaVersion: LOCAL_DB_VERSION, defaultAccounts: 37, migrationIdempotency: true, immutablePosting: true, sourceIdempotency: true, backupRestore: "ok" }))
 } finally {
   db.close()
   rmSync(directory, { recursive: true, force: true })

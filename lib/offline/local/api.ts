@@ -14,7 +14,6 @@ import {
   getOfflineReport,
   rowsToCsv,
   runProfessionalIntegrityChecks,
-  saveSupplierMaster,
   supplierLedgerSummary,
   verifyLocalBackup,
 } from "@/lib/offline/local/erp"
@@ -47,6 +46,21 @@ import { allocateAuthoritativeStock } from "@/lib/inventory-availability"
 import { buildReversalJournal, buildSaleJournal, splitOutputGst } from "@/lib/accounting/journal"
 import { minorToMoney, moneyToMinor, multiplyMoneyToMinor } from "@/lib/accounting/money"
 import { accountingAccounts, accountingIntegrity, accountingReport, accountingStatus, createAccountingExpense, deactivateAccountingAccount, initializeAccounting, loadPostedSourceJournal, postManualJournal, replaceAccountingExpense, reverseAccountingExpense, reverseJournal, saveAccountingAccount, systemAccountMap } from "@/lib/offline/local/accounting"
+import {
+  applyPartyAdvance,
+  createPartyPayment,
+  createPurchase as createAccountingPurchase,
+  createSalesCreditNote,
+  lockAccountingPeriod,
+  phaseTwoAccountingReport,
+  phaseTwoReferenceData,
+  reversePurchase,
+  saveBankAccount as saveAccountingBankAccount,
+  savePurchaseAttachment,
+  saveSupplier as saveAccountingSupplier,
+  unlockAccountingPeriod,
+  updateBankReconciliation,
+} from "@/lib/offline/local/accounting-phase2"
 import {
   assertFinancialYearWriteAllowed,
   closeFinancialYear,
@@ -94,6 +108,8 @@ const dailyEndpoints = new Set([
   "/api/purchases/order",
   "/api/purchases/goods-received",
   "/api/purchases/supplier-payment",
+  "/api/purchases/reverse",
+  "/api/purchases/attachments/save",
   "/api/quotations/list",
   "/api/quotations/create",
   "/api/delivery-challans/list",
@@ -109,6 +125,11 @@ const dailyEndpoints = new Set([
   "/api/accounting/initialize",
   "/api/accounting/bank-accounts",
   "/api/accounting/bank-accounts/save",
+  "/api/accounting/bank-reconciliation/save",
+  "/api/accounting/reference-data",
+  "/api/accounting/advances/apply",
+  "/api/accounting/period-lock",
+  "/api/accounting/period-unlock",
   "/api/accounting/vouchers",
   "/api/accounting/vouchers/create",
   "/api/accounting/vouchers/reverse",
@@ -287,11 +308,14 @@ const datedMutationKeys: Record<string, string[]> = {
   "/api/purchases/order": ["bill_date"],
   "/api/purchases/goods-received": ["bill_date"],
   "/api/purchases/supplier-payment": ["payment_date"],
+  "/api/purchases/reverse": ["reversal_date"],
   "/api/quotations/create": ["created_at"],
   "/api/delivery-challans/create": ["challan_date"],
   "/api/sales/proforma/create": ["invoice_date", "date"],
   "/api/sales/returns/create": ["note_date"],
   "/api/payments/create": ["payment_date"],
+  "/api/accounting/advances/apply": ["allocation_date"],
+  "/api/accounting/bank-accounts/save": ["opening_date"],
   "/api/accounting/vouchers/create": ["voucher_date"],
   "/api/accounting/vouchers/reverse": ["reversal_date"],
   "/api/notes/credit": ["note_date"],
@@ -532,9 +556,7 @@ async function listSuppliers(url: URL, organizationId: string) {
 }
 
 async function saveSupplier(body: DataRow, organizationId: string) {
-  const result = await saveSupplierMaster(organizationId, body)
-  await queueProfessionalAction("save_supplier", organizationId, { supplier: body, localSupplierId: result.supplier.id })
-  return ok(result as Record<string, unknown>)
+  return ok(await saveAccountingSupplier(organizationId, body))
 }
 
 async function supplierStatus(body: DataRow, organizationId: string) {
@@ -724,6 +746,8 @@ async function createInvoice(body: DataRow, organizationId: string) {
     const gst = hasExplicitItemGst && explicitItemGst.cgstMinor + explicitItemGst.sgstMinor + explicitItemGst.igstMinor === itemTax
       ? { ...explicitItemGst, mode: explicitItemGst.igstMinor ? "INTER_STATE" as const : "INTRA_STATE" as const }
       : splitOutputGst(itemTax, intraState ? "SAME" : "ORIGIN", intraState ? "SAME" : "DESTINATION")
+    const cessMinor = moneyToMinor(item.cess_amount || 0, "Invoice line cess")
+    const lineTotalMinor = moneyToMinor(item.line_total ?? 0, "Invoice line total")
     return {
       ...item,
       cost_rate_minor: cost.quantity > 0 ? Math.round(cost.knownMinor / cost.quantity) : null,
@@ -732,6 +756,12 @@ async function createInvoice(body: DataRow, organizationId: string) {
       cgst_amount: minorToMoney(gst.cgstMinor),
       sgst_amount: minorToMoney(gst.sgstMinor),
       igst_amount: minorToMoney(gst.igstMinor),
+      taxable_minor: Math.max(0, lineTotalMinor - gst.cgstMinor - gst.sgstMinor - gst.igstMinor - cessMinor),
+      cgst_minor: gst.cgstMinor,
+      sgst_minor: gst.sgstMinor,
+      igst_minor: gst.igstMinor,
+      cess_minor: cessMinor,
+      gst_rate_basis_points: moneyToMinor(item.tax_percent ?? item.gst ?? 0, "Invoice line GST rate"),
     }
   })
   const cogsMinor = Array.from(productCost.values()).reduce((sum, cost) => sum + cost.knownMinor, 0)
@@ -752,6 +782,21 @@ async function createInvoice(body: DataRow, organizationId: string) {
   }
   const taxMinor = moneyToMinor(taxTotal, "Invoice GST")
   const hasExplicitGst = explicitGst.cgstMinor + explicitGst.sgstMinor + explicitGst.igstMinor === taxMinor
+  Object.assign(invoiceRecord, {
+    taxable_minor: taxableMinor,
+    cgst_minor: explicitGst.cgstMinor,
+    sgst_minor: explicitGst.sgstMinor,
+    igst_minor: explicitGst.igstMinor,
+    cess_minor: moneyToMinor(body.cess_amount || 0, "Invoice cess"),
+    grand_total_minor: moneyToMinor(totalAmount, "Invoice total"),
+    paid_minor: moneyToMinor(paidAmount, "Invoice paid amount"),
+    outstanding_minor: moneyToMinor(outstandingAmount, "Invoice outstanding amount"),
+    place_of_supply: localString(body.place_of_supply, localString(customer.state)) || null,
+    customer_gstin: localString(body.customer_gstin, localString(customer.gst_number)) || null,
+    supply_type: intraState ? "INTRA_STATE" : "INTER_STATE",
+    transaction_type: localString(body.customer_gstin, localString(customer.gst_number)) ? "B2B" : "B2C",
+    tax_category: localString(body.tax_category, "TAXABLE"),
+  })
   const journal = buildSaleJournal({
     id: createOfflineId("sale-voucher"), organizationId, financialYearId: financialYear.id,
     voucherNumber: `SALE-${invoiceNumber}`, voucherType: "sale", voucherDate: invoiceDate,
@@ -1410,15 +1455,14 @@ async function listPurchases(url: URL, organizationId: string) {
 }
 
 async function purchaseCreate(body: DataRow, organizationId: string, kind: "purchase_invoice" | "purchase_return" | "purchase_order" | "goods_received") {
+  if (kind === "purchase_invoice" || kind === "purchase_return") {
+    return ok(await createAccountingPurchase(organizationId, body, kind))
+  }
   const result = await createPurchaseDocument(organizationId, body, kind)
   const actionType =
-    kind === "purchase_return"
-      ? "create_purchase_return"
-      : kind === "purchase_order"
-        ? "create_purchase_order"
-        : kind === "goods_received"
-          ? "create_goods_received"
-          : "create_purchase"
+    kind === "purchase_order"
+      ? "create_purchase_order"
+      : "create_goods_received"
   await queueProfessionalAction(actionType, organizationId, { kind, purchase: body, result })
   return ok(result)
 }
@@ -1434,6 +1478,10 @@ async function listPayments(url: URL, organizationId: string) {
 }
 
 async function paymentCreate(body: DataRow, organizationId: string) {
+  const partyType = localString(body.party_type)
+  if (partyType === "supplier" || partyType === "customer") {
+    return ok(await createPartyPayment(organizationId, body, partyType))
+  }
   const result = await createPaymentTransaction(
     organizationId,
     body,
@@ -1475,27 +1523,15 @@ async function listBankAccounts(url: URL, organizationId: string) {
   let rows = filterDeleted(await readCollection<DataRow>(organizationId, "bank_accounts"))
   rows = rows.filter((row) => rowMatches(row, ["bank_name", "branch_name", "account_number", "ifsc_code"], search))
   rows = sortRows(rows, url.searchParams.get("sort") || "created_at", url.searchParams.get("direction") || "desc")
-  return jsonResponse(paginate(url, rows))
+  return jsonResponse(paginate(url, rows.map((row) => ({
+    ...row,
+    account_number: undefined,
+    masked_identifier: row.masked_identifier || (localString(row.account_number) ? `•••• ${localString(row.account_number).slice(-4)}` : "Not provided"),
+  }))))
 }
 
 async function saveBankAccount(body: DataRow, organizationId: string) {
-  const now = nowIso()
-  const rows = await readCollection<DataRow>(organizationId, "bank_accounts")
-  const id = localString(body.id) || createOfflineId("bank-account")
-  const account = {
-    ...rows.find((row) => row.id === id),
-    ...body,
-    id,
-    organization_id: organizationId,
-    bank_name: localString(body.bank_name, localString(body.name, "Bank")),
-    is_active: body.is_active === undefined ? true : Boolean(body.is_active),
-    sync_status: "pending_update",
-    created_at: localString(body.created_at) || now,
-    updated_at: now,
-    deleted_at: null,
-  }
-  await writeCollections(organizationId, [{ collection: "bank_accounts", value: [account, ...rows.filter((row) => row.id !== id)] }])
-  return ok({ bank_account: account })
+  return ok(await saveAccountingBankAccount(organizationId, body))
 }
 
 async function listAccountingVouchers(url: URL, organizationId: string) {
@@ -1547,6 +1583,11 @@ async function expenseCreate(body: DataRow, organizationId: string) {
     vendorName: localString(body.vendor_name), category: localString(body.category),
     expenseAccountId: localString(body.expense_account_id), paymentAccountId: localString(body.payment_account_id),
     amount: body.amount, cgst: body.cgst ?? body.cgst_amount ?? 0, sgst: body.sgst ?? body.sgst_amount ?? 0, igst: body.igst ?? body.igst_amount ?? 0,
+    cess: body.cess ?? body.cess_amount ?? 0, taxableValue: body.taxable_value, gstRate: body.gst_rate,
+    partyGstin: localString(body.party_gstin, localString(body.gstin)), supplierInvoiceNumber: localString(body.supplier_invoice_number), hsnCode: localString(body.hsn_code),
+    placeOfSupply: localString(body.place_of_supply), supplyType: localString(body.supply_type, "INTRA_STATE") as "INTRA_STATE" | "INTER_STATE",
+    taxCategory: localString(body.tax_category, "TAXABLE") as "TAXABLE" | "EXEMPT" | "NIL_RATED" | "NON_GST",
+    reverseCharge: body.reverse_charge === true || body.reverse_charge === "true", itcStatus: localString(body.itc_status, "REVIEW_REQUIRED") as "ELIGIBLE" | "INELIGIBLE" | "REVIEW_REQUIRED",
     paymentMethod: localString(body.payment_method, "cash"), referenceNo: localString(body.reference_no),
   })
   return ok(result)
@@ -1581,7 +1622,21 @@ async function phaseOneAccountingReport(url: URL, organizationId: string) {
   if (!financialYearId) return fail("Financial year is required.", 422)
   const requested = (url.searchParams.get("report") || url.searchParams.get("type") || "overview").replace("dashboard", "overview")
   const allowed = new Set(["overview", "journals", "general-ledger", "trial-balance", "profit-loss", "balance-sheet", "cash-flow", "expenses", "warnings"])
-  if (!allowed.has(requested)) return fail("Unknown accounting report.", 422)
+  if (!allowed.has(requested)) {
+    return jsonResponse({ success: true, ...(await phaseTwoAccountingReport({
+      organizationId,
+      financialYearId,
+      report: requested,
+      from: url.searchParams.get("from") || undefined,
+      to: url.searchParams.get("to") || undefined,
+      page: Number(url.searchParams.get("page") || 1),
+      limit: Number(url.searchParams.get("limit") || 100),
+      search: url.searchParams.get("search") || undefined,
+      accountId: url.searchParams.get("account_id") || undefined,
+      partyId: url.searchParams.get("party_id") || url.searchParams.get("bank_account_id") || undefined,
+      status: url.searchParams.get("status") || undefined,
+    })) })
+  }
   return jsonResponse({ success: true, ...(await accountingReport({
     organizationId, financialYearId, report: requested as Parameters<typeof accountingReport>[0]["report"],
     from: url.searchParams.get("from") || undefined, to: url.searchParams.get("to") || undefined,
@@ -1877,12 +1932,14 @@ export async function localApiFetch(input: RequestInfo | URL, init: RequestInit 
     if (method === "POST" && url.pathname === "/api/purchases/order") return { handled: true, response: await purchaseCreate(body || {}, organizationId, "purchase_order") }
     if (method === "POST" && url.pathname === "/api/purchases/goods-received") return { handled: true, response: await purchaseCreate(body || {}, organizationId, "goods_received") }
     if (method === "POST" && url.pathname === "/api/purchases/supplier-payment") return { handled: true, response: await paymentCreate({ ...(body || {}), party_type: "supplier", payment_type: "cash_payment", direction: "out" }, organizationId) }
+    if (method === "POST" && url.pathname === "/api/purchases/reverse") return { handled: true, response: ok(await reversePurchase(organizationId, body || {})) }
+    if (method === "POST" && url.pathname === "/api/purchases/attachments/save") return { handled: true, response: ok(await savePurchaseAttachment(organizationId, body || {})) }
     if (method === "GET" && url.pathname === "/api/quotations/list") return { handled: true, response: await listQuotations(url, organizationId) }
     if (method === "POST" && url.pathname === "/api/quotations/create") return { handled: true, response: await createQuotation(body || {}, organizationId) }
     if (method === "GET" && url.pathname === "/api/delivery-challans/list") return { handled: true, response: await listDeliveryChallans(url, organizationId) }
     if (method === "POST" && url.pathname === "/api/delivery-challans/create") return { handled: true, response: await createDeliveryChallan(body || {}, organizationId) }
     if (method === "POST" && url.pathname === "/api/sales/proforma/create") return { handled: true, response: await createProformaInvoice(body || {}, organizationId) }
-    if (method === "POST" && url.pathname === "/api/sales/returns/create") return { handled: true, response: await noteCreate(body || {}, organizationId, "credit") }
+    if (method === "POST" && url.pathname === "/api/sales/returns/create") return { handled: true, response: ok(await createSalesCreditNote(organizationId, body || {})) }
     if (method === "GET" && url.pathname === "/api/payments/list") return { handled: true, response: await listPayments(url, organizationId) }
     if (method === "POST" && url.pathname === "/api/payments/create") return { handled: true, response: await paymentCreate(body || {}, organizationId) }
     if (method === "GET" && url.pathname === "/api/accounting/chart") return { handled: true, response: await listChartOfAccounts(url, organizationId) }
@@ -1892,12 +1949,24 @@ export async function localApiFetch(input: RequestInfo | URL, init: RequestInit 
     if (method === "POST" && url.pathname === "/api/accounting/initialize") return { handled: true, response: ok({ status: await initializeAccounting(organizationId, normalizeLocalDate(localString(body?.opening_date, isoLocalDate()))) }) }
     if (method === "GET" && url.pathname === "/api/accounting/bank-accounts") return { handled: true, response: await listBankAccounts(url, organizationId) }
     if (method === "POST" && url.pathname === "/api/accounting/bank-accounts/save") return { handled: true, response: await saveBankAccount(body || {}, organizationId) }
+    if (method === "POST" && url.pathname === "/api/accounting/bank-reconciliation/save") return { handled: true, response: ok(await updateBankReconciliation(organizationId, body || {})) }
+    if (method === "GET" && url.pathname === "/api/accounting/reference-data") {
+      const financialYearId = url.searchParams.get("financial_year_id") || ""
+      if (!financialYearId) return { handled: true, response: fail("Financial year is required.", 422) }
+      return { handled: true, response: ok(await phaseTwoReferenceData(organizationId, financialYearId)) }
+    }
+    if (method === "POST" && url.pathname === "/api/accounting/advances/apply") {
+      const partyType = localString(body?.party_type) === "customer" ? "customer" : "supplier"
+      return { handled: true, response: ok(await applyPartyAdvance(organizationId, body || {}, partyType)) }
+    }
+    if (method === "POST" && url.pathname === "/api/accounting/period-lock") return { handled: true, response: ok(await lockAccountingPeriod(organizationId, body || {})) }
+    if (method === "POST" && url.pathname === "/api/accounting/period-unlock") return { handled: true, response: ok(await unlockAccountingPeriod(organizationId, body || {})) }
     if (method === "GET" && url.pathname === "/api/accounting/vouchers") return { handled: true, response: await listAccountingVouchers(url, organizationId) }
     if (method === "POST" && url.pathname === "/api/accounting/vouchers/create") return { handled: true, response: await createVoucher(body || {}, organizationId) }
     if (method === "POST" && url.pathname === "/api/accounting/vouchers/reverse") return { handled: true, response: ok({ voucher: await reverseJournal({ organizationId, voucherId: localString(body?.voucher_id), reversalDate: normalizeLocalDate(localString(body?.reversal_date, isoLocalDate())), reason: localString(body?.reason) }) }) }
     if (method === "GET" && url.pathname === "/api/accounting/reports") return { handled: true, response: await phaseOneAccountingReport(url, organizationId) }
     if (method === "GET" && url.pathname === "/api/accounting/integrity") return { handled: true, response: ok({ integrity: await accountingIntegrity(organizationId, url.searchParams.get("financial_year_id")) }) }
-    if (method === "POST" && url.pathname === "/api/notes/credit") return { handled: true, response: await noteCreate(body || {}, organizationId, "credit") }
+    if (method === "POST" && url.pathname === "/api/notes/credit") return { handled: true, response: body?.invoice_id ? ok(await createSalesCreditNote(organizationId, body || {})) : await noteCreate(body || {}, organizationId, "credit") }
     if (method === "POST" && url.pathname === "/api/notes/debit") return { handled: true, response: await noteCreate(body || {}, organizationId, "debit") }
     if (method === "GET" && url.pathname === "/api/expenses/list") return { handled: true, response: await listExpenses(url, organizationId) }
     if (method === "POST" && url.pathname === "/api/expenses/create") return { handled: true, response: await expenseCreate(body || {}, organizationId) }

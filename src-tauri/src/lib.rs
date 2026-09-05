@@ -1296,6 +1296,17 @@ struct DesktopBusinessLogo {
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
+struct DesktopPurchaseAttachment {
+    relative_path: String,
+    absolute_path: String,
+    file_name: String,
+    media_type: String,
+    bytes: u64,
+    sha256: String,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
 struct DesktopLocalAsset {
     mime_type: String,
     bytes: Vec<u8>,
@@ -1504,6 +1515,7 @@ fn prepare_managed_data<R: tauri::Runtime>(
         "Database",
         INSTALLATION_DIRECTORY,
         "business-assets/logos",
+        "business-assets/purchase-attachments",
         "Settings",
         "PDFs",
         "Exports",
@@ -2277,6 +2289,67 @@ fn desktop_pick_business_logo<R: tauri::Runtime>(
 }
 
 #[tauri::command]
+fn desktop_pick_purchase_attachment<R: tauri::Runtime>(
+    app: tauri::AppHandle<R>,
+    organization_id: String,
+    purchase_id: String,
+) -> Result<Option<DesktopPurchaseAttachment>, String> {
+    let _operation = begin_critical_operation(&app)?;
+    const MAX_INPUT_BYTES: u64 = 20 * 1024 * 1024;
+    let source = rfd::FileDialog::new()
+        .add_filter("Supplier invoice", &["pdf", "png", "jpg", "jpeg", "webp"])
+        .pick_file();
+    let Some(source_path) = source else {
+        return Ok(None);
+    };
+    let metadata = fs::metadata(&source_path)
+        .map_err(|error| format!("Unable to inspect the selected supplier invoice: {error}"))?;
+    if metadata.len() == 0 || metadata.len() > MAX_INPUT_BYTES {
+        return Err(
+            "The supplier invoice attachment must be between 1 byte and 20 MB.".to_string(),
+        );
+    }
+    let bytes = fs::read(&source_path)
+        .map_err(|error| format!("Unable to read the selected supplier invoice: {error}"))?;
+    let (media_type, extension) = if bytes.starts_with(b"%PDF-") {
+        ("application/pdf", "pdf")
+    } else if let Some((_, media_type, extension)) = image_signature(&bytes) {
+        (media_type, extension)
+    } else {
+        return Err("Choose a valid PDF, PNG, JPEG, or WebP supplier invoice.".to_string());
+    };
+    let organization_stem = organization_asset_stem(&organization_id)?;
+    let purchase_stem = organization_asset_stem(&purchase_id)?;
+    let file_stem = format!("{purchase_stem}-{}", unix_timestamp());
+    let relative_path =
+        format!("business-assets/purchase-attachments/{organization_stem}/{file_stem}.{extension}");
+    let destination = local_asset_path(&app, &relative_path)?;
+    let parent = destination
+        .parent()
+        .ok_or_else(|| "Unable to resolve the purchase attachment folder.".to_string())?;
+    fs::create_dir_all(parent)
+        .map_err(|error| format!("Unable to create the purchase attachment folder: {error}"))?;
+    let temporary = parent.join(format!(".{file_stem}.tmp"));
+    fs::write(&temporary, &bytes)
+        .map_err(|error| format!("Unable to save the purchase attachment: {error}"))?;
+    fs::rename(&temporary, &destination)
+        .map_err(|error| format!("Unable to finish saving the purchase attachment: {error}"))?;
+    let file_name = source_path
+        .file_name()
+        .and_then(|value| value.to_str())
+        .unwrap_or("supplier-invoice")
+        .to_string();
+    Ok(Some(DesktopPurchaseAttachment {
+        relative_path,
+        absolute_path: destination.to_string_lossy().to_string(),
+        file_name,
+        media_type: media_type.to_string(),
+        bytes: bytes.len() as u64,
+        sha256: sha256_bytes(&bytes),
+    }))
+}
+
+#[tauri::command]
 fn desktop_remove_business_logo<R: tauri::Runtime>(
     app: tauri::AppHandle<R>,
     relative_path: String,
@@ -2889,9 +2962,72 @@ async fn verify_accounting_integrity(
     .fetch_one(&mut *connection)
     .await
     .map_err(|error| format!("Unable to verify {context} accounting source identities: {error}"))?;
-    if invalid_postings > 0 || duplicate_sources > 0 {
+    let phase_two_tables = sqlx::query_scalar::<_, i64>(
+        "SELECT COUNT(*) FROM sqlite_master
+         WHERE type = 'table' AND name IN ('payment_allocations', 'party_advances', 'advance_allocations', 'bank_reconciliations')",
+    )
+    .fetch_one(&mut *connection)
+    .await
+    .map_err(|error| format!("Unable to inspect {context} Phase 2 accounting schema: {error}"))?;
+    let broken_phase_two_links = if phase_two_tables == 4 {
+        sqlx::query_scalar::<_, i64>(
+            "SELECT COUNT(*) FROM (
+               SELECT purchase.id
+               FROM purchase_invoices purchase
+               LEFT JOIN accounting_vouchers voucher
+                 ON voucher.id = purchase.accounting_voucher_id
+                AND voucher.organization_id = purchase.organization_id
+                AND voucher.status = 'posted'
+               WHERE purchase.document_status = 'POSTED'
+                 AND purchase.deleted_at IS NULL AND voucher.id IS NULL
+               UNION ALL
+               SELECT payment.id
+               FROM payments payment
+               LEFT JOIN accounting_vouchers voucher
+                 ON voucher.id = payment.accounting_voucher_id
+                AND voucher.organization_id = payment.organization_id
+                AND voucher.status = 'posted'
+               WHERE payment.deleted_at IS NULL
+                 AND payment.amount_minor > 0 AND voucher.id IS NULL
+               UNION ALL
+               SELECT allocation.id
+               FROM payment_allocations allocation
+               LEFT JOIN payments payment
+                 ON payment.id = allocation.payment_id
+                AND payment.organization_id = allocation.organization_id
+               WHERE payment.id IS NULL
+               UNION ALL
+               SELECT allocation.id
+               FROM advance_allocations allocation
+               LEFT JOIN party_advances advance
+                 ON advance.id = allocation.advance_id
+                AND advance.organization_id = allocation.organization_id
+               LEFT JOIN accounting_vouchers voucher
+                 ON voucher.id = allocation.accounting_voucher_id
+                AND voucher.organization_id = allocation.organization_id
+                AND voucher.status = 'posted'
+               WHERE advance.id IS NULL OR voucher.id IS NULL
+               UNION ALL
+               SELECT reconciliation.id
+               FROM bank_reconciliations reconciliation
+               LEFT JOIN bank_accounts bank
+                 ON bank.id = reconciliation.bank_account_id
+                AND bank.organization_id = reconciliation.organization_id
+               LEFT JOIN accounting_voucher_entries entry
+                 ON entry.id = reconciliation.voucher_entry_id
+                AND entry.organization_id = reconciliation.organization_id
+               WHERE bank.id IS NULL OR entry.id IS NULL
+             )",
+        )
+        .fetch_one(&mut *connection)
+        .await
+        .map_err(|error| format!("Unable to verify {context} Phase 2 accounting links: {error}"))?
+    } else {
+        0
+    };
+    if invalid_postings > 0 || duplicate_sources > 0 || broken_phase_two_links > 0 {
         return Err(format!(
-            "The {context} contains invalid accounting data ({invalid_postings} broken journals, {duplicate_sources} duplicate sources)."
+            "The {context} contains invalid accounting data ({invalid_postings} broken journals, {duplicate_sources} duplicate sources, {broken_phase_two_links} broken Phase 2 links)."
         ));
     }
     Ok(())
@@ -6040,6 +6176,7 @@ pub fn run() {
             desktop_save_file,
             desktop_prepare_invoice_share,
             desktop_pick_business_logo,
+            desktop_pick_purchase_attachment,
             desktop_remove_business_logo,
             desktop_read_local_asset,
             desktop_open_pdf_for_print,
