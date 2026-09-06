@@ -17,6 +17,11 @@ const cargo = read("src-tauri/Cargo.toml");
 const tauriBuild = read("src-tauri/build.rs");
 const rust = read("src-tauri/src/lib.rs");
 const prepare = read("scripts/prepare-desktop-build.mjs");
+assert.doesNotMatch(
+  prepare,
+  /writeFileSync\(join\(desktop(?:Server|Node)Dir, ["']\.gitkeep["']\)/,
+  "Populated packaged runtime directories must not add placeholder files that can acquire signature-invalidating Finder metadata inside a DMG."
+);
 const nextBuild = read("scripts/build-next.mjs");
 const desktopBuild = read("scripts/build-desktop.mjs");
 const desktopStartupSmoke = read("scripts/test-desktop-startup.mjs");

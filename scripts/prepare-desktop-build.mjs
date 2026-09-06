@@ -134,7 +134,6 @@ writeFileSync(
 rmSync(desktopServerDir, { recursive: true, force: true });
 mkdirSync(desktopServerDir, { recursive: true });
 cpSync(standaloneDir, desktopServerDir, { recursive: true });
-writeFileSync(join(desktopServerDir, ".gitkeep"), "");
 
 rmSync(desktopNodeDir, { recursive: true, force: true });
 mkdirSync(desktopNodeDir, { recursive: true });
@@ -158,7 +157,6 @@ const nodeExecutableName = targetsWindows ? "node.exe" : "node";
 const nodeTarget = join(desktopNodeDir, nodeExecutableName);
 copyFileSync(nodeSource, nodeTarget);
 if (process.platform !== "win32") chmodSync(nodeTarget, 0o755);
-writeFileSync(join(desktopNodeDir, ".gitkeep"), "");
 
 console.log(
   `Prepared Bezgrow ${packageVersion} desktop runtime from ${buildIdentity.shortGitCommit} at ${buildTimestamp}.`

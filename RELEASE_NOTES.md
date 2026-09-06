@@ -11,6 +11,7 @@ Professional Accounting Phase 3.
 - Hardened accounting and statutory imports against traversal-style names, path-bearing metadata, oversized inputs, invalid hashes, and excessive rows; native backup/restore integrity now validates Phase 3 relationships.
 - Added deterministic schema 21-to-22 migration, golden-company totals, generated journal invariants, rollback injection, reconciliation, performance, route, packaged desktop, and cross-platform release-gate coverage.
 - Hardened schema 22 upgrades to repair legacy businesses with a partial system Chart of Accounts to the complete 43-ledger chart and restore a missing accounting-initialization record before the first accounting screen opens, without replacing an existing initialization policy or state.
+- Removed generated runtime placeholder files from packaged desktop resources so Finder metadata cannot invalidate strict signature verification after copying the app from a macOS disk image.
 
 This candidate is not publicly published. Existing download and updater metadata remains pinned to the published 0.3.0 artifacts until matching 0.3.1 platform artifacts, platform acceptance, and production trust requirements are complete.
 
