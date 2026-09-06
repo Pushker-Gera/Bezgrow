@@ -3025,9 +3025,60 @@ async fn verify_accounting_integrity(
     } else {
         0
     };
-    if invalid_postings > 0 || duplicate_sources > 0 || broken_phase_two_links > 0 {
+    let phase_three_tables = sqlx::query_scalar::<_, i64>(
+        "SELECT COUNT(*) FROM sqlite_master
+         WHERE type = 'table' AND name IN ('fixed_assets', 'fixed_asset_depreciation', 'fixed_asset_disposals', 'tax_transactions', 'accounting_dimension_allocations', 'gst_reconciliations', 'bank_statement_matches', 'accounting_audit_events')",
+    )
+    .fetch_one(&mut *connection)
+    .await
+    .map_err(|error| format!("Unable to inspect {context} Phase 3 accounting schema: {error}"))?;
+    let broken_phase_three_links = if phase_three_tables == 8 {
+        sqlx::query_scalar::<_, i64>(
+            "SELECT COUNT(*) FROM (
+               SELECT asset.id FROM fixed_assets asset
+               LEFT JOIN accounting_vouchers voucher ON voucher.id=asset.acquisition_voucher_id AND voucher.organization_id=asset.organization_id AND voucher.status='posted'
+               WHERE voucher.id IS NULL
+               UNION ALL
+               SELECT depreciation.id FROM fixed_asset_depreciation depreciation
+               LEFT JOIN fixed_assets asset ON asset.id=depreciation.asset_id AND asset.organization_id=depreciation.organization_id
+               LEFT JOIN accounting_vouchers voucher ON voucher.id=depreciation.accounting_voucher_id AND voucher.organization_id=depreciation.organization_id AND voucher.status='posted'
+               WHERE asset.id IS NULL OR voucher.id IS NULL
+               UNION ALL
+               SELECT disposal.id FROM fixed_asset_disposals disposal
+               LEFT JOIN fixed_assets asset ON asset.id=disposal.asset_id AND asset.organization_id=disposal.organization_id
+               LEFT JOIN accounting_vouchers voucher ON voucher.id=disposal.accounting_voucher_id AND voucher.organization_id=disposal.organization_id AND voucher.status='posted'
+               WHERE asset.id IS NULL OR voucher.id IS NULL
+               UNION ALL
+               SELECT tax.id FROM tax_transactions tax
+               LEFT JOIN tax_rules rule ON rule.id=tax.tax_rule_id AND rule.organization_id=tax.organization_id
+               LEFT JOIN accounting_vouchers voucher ON voucher.id=tax.accounting_voucher_id AND voucher.organization_id=tax.organization_id AND voucher.status='posted'
+               LEFT JOIN accounting_vouchers payment_voucher ON payment_voucher.id=tax.payment_accounting_voucher_id AND payment_voucher.organization_id=tax.organization_id AND payment_voucher.status='posted'
+               WHERE rule.id IS NULL OR voucher.id IS NULL OR (tax.payment_accounting_voucher_id IS NOT NULL AND payment_voucher.id IS NULL)
+               UNION ALL
+               SELECT allocation.id FROM accounting_dimension_allocations allocation
+               LEFT JOIN accounting_voucher_entries entry ON entry.id=allocation.voucher_entry_id AND entry.organization_id=allocation.organization_id
+               LEFT JOIN accounting_dimensions dimension ON dimension.id=allocation.dimension_id AND dimension.organization_id=allocation.organization_id
+               WHERE entry.id IS NULL OR dimension.id IS NULL
+               UNION ALL
+               SELECT match.id FROM bank_statement_matches match
+               LEFT JOIN bank_statement_lines statement_line ON statement_line.id=match.statement_line_id AND statement_line.organization_id=match.organization_id
+               LEFT JOIN accounting_voucher_entries entry ON entry.id=match.voucher_entry_id AND entry.organization_id=match.organization_id
+               WHERE statement_line.id IS NULL OR (match.voucher_entry_id IS NOT NULL AND entry.id IS NULL)
+             )",
+        )
+        .fetch_one(&mut *connection)
+        .await
+        .map_err(|error| format!("Unable to verify {context} Phase 3 accounting links: {error}"))?
+    } else {
+        0
+    };
+    if invalid_postings > 0
+        || duplicate_sources > 0
+        || broken_phase_two_links > 0
+        || broken_phase_three_links > 0
+    {
         return Err(format!(
-            "The {context} contains invalid accounting data ({invalid_postings} broken journals, {duplicate_sources} duplicate sources, {broken_phase_two_links} broken Phase 2 links)."
+            "The {context} contains invalid accounting data ({invalid_postings} broken journals, {duplicate_sources} duplicate sources, {broken_phase_two_links} broken Phase 2 links, {broken_phase_three_links} broken Phase 3 links)."
         ));
     }
     Ok(())

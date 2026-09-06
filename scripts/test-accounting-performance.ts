@@ -61,7 +61,7 @@ try {
   const voucher = db.prepare("INSERT INTO accounting_vouchers(id, organization_id, voucher_number, voucher_type, voucher_date, total_debit, total_credit, status, financial_year_id, source_type, source_id, total_debit_minor, total_credit_minor, is_system_generated, created_at, updated_at, finalized_at) VALUES (?, 'org:scale', ?, 'sale', ?, 118, 118, 'draft', 'fy:scale', 'SALES_INVOICE', ?, 11800, 11800, 1, datetime('now'), datetime('now'), datetime('now'))")
   const line = db.prepare("INSERT INTO accounting_voucher_entries(id, organization_id, voucher_id, account_id, account_type, line_no, debit, credit, debit_minor, credit_minor, created_at, updated_at) VALUES (?, 'org:scale', ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))")
   const post = db.prepare("UPDATE accounting_vouchers SET status = 'posted' WHERE id = ?")
-  for (let index = 0; index < 12_000; index += 1) {
+  for (let index = 0; index < 20_000; index += 1) {
     const id = `voucher:${index}`
     const date = `2026-${String(4 + (index % 9)).padStart(2, "0")}-${String(1 + (index % 27)).padStart(2, "0")}`
     voucher.run(id, `SALE-${index}`, date, `invoice:${index}`)
@@ -101,6 +101,9 @@ try {
     FROM accounting_voucher_entries line JOIN accounting_vouchers voucher ON voucher.id = line.voucher_id
     JOIN chart_of_accounts account ON account.id = line.account_id WHERE line.organization_id = 'org:scale'
     AND voucher.financial_year_id = 'fy:scale' AND voucher.status = 'posted' AND account.account_type IN ('ASSET','LIABILITY','EQUITY') GROUP BY account.account_type`).all())
+  const accountingSearch = timed(() => db.prepare("SELECT id,voucher_number,voucher_date,narration,total_debit_minor FROM accounting_vouchers WHERE organization_id='org:scale' AND financial_year_id='fy:scale' AND status='posted' AND (voucher_number LIKE '%SALE-19999%' OR reference_no LIKE '%SALE-19999%' OR narration LIKE '%SALE-19999%') ORDER BY voucher_date DESC LIMIT 50").all())
+  const auditTrail = timed(() => db.prepare("SELECT id,occurred_at,event_type,entity_type,entity_id FROM accounting_audit_events WHERE organization_id='org:scale' AND financial_year_id='fy:scale' AND event_type LIKE '%voucher.posted%' ORDER BY occurred_at DESC LIMIT 100").all())
+  const fixedAssetRegister = timed(() => db.prepare("SELECT id,asset_code,asset_name,written_down_value_minor,status FROM fixed_assets WHERE organization_id='org:scale' ORDER BY asset_code LIMIT 100").all())
 
   assert.equal(Number(integrity.result.invalid), 0)
   assert.equal((trialBalance.result as unknown[]).length, 2)
@@ -108,10 +111,10 @@ try {
   assert.ok(profitLoss.milliseconds < 1_500, `P&L took ${profitLoss.milliseconds.toFixed(1)}ms`)
   assert.ok(generalLedger.milliseconds < 1_500, `General ledger took ${generalLedger.milliseconds.toFixed(1)}ms`)
   assert.ok(integrity.milliseconds < 1_500, `Integrity scan took ${integrity.milliseconds.toFixed(1)}ms`)
-  for (const [name, measurement] of Object.entries({ productSearch, customerSearch, supplierSearch, invoiceList, purchaseList, payableAging, supplierPaymentList, journalList, balanceSheet })) assert.ok(measurement.milliseconds < 1_500, `${name} took ${measurement.milliseconds.toFixed(1)}ms`)
+  for (const [name, measurement] of Object.entries({ productSearch, customerSearch, supplierSearch, invoiceList, purchaseList, payableAging, supplierPaymentList, journalList, balanceSheet, accountingSearch, auditTrail, fixedAssetRegister })) assert.ok(measurement.milliseconds < 1_500, `${name} took ${measurement.milliseconds.toFixed(1)}ms`)
   const reopen = timed(() => { const connection = new DatabaseSync(databasePath, { readOnly: true }); connection.prepare("SELECT 1").get(); connection.close() })
   assert.ok(reopen.milliseconds < 1_500, `Database reopen took ${reopen.milliseconds.toFixed(1)}ms`)
-  console.log(JSON.stringify({ dataset: { products: 2_000, customers: 5_000, suppliers: 2_000, invoices: 20_000, invoiceLines: 40_000, purchases: 20_000, supplierPayments: 20_000, journals: 12_000, journalLines: 24_000 }, milliseconds: { databaseReopen: +reopen.milliseconds.toFixed(2), productSearch: +productSearch.milliseconds.toFixed(2), customerSearch: +customerSearch.milliseconds.toFixed(2), supplierSearch: +supplierSearch.milliseconds.toFixed(2), invoiceList: +invoiceList.milliseconds.toFixed(2), purchaseList: +purchaseList.milliseconds.toFixed(2), payableAging: +payableAging.milliseconds.toFixed(2), supplierPaymentList: +supplierPaymentList.milliseconds.toFixed(2), journalList: +journalList.milliseconds.toFixed(2), generalLedger: +generalLedger.milliseconds.toFixed(2), trialBalance: +trialBalance.milliseconds.toFixed(2), profitLoss: +profitLoss.milliseconds.toFixed(2), balanceSheet: +balanceSheet.milliseconds.toFixed(2), integrity: +integrity.milliseconds.toFixed(2) } }, null, 2))
+  console.log(JSON.stringify({ dataset: { products: 2_000, customers: 5_000, suppliers: 2_000, invoices: 20_000, invoiceLines: 40_000, purchases: 20_000, supplierPayments: 20_000, journals: 20_000, journalLines: 40_000, auditEvents: 20_000 }, milliseconds: { databaseReopen: +reopen.milliseconds.toFixed(2), productSearch: +productSearch.milliseconds.toFixed(2), customerSearch: +customerSearch.milliseconds.toFixed(2), supplierSearch: +supplierSearch.milliseconds.toFixed(2), invoiceList: +invoiceList.milliseconds.toFixed(2), purchaseList: +purchaseList.milliseconds.toFixed(2), payableAging: +payableAging.milliseconds.toFixed(2), supplierPaymentList: +supplierPaymentList.milliseconds.toFixed(2), journalList: +journalList.milliseconds.toFixed(2), accountingSearch: +accountingSearch.milliseconds.toFixed(2), auditTrail: +auditTrail.milliseconds.toFixed(2), fixedAssetRegister: +fixedAssetRegister.milliseconds.toFixed(2), generalLedger: +generalLedger.milliseconds.toFixed(2), trialBalance: +trialBalance.milliseconds.toFixed(2), profitLoss: +profitLoss.milliseconds.toFixed(2), balanceSheet: +balanceSheet.milliseconds.toFixed(2), integrity: +integrity.milliseconds.toFixed(2) } }, null, 2))
 } finally {
   db.close()
   rmSync(directory, { recursive: true, force: true })

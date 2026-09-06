@@ -45,7 +45,7 @@ import { FinancialYearDomainError, isoLocalDate, normalizeLocalDate, type Invoic
 import { allocateAuthoritativeStock } from "@/lib/inventory-availability"
 import { buildReversalJournal, buildSaleJournal, splitOutputGst } from "@/lib/accounting/journal"
 import { minorToMoney, moneyToMinor, multiplyMoneyToMinor } from "@/lib/accounting/money"
-import { accountingAccounts, accountingIntegrity, accountingReport, accountingStatus, createAccountingExpense, deactivateAccountingAccount, initializeAccounting, loadPostedSourceJournal, postManualJournal, replaceAccountingExpense, reverseAccountingExpense, reverseJournal, saveAccountingAccount, systemAccountMap } from "@/lib/offline/local/accounting"
+import { accountingAccounts, accountingIntegrity, accountingReport, accountingStatus, createAccountingExpense, deactivateAccountingAccount, initializeAccounting, loadPostedSourceJournal, postManualJournal, prepareAccountingVoucherNumber, replaceAccountingExpense, reverseAccountingExpense, reverseJournal, saveAccountingAccount, systemAccountMap } from "@/lib/offline/local/accounting"
 import {
   applyPartyAdvance,
   createPartyPayment,
@@ -61,6 +61,27 @@ import {
   unlockAccountingPeriod,
   updateBankReconciliation,
 } from "@/lib/offline/local/accounting-phase2"
+import {
+  allocateVoucherDimensions,
+  confirmBankStatementMatch,
+  createFixedAsset,
+  disposeFixedAsset,
+  importBankStatement,
+  importGstRecords,
+  phaseThreeAccountingReport,
+  phaseThreeReferenceData,
+  postAssetDepreciation,
+  postTcsTransaction,
+  postTdsTransaction,
+  recordTaxPayment,
+  saveAccountingBudget,
+  saveAccountingDimension,
+  saveEInvoicePreparation,
+  saveEwayBillPreparation,
+  saveGstReturnPeriod,
+  saveTaxRule,
+  saveVoucherSeries,
+} from "@/lib/offline/local/accounting-phase3"
 import {
   assertFinancialYearWriteAllowed,
   closeFinancialYear,
@@ -135,6 +156,23 @@ const dailyEndpoints = new Set([
   "/api/accounting/vouchers/reverse",
   "/api/accounting/reports",
   "/api/accounting/integrity",
+  "/api/accounting/voucher-series/save",
+  "/api/accounting/dimensions/save",
+  "/api/accounting/dimensions/allocate",
+  "/api/accounting/budgets/save",
+  "/api/accounting/assets/create",
+  "/api/accounting/assets/depreciate",
+  "/api/accounting/assets/dispose",
+  "/api/accounting/tax-rules/save",
+  "/api/accounting/tds/post",
+  "/api/accounting/tcs/post",
+  "/api/accounting/tax-payment/save",
+  "/api/accounting/gst-return/save",
+  "/api/accounting/gst-import",
+  "/api/accounting/e-invoice/prepare",
+  "/api/accounting/e-way-bill/prepare",
+  "/api/accounting/bank-statement/import",
+  "/api/accounting/bank-statement/match",
   "/api/notes/credit",
   "/api/notes/debit",
   "/api/expenses/list",
@@ -318,6 +356,12 @@ const datedMutationKeys: Record<string, string[]> = {
   "/api/accounting/bank-accounts/save": ["opening_date"],
   "/api/accounting/vouchers/create": ["voucher_date"],
   "/api/accounting/vouchers/reverse": ["reversal_date"],
+  "/api/accounting/assets/create": ["capitalization_date", "purchase_date"],
+  "/api/accounting/assets/depreciate": ["period_end"],
+  "/api/accounting/assets/dispose": ["disposal_date"],
+  "/api/accounting/tds/post": ["deduction_date"],
+  "/api/accounting/tcs/post": ["collection_date"],
+  "/api/accounting/tax-payment/save": ["payment_date"],
   "/api/notes/credit": ["note_date"],
   "/api/notes/debit": ["note_date"],
   "/api/expenses/create": ["expense_date"],
@@ -797,9 +841,10 @@ async function createInvoice(body: DataRow, organizationId: string) {
     transaction_type: localString(body.customer_gstin, localString(customer.gst_number)) ? "B2B" : "B2C",
     tax_category: localString(body.tax_category, "TAXABLE"),
   })
+  const voucherSeries = await prepareAccountingVoucherNumber(organizationId, financialYear.id, "SALES", "SALE")
   const journal = buildSaleJournal({
     id: createOfflineId("sale-voucher"), organizationId, financialYearId: financialYear.id,
-    voucherNumber: `SALE-${invoiceNumber}`, voucherType: "sale", voucherDate: invoiceDate,
+    voucherNumber: voucherSeries.voucherNumber, voucherType: "sale", voucherDate: invoiceDate,
     sourceType: "SALES_INVOICE", sourceId: invoiceId, referenceNo: invoiceNumber,
     narration: `Sales invoice ${invoiceNumber}`, systemGenerated: true, accounts,
     customerId: localString(body.customer_id),
@@ -1005,6 +1050,7 @@ async function createInvoice(body: DataRow, organizationId: string) {
     numberingMode: context.numberingMode as "CONTINUE" | "RESTART",
     financialYearId: financialYear.id,
     journal,
+    voucherSeries,
     accountingWarnings,
   })
 
@@ -1507,6 +1553,9 @@ async function saveChartAccount(body: DataRow, organizationId: string) {
     accountType: localString(body.account_type, localString(body.type, "EXPENSE")).toUpperCase() as "ASSET" | "LIABILITY" | "EQUITY" | "INCOME" | "EXPENSE",
     accountGroup: localString(body.account_group, localString(body.group)),
     normalBalance: localString(body.normal_balance, "debit").toLowerCase() as "debit" | "credit",
+    cashFlowClassification: (["OPERATING", "INVESTING", "FINANCING"].includes(localString(body.cash_flow_classification).toUpperCase())
+      ? localString(body.cash_flow_classification).toUpperCase()
+      : null) as "OPERATING" | "INVESTING" | "FINANCING" | null,
     notes: localString(body.notes),
   })
   return ok({ account_id: id })
@@ -1622,8 +1671,29 @@ async function phaseOneAccountingReport(url: URL, organizationId: string) {
   if (!financialYearId) return fail("Financial year is required.", 422)
   const requested = (url.searchParams.get("report") || url.searchParams.get("type") || "overview").replace("dashboard", "overview")
   const allowed = new Set(["overview", "journals", "general-ledger", "trial-balance", "profit-loss", "balance-sheet", "cash-flow", "expenses", "warnings"])
-  if (!allowed.has(requested)) {
-    return jsonResponse({ success: true, ...(await phaseTwoAccountingReport({
+  const phaseTwoReports = new Set([
+    "purchases", "purchase-returns", "suppliers", "payables-aging", "receivables-aging", "purchase-register",
+    "gst-purchase-register", "supplier-payments", "customer-receipts", "cash-book", "bank-book", "bank-accounts",
+    "bank-reconciliation", "sales-register", "gst-sales-register", "credit-notes", "gst-overview", "gstr-3b",
+    "gstr-1", "hsn-summary", "gst-validation", "period-locking",
+  ])
+  const withExportMetadata = async (result: DataRow) => {
+    const [organization] = await databaseManager.select<DataRow>("SELECT name,gst_number FROM organizations WHERE id=? AND deleted_at IS NULL LIMIT 1", [organizationId])
+    const year = (result.year as DataRow | undefined) || {}
+    return {
+      ...result,
+      exportMetadata: {
+        businessName: localString(organization?.name, "BezGrow business"),
+        gstin: localString(organization?.gst_number) || null,
+        financialYear: localString(year.label, financialYearId),
+        reportName: requested,
+        period: `${localString(result.from, localString(year.start_date))} to ${localString(result.to, localString(year.end_date))}`,
+        generatedAt: nowIso(),
+      },
+    }
+  }
+  if (!allowed.has(requested) && phaseTwoReports.has(requested)) {
+    return jsonResponse({ success: true, ...(await withExportMetadata(await phaseTwoAccountingReport({
       organizationId,
       financialYearId,
       report: requested,
@@ -1635,16 +1705,31 @@ async function phaseOneAccountingReport(url: URL, organizationId: string) {
       accountId: url.searchParams.get("account_id") || undefined,
       partyId: url.searchParams.get("party_id") || url.searchParams.get("bank_account_id") || undefined,
       status: url.searchParams.get("status") || undefined,
-    })) })
+    }))) })
   }
-  return jsonResponse({ success: true, ...(await accountingReport({
+  if (!allowed.has(requested)) {
+    return jsonResponse({ success: true, ...(await withExportMetadata(await phaseThreeAccountingReport({
+      organizationId,
+      financialYearId,
+      report: requested,
+      from: url.searchParams.get("from") || undefined,
+      to: url.searchParams.get("to") || undefined,
+      page: Number(url.searchParams.get("page") || 1),
+      limit: Number(url.searchParams.get("limit") || 100),
+      search: url.searchParams.get("search") || undefined,
+      partyId: url.searchParams.get("party_id") || url.searchParams.get("asset_id") || undefined,
+      dimensionId: url.searchParams.get("dimension_id") || undefined,
+      status: url.searchParams.get("status") || undefined,
+    }))) })
+  }
+  return jsonResponse({ success: true, ...(await withExportMetadata(await accountingReport({
     organizationId, financialYearId, report: requested as Parameters<typeof accountingReport>[0]["report"],
     from: url.searchParams.get("from") || undefined, to: url.searchParams.get("to") || undefined,
     accountId: url.searchParams.get("account_id") || undefined, page: Number(url.searchParams.get("page") || 1), limit: Number(url.searchParams.get("limit") || 100),
     transactionType: url.searchParams.get("transaction_type") || undefined,
     direction: url.searchParams.get("direction") === "desc" ? "desc" : "asc",
     search: url.searchParams.get("search") || undefined,
-  })) })
+  }))) })
 }
 
 async function professionalInventoryMovement(body: DataRow, organizationId: string) {
@@ -1953,7 +2038,11 @@ export async function localApiFetch(input: RequestInfo | URL, init: RequestInit 
     if (method === "GET" && url.pathname === "/api/accounting/reference-data") {
       const financialYearId = url.searchParams.get("financial_year_id") || ""
       if (!financialYearId) return { handled: true, response: fail("Financial year is required.", 422) }
-      return { handled: true, response: ok(await phaseTwoReferenceData(organizationId, financialYearId)) }
+      const [phaseTwo, phaseThree] = await Promise.all([
+        phaseTwoReferenceData(organizationId, financialYearId),
+        phaseThreeReferenceData(organizationId, financialYearId),
+      ])
+      return { handled: true, response: ok({ ...phaseTwo, ...phaseThree }) }
     }
     if (method === "POST" && url.pathname === "/api/accounting/advances/apply") {
       const partyType = localString(body?.party_type) === "customer" ? "customer" : "supplier"
@@ -1966,6 +2055,23 @@ export async function localApiFetch(input: RequestInfo | URL, init: RequestInit 
     if (method === "POST" && url.pathname === "/api/accounting/vouchers/reverse") return { handled: true, response: ok({ voucher: await reverseJournal({ organizationId, voucherId: localString(body?.voucher_id), reversalDate: normalizeLocalDate(localString(body?.reversal_date, isoLocalDate())), reason: localString(body?.reason) }) }) }
     if (method === "GET" && url.pathname === "/api/accounting/reports") return { handled: true, response: await phaseOneAccountingReport(url, organizationId) }
     if (method === "GET" && url.pathname === "/api/accounting/integrity") return { handled: true, response: ok({ integrity: await accountingIntegrity(organizationId, url.searchParams.get("financial_year_id")) }) }
+    if (method === "POST" && url.pathname === "/api/accounting/voucher-series/save") return { handled: true, response: ok(await saveVoucherSeries(organizationId, body || {})) }
+    if (method === "POST" && url.pathname === "/api/accounting/dimensions/save") return { handled: true, response: ok(await saveAccountingDimension(organizationId, body || {})) }
+    if (method === "POST" && url.pathname === "/api/accounting/dimensions/allocate") return { handled: true, response: ok(await allocateVoucherDimensions(organizationId, body || {})) }
+    if (method === "POST" && url.pathname === "/api/accounting/budgets/save") return { handled: true, response: ok(await saveAccountingBudget(organizationId, body || {})) }
+    if (method === "POST" && url.pathname === "/api/accounting/assets/create") return { handled: true, response: ok(await createFixedAsset(organizationId, body || {})) }
+    if (method === "POST" && url.pathname === "/api/accounting/assets/depreciate") return { handled: true, response: ok(await postAssetDepreciation(organizationId, body || {})) }
+    if (method === "POST" && url.pathname === "/api/accounting/assets/dispose") return { handled: true, response: ok(await disposeFixedAsset(organizationId, body || {})) }
+    if (method === "POST" && url.pathname === "/api/accounting/tax-rules/save") return { handled: true, response: ok(await saveTaxRule(organizationId, body || {})) }
+    if (method === "POST" && url.pathname === "/api/accounting/tds/post") return { handled: true, response: ok(await postTdsTransaction(organizationId, body || {})) }
+    if (method === "POST" && url.pathname === "/api/accounting/tcs/post") return { handled: true, response: ok(await postTcsTransaction(organizationId, body || {})) }
+    if (method === "POST" && url.pathname === "/api/accounting/tax-payment/save") return { handled: true, response: ok(await recordTaxPayment(organizationId, body || {})) }
+    if (method === "POST" && url.pathname === "/api/accounting/gst-return/save") return { handled: true, response: ok(await saveGstReturnPeriod(organizationId, body || {})) }
+    if (method === "POST" && url.pathname === "/api/accounting/gst-import") return { handled: true, response: ok(await importGstRecords(organizationId, body || {})) }
+    if (method === "POST" && url.pathname === "/api/accounting/e-invoice/prepare") return { handled: true, response: ok(await saveEInvoicePreparation(organizationId, body || {})) }
+    if (method === "POST" && url.pathname === "/api/accounting/e-way-bill/prepare") return { handled: true, response: ok(await saveEwayBillPreparation(organizationId, body || {})) }
+    if (method === "POST" && url.pathname === "/api/accounting/bank-statement/import") return { handled: true, response: ok(await importBankStatement(organizationId, body || {})) }
+    if (method === "POST" && url.pathname === "/api/accounting/bank-statement/match") return { handled: true, response: ok(await confirmBankStatementMatch(organizationId, body || {})) }
     if (method === "POST" && url.pathname === "/api/notes/credit") return { handled: true, response: body?.invoice_id ? ok(await createSalesCreditNote(organizationId, body || {})) : await noteCreate(body || {}, organizationId, "credit") }
     if (method === "POST" && url.pathname === "/api/notes/debit") return { handled: true, response: await noteCreate(body || {}, organizationId, "debit") }
     if (method === "GET" && url.pathname === "/api/expenses/list") return { handled: true, response: await listExpenses(url, organizationId) }

@@ -12,6 +12,8 @@ import {
 import { assertFinancialYearWriteAllowed, getFinancialYear } from "@/lib/offline/local/financial-years"
 import { getLocalDatabaseService, type SqlExecutor, type SqlValue } from "@/lib/offline/local/service"
 import { appendJournal } from "@/lib/offline/local/journal-posting"
+import { formatVoucherNumber } from "@/lib/accounting/phase3"
+import { isoLocalDate } from "@/lib/financial-years"
 
 type DataRow = Record<string, unknown>
 
@@ -26,12 +28,15 @@ export const DEFAULT_ACCOUNTS = [
   ["1300", "Other Current Assets", "ASSET", "CURRENT_ASSET", "debit", "OTHER_CURRENT_ASSETS"],
   ["1310", "Advances to Suppliers", "ASSET", "CURRENT_ASSET", "debit", "SUPPLIER_ADVANCES"],
   ["1500", "Fixed Assets", "ASSET", "FIXED_ASSET", "debit", "FIXED_ASSETS"],
+  ["1510", "Accumulated Depreciation", "ASSET", "ACCUMULATED_DEPRECIATION", "credit", "ACCUMULATED_DEPRECIATION"],
   ["2000", "Accounts Payable", "LIABILITY", "PAYABLE", "credit", "ACCOUNTS_PAYABLE"],
   ["2010", "Advances from Customers", "LIABILITY", "CURRENT_LIABILITY", "credit", "CUSTOMER_ADVANCES"],
   ["2100", "Output CGST", "LIABILITY", "TAX_LIABILITY", "credit", "OUTPUT_CGST"],
   ["2110", "Output SGST", "LIABILITY", "TAX_LIABILITY", "credit", "OUTPUT_SGST"],
   ["2120", "Output IGST", "LIABILITY", "TAX_LIABILITY", "credit", "OUTPUT_IGST"],
   ["2130", "Output Cess", "LIABILITY", "TAX_LIABILITY", "credit", "OUTPUT_CESS"],
+  ["2140", "TDS Payable", "LIABILITY", "TAX_LIABILITY", "credit", "TDS_PAYABLE"],
+  ["2150", "TCS Payable", "LIABILITY", "TAX_LIABILITY", "credit", "TCS_PAYABLE"],
   ["2190", "Other Current Liabilities", "LIABILITY", "CURRENT_LIABILITY", "credit", "OTHER_CURRENT_LIABILITIES"],
   ["2200", "Input CGST", "ASSET", "CURRENT_ASSET", "debit", "INPUT_CGST"],
   ["2210", "Input SGST", "ASSET", "CURRENT_ASSET", "debit", "INPUT_SGST"],
@@ -42,6 +47,7 @@ export const DEFAULT_ACCOUNTS = [
   ["3200", "Drawings", "EQUITY", "CAPITAL", "debit", "DRAWINGS"],
   ["4000", "Sales", "INCOME", "SALES_INCOME", "credit", "SALES"],
   ["4200", "Other Income", "INCOME", "OTHER_INCOME", "credit", "OTHER_INCOME"],
+  ["4210", "Gain on Asset Disposal", "INCOME", "OTHER_INCOME", "credit", "ASSET_DISPOSAL_GAIN"],
   ["5000", "Cost of Goods Sold", "EXPENSE", "COGS", "debit", "COGS"],
   ["5100", "Discount Allowed / Sales Discount", "EXPENSE", "DIRECT_EXPENSE", "debit", "SALES_DISCOUNT"],
   ["5200", "Freight / Delivery Expense", "EXPENSE", "DIRECT_EXPENSE", "debit", "FREIGHT_EXPENSE"],
@@ -55,6 +61,8 @@ export const DEFAULT_ACCOUNTS = [
   ["6060", "Repairs", "EXPENSE", "INDIRECT_EXPENSE", "debit", "REPAIRS_EXPENSE"],
   ["6070", "Internet / Communication", "EXPENSE", "INDIRECT_EXPENSE", "debit", "COMMUNICATION_EXPENSE"],
   ["6080", "Professional Fees", "EXPENSE", "INDIRECT_EXPENSE", "debit", "PROFESSIONAL_FEES"],
+  ["6090", "Depreciation Expense", "EXPENSE", "DEPRECIATION", "debit", "DEPRECIATION_EXPENSE"],
+  ["6100", "Loss on Asset Disposal", "EXPENSE", "OTHER_EXPENSE", "debit", "ASSET_DISPOSAL_LOSS"],
   ["6990", "Round Off / Rounding Adjustment", "EXPENSE", "INDIRECT_EXPENSE", "debit", "ROUND_OFF"],
 ] as const
 
@@ -112,10 +120,18 @@ export async function ensureDefaultAccountingAccounts(organizationId: string) {
       )
     }
     await tx.execute(
+      `UPDATE chart_of_accounts SET cash_flow_classification=CASE
+         WHEN system_role IN ('FIXED_ASSETS','ACCUMULATED_DEPRECIATION','DEPRECIATION_EXPENSE','ASSET_DISPOSAL_GAIN','ASSET_DISPOSAL_LOSS') THEN 'INVESTING'
+         WHEN system_role IN ('CAPITAL','OPENING_EQUITY','DRAWINGS') THEN 'FINANCING'
+         ELSE 'OPERATING' END
+       WHERE organization_id=? AND system_role IS NOT NULL AND cash_flow_classification IS NULL`,
+      [organizationId]
+    )
+    await tx.execute(
       `INSERT OR IGNORE INTO accounting_settings (
          organization_id, accounting_version, activation_date, opening_date, historical_policy,
          initialization_status, created_at, updated_at
-       ) VALUES (?, 1, date('now', 'localtime'), date('now', 'localtime'), 'CONTROLLED_OPENING', 'PENDING', ?, ?)`,
+       ) VALUES (?, 3, date('now', 'localtime'), date('now', 'localtime'), 'CONTROLLED_OPENING', 'PENDING', ?, ?)`,
       [organizationId, timestamp, timestamp]
     )
   })
@@ -148,6 +164,46 @@ export async function systemAccountMap(organizationId: string) {
   return map
 }
 
+export type PreparedAccountingVoucherNumber = {
+  id: string
+  voucherType: string
+  voucherNumber: string
+  prefix: string
+  suffix: string | null
+  padding: number
+  startingNumber: number
+  nextNumber: number
+}
+
+export async function prepareAccountingVoucherNumber(organizationId: string, financialYearId: string, voucherType: string, fallbackPrefix: string): Promise<PreparedAccountingVoucherNumber> {
+  const normalizedType = voucherType.trim().toUpperCase()
+  const db = await service.requireConnection("read")
+  const [year] = await db.select<DataRow>("SELECT label FROM financial_years WHERE organization_id=? AND id=?", [organizationId, financialYearId])
+  if (!year) throw new Error("Financial year was not found for voucher numbering.")
+  const [series] = await db.select<DataRow>("SELECT * FROM accounting_voucher_series WHERE organization_id=? AND financial_year_id=? AND voucher_type=? AND is_active=1", [organizationId, financialYearId, normalizedType])
+  const prefix = String(series?.prefix || fallbackPrefix).trim().toUpperCase()
+  const suffix = series?.suffix ? String(series.suffix) : null
+  const padding = Math.max(1, Math.min(12, Math.trunc(Number(series?.padding || 6))))
+  const startingNumber = Math.max(1, Math.trunc(Number(series?.starting_number || 1)))
+  const nextNumber = Math.max(startingNumber, Math.trunc(Number(series?.next_number || startingNumber)))
+  return {
+    id: String(series?.id || `voucher-series:${organizationId}:${financialYearId}:${normalizedType}`),
+    voucherType: normalizedType,
+    voucherNumber: formatVoucherNumber({ prefix, suffix, padding, nextNumber, financialYearLabel: String(year.label || "") }),
+    prefix, suffix, padding, startingNumber, nextNumber,
+  }
+}
+
+export async function advanceAccountingVoucherNumber(tx: SqlExecutor, organizationId: string, financialYearId: string, series: PreparedAccountingVoucherNumber) {
+  const timestamp = nowIso()
+  await tx.execute(
+    `INSERT INTO accounting_voucher_series (id,organization_id,financial_year_id,voucher_type,prefix,suffix,padding,starting_number,next_number,is_active,created_at,updated_at)
+     VALUES (?,?,?,?,?,?,?,?,?,1,?,?)
+     ON CONFLICT(organization_id,financial_year_id,voucher_type) DO UPDATE SET next_number=MAX(accounting_voucher_series.next_number,excluded.next_number),updated_at=excluded.updated_at`,
+    [series.id, organizationId, financialYearId, series.voucherType, series.prefix, series.suffix, series.padding, series.startingNumber, series.nextNumber + 1, timestamp, timestamp]
+  )
+}
+
 export async function saveAccountingAccount(input: {
   organizationId: string
   id?: string
@@ -156,6 +212,7 @@ export async function saveAccountingAccount(input: {
   accountType: "ASSET" | "LIABILITY" | "EQUITY" | "INCOME" | "EXPENSE"
   accountGroup?: string
   normalBalance: "debit" | "credit"
+  cashFlowClassification?: "OPERATING" | "INVESTING" | "FINANCING" | null
   notes?: string
 }) {
   await ensureDefaultAccountingAccounts(input.organizationId)
@@ -163,6 +220,7 @@ export async function saveAccountingAccount(input: {
   const name = input.accountName.trim()
   if (!code || !name) throw new Error("Account code and name are required.")
   const timestamp = nowIso()
+  const cashFlowClassification = input.cashFlowClassification || null
   const db = await service.requireConnection("read")
   const current = input.id
     ? (await db.select<DataRow>(
@@ -179,19 +237,27 @@ export async function saveAccountingAccount(input: {
     String(current.account_type) !== input.accountType
     || String(current.normal_balance) !== input.normalBalance
     || String(current.account_group || "") !== String(input.accountGroup || "").trim().toUpperCase()
+    || String(current.cash_flow_classification || "") !== String(cashFlowClassification || "")
   )) throw new Error("An account with posted history may be renamed, but its accounting classification cannot be changed.")
   const id = input.id || createOfflineId("account")
   await service.transaction(async (tx) => {
     await tx.execute(
       `INSERT INTO chart_of_accounts (
-         id, organization_id, account_code, account_name, account_type, account_group, normal_balance,
+         id, organization_id, account_code, account_name, account_type, account_group, normal_balance,cash_flow_classification,
          opening_balance, current_balance, is_system, is_cash_account, is_bank_account, is_active,
          notes, sync_status, created_at, updated_at
-       ) VALUES (?, ?, ?, ?, ?, ?, ?, 0, 0, 0, 0, 0, 1, ?, 'local', ?, ?)
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, 0, 0, 0, 0, 1, ?, 'local', ?, ?)
        ON CONFLICT(id) DO UPDATE SET account_code = excluded.account_code, account_name = excluded.account_name,
          account_type = excluded.account_type, account_group = excluded.account_group,
-         normal_balance = excluded.normal_balance, notes = excluded.notes, updated_at = excluded.updated_at`,
-      [id, input.organizationId, code, name, input.accountType, input.accountGroup?.trim().toUpperCase() || null, input.normalBalance, input.notes?.trim() || null, timestamp, timestamp]
+         normal_balance = excluded.normal_balance,cash_flow_classification=excluded.cash_flow_classification,notes = excluded.notes, updated_at = excluded.updated_at`,
+      [id, input.organizationId, code, name, input.accountType, input.accountGroup?.trim().toUpperCase() || null, input.normalBalance, cashFlowClassification, input.notes?.trim() || null, timestamp, timestamp]
+    )
+    await tx.execute(
+      `INSERT INTO accounting_audit_events (id,organization_id,financial_year_id,event_type,entity_type,entity_id,previous_state_json,new_state_json,source,occurred_at)
+       VALUES (?,?,NULL,?,?,?,?,?,'local',?)`,
+      [createOfflineId("accounting-audit"), input.organizationId, current ? "account.updated" : "account.created", "chart_of_account", id,
+        current ? JSON.stringify({ account_name: current.account_name, cash_flow_classification: current.cash_flow_classification }) : null,
+        JSON.stringify({ account_code: code, account_name: name, account_type: input.accountType, account_group: input.accountGroup?.trim().toUpperCase() || null, cash_flow_classification: cashFlowClassification }), timestamp]
     )
   })
   return id
@@ -210,6 +276,11 @@ export async function deactivateAccountingAccount(organizationId: string, id: st
   if (Number(account.is_system || 0)) throw new Error("System accounts cannot be deactivated.")
   await service.transaction(async (tx) => {
     await tx.execute("UPDATE chart_of_accounts SET is_active = 0, updated_at = ? WHERE organization_id = ? AND id = ?", [nowIso(), organizationId, id])
+    await tx.execute(
+      `INSERT INTO accounting_audit_events (id,organization_id,financial_year_id,event_type,entity_type,entity_id,previous_state_json,new_state_json,source,occurred_at)
+       VALUES (?,?,NULL,'account.deactivated','chart_of_account',?,?,?,'local',?)`,
+      [createOfflineId("accounting-audit"), organizationId, id, JSON.stringify({ is_active: 1 }), JSON.stringify({ is_active: 0 }), nowIso()]
+    )
   })
   return { preservedHistory: Boolean(account.has_history) }
 }
@@ -326,7 +397,7 @@ async function performAccountingInitialization(organizationId: string, openingDa
   return accountingStatus(organizationId)
 }
 
-export async function initializeAccounting(organizationId: string, openingDate = new Date().toISOString().slice(0, 10)) {
+export async function initializeAccounting(organizationId: string, openingDate = isoLocalDate()) {
   const existing = accountingInitializationPromises.get(organizationId)
   if (existing) return existing
   const initialization = performAccountingInitialization(organizationId, openingDate)
@@ -343,8 +414,10 @@ export async function accountingStatus(organizationId: string) {
   const db = await service.requireConnection("read")
   const [settings] = await db.select<DataRow>(
     `SELECT settings.*, voucher.voucher_number AS opening_voucher_number,
+       organization.name AS business_name, organization.gst_number AS business_gstin,
        (SELECT COUNT(*) FROM accounting_warnings warning WHERE warning.organization_id = settings.organization_id AND warning.status = 'OPEN') AS open_warnings
-     FROM accounting_settings settings LEFT JOIN accounting_vouchers voucher ON voucher.id = settings.opening_voucher_id
+     FROM accounting_settings settings JOIN organizations organization ON organization.id=settings.organization_id
+       LEFT JOIN accounting_vouchers voucher ON voucher.id = settings.opening_voucher_id
      WHERE settings.organization_id = ? LIMIT 1`,
     [organizationId]
   )
@@ -377,31 +450,18 @@ export async function postManualJournal(input: {
     }
     return { accountId: item.accountId, accountType: account.accountType, debitMinor: moneyToMinor(item.debit, "Debit"), creditMinor: moneyToMinor(item.credit, "Credit"), description: item.description?.trim() || null }
   })
-  const prefix = { journal: "JV", receipt: "RV", payment: "PV", contra: "CV", opening: "OP" }[input.voucherType]
-  const [sequence] = await db.select<DataRow>(
-    "SELECT next_number FROM accounting_sequences WHERE organization_id = ? AND financial_year_id = ? AND voucher_type = ? LIMIT 1",
-    [input.organizationId, year.id, input.voucherType]
-  )
-  const next = Math.max(1, Number(sequence?.next_number || 1))
-  const timestamp = nowIso()
+  const prefix = { journal: "JV", receipt: "REC", payment: "PAY", contra: "CONTRA", opening: "OPEN" }[input.voucherType]
+  const series = await prepareAccountingVoucherNumber(input.organizationId, year.id, input.voucherType, prefix)
   const draft = validateJournal({
     id: createOfflineId("voucher"), organizationId: input.organizationId, financialYearId: year.id,
-    voucherNumber: `${prefix}-${String(next).padStart(5, "0")}`, voucherType: input.voucherType,
+    voucherNumber: series.voucherNumber, voucherType: input.voucherType,
     voucherDate: input.voucherDate, sourceType: "MANUAL_JOURNAL", sourceId: createOfflineId("manual-source"),
     referenceNo: input.referenceNo?.trim() || null, narration: input.narration.trim() || "Manual journal",
     systemGenerated: false, createdBy: input.createdBy || null, lines,
   })
   await service.transaction(async (tx) => {
-    await tx.execute(
-      `INSERT OR IGNORE INTO accounting_sequences (id, organization_id, financial_year_id, voucher_type, prefix, next_number, updated_at)
-       VALUES (?, ?, ?, ?, ?, 1, ?)`,
-      [`accounting-sequence:${input.organizationId}:${year.id}:${input.voucherType}`, input.organizationId, year.id, input.voucherType, prefix, timestamp]
-    )
     await appendJournal(tx, draft)
-    await tx.execute(
-      "UPDATE accounting_sequences SET next_number = MAX(next_number, ?), updated_at = ? WHERE organization_id = ? AND financial_year_id = ? AND voucher_type = ?",
-      [next + 1, timestamp, input.organizationId, year.id, input.voucherType]
-    )
+    await advanceAccountingVoucherNumber(tx, input.organizationId, year.id, series)
   })
   return draft
 }
@@ -556,9 +616,10 @@ async function prepareAccountingExpense(input: AccountingExpenseInput) {
   const outputCess = system.get("OUTPUT_CESS")
   if (!inputCgst || !inputSgst || !inputIgst) throw new Error("Input GST accounts are missing.")
   const expenseId = createOfflineId("expense")
+  const voucherSeries = await prepareAccountingVoucherNumber(input.organizationId, year.id, "EXPENSE", "EXP")
   const expensePosting = buildExpenseJournal({
     id: createOfflineId("expense-voucher"), organizationId: input.organizationId, financialYearId: year.id,
-    voucherNumber: `EXP-${expenseId.slice(-8).toUpperCase()}`, voucherType: "expense", voucherDate: input.expenseDate,
+    voucherNumber: voucherSeries.voucherNumber, voucherType: "expense", voucherDate: input.expenseDate,
     sourceType: "EXPENSE", sourceId: expenseId, referenceNo: input.referenceNo?.trim() || null,
     narration: input.description.trim() || "Expense", systemGenerated: true,
     expenseAccount: rowAccount(expenseAccount), paymentAccount: rowAccount(paymentAccount),
@@ -576,7 +637,7 @@ async function prepareAccountingExpense(input: AccountingExpenseInput) {
   const journal = expensePosting.journal
   const timestamp = nowIso()
   const isUnpaid = String(paymentAccount.account_type) === "LIABILITY"
-  return { expenseId, expensePosting, journal, timestamp, isUnpaid, financialYearId: year.id }
+  return { expenseId, expensePosting, journal, timestamp, isUnpaid, financialYearId: year.id, voucherSeries }
 }
 
 async function insertAccountingExpense(tx: SqlExecutor, input: AccountingExpenseInput, prepared: Awaited<ReturnType<typeof prepareAccountingExpense>>, revision = 1, replacesExpenseId: string | null = null) {
@@ -602,6 +663,7 @@ async function insertAccountingExpense(tx: SqlExecutor, input: AccountingExpense
     ]
   )
   await appendJournal(tx, journal)
+  await advanceAccountingVoucherNumber(tx, input.organizationId, financialYearId, prepared.voucherSeries)
   await tx.execute(
     `INSERT INTO gst_transaction_classifications (id, organization_id, financial_year_id, source_type, source_id,
       registration_type, transaction_type, supply_type, tax_category, reverse_charge, itc_status, created_at, updated_at)
@@ -791,22 +853,39 @@ export async function accountingReport(input: {
       [input.organizationId, input.accountId, input.financialYearId, from]
     )
     const transactionType = input.transactionType && input.transactionType !== "all" ? input.transactionType : null
-    const periodValues: SqlValue[] = transactionType
-      ? [input.organizationId, input.accountId, input.financialYearId, from, to, transactionType]
-      : [input.organizationId, input.accountId, input.financialYearId, from, to]
+    const search = input.search?.trim() || null
+    const searchTerm = search ? `%${search}%` : null
+    const normalizedAmount = search && /^-?[\d,]+(?:\.\d{1,2})?$/.test(search) ? Math.abs(moneyToMinor(search.replaceAll(",", ""), "Ledger search amount")) : null
+    const searchClause = search
+      ? `AND (voucher.voucher_number LIKE ? OR voucher.narration LIKE ? OR voucher.reference_no LIKE ? OR voucher.source_type LIKE ?
+           OR line.description LIKE ? OR customer.name LIKE ? OR supplier.name LIKE ?
+           OR EXISTS (SELECT 1 FROM accounting_voucher_entries other_line JOIN chart_of_accounts other_account ON other_account.id=other_line.account_id WHERE other_line.voucher_id=voucher.id AND other_line.account_id<>line.account_id AND other_account.account_name LIKE ?)
+           ${normalizedAmount !== null ? "OR line.debit_minor=? OR line.credit_minor=?" : ""})`
+      : ""
+    const periodValues: SqlValue[] = [input.organizationId, input.accountId, input.financialYearId, from, to]
+    if (transactionType) periodValues.push(transactionType)
+    if (searchTerm) {
+      periodValues.push(...Array.from({ length: 8 }, () => searchTerm))
+      if (normalizedAmount !== null) periodValues.push(normalizedAmount, normalizedAmount)
+    }
     const [count] = await db.select<DataRow>(
       `SELECT COUNT(*) count FROM accounting_voucher_entries line JOIN accounting_vouchers voucher ON voucher.id = line.voucher_id
+       LEFT JOIN customers customer ON customer.id=line.customer_id LEFT JOIN suppliers supplier ON supplier.id=line.supplier_id
        WHERE line.organization_id = ? AND line.account_id = ? AND voucher.status = 'posted'
-         AND voucher.financial_year_id = ? AND voucher.voucher_date BETWEEN ? AND ? ${transactionType ? "AND voucher.voucher_type = ?" : ""}`,
+         AND voucher.financial_year_id = ? AND voucher.voucher_date BETWEEN ? AND ? ${transactionType ? "AND voucher.voucher_type = ?" : ""} ${searchClause}`,
       periodValues
     )
     const rows = await db.select<DataRow>(
-      `SELECT voucher.voucher_date, voucher.voucher_number, voucher.voucher_type, voucher.reference_no, voucher.narration,
-         line.line_no, line.description, line.debit_minor, line.credit_minor,
+      `SELECT voucher.id voucher_id,voucher.voucher_date,voucher.voucher_number,voucher.voucher_type,voucher.reference_no,voucher.narration,
+         voucher.source_type,voucher.source_id,voucher.reversal_of_voucher_id,line.line_no,line.description,line.debit_minor,line.credit_minor,
+         COALESCE(customer.name,supplier.name,
+           (SELECT GROUP_CONCAT(other_account.account_name, ', ') FROM accounting_voucher_entries other_line JOIN chart_of_accounts other_account ON other_account.id=other_line.account_id WHERE other_line.voucher_id=voucher.id AND other_line.account_id<>line.account_id),
+           '—') counterparty,
          ? + SUM(line.debit_minor - line.credit_minor) OVER (ORDER BY voucher.voucher_date, voucher.created_at, line.line_no, line.id) AS running_balance_minor
        FROM accounting_voucher_entries line JOIN accounting_vouchers voucher ON voucher.id = line.voucher_id
+       LEFT JOIN customers customer ON customer.id=line.customer_id LEFT JOIN suppliers supplier ON supplier.id=line.supplier_id
        WHERE line.organization_id = ? AND line.account_id = ? AND voucher.status = 'posted'
-         AND voucher.financial_year_id = ? AND voucher.voucher_date BETWEEN ? AND ? ${transactionType ? "AND voucher.voucher_type = ?" : ""}
+         AND voucher.financial_year_id = ? AND voucher.voucher_date BETWEEN ? AND ? ${transactionType ? "AND voucher.voucher_type = ?" : ""} ${searchClause}
        ORDER BY voucher.voucher_date ${input.direction === "desc" ? "DESC" : "ASC"}, voucher.created_at ${input.direction === "desc" ? "DESC" : "ASC"}, line.line_no ${input.direction === "desc" ? "DESC" : "ASC"}, line.id ${input.direction === "desc" ? "DESC" : "ASC"} LIMIT ? OFFSET ?`,
       [Number(opening?.balance_minor || 0), ...periodValues, limit, (page - 1) * limit]
     )
@@ -814,7 +893,7 @@ export async function accountingReport(input: {
   }
 
   const balances = await db.select<DataRow>(
-    `SELECT account.id, account.account_code, account.account_name, account.account_type, account.account_group, account.normal_balance,
+    `SELECT account.id, account.account_code, account.account_name, account.account_type, account.account_group, account.normal_balance,account.system_role,account.cash_flow_classification,
        COALESCE(SUM(CASE WHEN voucher.voucher_date < ? THEN line.debit_minor - line.credit_minor ELSE 0 END), 0) AS opening_minor,
        COALESCE(SUM(CASE WHEN voucher.voucher_date BETWEEN ? AND ? THEN line.debit_minor ELSE 0 END), 0) AS debit_minor,
        COALESCE(SUM(CASE WHEN voucher.voucher_date BETWEEN ? AND ? THEN line.credit_minor ELSE 0 END), 0) AS credit_minor,
@@ -837,30 +916,94 @@ export async function accountingReport(input: {
     }))
   const byType = (types: string[]) => active.filter((row) => types.includes(String(row.account_type)))
   const signed = (row: DataRow) => Number(row.closing_minor || 0)
-  const incomeMinor = byType(["INCOME"]).reduce((sum, row) => sum - signed(row), 0)
-  const expenseMinor = byType(["EXPENSE"]).reduce((sum, row) => sum + signed(row), 0)
-  const cogsMinor = active.filter((row) => row.account_group === "COGS").reduce((sum, row) => sum + signed(row), 0)
-  const operatingExpenseMinor = expenseMinor - cogsMinor
+  const periodSigned = (row: DataRow) => Number(row.debit_minor || 0) - Number(row.credit_minor || 0)
+  const incomeMinor = byType(["INCOME"]).reduce((sum, row) => sum - periodSigned(row), 0)
+  const expenseMinor = byType(["EXPENSE"]).reduce((sum, row) => sum + periodSigned(row), 0)
+  const closingIncomeMinor = byType(["INCOME"]).reduce((sum, row) => sum - signed(row), 0)
+  const closingExpenseMinor = byType(["EXPENSE"]).reduce((sum, row) => sum + signed(row), 0)
+  const cogsMinor = active.filter((row) => row.account_group === "COGS").reduce((sum, row) => sum + periodSigned(row), 0)
+  const depreciationMinor = active.filter((row) => row.system_role === "DEPRECIATION_EXPENSE").reduce((sum, row) => sum + periodSigned(row), 0)
+  const otherExpenseMinor = active.filter((row) => row.account_group === "OTHER_EXPENSE").reduce((sum, row) => sum + periodSigned(row), 0)
+  const otherIncomeMinor = active.filter((row) => row.account_group === "OTHER_INCOME").reduce((sum, row) => sum - periodSigned(row), 0)
+  const salesMinor = incomeMinor - otherIncomeMinor
+  const operatingExpenseMinor = expenseMinor - cogsMinor - depreciationMinor - otherExpenseMinor
   const cashRows = active.filter((row) => ["CASH", "BANK"].includes(String(row.account_group)))
   const integrity = await accountingIntegrity(input.organizationId, input.financialYearId)
   if (input.report === "trial-balance") {
     return { report: input.report, year, from, to, rows: active, totalDebitMinor: active.reduce((sum, row) => sum + Math.max(0, signed(row)), 0), totalCreditMinor: active.reduce((sum, row) => sum + Math.max(0, -signed(row)), 0), integrity }
   }
-  if (input.report === "profit-loss") return { report: input.report, year, from, to, income: byType(["INCOME"]), expenses: byType(["EXPENSE"]), incomeMinor, cogsMinor, grossProfitMinor: incomeMinor - cogsMinor, operatingExpenseMinor, expenseMinor, netProfitMinor: incomeMinor - expenseMinor, integrity }
+  if (input.report === "profit-loss") {
+    const grossProfitMinor = salesMinor - cogsMinor
+    const ebitdaMinor = grossProfitMinor - operatingExpenseMinor
+    const operatingProfitMinor = ebitdaMinor - depreciationMinor
+    const profitBeforeTaxMinor = incomeMinor - expenseMinor
+    return { report: input.report, year, from, to,
+      income: byType(["INCOME"]).map((row) => ({ ...row, period_minor: -periodSigned(row) })),
+      expenses: byType(["EXPENSE"]).map((row) => ({ ...row, period_minor: periodSigned(row) })),
+      incomeMinor, salesMinor, netRevenueMinor: salesMinor, otherIncomeMinor, cogsMinor, grossProfitMinor, operatingExpenseMinor, ebitdaMinor, depreciationMinor, operatingProfitMinor, otherExpenseMinor, expenseMinor, profitBeforeTaxMinor, netProfitMinor: profitBeforeTaxMinor, taxProvisionMinor: null, integrity }
+  }
   if (input.report === "balance-sheet") {
-    const assets = byType(["ASSET"])
-    const liabilities = byType(["LIABILITY"])
-    const equityRows = byType(["EQUITY"])
+    const statementGroup = (row: DataRow) => {
+      const group = String(row.account_group || "")
+      if (row.account_type === "ASSET") {
+        if (group === "CASH") return "Current Assets · Cash"
+        if (group === "BANK") return "Current Assets · Bank"
+        if (group === "RECEIVABLE") return "Current Assets · Accounts Receivable"
+        if (group === "INVENTORY") return "Current Assets · Inventory"
+        if (["FIXED_ASSET", "ACCUMULATED_DEPRECIATION"].includes(group)) return "Non-Current Assets · Fixed Assets"
+        return "Current Assets · Other"
+      }
+      if (row.account_type === "LIABILITY") {
+        if (group === "PAYABLE") return "Current Liabilities · Accounts Payable"
+        if (group === "TAX_LIABILITY") return "Current Liabilities · Tax Liabilities"
+        return "Current Liabilities · Other"
+      }
+      return "Equity · Capital and Retained Earnings"
+    }
+    const assets = byType(["ASSET"]).map((row) => ({ ...row, statement_group: statementGroup(row) }))
+    const liabilities = byType(["LIABILITY"]).map((row) => ({ ...row, statement_group: statementGroup(row) }))
+    const equityRows = byType(["EQUITY"]).map((row) => ({ ...row, statement_group: statementGroup(row) }))
     const assetMinor = assets.reduce((sum, row) => sum + signed(row), 0)
     const liabilitiesMinor = liabilities.reduce((sum, row) => sum - signed(row), 0)
-    const equityMinor = equityRows.reduce((sum, row) => sum - signed(row), 0) + incomeMinor - expenseMinor
-    return { report: input.report, year, from, to, assets, liabilities, equity: equityRows, assetMinor, liabilitiesMinor, equityMinor, differenceMinor: assetMinor - liabilitiesMinor - equityMinor, integrity }
+    const currentEarningsMinor = closingIncomeMinor - closingExpenseMinor
+    const equityMinor = equityRows.reduce((sum, row) => sum - signed(row), 0) + currentEarningsMinor
+    return { report: input.report, year, from, to, assets, liabilities, equity: equityRows, assetMinor, liabilitiesMinor, equityMinor, currentEarningsMinor, differenceMinor: assetMinor - liabilitiesMinor - equityMinor, integrity }
   }
   if (input.report === "cash-flow") {
     const openingMinor = cashRows.reduce((sum, row) => sum + Number(row.opening_minor || 0), 0)
     const inflowMinor = cashRows.reduce((sum, row) => sum + Number(row.debit_minor || 0), 0)
     const outflowMinor = cashRows.reduce((sum, row) => sum + Number(row.credit_minor || 0), 0)
-    return { report: input.report, year, from, to, rows: cashRows, openingMinor, inflowMinor, outflowMinor, netMovementMinor: inflowMinor - outflowMinor, closingMinor: openingMinor + inflowMinor - outflowMinor, sections: [{ name: "Operating activities", movementMinor: inflowMinor - outflowMinor }, { name: "Investing activities", movementMinor: 0 }, { name: "Financing activities", movementMinor: 0 }], classificationBasis: "Conservative Phase 1 cash-account reconciliation; unclassified cash movements are operating until account groups are expanded.", integrity }
+    const movements = await db.select<DataRow>(
+      `WITH voucher_cash AS (
+         SELECT voucher.id,SUM(cash_line.debit_minor-cash_line.credit_minor) movement_minor
+         FROM accounting_vouchers voucher
+         JOIN accounting_voucher_entries cash_line ON cash_line.voucher_id=voucher.id
+         JOIN chart_of_accounts cash_account ON cash_account.id=cash_line.account_id AND cash_account.account_group IN ('CASH','BANK')
+         WHERE voucher.organization_id=? AND voucher.financial_year_id=? AND voucher.status='posted' AND voucher.voucher_date BETWEEN ? AND ?
+         GROUP BY voucher.id
+       ), voucher_class AS (
+         SELECT voucher.id,CASE
+           WHEN COUNT(DISTINCT counterpart.cash_flow_classification)=1 THEN MAX(counterpart.cash_flow_classification)
+           ELSE 'UNCLASSIFIED' END classification
+         FROM accounting_vouchers voucher
+         JOIN accounting_voucher_entries other_line ON other_line.voucher_id=voucher.id
+         JOIN chart_of_accounts counterpart ON counterpart.id=other_line.account_id AND counterpart.account_group NOT IN ('CASH','BANK')
+         WHERE voucher.organization_id=? AND voucher.financial_year_id=? AND voucher.status='posted' AND voucher.voucher_date BETWEEN ? AND ?
+         GROUP BY voucher.id
+       )
+       SELECT COALESCE(voucher_class.classification,'UNCLASSIFIED') classification,COALESCE(SUM(voucher_cash.movement_minor),0) movement_minor
+       FROM voucher_cash LEFT JOIN voucher_class ON voucher_class.id=voucher_cash.id
+       GROUP BY COALESCE(voucher_class.classification,'UNCLASSIFIED')`,
+      [input.organizationId, input.financialYearId, from, to, input.organizationId, input.financialYearId, from, to]
+    )
+    const classified = new Map(movements.map((row) => [String(row.classification || "UNCLASSIFIED"), Number(row.movement_minor || 0)]))
+    const sections = [
+      { name: "Operating activities", classification: "OPERATING", movementMinor: classified.get("OPERATING") || 0 },
+      { name: "Investing activities", classification: "INVESTING", movementMinor: classified.get("INVESTING") || 0 },
+      { name: "Financing activities", classification: "FINANCING", movementMinor: classified.get("FINANCING") || 0 },
+      { name: "Unclassified cash movements", classification: "UNCLASSIFIED", movementMinor: classified.get("UNCLASSIFIED") || 0 },
+    ]
+    return { report: input.report, year, from, to, rows: cashRows, openingMinor, inflowMinor, outflowMinor, netMovementMinor: inflowMinor - outflowMinor, closingMinor: openingMinor + inflowMinor - outflowMinor, sections, classificationBasis: "Journal-derived cash movements use the controlled classification on each non-cash ledger. Mixed or missing classifications remain visibly unclassified; BezGrow never guesses them.", integrity }
   }
   if (input.report === "expenses") {
     const page = Math.max(1, input.page || 1)
@@ -878,5 +1021,9 @@ export async function accountingReport(input: {
     const rows = await db.select<DataRow>("SELECT * FROM accounting_warnings WHERE organization_id = ? ORDER BY status, created_at DESC", [input.organizationId])
     return { report: input.report, year, from, to, rows, integrity }
   }
-  return { report: "overview", year, from, to, incomeMinor, expenseMinor, cogsMinor, netProfitMinor: incomeMinor - expenseMinor, cashMinor: cashRows.reduce((sum, row) => sum + signed(row), 0), inventoryMinor: active.filter((row) => row.account_group === "INVENTORY").reduce((sum, row) => sum + signed(row), 0), receivablesMinor: active.filter((row) => row.account_group === "RECEIVABLE").reduce((sum, row) => sum + signed(row), 0), payablesMinor: active.filter((row) => row.account_group === "PAYABLE").reduce((sum, row) => sum - signed(row), 0), integrity }
+  const cashOnHandMinor = cashRows.filter((row) => row.account_group === "CASH").reduce((sum, row) => sum + signed(row), 0)
+  const bankMinor = cashRows.filter((row) => row.account_group === "BANK").reduce((sum, row) => sum + signed(row), 0)
+  const gstAssetMinor = active.filter((row) => String(row.system_role || "").startsWith("INPUT_")).reduce((sum, row) => sum + signed(row), 0)
+  const gstLiabilityMinor = active.filter((row) => String(row.system_role || "").startsWith("OUTPUT_")).reduce((sum, row) => sum - signed(row), 0)
+  return { report: "overview", year, from, to, incomeMinor, expenseMinor, cogsMinor, grossProfitMinor: salesMinor - cogsMinor, netProfitMinor: incomeMinor - expenseMinor, cashMinor: cashOnHandMinor + bankMinor, cashOnHandMinor, bankMinor, inventoryMinor: active.filter((row) => row.account_group === "INVENTORY").reduce((sum, row) => sum + signed(row), 0), receivablesMinor: active.filter((row) => row.account_group === "RECEIVABLE").reduce((sum, row) => sum + signed(row), 0), payablesMinor: active.filter((row) => row.account_group === "PAYABLE").reduce((sum, row) => sum - signed(row), 0), gstPositionMinor: gstLiabilityMinor - gstAssetMinor, integrity }
 }

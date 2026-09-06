@@ -11,6 +11,7 @@ type StatementPayload = { query: string; bindValues?: SqlValue[]; ignoreDuplicat
 const directory = mkdtempSync(path.join(tmpdir(), "bezgrow-phase2-integration-"))
 const databasePath = path.join(directory, "business.db")
 const db = new DatabaseSync(databasePath)
+let injectedFailurePattern: RegExp | null = null
 
 Object.defineProperty(globalThis, "window", { value: globalThis, configurable: true })
 Object.defineProperty(globalThis, "location", { value: { hostname: "127.0.0.1", port: "43123" }, configurable: true })
@@ -20,7 +21,12 @@ function payloadStatement(payload: unknown) {
   return (payload as { statement: StatementPayload }).statement
 }
 
+function voucherNumber(voucherId: unknown) {
+  return String((db.prepare("SELECT voucher_number FROM accounting_vouchers WHERE id=?").get(String(voucherId)) as { voucher_number: string }).voucher_number)
+}
+
 function run(statement: StatementPayload) {
+  if (injectedFailurePattern?.test(statement.query)) throw new Error("injected_accounting_transaction_failure")
   const values = statement.bindValues || []
   if (values.length) return Number(db.prepare(statement.query).run(...values).changes)
   db.exec(statement.query)
@@ -126,6 +132,17 @@ try {
   assert.equal(Number((db.prepare("SELECT current_balance FROM suppliers WHERE id=?").get(openingPayableSupplier.supplier_id) as { current_balance: number }).current_balance), 0)
   assert.equal(String((db.prepare("SELECT document_type FROM payment_allocations WHERE document_id=?").get(openingDocument?.id) as { document_type: string }).document_type), "supplier_opening")
 
+  const purchaseCountBeforeFailure = Number((db.prepare("SELECT COUNT(*) count FROM purchase_invoices").get() as { count: number }).count)
+  injectedFailurePattern = /INSERT INTO accounting_vouchers/
+  await assert.rejects(() => phase2.createPurchase("org:integration", {
+    supplier_id: supplier.supplier_id, supplier_invoice_number: "ROLLBACK-PURCHASE", purchase_date: "2026-09-05",
+    place_of_supply: "MH", supply_type: "INTRA_STATE", tax_category: "TAXABLE", itc_status: "ELIGIBLE",
+    items: [{ product_id: "product:medicine", product_name: "Batch Medicine", hsn_code: "300490", quantity: 1, unit: "box", unit_cost: 100, gst_rate: 18, purchase_classification: "INVENTORY", warehouse_id: "warehouse:main", batch_no: "ROLLBACK-BATCH" }],
+  }), /injected_accounting_transaction_failure/)
+  injectedFailurePattern = null
+  assert.equal(Number((db.prepare("SELECT COUNT(*) count FROM purchase_invoices").get() as { count: number }).count), purchaseCountBeforeFailure)
+  assert.equal(Number((db.prepare("SELECT stock FROM products WHERE id='product:medicine'").get() as { stock: number }).stock), 0)
+
   const purchase = await phase2.createPurchase("org:integration", {
     supplier_id: supplier.supplier_id,
     supplier_invoice_number: "SUP-2026-001",
@@ -152,9 +169,21 @@ try {
     }],
   })
   assert.equal("outstanding_minor" in purchase ? purchase.outstanding_minor : null, 23_600)
+  assert.equal(voucherNumber(purchase.accounting_voucher_id), "PUR/26-27/000001", "A rolled-back purchase must not consume the first purchase voucher number.")
   assert.equal(Number((db.prepare("SELECT stock FROM products WHERE id='product:medicine'").get() as { stock: number }).stock), 2)
   assert.equal(Number((db.prepare("SELECT quantity FROM stock_batches WHERE source_id=?").get(purchase.purchase_id) as { quantity: number }).quantity), 2)
   assert.equal(Number((db.prepare("SELECT total_debit_minor-total_credit_minor balance FROM accounting_vouchers WHERE id=?").get(purchase.accounting_voucher_id) as { balance: number }).balance), 0)
+
+  const outstandingBeforeFailedPayment = Number((db.prepare("SELECT outstanding_minor FROM purchase_invoices WHERE id=?").get(purchase.purchase_id) as { outstanding_minor: number }).outstanding_minor)
+  const paymentCountBeforeFailure = Number((db.prepare("SELECT COUNT(*) count FROM payments").get() as { count: number }).count)
+  injectedFailurePattern = /INSERT INTO accounting_vouchers/
+  await assert.rejects(() => phase2.createPartyPayment("org:integration", {
+    party_id: supplier.supplier_id, payment_date: "2026-09-06", amount: 10, payment_account_id: cash.id,
+    allocations: [{ document_id: purchase.purchase_id, allocation_amount: 10 }],
+  }, "supplier"), /injected_accounting_transaction_failure/)
+  injectedFailurePattern = null
+  assert.equal(Number((db.prepare("SELECT COUNT(*) count FROM payments").get() as { count: number }).count), paymentCountBeforeFailure)
+  assert.equal(Number((db.prepare("SELECT outstanding_minor FROM purchase_invoices WHERE id=?").get(purchase.purchase_id) as { outstanding_minor: number }).outstanding_minor), outstandingBeforeFailedPayment)
 
   const payment = await phase2.createPartyPayment("org:integration", {
     party_id: supplier.supplier_id,
@@ -166,6 +195,7 @@ try {
     allocations: [{ document_id: purchase.purchase_id, allocation_amount: 100 }],
   }, "supplier")
   assert.equal(payment.allocated_minor, 10_000)
+  assert.equal(voucherNumber(payment.accounting_voucher_id), "PAY/26-27/000002", "A rolled-back payment must not leave a gap in the payment series.")
   assert.equal(Number((db.prepare("SELECT outstanding_minor FROM purchase_invoices WHERE id=?").get(purchase.purchase_id) as { outstanding_minor: number }).outstanding_minor), 13_600)
 
   const purchaseReturn = await phase2.createPurchaseReturn("org:integration", {
@@ -181,6 +211,7 @@ try {
     items: [{ product_id: "product:medicine", product_name: "Batch Medicine", quantity: 1, unit_cost: 100, gst_rate: 18, purchase_classification: "INVENTORY", warehouse_id: "warehouse:main" }],
   })
   assert.equal(purchaseReturn.payable_reduction_minor, 11_800)
+  assert.equal(voucherNumber(purchaseReturn.accounting_voucher_id), "DN/26-27/000001")
   assert.equal(Number((db.prepare("SELECT stock FROM products WHERE id='product:medicine'").get() as { stock: number }).stock), 1)
   assert.equal(Number((db.prepare("SELECT outstanding_minor FROM purchase_invoices WHERE id=?").get(purchase.purchase_id) as { outstanding_minor: number }).outstanding_minor), 1_800)
   await phase2.applyPartyAdvance("org:integration", {
@@ -236,6 +267,7 @@ try {
     allocations: [{ document_id: "invoice:credit-source", allocation_amount: 100 }],
   }, "customer")
   assert.equal(receipt.advance_minor, 5_000)
+  assert.equal(voucherNumber(receipt.accounting_voucher_id), "REC/26-27/000001")
   assert.equal(Number((db.prepare("SELECT current_balance FROM customers WHERE id='customer:one'").get() as { current_balance: number }).current_balance), 18)
   const customerAdvance = db.prepare("SELECT id FROM party_advances WHERE payment_id=?").get(receipt.payment_id) as { id: string }
   await phase2.applyPartyAdvance("org:integration", {
@@ -254,6 +286,7 @@ try {
     items: [{ invoice_item_id: "invoice-item:credit-source", product_id: "product:medicine", quantity: 1 }],
   })
   assert.equal(creditNote.customer_advance_minor, 11_800)
+  assert.equal(voucherNumber(creditNote.accounting_voucher_id), "CN/26-27/000001")
   assert.equal(Number((db.prepare("SELECT stock FROM products WHERE id='product:medicine'").get() as { stock: number }).stock), 1)
   assert.equal(Number((db.prepare("SELECT total_debit_minor-total_credit_minor balance FROM accounting_vouchers WHERE id=?").get(creditNote.accounting_voucher_id) as { balance: number }).balance), 0)
 
@@ -277,6 +310,17 @@ try {
     taxCategory: "TAXABLE",
     itcStatus: "ELIGIBLE",
   })
+
+  const bankCountBeforeInvalidDate = Number((db.prepare("SELECT COUNT(*) count FROM bank_accounts").get() as { count: number }).count)
+  await assert.rejects(() => phase2.saveBankAccount("org:integration", {
+    display_name: "Invalid Date Bank",
+    bank_name: "Test Bank",
+    account_number: "111122223333",
+    account_type: "CURRENT",
+    opening_balance: 1,
+    opening_date: "2026-02-31",
+  }), /valid business date/)
+  assert.equal(Number((db.prepare("SELECT COUNT(*) count FROM bank_accounts").get() as { count: number }).count), bankCountBeforeInvalidDate)
 
   const bank = await phase2.saveBankAccount("org:integration", {
     display_name: "Operating Bank",
@@ -323,6 +367,14 @@ try {
     sha256: "a".repeat(64),
   })
   assert.equal(Boolean(attachment.attachment_id), true)
+  await assert.rejects(() => phase2.savePurchaseAttachment("org:integration", {
+    purchase_id: purchase.purchase_id,
+    relative_path: "business-assets/purchase-attachments/../../escaped.pdf",
+    file_name: "escaped.pdf",
+    media_type: "application/pdf",
+    size_bytes: 128,
+    sha256: "b".repeat(64),
+  }), /metadata is invalid/)
 
   const periodLock = await phase2.lockAccountingPeriod("org:integration", {
     locked_through: "2026-09-30",
@@ -357,6 +409,10 @@ try {
   console.log(JSON.stringify({
     status: "ok",
     purchaseAtomic: true,
+    purchaseRollback: true,
+    paymentRollback: true,
+    voucherNumberingTransactional: true,
+    invalidCalendarDateRejected: true,
     inventoryReceipt: true,
     supplierAllocation: true,
     customerAllocationAndAdvance: true,
@@ -367,6 +423,7 @@ try {
     reconciliation: true,
     gstReports: true,
     attachmentMetadata: true,
+    attachmentPathTraversalRejected: true,
     periodLock: true,
     trialBalance: true,
   }))

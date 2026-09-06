@@ -6,6 +6,7 @@ import type { OfflineAction, OfflineActionStatus, OfflineCollection } from "@/li
 import { financialYearIdForDate } from "@/lib/financial-years"
 import { appendJournal } from "@/lib/offline/local/journal-posting"
 import type { JournalDraft, ValidatedJournal } from "@/lib/accounting/journal"
+import { advanceAccountingVoucherNumber, type PreparedAccountingVoucherNumber } from "@/lib/offline/local/accounting"
 
 type DataRow = Record<string, unknown>
 
@@ -1719,6 +1720,7 @@ export type NormalizedInvoiceAtomicInput = {
   numberingMode: "CONTINUE" | "RESTART"
   financialYearId: string
   journal: JournalDraft | ValidatedJournal
+  voucherSeries: PreparedAccountingVoucherNumber
   accountingWarnings?: Array<{ id: string; productId: string; message: string }>
 }
 
@@ -1812,6 +1814,7 @@ export async function createNormalizedInvoiceAtomic(input: NormalizedInvoiceAtom
       await upsert(db, "ledger_entries", ledgerEntryRow(input.ledgerEntries[index], input.organizationId, index))
     }
     await appendJournal(db, input.journal)
+    await advanceAccountingVoucherNumber(db, input.organizationId, input.financialYearId, input.voucherSeries)
     for (const warning of input.accountingWarnings || []) {
       await db.execute(
         `INSERT OR IGNORE INTO accounting_warnings (

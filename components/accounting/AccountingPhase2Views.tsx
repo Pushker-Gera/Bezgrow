@@ -46,7 +46,10 @@ const preferredColumns = [
   "current_balance_minor",
   "warning",
 ];
-const today = () => new Date().toISOString().slice(0, 10);
+const today = () => {
+  const value = new Date();
+  return `${value.getFullYear()}-${String(value.getMonth() + 1).padStart(2, "0")}-${String(value.getDate()).padStart(2, "0")}`;
+};
 const asText = (value: unknown, fallback = "—") =>
   value === null || value === undefined || value === ""
     ? fallback
@@ -148,13 +151,21 @@ function SmartTable({
   );
 }
 
-function ExportActions({ view, rows }: { view: string; rows: Row[] }) {
+function ExportActions({ view, rows, report }: { view: string; rows: Row[]; report?: Report }) {
   function exportRows() {
     if (!rows.length) return;
     const columns = [...new Set(rows.flatMap((row) => Object.keys(row)))];
     const quote = (value: unknown) =>
       `"${(value === null || value === undefined ? "" : typeof value === "object" ? JSON.stringify(value) : String(value)).replaceAll('"', '""')}"`;
+    const metadata = (report?.exportMetadata as Row | undefined) || {};
     const csv = [
+      ["Business name", metadata.businessName].map(quote).join(","),
+      ["GSTIN", metadata.gstin].map(quote).join(","),
+      ["Financial year", metadata.financialYear].map(quote).join(","),
+      ["Report", metadata.reportName || view].map(quote).join(","),
+      ["Period", metadata.period].map(quote).join(","),
+      ["Generated at", metadata.generatedAt].map(quote).join(","),
+      "",
       columns.map(quote).join(","),
       ...rows.map((row) =>
         columns.map((column) => quote(row[column])).join(","),
@@ -359,7 +370,7 @@ export function AccountingPhase2Views({
     if (view === "gstr-1") return <GstrOne report={report} />;
     return (
       <section className="space-y-4">
-        <ExportActions view={view} rows={rows} />
+        <ExportActions view={view} rows={rows} report={report} />
         <SmartTable rows={rows} />
       </section>
     );
@@ -1677,6 +1688,7 @@ function GstOverview({ report }: { report: Report }) {
   ];
   return (
     <section className="space-y-4">
+      <ExportActions view={String(report.report || "gst-overview")} report={report} rows={metrics.map(([label, value]) => ({ metric: label, amount_minor: value }))} />
       <div className="rounded-lg border border-amber-300/20 bg-amber-300/5 p-4 text-sm">
         <strong>GST Return Preparation</strong> — review classifications and
         validation warnings before using these figures for filing. This is not a
@@ -1701,8 +1713,10 @@ function GstOverview({ report }: { report: Report }) {
 
 function GstrOne({ report }: { report: Report }) {
   const sections = report.sections as Row | undefined;
+  const exportRows = Object.entries(sections || {}).flatMap(([section, value]) => Array.isArray(value) ? (value as Row[]).map((row) => ({ section, ...row })) : []);
   return (
     <section className="space-y-5">
+      <ExportActions view="gstr-1-preparation" report={report} rows={exportRows} />
       <div className="rounded-lg border border-amber-300/20 bg-amber-300/5 p-4 text-sm">
         <strong>GSTR-1 Preparation</strong> — review locally prepared B2B, B2C,
         note, and rate summaries. Nothing is submitted automatically.

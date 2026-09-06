@@ -1,6 +1,6 @@
 "use client"
 
-export const LOCAL_DB_VERSION = 21
+export const LOCAL_DB_VERSION = 22
 export const LOCAL_DB_URL = "sqlite:bezgrow-offline.db"
 
 export const normalizedTables = [
@@ -57,6 +57,27 @@ export const normalizedTables = [
   "accounting_period_locks",
   "gst_transaction_classifications",
   "purchase_attachments",
+  "accounting_voucher_series",
+  "accounting_dimensions",
+  "accounting_dimension_allocations",
+  "accounting_budgets",
+  "fixed_asset_categories",
+  "fixed_assets",
+  "fixed_asset_depreciation",
+  "fixed_asset_disposals",
+  "tax_rules",
+  "tax_transactions",
+  "gst_return_periods",
+  "gst_import_batches",
+  "gst_import_records",
+  "gst_reconciliations",
+  "statutory_integrations",
+  "e_invoice_preparations",
+  "e_way_bill_preparations",
+  "bank_statement_imports",
+  "bank_statement_lines",
+  "bank_statement_matches",
+  "accounting_audit_events",
   "gst_tax_rates",
   "gst_invoice_summary",
   "gst_hsn_summary",
@@ -2390,6 +2411,546 @@ export const localMigrations: Array<{ version: number; name: string; sql: string
       "CREATE INDEX idx_payment_allocations_document ON payment_allocations (organization_id, document_type, document_id, reversed_at)",
       "CREATE INDEX idx_payment_allocations_party ON payment_allocations (organization_id, party_type, party_id, allocated_at DESC)",
       "CREATE INDEX idx_advance_allocations_document ON advance_allocations (organization_id, document_type, document_id)",
+    ],
+  },
+  {
+    version: 22,
+    name: "accounting_phase_three_professional_compliance_and_analytics",
+    sql: [
+      "ALTER TABLE chart_of_accounts ADD COLUMN cash_flow_classification TEXT CHECK (cash_flow_classification IS NULL OR cash_flow_classification IN ('OPERATING', 'INVESTING', 'FINANCING'))",
+      "ALTER TABLE accounting_sequences ADD COLUMN suffix TEXT",
+      "ALTER TABLE accounting_sequences ADD COLUMN padding INTEGER NOT NULL DEFAULT 6 CHECK (padding BETWEEN 1 AND 12)",
+      "ALTER TABLE accounting_sequences ADD COLUMN starting_number INTEGER NOT NULL DEFAULT 1 CHECK (starting_number > 0)",
+      "ALTER TABLE customers ADD COLUMN pan TEXT",
+
+      `CREATE TABLE IF NOT EXISTS accounting_voucher_series (
+        id TEXT PRIMARY KEY,
+        organization_id TEXT NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+        financial_year_id TEXT NOT NULL REFERENCES financial_years(id) ON DELETE CASCADE,
+        voucher_type TEXT NOT NULL,
+        prefix TEXT NOT NULL,
+        suffix TEXT,
+        padding INTEGER NOT NULL DEFAULT 6 CHECK (padding BETWEEN 1 AND 12),
+        starting_number INTEGER NOT NULL DEFAULT 1 CHECK (starting_number > 0),
+        next_number INTEGER NOT NULL DEFAULT 1 CHECK (next_number > 0),
+        is_active INTEGER NOT NULL DEFAULT 1,
+        created_at TEXT NOT NULL DEFAULT (datetime('now')),
+        updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+        UNIQUE (organization_id, financial_year_id, voucher_type)
+      )`,
+      `CREATE TABLE IF NOT EXISTS accounting_dimensions (
+        id TEXT PRIMARY KEY,
+        organization_id TEXT NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+        dimension_type TEXT NOT NULL CHECK (dimension_type IN ('COST_CENTRE', 'DEPARTMENT', 'PROJECT')),
+        code TEXT NOT NULL,
+        name TEXT NOT NULL,
+        parent_id TEXT REFERENCES accounting_dimensions(id) ON DELETE RESTRICT,
+        is_active INTEGER NOT NULL DEFAULT 1,
+        notes TEXT,
+        created_at TEXT NOT NULL DEFAULT (datetime('now')),
+        updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+        UNIQUE (organization_id, dimension_type, code),
+        UNIQUE (organization_id, dimension_type, name)
+      )`,
+      `CREATE TABLE IF NOT EXISTS accounting_dimension_allocations (
+        id TEXT PRIMARY KEY,
+        organization_id TEXT NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+        financial_year_id TEXT NOT NULL REFERENCES financial_years(id) ON DELETE RESTRICT,
+        voucher_entry_id TEXT NOT NULL REFERENCES accounting_voucher_entries(id) ON DELETE RESTRICT,
+        dimension_id TEXT NOT NULL REFERENCES accounting_dimensions(id) ON DELETE RESTRICT,
+        dimension_type TEXT NOT NULL CHECK (dimension_type IN ('COST_CENTRE', 'DEPARTMENT', 'PROJECT')),
+        amount_minor INTEGER NOT NULL CHECK (amount_minor > 0 AND typeof(amount_minor) = 'integer'),
+        created_at TEXT NOT NULL DEFAULT (datetime('now')),
+        UNIQUE (organization_id, voucher_entry_id, dimension_id)
+      )`,
+      `CREATE TABLE IF NOT EXISTS accounting_budgets (
+        id TEXT PRIMARY KEY,
+        organization_id TEXT NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+        financial_year_id TEXT NOT NULL REFERENCES financial_years(id) ON DELETE CASCADE,
+        period_type TEXT NOT NULL CHECK (period_type IN ('MONTH', 'QUARTER', 'YEAR')),
+        period_start TEXT NOT NULL,
+        period_end TEXT NOT NULL,
+        account_id TEXT NOT NULL REFERENCES chart_of_accounts(id) ON DELETE RESTRICT,
+        dimension_id TEXT REFERENCES accounting_dimensions(id) ON DELETE RESTRICT,
+        budget_minor INTEGER NOT NULL CHECK (budget_minor >= 0 AND typeof(budget_minor) = 'integer'),
+        warning_threshold_basis_points INTEGER NOT NULL DEFAULT 10000 CHECK (warning_threshold_basis_points >= 0),
+        enforcement_policy TEXT NOT NULL DEFAULT 'WARN' CHECK (enforcement_policy IN ('WARN', 'BLOCK')),
+        notes TEXT,
+        created_at TEXT NOT NULL DEFAULT (datetime('now')),
+        updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+        UNIQUE (organization_id, financial_year_id, period_type, period_start, account_id, dimension_id)
+      )`,
+      `CREATE TABLE IF NOT EXISTS fixed_asset_categories (
+        id TEXT PRIMARY KEY,
+        organization_id TEXT NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+        code TEXT NOT NULL,
+        name TEXT NOT NULL,
+        default_method TEXT NOT NULL DEFAULT 'SLM' CHECK (default_method IN ('SLM', 'WDV')),
+        default_useful_life_months INTEGER NOT NULL DEFAULT 60 CHECK (default_useful_life_months > 0),
+        default_rate_basis_points INTEGER NOT NULL DEFAULT 0 CHECK (default_rate_basis_points >= 0),
+        asset_account_id TEXT REFERENCES chart_of_accounts(id) ON DELETE RESTRICT,
+        accumulated_depreciation_account_id TEXT REFERENCES chart_of_accounts(id) ON DELETE RESTRICT,
+        depreciation_expense_account_id TEXT REFERENCES chart_of_accounts(id) ON DELETE RESTRICT,
+        is_active INTEGER NOT NULL DEFAULT 1,
+        created_at TEXT NOT NULL DEFAULT (datetime('now')),
+        updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+        UNIQUE (organization_id, code),
+        UNIQUE (organization_id, name)
+      )`,
+      `CREATE TABLE IF NOT EXISTS fixed_assets (
+        id TEXT PRIMARY KEY,
+        organization_id TEXT NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+        financial_year_id TEXT NOT NULL REFERENCES financial_years(id) ON DELETE RESTRICT,
+        asset_code TEXT NOT NULL,
+        asset_name TEXT NOT NULL,
+        category_id TEXT NOT NULL REFERENCES fixed_asset_categories(id) ON DELETE RESTRICT,
+        purchase_date TEXT NOT NULL,
+        capitalization_date TEXT NOT NULL,
+        supplier_id TEXT REFERENCES suppliers(id) ON DELETE SET NULL,
+        purchase_document_type TEXT,
+        purchase_document_id TEXT,
+        original_cost_minor INTEGER NOT NULL CHECK (original_cost_minor > 0 AND typeof(original_cost_minor) = 'integer'),
+        gst_itc_treatment TEXT NOT NULL DEFAULT 'REVIEW_REQUIRED' CHECK (gst_itc_treatment IN ('ELIGIBLE', 'INELIGIBLE', 'CAPITALIZED', 'REVIEW_REQUIRED')),
+        useful_life_months INTEGER NOT NULL CHECK (useful_life_months > 0),
+        residual_value_minor INTEGER NOT NULL DEFAULT 0 CHECK (residual_value_minor >= 0 AND typeof(residual_value_minor) = 'integer'),
+        depreciation_method TEXT NOT NULL CHECK (depreciation_method IN ('SLM', 'WDV')),
+        depreciation_rate_basis_points INTEGER NOT NULL DEFAULT 0 CHECK (depreciation_rate_basis_points >= 0),
+        accumulated_depreciation_minor INTEGER NOT NULL DEFAULT 0 CHECK (accumulated_depreciation_minor >= 0 AND typeof(accumulated_depreciation_minor) = 'integer'),
+        written_down_value_minor INTEGER NOT NULL CHECK (written_down_value_minor >= 0 AND typeof(written_down_value_minor) = 'integer'),
+        asset_account_id TEXT NOT NULL REFERENCES chart_of_accounts(id) ON DELETE RESTRICT,
+        accumulated_depreciation_account_id TEXT NOT NULL REFERENCES chart_of_accounts(id) ON DELETE RESTRICT,
+        depreciation_expense_account_id TEXT NOT NULL REFERENCES chart_of_accounts(id) ON DELETE RESTRICT,
+        location TEXT,
+        department_dimension_id TEXT REFERENCES accounting_dimensions(id) ON DELETE SET NULL,
+        cost_centre_dimension_id TEXT REFERENCES accounting_dimensions(id) ON DELETE SET NULL,
+        project_dimension_id TEXT REFERENCES accounting_dimensions(id) ON DELETE SET NULL,
+        acquisition_voucher_id TEXT NOT NULL REFERENCES accounting_vouchers(id) ON DELETE RESTRICT,
+        status TEXT NOT NULL DEFAULT 'ACTIVE' CHECK (status IN ('ACTIVE', 'FULLY_DEPRECIATED', 'DISPOSED', 'WRITTEN_OFF')),
+        disposal_date TEXT,
+        disposal_proceeds_minor INTEGER,
+        notes TEXT,
+        created_at TEXT NOT NULL DEFAULT (datetime('now')),
+        updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+        UNIQUE (organization_id, asset_code),
+        CHECK (residual_value_minor <= original_cost_minor),
+        CHECK (accumulated_depreciation_minor <= original_cost_minor - residual_value_minor),
+        CHECK (written_down_value_minor = original_cost_minor - accumulated_depreciation_minor)
+      )`,
+      `CREATE TABLE IF NOT EXISTS fixed_asset_depreciation (
+        id TEXT PRIMARY KEY,
+        organization_id TEXT NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+        financial_year_id TEXT NOT NULL REFERENCES financial_years(id) ON DELETE RESTRICT,
+        asset_id TEXT NOT NULL REFERENCES fixed_assets(id) ON DELETE RESTRICT,
+        period_start TEXT NOT NULL,
+        period_end TEXT NOT NULL,
+        days INTEGER NOT NULL CHECK (days > 0),
+        opening_written_down_value_minor INTEGER NOT NULL CHECK (opening_written_down_value_minor >= 0),
+        depreciation_minor INTEGER NOT NULL CHECK (depreciation_minor > 0),
+        closing_written_down_value_minor INTEGER NOT NULL CHECK (closing_written_down_value_minor >= 0),
+        accounting_voucher_id TEXT NOT NULL REFERENCES accounting_vouchers(id) ON DELETE RESTRICT,
+        posted_by TEXT,
+        created_at TEXT NOT NULL DEFAULT (datetime('now')),
+        UNIQUE (organization_id, asset_id, period_start, period_end)
+      )`,
+      `CREATE TABLE IF NOT EXISTS fixed_asset_disposals (
+        id TEXT PRIMARY KEY,
+        organization_id TEXT NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+        financial_year_id TEXT NOT NULL REFERENCES financial_years(id) ON DELETE RESTRICT,
+        asset_id TEXT NOT NULL UNIQUE REFERENCES fixed_assets(id) ON DELETE RESTRICT,
+        disposal_date TEXT NOT NULL,
+        disposal_type TEXT NOT NULL CHECK (disposal_type IN ('SALE', 'WRITE_OFF')),
+        proceeds_minor INTEGER NOT NULL DEFAULT 0 CHECK (proceeds_minor >= 0),
+        written_down_value_minor INTEGER NOT NULL CHECK (written_down_value_minor >= 0),
+        gain_minor INTEGER NOT NULL DEFAULT 0 CHECK (gain_minor >= 0),
+        loss_minor INTEGER NOT NULL DEFAULT 0 CHECK (loss_minor >= 0),
+        settlement_account_id TEXT NOT NULL REFERENCES chart_of_accounts(id) ON DELETE RESTRICT,
+        accounting_voucher_id TEXT NOT NULL REFERENCES accounting_vouchers(id) ON DELETE RESTRICT,
+        notes TEXT,
+        created_at TEXT NOT NULL DEFAULT (datetime('now')),
+        CHECK (gain_minor = 0 OR loss_minor = 0)
+      )`,
+      `CREATE TABLE IF NOT EXISTS tax_rules (
+        id TEXT PRIMARY KEY,
+        organization_id TEXT NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+        tax_type TEXT NOT NULL CHECK (tax_type IN ('TDS', 'TCS')),
+        section_code TEXT NOT NULL,
+        description TEXT NOT NULL,
+        effective_from TEXT NOT NULL,
+        effective_to TEXT,
+        rate_basis_points INTEGER NOT NULL CHECK (rate_basis_points >= 0),
+        threshold_minor INTEGER NOT NULL DEFAULT 0 CHECK (threshold_minor >= 0),
+        pan_required INTEGER NOT NULL DEFAULT 1,
+        is_active INTEGER NOT NULL DEFAULT 1,
+        notes TEXT,
+        created_at TEXT NOT NULL DEFAULT (datetime('now')),
+        updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+        UNIQUE (organization_id, tax_type, section_code, effective_from)
+      )`,
+      `CREATE TABLE IF NOT EXISTS tax_transactions (
+        id TEXT PRIMARY KEY,
+        organization_id TEXT NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+        financial_year_id TEXT NOT NULL REFERENCES financial_years(id) ON DELETE RESTRICT,
+        tax_type TEXT NOT NULL CHECK (tax_type IN ('TDS', 'TCS')),
+        tax_rule_id TEXT NOT NULL REFERENCES tax_rules(id) ON DELETE RESTRICT,
+        section_code TEXT NOT NULL,
+        party_type TEXT NOT NULL CHECK (party_type IN ('supplier', 'customer')),
+        party_id TEXT NOT NULL,
+        party_pan TEXT,
+        source_type TEXT NOT NULL,
+        source_id TEXT NOT NULL,
+        deduction_basis TEXT NOT NULL,
+        taxable_minor INTEGER NOT NULL CHECK (taxable_minor > 0 AND typeof(taxable_minor) = 'integer'),
+        rate_basis_points INTEGER NOT NULL CHECK (rate_basis_points >= 0),
+        tax_minor INTEGER NOT NULL CHECK (tax_minor > 0 AND typeof(tax_minor) = 'integer'),
+        deduction_date TEXT NOT NULL,
+        payment_date TEXT,
+        challan_reference TEXT,
+        status TEXT NOT NULL DEFAULT 'DEDUCTED' CHECK (status IN ('DRAFT', 'DEDUCTED', 'COLLECTED', 'PAID', 'REVERSED')),
+        accounting_voucher_id TEXT NOT NULL REFERENCES accounting_vouchers(id) ON DELETE RESTRICT,
+        payment_accounting_voucher_id TEXT REFERENCES accounting_vouchers(id) ON DELETE RESTRICT,
+        notes TEXT,
+        created_at TEXT NOT NULL DEFAULT (datetime('now')),
+        updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+        UNIQUE (organization_id, tax_type, source_type, source_id)
+      )`,
+      `CREATE TABLE IF NOT EXISTS gst_return_periods (
+        id TEXT PRIMARY KEY,
+        organization_id TEXT NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+        financial_year_id TEXT NOT NULL REFERENCES financial_years(id) ON DELETE RESTRICT,
+        return_type TEXT NOT NULL CHECK (return_type IN ('GSTR1', 'GSTR3B')),
+        period_start TEXT NOT NULL,
+        period_end TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'DRAFT' CHECK (status IN ('DRAFT', 'NEEDS_REVIEW', 'READY_FOR_EXPORT', 'EXPORTED', 'FILED_EXTERNALLY')),
+        validation_snapshot_json TEXT,
+        exported_at TEXT,
+        filed_externally_at TEXT,
+        notes TEXT,
+        created_at TEXT NOT NULL DEFAULT (datetime('now')),
+        updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+        UNIQUE (organization_id, return_type, period_start, period_end)
+      )`,
+      `CREATE TABLE IF NOT EXISTS gst_import_batches (
+        id TEXT PRIMARY KEY,
+        organization_id TEXT NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+        financial_year_id TEXT NOT NULL REFERENCES financial_years(id) ON DELETE RESTRICT,
+        import_type TEXT NOT NULL,
+        file_name TEXT NOT NULL,
+        file_sha256 TEXT NOT NULL,
+        row_count INTEGER NOT NULL DEFAULT 0 CHECK (row_count >= 0),
+        imported_by TEXT,
+        imported_at TEXT NOT NULL DEFAULT (datetime('now')),
+        status TEXT NOT NULL DEFAULT 'IMPORTED' CHECK (status IN ('IMPORTED', 'RECONCILED', 'REJECTED')),
+        UNIQUE (organization_id, file_sha256)
+      )`,
+      `CREATE TABLE IF NOT EXISTS gst_import_records (
+        id TEXT PRIMARY KEY,
+        organization_id TEXT NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+        batch_id TEXT NOT NULL REFERENCES gst_import_batches(id) ON DELETE CASCADE,
+        supplier_gstin TEXT,
+        invoice_number TEXT NOT NULL,
+        normalized_invoice_number TEXT NOT NULL,
+        invoice_date TEXT NOT NULL,
+        taxable_minor INTEGER NOT NULL CHECK (typeof(taxable_minor) = 'integer'),
+        cgst_minor INTEGER NOT NULL DEFAULT 0 CHECK (typeof(cgst_minor) = 'integer'),
+        sgst_minor INTEGER NOT NULL DEFAULT 0 CHECK (typeof(sgst_minor) = 'integer'),
+        igst_minor INTEGER NOT NULL DEFAULT 0 CHECK (typeof(igst_minor) = 'integer'),
+        cess_minor INTEGER NOT NULL DEFAULT 0 CHECK (typeof(cess_minor) = 'integer'),
+        source_row_number INTEGER NOT NULL CHECK (source_row_number > 0),
+        raw_json TEXT,
+        created_at TEXT NOT NULL DEFAULT (datetime('now')),
+        UNIQUE (organization_id, batch_id, source_row_number)
+      )`,
+      `CREATE TABLE IF NOT EXISTS gst_reconciliations (
+        id TEXT PRIMARY KEY,
+        organization_id TEXT NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+        financial_year_id TEXT NOT NULL REFERENCES financial_years(id) ON DELETE RESTRICT,
+        import_record_id TEXT REFERENCES gst_import_records(id) ON DELETE RESTRICT,
+        book_source_type TEXT,
+        book_source_id TEXT,
+        classification TEXT NOT NULL CHECK (classification IN ('EXACT_MATCH', 'PROBABLE_MATCH', 'VALUE_MISMATCH', 'TAX_MISMATCH', 'DATE_MISMATCH', 'MISSING_IN_BOOKS', 'MISSING_IN_IMPORTED_DATA', 'NEEDS_REVIEW')),
+        match_score INTEGER NOT NULL DEFAULT 0 CHECK (match_score BETWEEN 0 AND 5),
+        confirmed_by TEXT,
+        confirmed_at TEXT,
+        notes TEXT,
+        created_at TEXT NOT NULL DEFAULT (datetime('now')),
+        updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+        UNIQUE (organization_id, import_record_id, book_source_type, book_source_id)
+      )`,
+      `CREATE TABLE IF NOT EXISTS statutory_integrations (
+        id TEXT PRIMARY KEY,
+        organization_id TEXT NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+        integration_type TEXT NOT NULL CHECK (integration_type IN ('E_INVOICE', 'E_WAY_BILL', 'GST_RETURN')),
+        provider_code TEXT,
+        configuration_status TEXT NOT NULL DEFAULT 'NOT_CONFIGURED' CHECK (configuration_status IN ('NOT_CONFIGURED', 'CONFIGURED', 'DISABLED')),
+        last_verified_at TEXT,
+        created_at TEXT NOT NULL DEFAULT (datetime('now')),
+        updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+        UNIQUE (organization_id, integration_type)
+      )`,
+      `CREATE TABLE IF NOT EXISTS e_invoice_preparations (
+        id TEXT PRIMARY KEY,
+        organization_id TEXT NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+        financial_year_id TEXT NOT NULL REFERENCES financial_years(id) ON DELETE RESTRICT,
+        source_type TEXT NOT NULL,
+        source_id TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'DRAFT' CHECK (status IN ('DRAFT', 'VALIDATION_FAILED', 'READY', 'SUBMITTED', 'CANCELLED')),
+        request_json TEXT NOT NULL,
+        validation_json TEXT,
+        irn TEXT,
+        acknowledgement_number TEXT,
+        acknowledgement_date TEXT,
+        signed_payload TEXT,
+        qr_information TEXT,
+        cancellation_state TEXT,
+        created_at TEXT NOT NULL DEFAULT (datetime('now')),
+        updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+        UNIQUE (organization_id, source_type, source_id)
+      )`,
+      `CREATE TABLE IF NOT EXISTS e_way_bill_preparations (
+        id TEXT PRIMARY KEY,
+        organization_id TEXT NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+        financial_year_id TEXT NOT NULL REFERENCES financial_years(id) ON DELETE RESTRICT,
+        source_type TEXT NOT NULL,
+        source_id TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'DRAFT' CHECK (status IN ('DRAFT', 'VALIDATION_FAILED', 'READY', 'SUBMITTED', 'CANCELLED')),
+        transport_json TEXT NOT NULL,
+        validation_json TEXT,
+        eway_bill_number TEXT,
+        valid_until TEXT,
+        cancellation_state TEXT,
+        created_at TEXT NOT NULL DEFAULT (datetime('now')),
+        updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+        UNIQUE (organization_id, source_type, source_id)
+      )`,
+      `CREATE TABLE IF NOT EXISTS bank_statement_imports (
+        id TEXT PRIMARY KEY,
+        organization_id TEXT NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+        financial_year_id TEXT NOT NULL REFERENCES financial_years(id) ON DELETE RESTRICT,
+        bank_account_id TEXT NOT NULL REFERENCES bank_accounts(id) ON DELETE RESTRICT,
+        file_name TEXT NOT NULL,
+        file_sha256 TEXT NOT NULL,
+        row_count INTEGER NOT NULL DEFAULT 0 CHECK (row_count >= 0),
+        status TEXT NOT NULL DEFAULT 'IMPORTED' CHECK (status IN ('IMPORTED', 'REVIEWED', 'REJECTED')),
+        created_at TEXT NOT NULL DEFAULT (datetime('now')),
+        UNIQUE (organization_id, bank_account_id, file_sha256)
+      )`,
+      `CREATE TABLE IF NOT EXISTS bank_statement_lines (
+        id TEXT PRIMARY KEY,
+        organization_id TEXT NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+        import_id TEXT NOT NULL REFERENCES bank_statement_imports(id) ON DELETE CASCADE,
+        transaction_date TEXT NOT NULL,
+        amount_minor INTEGER NOT NULL CHECK (amount_minor <> 0 AND typeof(amount_minor) = 'integer'),
+        reference TEXT,
+        description TEXT,
+        source_row_number INTEGER NOT NULL CHECK (source_row_number > 0),
+        raw_json TEXT,
+        created_at TEXT NOT NULL DEFAULT (datetime('now')),
+        UNIQUE (organization_id, import_id, source_row_number)
+      )`,
+      `CREATE TABLE IF NOT EXISTS bank_statement_matches (
+        id TEXT PRIMARY KEY,
+        organization_id TEXT NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+        statement_line_id TEXT NOT NULL REFERENCES bank_statement_lines(id) ON DELETE RESTRICT,
+        voucher_entry_id TEXT REFERENCES accounting_voucher_entries(id) ON DELETE RESTRICT,
+        match_status TEXT NOT NULL CHECK (match_status IN ('SUGGESTED', 'CONFIRMED', 'REJECTED', 'UNMATCHED')),
+        match_score INTEGER NOT NULL DEFAULT 0 CHECK (match_score BETWEEN 0 AND 100),
+        confirmed_by TEXT,
+        confirmed_at TEXT,
+        notes TEXT,
+        created_at TEXT NOT NULL DEFAULT (datetime('now')),
+        updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+        UNIQUE (organization_id, statement_line_id, voucher_entry_id)
+      )`,
+      `CREATE TABLE IF NOT EXISTS accounting_audit_events (
+        id TEXT PRIMARY KEY,
+        organization_id TEXT NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+        financial_year_id TEXT REFERENCES financial_years(id) ON DELETE SET NULL,
+        event_type TEXT NOT NULL,
+        entity_type TEXT NOT NULL,
+        entity_id TEXT NOT NULL,
+        actor TEXT,
+        reason TEXT,
+        previous_state_json TEXT,
+        new_state_json TEXT,
+        source TEXT NOT NULL DEFAULT 'local',
+        occurred_at TEXT NOT NULL DEFAULT (datetime('now'))
+      )`,
+
+      `INSERT OR IGNORE INTO chart_of_accounts (
+         id, organization_id, account_code, account_name, account_type, account_group, normal_balance,
+         opening_balance, current_balance, is_system, is_cash_account, is_bank_account, is_active,
+         system_role, tax_role, sync_status, created_at, updated_at
+       )
+       SELECT 'account:' || organization.id || ':' || seed.code, organization.id, seed.code, seed.name,
+         seed.type, seed.group_name, seed.normal, 0, 0, 1, 0, 0, 1, seed.system_role,
+         seed.tax_role, 'local', datetime('now'), datetime('now')
+       FROM organizations organization CROSS JOIN (
+         SELECT '1510' code, 'Accumulated Depreciation' name, 'ASSET' type, 'ACCUMULATED_DEPRECIATION' group_name, 'credit' normal, 'ACCUMULATED_DEPRECIATION' system_role, NULL tax_role
+         UNION ALL SELECT '2140', 'TDS Payable', 'LIABILITY', 'TAX_LIABILITY', 'credit', 'TDS_PAYABLE', 'TDS_PAYABLE'
+         UNION ALL SELECT '2150', 'TCS Payable', 'LIABILITY', 'TAX_LIABILITY', 'credit', 'TCS_PAYABLE', 'TCS_PAYABLE'
+         UNION ALL SELECT '4210', 'Gain on Asset Disposal', 'INCOME', 'OTHER_INCOME', 'credit', 'ASSET_DISPOSAL_GAIN', NULL
+         UNION ALL SELECT '6090', 'Depreciation Expense', 'EXPENSE', 'DEPRECIATION', 'debit', 'DEPRECIATION_EXPENSE', NULL
+         UNION ALL SELECT '6100', 'Loss on Asset Disposal', 'EXPENSE', 'OTHER_EXPENSE', 'debit', 'ASSET_DISPOSAL_LOSS', NULL
+      ) seed WHERE organization.deleted_at IS NULL`,
+      `UPDATE chart_of_accounts SET cash_flow_classification=CASE
+         WHEN system_role IN ('FIXED_ASSETS','ACCUMULATED_DEPRECIATION','DEPRECIATION_EXPENSE','ASSET_DISPOSAL_GAIN','ASSET_DISPOSAL_LOSS') THEN 'INVESTING'
+         WHEN system_role IN ('CAPITAL','OPENING_EQUITY','DRAWINGS') THEN 'FINANCING'
+         WHEN system_role IS NOT NULL THEN 'OPERATING'
+         ELSE cash_flow_classification END
+       WHERE cash_flow_classification IS NULL`,
+      "UPDATE accounting_settings SET accounting_version = MAX(accounting_version, 3), updated_at = datetime('now')",
+      `INSERT OR IGNORE INTO fixed_asset_categories (
+         id, organization_id, code, name, default_method, default_useful_life_months,
+         asset_account_id, accumulated_depreciation_account_id, depreciation_expense_account_id
+       ) SELECT 'asset-category:' || organization.id || ':' || seed.code, organization.id, seed.code, seed.name,
+         'SLM', seed.life_months,
+         (SELECT id FROM chart_of_accounts WHERE organization_id=organization.id AND system_role='FIXED_ASSETS'),
+         (SELECT id FROM chart_of_accounts WHERE organization_id=organization.id AND system_role='ACCUMULATED_DEPRECIATION'),
+         (SELECT id FROM chart_of_accounts WHERE organization_id=organization.id AND system_role='DEPRECIATION_EXPENSE')
+       FROM organizations organization CROSS JOIN (
+         SELECT 'PLANT' code, 'Plant & Machinery' name, 120 life_months
+         UNION ALL SELECT 'FURNITURE', 'Furniture', 120
+         UNION ALL SELECT 'COMPUTERS', 'Computers', 36
+         UNION ALL SELECT 'OFFICE_EQUIPMENT', 'Office Equipment', 60
+         UNION ALL SELECT 'VEHICLES', 'Vehicles', 96
+         UNION ALL SELECT 'BUILDINGS', 'Buildings', 360
+         UNION ALL SELECT 'OTHER', 'Other Fixed Assets', 60
+       ) seed WHERE organization.deleted_at IS NULL`,
+      `INSERT OR IGNORE INTO statutory_integrations (id, organization_id, integration_type, configuration_status)
+       SELECT 'statutory:' || organization.id || ':' || integration.type, organization.id, integration.type, 'NOT_CONFIGURED'
+       FROM organizations organization CROSS JOIN (
+         SELECT 'E_INVOICE' type UNION ALL SELECT 'E_WAY_BILL' UNION ALL SELECT 'GST_RETURN'
+       ) integration WHERE organization.deleted_at IS NULL`,
+
+      "CREATE INDEX IF NOT EXISTS idx_voucher_series_lookup ON accounting_voucher_series (organization_id, financial_year_id, voucher_type, is_active)",
+      "CREATE INDEX IF NOT EXISTS idx_dimensions_lookup ON accounting_dimensions (organization_id, dimension_type, is_active, name COLLATE NOCASE)",
+      "CREATE INDEX IF NOT EXISTS idx_dimension_allocations_entry ON accounting_dimension_allocations (organization_id, voucher_entry_id, dimension_type)",
+      "CREATE INDEX IF NOT EXISTS idx_dimension_allocations_dimension ON accounting_dimension_allocations (organization_id, dimension_id, financial_year_id)",
+      "CREATE INDEX IF NOT EXISTS idx_budgets_period ON accounting_budgets (organization_id, financial_year_id, period_start, period_end, account_id)",
+      "CREATE INDEX IF NOT EXISTS idx_assets_status ON fixed_assets (organization_id, status, capitalization_date, asset_code)",
+      "CREATE INDEX IF NOT EXISTS idx_asset_depreciation_period ON fixed_asset_depreciation (organization_id, financial_year_id, period_end, asset_id)",
+      "CREATE INDEX IF NOT EXISTS idx_tax_rules_lookup ON tax_rules (organization_id, tax_type, section_code, effective_from, effective_to, is_active)",
+      "CREATE INDEX IF NOT EXISTS idx_tax_transactions_period ON tax_transactions (organization_id, financial_year_id, tax_type, deduction_date, status)",
+      "CREATE INDEX IF NOT EXISTS idx_tax_transactions_party ON tax_transactions (organization_id, tax_type, party_type, party_id, deduction_date)",
+      "CREATE INDEX IF NOT EXISTS idx_gst_returns_period ON gst_return_periods (organization_id, financial_year_id, return_type, period_start)",
+      "CREATE INDEX IF NOT EXISTS idx_gst_import_invoice ON gst_import_records (organization_id, supplier_gstin, normalized_invoice_number, invoice_date)",
+      "CREATE INDEX IF NOT EXISTS idx_gst_reconciliation_class ON gst_reconciliations (organization_id, financial_year_id, classification, confirmed_at)",
+      "CREATE INDEX IF NOT EXISTS idx_einvoice_status ON e_invoice_preparations (organization_id, financial_year_id, status, created_at)",
+      "CREATE INDEX IF NOT EXISTS idx_eway_status ON e_way_bill_preparations (organization_id, financial_year_id, status, created_at)",
+      "CREATE INDEX IF NOT EXISTS idx_bank_statement_lines_match ON bank_statement_lines (organization_id, transaction_date, amount_minor)",
+      "CREATE INDEX IF NOT EXISTS idx_bank_statement_matches_status ON bank_statement_matches (organization_id, match_status, match_score)",
+      "CREATE INDEX IF NOT EXISTS idx_accounting_audit_trace ON accounting_audit_events (organization_id, occurred_at DESC, entity_type, entity_id)",
+      "CREATE INDEX IF NOT EXISTS idx_accounting_search_voucher ON accounting_vouchers (organization_id, voucher_number COLLATE NOCASE, reference_no COLLATE NOCASE)",
+
+      `CREATE TRIGGER IF NOT EXISTS trg_dimension_allocation_scope_insert
+       BEFORE INSERT ON accounting_dimension_allocations FOR EACH ROW
+       WHEN NOT EXISTS (
+         SELECT 1 FROM accounting_voucher_entries entry
+         JOIN accounting_vouchers voucher ON voucher.id=entry.voucher_id AND voucher.organization_id=entry.organization_id
+         JOIN accounting_dimensions dimension ON dimension.id=NEW.dimension_id AND dimension.organization_id=NEW.organization_id
+         WHERE entry.id=NEW.voucher_entry_id AND entry.organization_id=NEW.organization_id
+           AND voucher.financial_year_id=NEW.financial_year_id AND dimension.dimension_type=NEW.dimension_type
+       ) BEGIN SELECT RAISE(ABORT, 'dimension_allocation_scope_invalid'); END`,
+      `CREATE TRIGGER IF NOT EXISTS trg_dimension_allocation_immutable_update
+       BEFORE UPDATE ON accounting_dimension_allocations FOR EACH ROW
+       BEGIN SELECT RAISE(ABORT, 'posted_dimension_allocation_is_immutable'); END`,
+      `CREATE TRIGGER IF NOT EXISTS trg_dimension_allocation_immutable_delete
+       BEFORE DELETE ON accounting_dimension_allocations FOR EACH ROW
+       BEGIN SELECT RAISE(ABORT, 'posted_dimension_allocation_is_immutable'); END`,
+      `CREATE TRIGGER IF NOT EXISTS trg_asset_depreciation_immutable_update
+       BEFORE UPDATE ON fixed_asset_depreciation FOR EACH ROW
+       BEGIN SELECT RAISE(ABORT, 'posted_asset_depreciation_is_immutable'); END`,
+      `CREATE TRIGGER IF NOT EXISTS trg_asset_depreciation_immutable_delete
+       BEFORE DELETE ON fixed_asset_depreciation FOR EACH ROW
+       BEGIN SELECT RAISE(ABORT, 'posted_asset_depreciation_is_immutable'); END`,
+      `CREATE TRIGGER IF NOT EXISTS trg_asset_disposal_immutable_update
+       BEFORE UPDATE ON fixed_asset_disposals FOR EACH ROW
+       BEGIN SELECT RAISE(ABORT, 'posted_asset_disposal_is_immutable'); END`,
+      `CREATE TRIGGER IF NOT EXISTS trg_asset_disposal_immutable_delete
+       BEFORE DELETE ON fixed_asset_disposals FOR EACH ROW
+       BEGIN SELECT RAISE(ABORT, 'posted_asset_disposal_is_immutable'); END`,
+      `CREATE TRIGGER IF NOT EXISTS trg_tax_transaction_immutable_financials
+       BEFORE UPDATE OF organization_id, financial_year_id, tax_type, tax_rule_id, section_code, party_type,
+         party_id, party_pan, source_type, source_id, deduction_basis, taxable_minor, rate_basis_points,
+         tax_minor, deduction_date, accounting_voucher_id ON tax_transactions FOR EACH ROW
+       BEGIN SELECT RAISE(ABORT, 'posted_tax_transaction_is_immutable'); END`,
+      `CREATE TRIGGER IF NOT EXISTS trg_tax_transaction_delete
+       BEFORE DELETE ON tax_transactions FOR EACH ROW
+       BEGIN SELECT RAISE(ABORT, 'posted_tax_transaction_is_immutable'); END`,
+      `CREATE TRIGGER IF NOT EXISTS trg_tax_payment_voucher_immutable
+       BEFORE UPDATE OF payment_accounting_voucher_id ON tax_transactions FOR EACH ROW
+       WHEN OLD.payment_accounting_voucher_id IS NOT NULL AND NEW.payment_accounting_voucher_id IS NOT OLD.payment_accounting_voucher_id
+       BEGIN SELECT RAISE(ABORT, 'posted_tax_payment_is_immutable'); END`,
+      `CREATE TRIGGER IF NOT EXISTS trg_accounting_audit_immutable_update
+       BEFORE UPDATE ON accounting_audit_events FOR EACH ROW
+       BEGIN SELECT RAISE(ABORT, 'accounting_audit_event_is_immutable'); END`,
+      `CREATE TRIGGER IF NOT EXISTS trg_accounting_audit_immutable_delete
+       BEFORE DELETE ON accounting_audit_events FOR EACH ROW
+       BEGIN SELECT RAISE(ABORT, 'accounting_audit_event_is_immutable'); END`,
+      `CREATE TRIGGER IF NOT EXISTS trg_accounting_audit_voucher_posted_insert
+       AFTER INSERT ON accounting_vouchers FOR EACH ROW WHEN NEW.status='posted'
+       BEGIN
+         INSERT INTO accounting_audit_events(id,organization_id,financial_year_id,event_type,entity_type,entity_id,actor,previous_state_json,new_state_json,source,occurred_at)
+         VALUES ('accounting-audit:' || lower(hex(randomblob(16))),NEW.organization_id,NEW.financial_year_id,
+           CASE WHEN NEW.reversal_of_voucher_id IS NULL THEN 'voucher.posted' ELSE 'voucher.reversed' END,
+           'accounting_voucher',NEW.id,NEW.created_by,NULL,
+           json_object('status',NEW.status,'voucher_number',NEW.voucher_number,'voucher_type',NEW.voucher_type,'source_type',NEW.source_type,'source_id',NEW.source_id,'total_debit_minor',NEW.total_debit_minor,'total_credit_minor',NEW.total_credit_minor),
+           'database-trigger',COALESCE(NEW.finalized_at,NEW.created_at,datetime('now')));
+       END`,
+      `CREATE TRIGGER IF NOT EXISTS trg_accounting_audit_voucher_posted_update
+       AFTER UPDATE OF status ON accounting_vouchers FOR EACH ROW WHEN OLD.status<>'posted' AND NEW.status='posted'
+       BEGIN
+         INSERT INTO accounting_audit_events(id,organization_id,financial_year_id,event_type,entity_type,entity_id,actor,previous_state_json,new_state_json,source,occurred_at)
+         VALUES ('accounting-audit:' || lower(hex(randomblob(16))),NEW.organization_id,NEW.financial_year_id,
+           CASE WHEN NEW.reversal_of_voucher_id IS NULL THEN 'voucher.posted' ELSE 'voucher.reversed' END,
+           'accounting_voucher',NEW.id,NEW.created_by,json_object('status',OLD.status),
+           json_object('status',NEW.status,'voucher_number',NEW.voucher_number,'voucher_type',NEW.voucher_type,'source_type',NEW.source_type,'source_id',NEW.source_id,'total_debit_minor',NEW.total_debit_minor,'total_credit_minor',NEW.total_credit_minor),
+           'database-trigger',COALESCE(NEW.finalized_at,NEW.updated_at,datetime('now')));
+       END`,
+      `CREATE TRIGGER IF NOT EXISTS trg_accounting_audit_period_lock
+       AFTER INSERT ON accounting_period_locks FOR EACH ROW
+       BEGIN
+         INSERT INTO accounting_audit_events(id,organization_id,financial_year_id,event_type,entity_type,entity_id,actor,reason,new_state_json,source,occurred_at)
+         VALUES ('accounting-audit:' || lower(hex(randomblob(16))),NEW.organization_id,(SELECT id FROM financial_years WHERE organization_id=NEW.organization_id AND NEW.locked_through BETWEEN start_date AND end_date LIMIT 1),'period.locked','accounting_period_lock',NEW.id,NEW.locked_by,NEW.reason,json_object('locked_through',NEW.locked_through),'database-trigger',NEW.created_at);
+       END`,
+      `CREATE TRIGGER IF NOT EXISTS trg_accounting_audit_period_unlock
+       AFTER UPDATE OF unlocked_at ON accounting_period_locks FOR EACH ROW WHEN OLD.unlocked_at IS NULL AND NEW.unlocked_at IS NOT NULL
+       BEGIN
+         INSERT INTO accounting_audit_events(id,organization_id,financial_year_id,event_type,entity_type,entity_id,actor,reason,previous_state_json,new_state_json,source,occurred_at)
+         VALUES ('accounting-audit:' || lower(hex(randomblob(16))),NEW.organization_id,(SELECT id FROM financial_years WHERE organization_id=NEW.organization_id AND NEW.locked_through BETWEEN start_date AND end_date LIMIT 1),'period.unlocked','accounting_period_lock',NEW.id,NEW.unlocked_by,NEW.unlock_reason,json_object('unlocked_at',OLD.unlocked_at),json_object('unlocked_at',NEW.unlocked_at),'database-trigger',NEW.unlocked_at);
+       END`,
+      `CREATE TRIGGER IF NOT EXISTS trg_accounting_audit_year_close
+       AFTER UPDATE OF status ON financial_years FOR EACH ROW WHEN OLD.status='OPEN' AND NEW.status<>'OPEN'
+       BEGIN
+         INSERT INTO accounting_audit_events(id,organization_id,financial_year_id,event_type,entity_type,entity_id,previous_state_json,new_state_json,source,occurred_at)
+         VALUES ('accounting-audit:' || lower(hex(randomblob(16))),NEW.organization_id,NEW.id,'financial_year.closed','financial_year',NEW.id,json_object('status',OLD.status),json_object('status',NEW.status),'database-trigger',COALESCE(NEW.closed_at,datetime('now')));
+       END`,
+      `CREATE TRIGGER IF NOT EXISTS trg_accounting_audit_gst_classification
+       AFTER UPDATE OF transaction_type,supply_type,tax_category,itc_status ON gst_transaction_classifications FOR EACH ROW
+       WHEN OLD.transaction_type IS NOT NEW.transaction_type OR OLD.supply_type IS NOT NEW.supply_type OR OLD.tax_category IS NOT NEW.tax_category OR OLD.itc_status IS NOT NEW.itc_status
+       BEGIN
+         INSERT INTO accounting_audit_events(id,organization_id,financial_year_id,event_type,entity_type,entity_id,previous_state_json,new_state_json,source,occurred_at)
+         VALUES ('accounting-audit:' || lower(hex(randomblob(16))),NEW.organization_id,NEW.financial_year_id,'gst.classification_changed','gst_transaction_classification',NEW.id,
+           json_object('transaction_type',OLD.transaction_type,'supply_type',OLD.supply_type,'tax_category',OLD.tax_category,'itc_status',OLD.itc_status),
+           json_object('transaction_type',NEW.transaction_type,'supply_type',NEW.supply_type,'tax_category',NEW.tax_category,'itc_status',NEW.itc_status),'database-trigger',datetime('now'));
+       END`,
+      `CREATE TRIGGER IF NOT EXISTS trg_accounting_audit_bank_reconciliation
+       AFTER UPDATE OF status ON bank_reconciliations FOR EACH ROW WHEN OLD.status IS NOT NEW.status
+       BEGIN
+         INSERT INTO accounting_audit_events(id,organization_id,financial_year_id,event_type,entity_type,entity_id,actor,previous_state_json,new_state_json,source,occurred_at)
+         VALUES ('accounting-audit:' || lower(hex(randomblob(16))),NEW.organization_id,(SELECT voucher.financial_year_id FROM accounting_voucher_entries entry JOIN accounting_vouchers voucher ON voucher.id=entry.voucher_id WHERE entry.id=NEW.voucher_entry_id LIMIT 1),'bank.reconciliation_changed','bank_reconciliation',NEW.id,NEW.reconciled_by,json_object('status',OLD.status),json_object('status',NEW.status,'cleared_date',NEW.cleared_date,'bank_reference',NEW.bank_reference),'database-trigger',datetime('now'));
+       END`,
+      `CREATE TRIGGER IF NOT EXISTS trg_period_lock_tax_transaction_insert
+       BEFORE INSERT ON tax_transactions FOR EACH ROW
+       WHEN EXISTS (SELECT 1 FROM accounting_period_locks lock WHERE lock.organization_id=NEW.organization_id AND lock.unlocked_at IS NULL AND date(NEW.deduction_date) <= date(lock.locked_through))
+       BEGIN SELECT RAISE(ABORT, 'accounting_period_locked'); END`,
+      `CREATE TRIGGER IF NOT EXISTS trg_period_lock_depreciation_insert
+       BEFORE INSERT ON fixed_asset_depreciation FOR EACH ROW
+       WHEN EXISTS (SELECT 1 FROM accounting_period_locks lock WHERE lock.organization_id=NEW.organization_id AND lock.unlocked_at IS NULL AND date(NEW.period_end) <= date(lock.locked_through))
+       BEGIN SELECT RAISE(ABORT, 'accounting_period_locked'); END`,
+      ...closedFinancialYearMutationTriggers("tax_transactions", "tax_transaction"),
+      ...closedFinancialYearMutationTriggers("fixed_asset_depreciation", "fixed_asset_depreciation"),
+      ...closedFinancialYearMutationTriggers("fixed_asset_disposals", "fixed_asset_disposal"),
     ],
   },
 ]

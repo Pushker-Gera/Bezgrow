@@ -47,8 +47,20 @@ function verify(database) {
     assert.equal(Number(accountingTables), 6, "Accounting Phase 1 tables are incomplete in the installed database.")
     assert.equal(
       Number(database.prepare("SELECT COUNT(*) count FROM chart_of_accounts WHERE organization_id = ? AND system_role IS NOT NULL").get(ids.organization).count),
-      32,
+      43,
       "The upgraded business must have exactly one complete system Chart of Accounts."
+    )
+    const phaseThreeTables = [
+      "accounting_voucher_series", "accounting_dimensions", "accounting_dimension_allocations", "accounting_budgets",
+      "fixed_asset_categories", "fixed_assets", "fixed_asset_depreciation", "fixed_asset_disposals", "tax_rules",
+      "tax_transactions", "gst_return_periods", "gst_import_batches", "gst_import_records", "gst_reconciliations",
+      "statutory_integrations", "e_invoice_preparations", "e_way_bill_preparations", "bank_statement_imports",
+      "bank_statement_lines", "bank_statement_matches", "accounting_audit_events",
+    ]
+    assert.equal(
+      Number(database.prepare(`SELECT COUNT(*) count FROM sqlite_master WHERE type='table' AND name IN (${phaseThreeTables.map(() => "?").join(",")})`).get(...phaseThreeTables).count),
+      phaseThreeTables.length,
+      "Accounting Phase 3 tables are incomplete in the installed database."
     )
     assert.equal(
       Number(database.prepare("SELECT COUNT(*) count FROM accounting_settings WHERE organization_id = ?").get(ids.organization).count),
@@ -64,6 +76,16 @@ function verify(database) {
       Number(database.prepare("SELECT COUNT(*) count FROM (SELECT system_role FROM chart_of_accounts WHERE organization_id = ? AND system_role IS NOT NULL GROUP BY system_role HAVING COUNT(*) > 1)").get(ids.organization).count),
       0,
       "The upgraded Chart of Accounts contains duplicated system roles."
+    )
+    assert.equal(
+      Number(database.prepare("SELECT COUNT(*) count FROM accounting_voucher_entries line LEFT JOIN accounting_vouchers voucher ON voucher.id=line.voucher_id WHERE voucher.id IS NULL").get().count),
+      0,
+      "The upgraded database contains orphan accounting journal lines."
+    )
+    assert.equal(
+      Number(database.prepare("SELECT COUNT(*) count FROM (SELECT organization_id,source_type,source_id,COUNT(*) count FROM accounting_vouchers WHERE status='posted' AND source_type IS NOT NULL AND source_id IS NOT NULL GROUP BY organization_id,source_type,source_id HAVING count>1)").get().count),
+      0,
+      "The upgraded database contains duplicate posted source transactions."
     )
   }
   assert.equal(

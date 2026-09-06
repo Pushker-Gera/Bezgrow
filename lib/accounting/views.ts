@@ -17,6 +17,7 @@ export const accountingViewGroups: readonly AccountingViewGroup[] = [
     views: [
       { id: "customer-receipts", label: "Customer Receipts" },
       { id: "receivables-aging", label: "Receivables Aging" },
+      { id: "customer-statement", label: "Customer Statement" },
       { id: "sales-register", label: "Sales Register" },
       { id: "credit-notes", label: "Credit Notes" },
     ],
@@ -28,6 +29,7 @@ export const accountingViewGroups: readonly AccountingViewGroup[] = [
       { id: "purchase-returns", label: "Purchase Returns" },
       { id: "supplier-payments", label: "Supplier Payments" },
       { id: "payables-aging", label: "Payables Aging" },
+      { id: "supplier-statement", label: "Supplier Statement" },
       { id: "purchase-register", label: "Purchase Register" },
       { id: "suppliers", label: "Suppliers" },
     ],
@@ -39,10 +41,11 @@ export const accountingViewGroups: readonly AccountingViewGroup[] = [
       { id: "cash-book", label: "Cash Book" },
       { id: "bank-book", label: "Bank Book" },
       { id: "bank-reconciliation", label: "Bank Reconciliation" },
+      { id: "bank-statement-import", label: "Statement Import" },
     ],
   },
   {
-    label: "Tax",
+    label: "Tax & GST",
     views: [
       { id: "gst-overview", label: "GST Overview" },
       { id: "gst-sales-register", label: "GST Sales Register" },
@@ -51,6 +54,24 @@ export const accountingViewGroups: readonly AccountingViewGroup[] = [
       { id: "gstr-3b", label: "GSTR-3B Preparation" },
       { id: "hsn-summary", label: "HSN/SAC Summary" },
       { id: "gst-validation", label: "GST Validation" },
+      { id: "gst-return-preparation", label: "Return Preparation" },
+      { id: "gst-reconciliation", label: "GST Reconciliation" },
+      { id: "e-invoice", label: "E-Invoice" },
+      { id: "e-way-bill", label: "E-Way Bill" },
+      { id: "tds-register", label: "TDS" },
+      { id: "tcs-register", label: "TCS" },
+    ],
+  },
+  {
+    label: "Assets & Analysis",
+    views: [
+      { id: "fixed-assets", label: "Fixed Assets" },
+      { id: "depreciation-schedule", label: "Depreciation" },
+      { id: "dimensions", label: "Cost Centres" },
+      { id: "cost-centre-pl", label: "Cost Centre P&L" },
+      { id: "department-pl", label: "Department P&L" },
+      { id: "project-pl", label: "Project P&L" },
+      { id: "budget-vs-actual", label: "Budgets" },
     ],
   },
   {
@@ -60,6 +81,18 @@ export const accountingViewGroups: readonly AccountingViewGroup[] = [
       { id: "balance-sheet", label: "Balance Sheet" },
       { id: "cash-flow", label: "Cash Flow" },
       { id: "expenses", label: "Expenses" },
+      { id: "comparative-financials", label: "Comparative" },
+      { id: "financial-insights", label: "Financial Insights" },
+    ],
+  },
+  {
+    label: "Professional",
+    views: [
+      { id: "accountant-workspace", label: "Accountant / CA" },
+      { id: "auditor-mode", label: "Auditor Mode" },
+      { id: "audit-trail", label: "Audit Trail" },
+      { id: "accounting-health", label: "Accounting Health" },
+      { id: "accounting-search", label: "Accounting Search" },
     ],
   },
   {
@@ -67,6 +100,7 @@ export const accountingViewGroups: readonly AccountingViewGroup[] = [
     views: [
       { id: "opening-balances", label: "Opening Balances" },
       { id: "period-locking", label: "Period Locking" },
+      { id: "voucher-numbering", label: "Voucher Numbering" },
     ],
   },
 ] as const

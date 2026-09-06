@@ -17,9 +17,10 @@ import {
 } from "@/lib/accounting/phase2"
 import { buildReversalJournal, validateJournal, type AccountingAccount, type JournalLine } from "@/lib/accounting/journal"
 import { appendJournal } from "@/lib/offline/local/journal-posting"
-import { accountingStatus, initializeAccounting, loadPostedJournal, systemAccountMap } from "@/lib/offline/local/accounting"
+import { accountingStatus, advanceAccountingVoucherNumber, initializeAccounting, loadPostedJournal, prepareAccountingVoucherNumber, systemAccountMap } from "@/lib/offline/local/accounting"
 import { assertFinancialYearWriteAllowed, getFinancialYear } from "@/lib/offline/local/financial-years"
 import { getLocalDatabaseService, type SqlExecutor, type SqlValue } from "@/lib/offline/local/service"
+import { isoLocalDate, normalizeLocalDate } from "@/lib/financial-years"
 
 type DataRow = Record<string, unknown>
 type AllocationInput = { document_id?: unknown; purchase_invoice_id?: unknown; invoice_id?: unknown; amount?: unknown; allocation_amount?: unknown }
@@ -31,7 +32,10 @@ function nowIso() { return new Date().toISOString() }
 function localString(value: unknown, fallback = "") { return typeof value === "string" && value.trim() ? value.trim() : fallback }
 function localNumber(value: unknown, fallback = 0) { const parsed = Number(value); return Number.isFinite(parsed) ? parsed : fallback }
 function bool(value: unknown) { return value === true || value === 1 || value === "1" || String(value).toLowerCase() === "true" }
-function date(value: unknown) { const result = localString(value, nowIso().slice(0, 10)).slice(0, 10); if (!/^\d{4}-\d{2}-\d{2}$/.test(result)) throw new Error("Date must use YYYY-MM-DD format."); return result }
+function date(value: unknown) {
+  try { return normalizeLocalDate(localString(value, isoLocalDate()).slice(0, 10)) }
+  catch { throw new Error("Enter a valid business date in YYYY-MM-DD format.") }
+}
 
 function rowAccount(row: DataRow): AccountingAccount {
   return { id: String(row.id || ""), accountCode: String(row.account_code || ""), accountName: String(row.account_name || ""), accountType: String(row.account_type || ""), systemRole: row.system_role ? String(row.system_role) : null }
@@ -237,8 +241,9 @@ export async function createPurchase(organizationId: string, input: DataRow, kin
   const accounts = await systemAccountMap(organizationId)
   const purchaseId = createOfflineId("purchase")
   const internalNumber = await nextInternalPurchaseNumber(organizationId, kind)
+  const purchaseSeries = await prepareAccountingVoucherNumber(organizationId, year.id, "PURCHASE", "PUR")
   const purchasePosting = buildPurchaseJournal({
-    id: createOfflineId("purchase-voucher"), organizationId, financialYearId: year.id, voucherNumber: `PUR-${internalNumber}`,
+    id: createOfflineId("purchase-voucher"), organizationId, financialYearId: year.id, voucherNumber: purchaseSeries.voucherNumber,
     voucherType: "purchase", voucherDate: purchaseDate, sourceType: "PURCHASE_INVOICE", sourceId: purchaseId,
     referenceNo: supplierInvoiceNumber, narration: `Purchase invoice ${supplierInvoiceNumber}`, systemGenerated: true,
     accounts, supplierId, lines, totals, paidMinor: 0, selectedAccounts, reverseCharge: bool(input.reverse_charge),
@@ -250,8 +255,9 @@ export async function createPurchase(organizationId: string, input: DataRow, kin
   const paymentAccount = paymentAccounts.get(paymentAccountId)
   if (paidMinor && (!paymentAccount || paymentAccount.accountType !== "ASSET")) throw new Error("Select an active cash or bank account for the paid amount.")
   const paymentId = paidMinor ? createOfflineId("supplier-payment") : ""
+  const paymentSeries = paidMinor ? await prepareAccountingVoucherNumber(organizationId, year.id, "PAYMENT", "PAY") : null
   const paymentPosting = paidMinor && paymentAccount ? buildPartySettlementJournal({
-    id: createOfflineId("payment-voucher"), organizationId, financialYearId: year.id, voucherNumber: `PAY-${paymentId.slice(-8).toUpperCase()}`,
+    id: createOfflineId("payment-voucher"), organizationId, financialYearId: year.id, voucherNumber: paymentSeries!.voucherNumber,
     voucherType: "payment", voucherDate: purchaseDate, sourceType: "SUPPLIER_PAYMENT", sourceId: paymentId,
     referenceNo: localString(input.payment_reference, supplierInvoiceNumber), narration: `Payment against ${supplierInvoiceNumber}`,
     systemGenerated: true, accounts, partyType: "supplier", partyId: supplierId, direction: "out", paymentAccount,
@@ -298,6 +304,7 @@ export async function createPurchase(organizationId: string, input: DataRow, kin
       }
     }
     await appendJournal(tx, purchasePosting.journal)
+    await advanceAccountingVoucherNumber(tx, organizationId, year.id, purchaseSeries)
     if (paymentPosting) {
       await tx.execute(
         `INSERT INTO payments (id, organization_id, party_type, party_id, document_type, document_id, amount,
@@ -314,6 +321,7 @@ export async function createPurchase(organizationId: string, input: DataRow, kin
         [createOfflineId("allocation"), organizationId, year.id, paymentId, supplierId, purchaseId, paidMinor, timestamp]
       )
       await appendJournal(tx, paymentPosting.journal)
+      await advanceAccountingVoucherNumber(tx, organizationId, year.id, paymentSeries!)
     }
     await tx.execute("UPDATE purchase_invoices SET document_status = 'POSTED', updated_at = ? WHERE organization_id = ? AND id = ? AND document_status = 'DRAFT'", [timestamp, organizationId, purchaseId])
     await tx.execute("UPDATE suppliers SET current_balance = COALESCE(current_balance, 0) + ?, sync_status = 'pending_update', updated_at = ? WHERE organization_id = ? AND id = ?", [minorToMoney(totals.settlementTotalMinor - paidMinor), timestamp, organizationId, supplierId])
@@ -392,8 +400,9 @@ export async function createPurchaseReturn(organizationId: string, input: DataRo
   const accounts = await systemAccountMap(organizationId)
   const returnId = createOfflineId("purchase-return")
   const internalNumber = await nextInternalPurchaseNumber(organizationId, "purchase_return")
+  const voucherSeries = await prepareAccountingVoucherNumber(organizationId, year.id, "DEBIT_NOTE", "DN")
   const posting = buildPurchaseJournal({
-    id: createOfflineId("purchase-return-voucher"), organizationId, financialYearId: year.id, voucherNumber: `DN-${internalNumber}`,
+    id: createOfflineId("purchase-return-voucher"), organizationId, financialYearId: year.id, voucherNumber: voucherSeries.voucherNumber,
     voucherType: "debit_note", voucherDate: purchaseDate, sourceType: "PURCHASE_RETURN", sourceId: returnId,
     referenceNo: supplierInvoiceNumber, narration: `Purchase return / debit note ${supplierInvoiceNumber}`,
     systemGenerated: true, accounts, supplierId, lines, totals, paidMinor: 0, selectedAccounts,
@@ -437,6 +446,7 @@ export async function createPurchaseReturn(organizationId: string, input: DataRo
       }
     }
     await appendJournal(tx, posting.journal)
+    await advanceAccountingVoucherNumber(tx, organizationId, year.id, voucherSeries)
     await tx.execute("UPDATE purchase_invoices SET document_status = 'POSTED', updated_at = ? WHERE organization_id = ? AND id = ? AND document_status = 'DRAFT'", [timestamp, organizationId, returnId])
     await tx.execute(
       `UPDATE purchase_invoices SET outstanding_minor = MAX(0, outstanding_minor - ?), outstanding_amount = MAX(0, outstanding_amount - ?),
@@ -566,9 +576,15 @@ export async function createPartyPayment(organizationId: string, input: DataRow,
   if (allocatedMinor > amountMinor) throw new Error("Invoice allocations cannot exceed the payment amount.")
   const accounts = await systemAccountMap(organizationId)
   const paymentId = createOfflineId(partyType === "supplier" ? "supplier-payment" : "customer-receipt")
+  const voucherSeries = await prepareAccountingVoucherNumber(
+    organizationId,
+    year.id,
+    partyType === "supplier" ? "PAYMENT" : "RECEIPT",
+    partyType === "supplier" ? "PAY" : "REC"
+  )
   const posting = buildPartySettlementJournal({
     id: createOfflineId("payment-voucher"), organizationId, financialYearId: year.id,
-    voucherNumber: `${partyType === "supplier" ? "PAY" : "REC"}-${paymentId.slice(-8).toUpperCase()}`,
+    voucherNumber: voucherSeries.voucherNumber,
     voucherType: partyType === "supplier" ? "payment" : "receipt", voucherDate: paymentDate,
     sourceType: partyType === "supplier" ? "SUPPLIER_PAYMENT" : "CUSTOMER_RECEIPT", sourceId: paymentId,
     referenceNo: localString(input.reference_no) || null,
@@ -627,6 +643,7 @@ export async function createPartyPayment(organizationId: string, input: DataRow,
       )
     }
     await appendJournal(tx, posting.journal)
+    await advanceAccountingVoucherNumber(tx, organizationId, year.id, voucherSeries)
     const balanceDelta = partyType === "supplier" ? -allocatedMinor : -allocatedMinor
     await tx.execute(`UPDATE ${partyTable} SET current_balance = MAX(0, COALESCE(current_balance, 0) + ?), sync_status = 'pending_update', updated_at = ? WHERE organization_id = ? AND id = ?`, [minorToMoney(balanceDelta), timestamp, organizationId, partyId])
     await audit(tx, organizationId, partyType === "supplier" ? "supplier_payment.posted" : "customer_receipt.posted", "payment", paymentId, `${String(party.name || "Party")} · ${resolvedAllocations.length} document allocation(s) · advance ${posting.advanceMinor} minor units.`, timestamp)
@@ -660,9 +677,10 @@ export async function applyPartyAdvance(organizationId: string, input: DataRow, 
   if (!document || amountMinor > outstandingMinor) throw new Error("Advance allocation exceeds the target document outstanding amount.")
   const accounts = await systemAccountMap(organizationId)
   const allocationId = createOfflineId("advance-allocation")
+  const voucherSeries = await prepareAccountingVoucherNumber(organizationId, year.id, "ADVANCE_ADJUSTMENT", "ADJ")
   const posting = buildAdvanceApplicationJournal({
     id: createOfflineId("advance-voucher"), organizationId, financialYearId: year.id,
-    voucherNumber: `ADV-${allocationId.slice(-8).toUpperCase()}`, voucherType: "journal", voucherDate: allocationDate,
+    voucherNumber: voucherSeries.voucherNumber, voucherType: "journal", voucherDate: allocationDate,
     sourceType: partyType === "supplier" ? "SUPPLIER_ADVANCE_APPLICATION" : "CUSTOMER_ADVANCE_APPLICATION",
     sourceId: allocationId, referenceNo: localString(input.reference_no) || null,
     narration: localString(input.notes, "Party advance applied to invoice"), systemGenerated: true,
@@ -671,6 +689,7 @@ export async function applyPartyAdvance(organizationId: string, input: DataRow, 
   const timestamp = nowIso()
   await service.transaction(async (tx) => {
     await appendJournal(tx, posting)
+    await advanceAccountingVoucherNumber(tx, organizationId, year.id, voucherSeries)
     await tx.execute(
       `INSERT INTO advance_allocations (id, organization_id, financial_year_id, advance_id, document_type,
        document_id, allocation_minor, accounting_voucher_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
@@ -712,6 +731,7 @@ export async function saveSupplier(organizationId: string, input: DataRow) {
   }
   const openingDate = date(input.opening_date)
   let openingJournal: ReturnType<typeof validateJournal> | null = null
+  let openingSeries: Awaited<ReturnType<typeof prepareAccountingVoucherNumber>> | null = null
   if (!existing && openingMinor > 0) {
     await assertPeriodUnlocked(organizationId, openingDate)
     await initializeAccounting(organizationId, openingDate)
@@ -721,10 +741,11 @@ export async function saveSupplier(organizationId: string, input: DataRow) {
     const account = openingType === "payable" ? accounts.get("ACCOUNTS_PAYABLE") : accounts.get("SUPPLIER_ADVANCES")
     const equity = accounts.get("OPENING_EQUITY")
     if (!account || !equity) throw new Error("Supplier opening accounts are missing.")
+    openingSeries = await prepareAccountingVoucherNumber(organizationId, year.id, "OPENING", "OPEN")
     const lines: JournalLine[] = openingType === "payable"
       ? [{ accountId: equity.id, accountType: equity.accountType, debitMinor: openingMinor, creditMinor: 0 }, { accountId: account.id, accountType: account.accountType, debitMinor: 0, creditMinor: openingMinor, ...partyDetails }]
       : [{ accountId: account.id, accountType: account.accountType, debitMinor: openingMinor, creditMinor: 0, ...partyDetails }, { accountId: equity.id, accountType: equity.accountType, debitMinor: 0, creditMinor: openingMinor }]
-    openingJournal = validateJournal({ id: createOfflineId("supplier-opening-voucher"), organizationId, financialYearId: year.id, voucherNumber: `SUP-OPEN-${id.slice(-8).toUpperCase()}`, voucherType: "opening", voucherDate: openingDate, sourceType: "SUPPLIER_OPENING", sourceId: id, narration: `Supplier opening ${openingType} · ${name}`, systemGenerated: true, lines })
+    openingJournal = validateJournal({ id: createOfflineId("supplier-opening-voucher"), organizationId, financialYearId: year.id, voucherNumber: openingSeries.voucherNumber, voucherType: "opening", voucherDate: openingDate, sourceType: "SUPPLIER_OPENING", sourceId: id, narration: `Supplier opening ${openingType} · ${name}`, systemGenerated: true, lines })
   }
   const timestamp = nowIso()
   await service.transaction(async (tx) => {
@@ -752,6 +773,7 @@ export async function saveSupplier(organizationId: string, input: DataRow) {
     )
     if (openingJournal) {
       await appendJournal(tx, openingJournal)
+      await advanceAccountingVoucherNumber(tx, organizationId, openingJournal.financialYearId, openingSeries!)
       if (openingType === "advance") {
         await tx.execute(
           `INSERT INTO party_advances (id, organization_id, financial_year_id, party_type, party_id, payment_id,
@@ -832,7 +854,10 @@ export async function savePurchaseAttachment(organizationId: string, input: Data
   const mediaType = localString(input.media_type, localString(input.mediaType))
   const sizeBytes = Math.trunc(localNumber(input.size_bytes ?? input.bytes))
   const sha256 = localString(input.sha256).toLowerCase()
-  if (!purchaseId || !relativePath.startsWith("business-assets/purchase-attachments/") || !fileName || !["application/pdf", "image/png", "image/jpeg", "image/webp"].includes(mediaType) || sizeBytes <= 0 || sizeBytes > 20 * 1024 * 1024 || !/^[a-f0-9]{64}$/.test(sha256)) {
+  const pathParts = relativePath.split("/")
+  const safePath = relativePath.startsWith("business-assets/purchase-attachments/") && relativePath.length <= 512 && !relativePath.includes("\\") && pathParts.every((part) => part && part !== "." && part !== "..")
+  const safeFileName = fileName.length <= 255 && !/[\\/]/.test(fileName) && fileName !== "." && fileName !== ".." && pathParts.at(-1) === fileName
+  if (!purchaseId || !safePath || !safeFileName || !["application/pdf", "image/png", "image/jpeg", "image/webp"].includes(mediaType) || sizeBytes <= 0 || sizeBytes > 20 * 1024 * 1024 || !/^[a-f0-9]{64}$/.test(sha256)) {
     throw new Error("The local supplier invoice attachment metadata is invalid.")
   }
   const db = await service.requireConnection("read")
@@ -906,7 +931,8 @@ export async function createSalesCreditNote(organizationId: string, input: DataR
     lines.push(accountLine(requireRole("COGS"), 0, totals.cost, { description: "COGS reversed" }))
   }
   const noteId = createOfflineId("credit-note")
-  const noteNumber = localString(input.note_number, `CN-${noteId.slice(-8).toUpperCase()}`)
+  const voucherSeries = await prepareAccountingVoucherNumber(organizationId, year.id, "CREDIT_NOTE", "CN")
+  const noteNumber = voucherSeries.voucherNumber
   const journal = validateJournal({ id: createOfflineId("credit-note-voucher"), organizationId, financialYearId: year.id, voucherNumber: noteNumber, voucherType: "credit_note", voucherDate: noteDate, sourceType: "SALES_CREDIT_NOTE", sourceId: noteId, referenceNo: String(invoice.display_invoice_number || invoice.invoice_number || ""), narration: localString(input.reason, `Sales credit note against ${String(invoice.invoice_number || invoiceId)}`), systemGenerated: true, lines })
   const movements = await db.select<DataRow>("SELECT * FROM stock_movements WHERE organization_id = ? AND reference_id = ? AND reference_type = 'invoice' AND quantity < 0 AND deleted_at IS NULL ORDER BY created_at, id", [organizationId, invoiceId])
   const timestamp = nowIso()
@@ -952,6 +978,7 @@ export async function createSalesCreditNote(organizationId: string, input: DataR
       }
     }
     await appendJournal(tx, journal)
+    await advanceAccountingVoucherNumber(tx, organizationId, year.id, voucherSeries)
     await tx.execute("UPDATE sales_invoices SET outstanding_minor = MAX(0, outstanding_minor - ?), outstanding_amount = MAX(0, outstanding_amount - ?), updated_at = ? WHERE organization_id = ? AND id = ?", [receivableReductionMinor, minorToMoney(receivableReductionMinor), timestamp, organizationId, invoiceId])
     await tx.execute("UPDATE customers SET current_balance = MAX(0, COALESCE(current_balance, 0) - ?), updated_at = ? WHERE organization_id = ? AND id = ?", [minorToMoney(receivableReductionMinor), timestamp, organizationId, customerId])
     if (customerAdvanceMinor) await tx.execute(
@@ -986,6 +1013,7 @@ export async function saveBankAccount(organizationId: string, input: DataRow) {
   const openingDate = date(input.opening_date)
   let accountId = localString(existing?.account_id)
   let openingJournal: ReturnType<typeof validateJournal> | null = null
+  let openingSeries: Awaited<ReturnType<typeof prepareAccountingVoucherNumber>> | null = null
   if (!existing) {
     await assertPeriodUnlocked(organizationId, openingDate)
     await initializeAccounting(organizationId, openingDate)
@@ -997,9 +1025,10 @@ export async function saveBankAccount(organizationId: string, input: DataRow) {
       if (!equity) throw new Error("Opening equity account is missing.")
       const bank: AccountingAccount = { id: accountId, accountCode: `BANK-${id.slice(-6).toUpperCase()}`, accountName: displayName, accountType: "ASSET", systemRole: null }
       const absolute = Math.abs(openingMinor)
+      openingSeries = await prepareAccountingVoucherNumber(organizationId, year.id, "OPENING", "OPEN")
       openingJournal = validateJournal({
         id: createOfflineId("bank-opening-voucher"), organizationId, financialYearId: year.id,
-        voucherNumber: `BANK-OPEN-${id.slice(-8).toUpperCase()}`, voucherType: "opening", voucherDate: openingDate,
+        voucherNumber: openingSeries.voucherNumber, voucherType: "opening", voucherDate: openingDate,
         sourceType: "BANK_ACCOUNT_OPENING", sourceId: id, narration: `Opening balance · ${displayName}`, systemGenerated: true,
         lines: openingMinor > 0
           ? [accountLine(bank, absolute, 0), accountLine(equity, 0, absolute)]
@@ -1038,7 +1067,10 @@ export async function saveBankAccount(organizationId: string, input: DataRow) {
         localString(input.account_type, "CURRENT").toUpperCase(), maskAccountNumber(accountNumber), openingMinor,
         openingDate, openingJournal?.id || (existing?.opening_voucher_id as SqlValue) || null, (existing?.created_at as SqlValue) || timestamp, timestamp]
     )
-    if (openingJournal) await appendJournal(tx, openingJournal)
+    if (openingJournal) {
+      await appendJournal(tx, openingJournal)
+      await advanceAccountingVoucherNumber(tx, organizationId, openingJournal.financialYearId, openingSeries!)
+    }
     await audit(tx, organizationId, existing ? "bank_account.updated" : "bank_account.created", "bank_account", id, `${displayName} ${existing ? "updated" : "created"}.`, timestamp)
   })
   return { bank_account_id: id, account_id: accountId, masked_identifier: maskAccountNumber(accountNumber), opening_voucher_id: openingJournal?.id || existing?.opening_voucher_id || null }

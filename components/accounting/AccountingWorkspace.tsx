@@ -1,11 +1,13 @@
 "use client";
 
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useState, type FormEvent } from "react";
 import { apiFetch } from "@/lib/api/client-fetch";
 import { getOrganizationId } from "@/lib/getOrganization";
 import { useFinancialYears } from "@/components/financial-years/FinancialYearContext";
 import { AccountingPhase2Views } from "@/components/accounting/AccountingPhase2Views";
+import { AccountingPhase3Views } from "@/components/accounting/AccountingPhase3Views";
 import { accountingViewGroups, accountingViews } from "@/lib/accounting/views";
 
 type Row = Record<string, unknown>;
@@ -23,6 +25,7 @@ const reportForView: Record<string, string> = {
   "cash-flow": "cash-flow",
   expenses: "expenses",
   "opening-balances": "warnings",
+  "bank-statement-import": "bank-statement-import",
 };
 
 const phaseOneViews = new Set([
@@ -36,6 +39,13 @@ const phaseOneViews = new Set([
   "cash-flow",
   "expenses",
   "opening-balances",
+]);
+
+const phaseThreeViews = new Set([
+  "customer-statement", "supplier-statement", "bank-statement-import", "gst-return-preparation", "gst-reconciliation",
+  "e-invoice", "e-way-bill", "tds-register", "tcs-register", "fixed-assets", "depreciation-schedule", "dimensions",
+  "cost-centre-pl", "department-pl", "project-pl", "budget-vs-actual", "comparative-financials", "financial-insights",
+  "accountant-workspace", "auditor-mode", "audit-trail", "accounting-health", "accounting-search", "voucher-numbering",
 ]);
 
 function text(value: unknown, fallback = "—") {
@@ -61,6 +71,11 @@ function classNames(...values: Array<string | false | null | undefined>) {
   return values.filter(Boolean).join(" ");
 }
 
+function businessToday() {
+  const date = new Date();
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
+}
+
 async function payload(response: Response) {
   const result = (await response.json()) as Row;
   if (!response.ok || result.success === false)
@@ -78,10 +93,21 @@ function csvValue(value: unknown) {
   return `"${candidate.replaceAll('"', '""')}"`;
 }
 
-function downloadCsv(name: string, rows: Row[]) {
+function downloadCsv(name: string, rows: Row[], metadata?: Row) {
   if (!rows.length) return;
   const columns = Array.from(new Set(rows.flatMap((row) => Object.keys(row))));
   const content = [
+    ...(metadata
+      ? [
+          ["Business name", metadata.businessName],
+          ["GSTIN", metadata.gstin],
+          ["Financial year", metadata.financialYear],
+          ["Report", metadata.reportName],
+          ["Period", metadata.period],
+          ["Generated at", metadata.generatedAt],
+          [],
+        ].map((values) => values.map(csvValue).join(","))
+      : []),
     columns.map(csvValue).join(","),
     ...rows.map((row) =>
       columns.map((column) => csvValue(row[column])).join(","),
@@ -204,12 +230,12 @@ function DataTable({
   );
 }
 
-function ReportActions({ view, rows }: { view: string; rows: Row[] }) {
+function ReportActions({ view, rows, report }: { view: string; rows: Row[]; report?: Report }) {
   return (
     <div className="flex flex-wrap gap-2 print:hidden">
       <button
         type="button"
-        onClick={() => downloadCsv(`bezgrow-${view}`, rows)}
+        onClick={() => downloadCsv(`bezgrow-${view}`, rows, report?.exportMetadata as Row | undefined)}
         disabled={!rows.length}
         className="min-h-10 rounded-xl border border-white/10 px-4 text-xs font-black text-neutral-200 disabled:opacity-40"
       >
@@ -227,11 +253,13 @@ function ReportActions({ view, rows }: { view: string; rows: Row[] }) {
 }
 
 export function AccountingWorkspace({ view }: { view: string }) {
+  const router = useRouter();
   const { selectedYear } = useFinancialYears();
   const [organizationId, setOrganizationId] = useState("");
   const [accounts, setAccounts] = useState<Row[]>([]);
   const [status, setStatus] = useState<Row | null>(null);
   const [report, setReport] = useState<Report>({});
+  const [phaseThreeReference, setPhaseThreeReference] = useState<Row>({});
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [notice, setNotice] = useState("");
@@ -244,6 +272,31 @@ export function AccountingWorkspace({ view }: { view: string }) {
   const [reportPage, setReportPage] = useState(1);
   const [reportSearch, setReportSearch] = useState("");
   const [searchDraft, setSearchDraft] = useState("");
+  const [reportPartyId, setReportPartyId] = useState("");
+
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      const target = event.target as HTMLElement | null;
+      const editing = target?.matches("input, textarea, select, [contenteditable='true']");
+      if (event.key === "Escape" && editing) {
+        target?.blur();
+        return;
+      }
+      const searchShortcut = (event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "k";
+      if (searchShortcut || (event.key === "/" && !editing)) {
+        event.preventDefault();
+        router.push("/dashboard/accounting/accounting-search");
+        window.setTimeout(() => document.getElementById("accounting-search-input")?.focus(), 150);
+        return;
+      }
+      if (event.altKey && !editing) {
+        const route = ({ "1": "/dashboard/invoices/create", "2": "/dashboard/accounting/purchases", "3": "/dashboard/accounting/customer-receipts", "4": "/dashboard/accounting/supplier-payments", "5": "/dashboard/accounting/expenses" } as Record<string, string>)[event.key];
+        if (route) { event.preventDefault(); router.push(route); }
+      }
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [router]);
 
   async function load() {
     if (!selectedYear) return;
@@ -266,7 +319,8 @@ export function AccountingWorkspace({ view }: { view: string }) {
       query.set("page", String(reportPage));
       query.set("limit", "50");
       if (reportSearch) query.set("search", reportSearch);
-      const [accountResult, statusResult, reportResult] = await Promise.all([
+      if (reportPartyId) query.set("party_id", reportPartyId);
+      const [accountResult, statusResult, reportResult, referenceResult] = await Promise.all([
         apiFetch(
           `/api/accounting/chart?organization_id=${encodeURIComponent(org)}&limit=500`,
           { cache: "no-store" },
@@ -281,6 +335,9 @@ export function AccountingWorkspace({ view }: { view: string }) {
           : apiFetch(`/api/accounting/reports?${query.toString()}`, {
               cache: "no-store",
             }).then(payload),
+        phaseThreeViews.has(view)
+          ? apiFetch(`/api/accounting/reference-data?organization_id=${encodeURIComponent(org)}&financial_year_id=${encodeURIComponent(selectedYear.id)}`, { cache: "no-store" }).then(payload)
+          : Promise.resolve({} as Row),
       ]);
       const nextAccounts = Array.isArray(accountResult.data)
         ? (accountResult.data as Row[])
@@ -288,6 +345,7 @@ export function AccountingWorkspace({ view }: { view: string }) {
       setAccounts(nextAccounts);
       setStatus((statusResult.status as Row) || null);
       setReport(reportResult as Report);
+      setPhaseThreeReference(referenceResult);
       if (view === "general-ledger" && !ledgerAccountId && nextAccounts[0]?.id)
         setLedgerAccountId(String(nextAccounts[0].id));
       setNotice("");
@@ -321,10 +379,12 @@ export function AccountingWorkspace({ view }: { view: string }) {
     direction,
     reportPage,
     reportSearch,
+    reportPartyId,
   ]);
 
   useEffect(() => {
     setReportPage(1);
+    setReportPartyId("");
   }, [view, ledgerAccountId]);
 
   async function submit(path: string, body: Row) {
@@ -384,7 +444,7 @@ export function AccountingWorkspace({ view }: { view: string }) {
           <div className="flex flex-wrap items-start justify-between gap-4">
             <div>
               <p className="text-xs font-black uppercase tracking-[0.2em] text-cyan-300">
-                Phase 2 · Local double-entry
+                Phase 3 · Professional local double-entry
               </p>
               <h1 className="mt-2 text-2xl font-black sm:text-3xl">
                 Accounting · {active.label}
@@ -393,6 +453,7 @@ export function AccountingWorkspace({ view }: { view: string }) {
                 Authoritative journals are stored in local SQLite. Posted
                 entries are immutable; corrections use linked reversals.
               </p>
+              <p className="mt-2 text-[11px] text-neutral-500 print:hidden">⌘/Ctrl K or / Search · Alt+1 Sale · Alt+2 Purchase · Alt+3 Receive Money · Alt+4 Pay Supplier · Alt+5 Expense</p>
             </div>
             <div className="rounded-xl border border-white/10 bg-black/30 px-4 py-3 text-right text-xs print:border-neutral-300 print:bg-white">
               <p className="font-black">
@@ -452,7 +513,7 @@ export function AccountingWorkspace({ view }: { view: string }) {
             transactionType={transactionType}
             direction={direction}
             showTransactionType={["journal", "general-ledger"].includes(view)}
-            showSearch={["journal", "expenses"].includes(view)}
+            showSearch={["journal", "general-ledger", "expenses", "accounting-search", "audit-trail", "auditor-mode"].includes(view)}
             search={searchDraft}
             onSearchDraft={setSearchDraft}
             onSearch={() => {
@@ -507,7 +568,7 @@ export function AccountingWorkspace({ view }: { view: string }) {
               disabled={saving || !selectedYear?.is_active}
               onClick={() =>
                 submit("/api/accounting/initialize", {
-                  opening_date: new Date().toISOString().slice(0, 10),
+                  opening_date: businessToday(),
                 })
               }
               className="mt-5 min-h-11 rounded-xl bg-cyan-300 px-5 text-sm font-black text-black disabled:opacity-40"
@@ -574,7 +635,22 @@ export function AccountingWorkspace({ view }: { view: string }) {
         {!loading && initialized && view === "opening-balances" ? (
           <OpeningBalances report={report} status={status} />
         ) : null}
-        {!loading && initialized && !phaseOneViews.has(view) ? (
+        {!loading && initialized && phaseThreeViews.has(view) ? (
+          <AccountingPhase3Views
+            view={view}
+            report={report}
+            reference={phaseThreeReference}
+            accounts={accounts}
+            saving={saving}
+            onSubmit={submit}
+            selectedParty={reportPartyId}
+            onSelectedParty={(id) => {
+              setReportPartyId(id);
+              setReportPage(1);
+            }}
+          />
+        ) : null}
+        {!loading && initialized && !phaseOneViews.has(view) && !phaseThreeViews.has(view) ? (
           <AccountingPhase2Views
             view={view}
             report={report}
@@ -650,9 +726,8 @@ function ReportFilters({
     const startMonth = kind === "quarter" ? Math.floor(month / 3) * 3 : month;
     const endMonth = kind === "quarter" ? startMonth + 2 : month;
     const periodStart = `${today.getFullYear()}-${String(startMonth + 1).padStart(2, "0")}-01`;
-    const periodEnd = new Date(today.getFullYear(), endMonth + 1, 0)
-      .toISOString()
-      .slice(0, 10);
+    const lastDay = new Date(today.getFullYear(), endMonth + 1, 0);
+    const periodEnd = `${lastDay.getFullYear()}-${String(lastDay.getMonth() + 1).padStart(2, "0")}-${String(lastDay.getDate()).padStart(2, "0")}`;
     onFrom(
       periodStart < year.start_date || periodStart > year.end_date
         ? year.start_date
@@ -737,6 +812,7 @@ function ReportFilters({
           <label className="text-[11px] font-black uppercase tracking-wider text-neutral-500">
             Search
             <input
+              id="accounting-search-input"
               value={search}
               onChange={(event) => onSearchDraft(event.target.value)}
               placeholder="Voucher, reference, payee…"
@@ -827,7 +903,8 @@ function Overview({ report, status }: { report: Report; status: Row | null }) {
           value={moneyMinor(report.netProfitMinor)}
           tone={number(report.netProfitMinor) >= 0 ? "green" : "amber"}
         />
-        <Metric label="Cash + bank" value={moneyMinor(report.cashMinor)} />
+        <Metric label="Cash on hand" value={moneyMinor(report.cashOnHandMinor)} />
+        <Metric label="Bank" value={moneyMinor(report.bankMinor)} />
         <Metric
           label="Receivables"
           value={moneyMinor(report.receivablesMinor)}
@@ -843,6 +920,11 @@ function Overview({ report, status }: { report: Report; status: Row | null }) {
           tone="green"
         />
         <Metric
+          label="Gross profit"
+          value={moneyMinor(report.grossProfitMinor)}
+          tone={number(report.grossProfitMinor) >= 0 ? "green" : "amber"}
+        />
+        <Metric
           label="Expenses incl. COGS"
           value={moneyMinor(report.expenseMinor)}
           tone="amber"
@@ -854,6 +936,11 @@ function Overview({ report, status }: { report: Report; status: Row | null }) {
         <Metric
           label="Cost of goods sold"
           value={moneyMinor(report.cogsMinor)}
+          tone="amber"
+        />
+        <Metric
+          label="GST payable / (credit)"
+          value={moneyMinor(report.gstPositionMinor)}
           tone="amber"
         />
       </div>
@@ -921,7 +1008,7 @@ function ChartOfAccounts({
       <form
         key={editingId || "new"}
         onSubmit={save}
-        className="grid gap-3 rounded-lg border border-white/10 bg-white/[0.03] p-4 md:grid-cols-4 xl:grid-cols-[1fr_2fr_1fr_1fr_1fr_auto_auto]"
+        className="grid gap-3 rounded-lg border border-white/10 bg-white/[0.03] p-4 md:grid-cols-4 xl:grid-cols-[1fr_2fr_1fr_1fr_1fr_1fr_auto_auto]"
       >
         <input
           name="account_code"
@@ -962,6 +1049,17 @@ function ChartOfAccounts({
           placeholder="Group (optional)"
           className="rounded-xl border border-white/10 bg-black px-3 py-2.5"
         />
+        <select
+          name="cash_flow_classification"
+          defaultValue={text(editing?.cash_flow_classification, "")}
+          className="rounded-xl border border-white/10 bg-black px-3 py-2.5"
+          title="Used only when a cash-flow activity can be identified from this counter-ledger"
+        >
+          <option value="">Cash flow: unclassified</option>
+          <option value="OPERATING">Operating</option>
+          <option value="INVESTING">Investing</option>
+          <option value="FINANCING">Financing</option>
+        </select>
         <button
           disabled={saving}
           className="rounded-xl bg-cyan-300 px-4 font-black text-black"
@@ -988,6 +1086,7 @@ function ChartOfAccounts({
               <th className="px-4 py-3">Code</th>
               <th className="px-4 py-3">Account</th>
               <th className="px-4 py-3">Type / Group</th>
+              <th className="px-4 py-3">Cash flow</th>
               <th className="px-4 py-3 text-right">Current balance</th>
               <th className="px-4 py-3">Status</th>
               <th className="px-4 py-3 text-right print:hidden">Actions</th>
@@ -1011,6 +1110,9 @@ function ChartOfAccounts({
                 </td>
                 <td className="px-4 py-3 text-neutral-400">
                   {text(account.account_type)} · {text(account.account_group)}
+                </td>
+                <td className="px-4 py-3 text-neutral-400">
+                  {text(account.cash_flow_classification, "Unclassified")}
                 </td>
                 <td className="px-4 py-3 text-right font-mono font-bold">
                   {moneyMinor(account.current_balance_minor)}
@@ -1140,7 +1242,7 @@ function JournalView({
             type="date"
             name="voucher_date"
             required
-            defaultValue={new Date().toISOString().slice(0, 10)}
+            defaultValue={businessToday()}
             className="rounded-xl border border-white/10 bg-black px-3 py-2.5"
           />
           <select
@@ -1286,7 +1388,7 @@ function JournalView({
           </div>
         </div>
       </form>
-      <ReportActions view="journal" rows={rows} />
+      <ReportActions view="journal" rows={rows} report={report} />
       <div className="space-y-2">
         {rows.map((voucher) => {
           const id = text(voucher.id, "");
@@ -1366,7 +1468,7 @@ function GeneralLedger({
             </option>
           ))}
         </select>
-        <ReportActions view="general-ledger" rows={rows} />
+        <ReportActions view="general-ledger" rows={rows} report={report} />
       </div>
       <p className="text-sm text-neutral-500">
         Opening balance:{" "}
@@ -1380,6 +1482,7 @@ function GeneralLedger({
           { key: "voucher_date", label: "Date" },
           { key: "voucher_number", label: "Voucher" },
           { key: "voucher_type", label: "Type" },
+          { key: "counterparty", label: "Counterparty" },
           { key: "narration", label: "Particulars" },
           { key: "reference_no", label: "Reference" },
           { key: "debit_minor", label: "Debit", money: true },
@@ -1413,7 +1516,7 @@ function TrialBalance({ report }: { report: Report }) {
         </div>
       ) : null}
       <div className="flex justify-end">
-        <ReportActions view="trial-balance" rows={rows} />
+        <ReportActions view="trial-balance" rows={rows} report={report} />
       </div>
       <DataTable
         rows={rows}
@@ -1471,13 +1574,28 @@ function ProfitLoss({ report }: { report: Report }) {
           tone="amber"
         />
         <Metric
+          label="EBITDA"
+          value={moneyMinor(report.ebitdaMinor)}
+          tone={number(report.ebitdaMinor) >= 0 ? "green" : "amber"}
+        />
+        <Metric
+          label="Depreciation"
+          value={moneyMinor(report.depreciationMinor)}
+          tone="amber"
+        />
+        <Metric
+          label="Profit before tax"
+          value={moneyMinor(report.profitBeforeTaxMinor)}
+          tone={number(report.profitBeforeTaxMinor) >= 0 ? "green" : "amber"}
+        />
+        <Metric
           label="Net profit / loss"
           value={moneyMinor(report.netProfitMinor)}
           tone={number(report.netProfitMinor) >= 0 ? "green" : "amber"}
         />
       </div>
       <div className="flex justify-end">
-        <ReportActions view="profit-loss" rows={rows} />
+        <ReportActions view="profit-loss" rows={rows} report={report} />
       </div>
       <DataTable
         rows={rows}
@@ -1487,7 +1605,7 @@ function ProfitLoss({ report }: { report: Report }) {
           { key: "account_group", label: "Section" },
           { key: "debit_minor", label: "Debit", money: true },
           { key: "credit_minor", label: "Credit", money: true },
-          { key: "closing_minor", label: "Balance", money: true },
+          { key: "period_minor", label: "Period amount", money: true },
         ]}
       />
     </section>
@@ -1500,8 +1618,14 @@ function BalanceSheet({ report }: { report: Report }) {
     ...(Array.isArray(report.liabilities) ? (report.liabilities as Row[]) : []),
     ...(Array.isArray(report.equity) ? (report.equity as Row[]) : []),
   ];
+  const balanced = number(report.differenceMinor) === 0;
   return (
     <section className="space-y-4">
+      {!balanced ? (
+        <div role="alert" className="rounded-lg border border-rose-400/40 bg-rose-400/10 p-4 text-sm font-bold text-rose-100">
+          Accounting integrity error: Assets do not equal Liabilities plus Equity. BezGrow has not inserted any balancing value. Review Accounting Health and the underlying vouchers before relying on this statement.
+        </div>
+      ) : null}
       <div className="grid gap-3 sm:grid-cols-3">
         <Metric label="Assets" value={moneyMinor(report.assetMinor)} />
         <Metric
@@ -1519,21 +1643,21 @@ function BalanceSheet({ report }: { report: Report }) {
         <p
           className={classNames(
             "text-sm font-black",
-            number(report.differenceMinor) === 0
+            balanced
               ? "text-emerald-300"
               : "text-rose-300",
           )}
         >
           Equation difference: {moneyMinor(report.differenceMinor)}
         </p>
-        <ReportActions view="balance-sheet" rows={rows} />
+        <ReportActions view="balance-sheet" rows={rows} report={report} />
       </div>
       <DataTable
         rows={rows}
         columns={[
           { key: "account_code", label: "Code" },
           { key: "account_name", label: "Account" },
-          { key: "account_type", label: "Section" },
+          { key: "statement_group", label: "Section" },
           { key: "closing_minor", label: "Signed balance", money: true },
         ]}
       />
@@ -1573,7 +1697,7 @@ function CashFlow({ report }: { report: Report }) {
         {text(report.classificationBasis)}
       </p>
       <div className="flex justify-end">
-        <ReportActions view="cash-flow" rows={rows} />
+        <ReportActions view="cash-flow" rows={rows} report={report} />
       </div>
       <DataTable
         rows={rows}
@@ -1643,7 +1767,7 @@ function Expenses({
           type="date"
           name="expense_date"
           required
-          defaultValue={new Date().toISOString().slice(0, 10)}
+          defaultValue={businessToday()}
           className={field}
         />
         <input
@@ -1791,7 +1915,7 @@ function Expenses({
           type="date"
           name="reversal_date"
           required
-          defaultValue={new Date().toISOString().slice(0, 10)}
+          defaultValue={businessToday()}
           className="min-h-10 rounded-xl border border-white/10 bg-black px-3"
         />
         <button
@@ -1802,7 +1926,7 @@ function Expenses({
         </button>
       </form>
       <div className="flex justify-end">
-        <ReportActions view="expenses" rows={rows} />
+        <ReportActions view="expenses" rows={rows} report={report} />
       </div>
       <DataTable
         rows={rows}
