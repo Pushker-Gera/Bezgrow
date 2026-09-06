@@ -21,6 +21,9 @@ const cycles = Number(valueAfter("cycles", "20"))
 const expectedStalePid = Number(valueAfter("expect-stale-pid", "0"))
 const skipNativeClose = process.argv.includes("--skip-native-close")
 const preserveExistingPortOwner = process.argv.includes("--preserve-existing-port-owner")
+const allowFreshDatabase = process.argv.includes("--allow-fresh-database")
+const closeUsingNativeWindow = process.argv.includes("--close-using-native-window")
+const launchViaOpen = process.argv.includes("--launch-via-open")
 const bundleIdentifier = valueAfter("bundle-id", "com.bezgrow.erp")
 if (!/^[A-Za-z0-9.-]+$/.test(bundleIdentifier)) throw new Error("--bundle-id contains unsupported characters.")
 const dataRoot = join(homedir(), "Library", "Application Support", bundleIdentifier)
@@ -151,7 +154,8 @@ function assertPersistence(before, after) {
   if (before.license !== after.license) throw new Error("Local license changed during lifecycle testing.")
   if (before.signedLicences !== after.signedLicences) throw new Error("The signed SQLite licences changed during lifecycle testing.")
   if (before.appLock !== after.appLock) throw new Error("The secure App Lock credential changed during lifecycle testing.")
-  if (before.sqlite.exists !== after.sqlite.exists) throw new Error("SQLite database presence changed during lifecycle testing.")
+  const expectedFreshDatabase = allowFreshDatabase && !before.sqlite.exists && after.sqlite.exists
+  if (before.sqlite.exists !== after.sqlite.exists && !expectedFreshDatabase) throw new Error("SQLite database presence changed during lifecycle testing.")
   if (after.sqlite.exists && after.sqlite.integrity !== "ok") throw new Error(`SQLite integrity is ${after.sqlite.integrity}.`)
   for (const [table, count] of Object.entries(before.sqlite.counts)) {
     if (after.sqlite.counts[table] !== count) throw new Error(`SQLite ${table} count changed from ${count} to ${after.sqlite.counts[table]}.`)
@@ -159,7 +163,21 @@ function assertPersistence(before, after) {
 }
 
 async function launch({ enumerateAccountingRoutes = false } = {}) {
-  const child = spawn(binaryPath, [], { cwd: dirname(binaryPath), stdio: "ignore" })
+  const previousShellPid = existsSync(runtimeStatePath) ? Number(readRuntime().shellPid || 0) : 0
+  let child
+  if (launchViaOpen) {
+    const opened = spawnSync("/usr/bin/open", ["-n", appPath], { encoding: "utf8", timeout: 10_000 })
+    if (opened.status !== 0) throw new Error(`Launch Services could not open the QA app: ${opened.stderr.trim()}`)
+    await waitUntil(() => {
+      if (!existsSync(runtimeStatePath)) return false
+      const runtime = readRuntime()
+      return runtime.shellPid !== previousShellPid && runtime.shellExecutable === binaryPath && processExists(runtime.shellPid)
+    }, 20_000, "Launch Services did not establish new Bezgrow runtime ownership.")
+    const pid = Number(readRuntime().shellPid)
+    child = { pid, kill: (signal) => process.kill(pid, signal) }
+  } else {
+    child = spawn(binaryPath, [], { cwd: dirname(binaryPath), stdio: "ignore" })
+  }
   await waitUntil(() => {
     if (!existsSync(runtimeStatePath)) return false
     const runtime = readRuntime()
@@ -178,19 +196,23 @@ async function launch({ enumerateAccountingRoutes = false } = {}) {
 }
 
 async function quitNormally(active, cause = "Apple-event quit") {
+  if (closeUsingNativeWindow) {
+    await closeMainWindow(active, cause)
+    return
+  }
   const result = spawnSync("/usr/bin/osascript", ["-e", `tell application id "${bundleIdentifier}" to quit`], { encoding: "utf8", timeout: 10_000 })
   if (result.status !== 0) throw new Error(`${cause} failed: ${result.stderr.trim()}`)
   await verifyStopped(active, cause)
 }
 
-async function closeMainWindow(active) {
+async function closeMainWindow(active, cause = "native main-window close") {
   await waitUntil(() => {
-    const probe = spawnSync("/usr/bin/osascript", ["-e", 'tell application "System Events" to tell process "Bezgrow" to return (count of windows) > 0'], { encoding: "utf8", timeout: 2_000 })
+    const probe = spawnSync("/usr/bin/osascript", ["-e", `tell application "System Events" to tell first process whose unix id is ${active.child.pid} to return (count of windows) > 0`], { encoding: "utf8", timeout: 2_000 })
     return probe.status === 0 && probe.stdout.trim() === "true"
   }, 10_000, "Native Bezgrow main window was not exposed to macOS Accessibility.")
-  const result = spawnSync("/usr/bin/osascript", ["-e", 'tell application "System Events" to tell process "Bezgrow" to click button 1 of front window'], { encoding: "utf8", timeout: 10_000 })
+  const result = spawnSync("/usr/bin/osascript", ["-e", `tell application "System Events" to tell first process whose unix id is ${active.child.pid} to click button 1 of front window`], { encoding: "utf8", timeout: 10_000 })
   if (result.status !== 0) throw new Error(`Native main-window close failed: ${result.stderr.trim()}`)
-  await verifyStopped(active, "native main-window close")
+  await verifyStopped(active, cause)
 }
 
 async function verifyStopped(active, cause) {
@@ -292,6 +314,9 @@ console.log(JSON.stringify({
   unrelatedPortFallback: "authenticated-and-owner-preserved",
   preferredPortReleased: !preserveExistingPortOwner,
   existingPortOwnerPreserved: preserveExistingPortOwner,
+  freshDatabaseCreated: allowFreshDatabase && !before.sqlite.exists && after.sqlite.exists,
+  closeMethod: closeUsingNativeWindow ? "pid-targeted-native-window" : "application-quit-event",
+  launchMethod: launchViaOpen ? "macos-launch-services" : "inner-binary",
   orphanServers: 0,
   sqliteIntegrity: after.sqlite.integrity,
   sqliteCounts: after.sqlite.counts,
