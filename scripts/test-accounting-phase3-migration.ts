@@ -69,16 +69,30 @@ try {
   `)
   for (const migration of localMigrations.filter((candidate) => candidate.version > 17 && candidate.version <= 21)) apply(source, migration.version)
   assert.equal(scalar(source, "PRAGMA user_version"), 21)
+  // Keep one deliberately customized initialization row to prove the repair
+  // never replaces existing business policy or initialization state.
+  source.exec(`
+    INSERT INTO organizations(id,name,state,created_at,updated_at) VALUES ('org:settings-preserved','Settings Preserved','KA',datetime('now'),datetime('now'));
+    INSERT INTO accounting_settings(
+      organization_id,accounting_version,activation_date,opening_date,historical_policy,
+      initialization_status,warning_count,initialized_at,created_at,updated_at
+    ) VALUES (
+      'org:settings-preserved',2,'2025-04-01','2025-04-01','CONTROLLED_OPENING',
+      'INITIALIZED',7,'2025-04-02 10:00:00','2025-04-01 09:00:00','2025-04-02 10:00:00'
+    );
+  `)
   // Reproduce an installed legacy business whose runtime-created chart only had
-  // the original five foundational ledgers. Schema 22 must repair the complete
-  // system chart during upgrade, before any accounting screen is opened.
+  // the original five foundational ledgers and no initialization record.
+  // Schema 22 must repair both before any accounting screen is opened.
   source.exec(`UPDATE chart_of_accounts SET is_system=0
     WHERE organization_id='org:phase3-migration'
       AND system_role NOT IN ('CASH','BANK','ACCOUNTS_RECEIVABLE','INVENTORY','ACCOUNTS_PAYABLE');
     DELETE FROM chart_of_accounts
     WHERE organization_id='org:phase3-migration'
-      AND system_role NOT IN ('CASH','BANK','ACCOUNTS_RECEIVABLE','INVENTORY','ACCOUNTS_PAYABLE')`)
+      AND system_role NOT IN ('CASH','BANK','ACCOUNTS_RECEIVABLE','INVENTORY','ACCOUNTS_PAYABLE');
+    DELETE FROM accounting_settings WHERE organization_id='org:phase3-migration'`)
   assert.equal(scalar(source, "SELECT COUNT(*) FROM chart_of_accounts WHERE organization_id='org:phase3-migration' AND system_role IS NOT NULL"), 5)
+  assert.equal(scalar(source, "SELECT COUNT(*) FROM accounting_settings WHERE organization_id='org:phase3-migration'"), 0)
   const before = preservedSnapshot(source)
   source.close()
 
@@ -92,6 +106,19 @@ try {
   const phaseThreeTables = ["accounting_voucher_series", "accounting_dimensions", "accounting_dimension_allocations", "accounting_budgets", "fixed_asset_categories", "fixed_assets", "fixed_asset_depreciation", "fixed_asset_disposals", "tax_rules", "tax_transactions", "gst_return_periods", "gst_import_batches", "gst_import_records", "gst_reconciliations", "statutory_integrations", "e_invoice_preparations", "e_way_bill_preparations", "bank_statement_imports", "bank_statement_lines", "bank_statement_matches", "accounting_audit_events"]
   for (const table of phaseThreeTables) assert.equal(scalar(upgraded, "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name=?", table), 1, `${table} must exist after schema 21 → 22.`)
   assert.equal(scalar(upgraded, "SELECT COUNT(*) FROM chart_of_accounts WHERE organization_id='org:phase3-migration' AND system_role IS NOT NULL"), 43)
+  assert.equal(scalar(upgraded, "SELECT COUNT(*) FROM accounting_settings WHERE organization_id='org:phase3-migration'"), 1)
+  assert.deepEqual({ ...upgraded.prepare(`SELECT accounting_version,activation_date,opening_date,historical_policy,
+    initialization_status,warning_count,initialized_at,created_at
+    FROM accounting_settings WHERE organization_id='org:settings-preserved'`).get() }, {
+    accounting_version: 3,
+    activation_date: "2025-04-01",
+    opening_date: "2025-04-01",
+    historical_policy: "CONTROLLED_OPENING",
+    initialization_status: "INITIALIZED",
+    warning_count: 7,
+    initialized_at: "2025-04-02 10:00:00",
+    created_at: "2025-04-01 09:00:00",
+  })
   assert.equal(scalar(upgraded, "SELECT COUNT(*) FROM fixed_asset_categories WHERE organization_id='org:phase3-migration'"), 7)
   assert.equal(scalar(upgraded, "SELECT COUNT(*) FROM statutory_integrations WHERE organization_id='org:phase3-migration' AND configuration_status='NOT_CONFIGURED'"), 3)
   assert.equal(scalar(upgraded, "SELECT COUNT(*) FROM pragma_foreign_key_check"), 0)
@@ -118,7 +145,7 @@ try {
   assert.deepEqual(preservedSnapshot(upgraded), before)
   assert.equal(scalar(upgraded, "SELECT COUNT(*) FROM pragma_foreign_key_check"), 0)
   assert.equal(String(Object.values(upgraded.prepare("PRAGMA quick_check").get() as Record<string, string>)[0]), "ok")
-  console.log(JSON.stringify({ status: "ok", upgradedFromSchema: 21, schemaVersion: LOCAL_DB_VERSION, preservedCounts: before.counts, preservedChecksum: before.checksum, defaultAccounts: 43, phaseThreeTables: phaseThreeTables.length, migrationIdempotent: true, auditImmutable: true, backupRestore: true, foreignKeyViolations: 0, quickCheck: "ok" }))
+  console.log(JSON.stringify({ status: "ok", upgradedFromSchema: 21, schemaVersion: LOCAL_DB_VERSION, preservedCounts: before.counts, preservedChecksum: before.checksum, defaultAccounts: 43, accountingInitializationRepaired: true, existingAccountingInitializationPreserved: true, phaseThreeTables: phaseThreeTables.length, migrationIdempotent: true, auditImmutable: true, backupRestore: true, foreignKeyViolations: 0, quickCheck: "ok" }))
 } finally {
   try { source.close() } catch {}
   try { upgraded?.close() } catch {}

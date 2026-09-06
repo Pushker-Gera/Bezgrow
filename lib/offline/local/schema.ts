@@ -2835,6 +2835,13 @@ export const localMigrations: Array<{ version: number; name: string; sql: string
          WHEN system_role IS NOT NULL THEN 'OPERATING'
          ELSE cash_flow_classification END
        WHERE cash_flow_classification IS NULL`,
+      `INSERT OR IGNORE INTO accounting_settings (
+         organization_id, accounting_version, activation_date, opening_date, historical_policy,
+         initialization_status, created_at, updated_at
+       )
+       SELECT id, 3, date('now', 'localtime'), date('now', 'localtime'), 'CONTROLLED_OPENING',
+         'PENDING', datetime('now'), datetime('now')
+       FROM organizations WHERE deleted_at IS NULL`,
       "UPDATE accounting_settings SET accounting_version = MAX(accounting_version, 3), updated_at = datetime('now')",
       `INSERT OR IGNORE INTO fixed_asset_categories (
          id, organization_id, code, name, default_method, default_useful_life_months,
