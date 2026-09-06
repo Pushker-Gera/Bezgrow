@@ -2782,15 +2782,52 @@ export const localMigrations: Array<{ version: number; name: string; sql: string
          system_role, tax_role, sync_status, created_at, updated_at
        )
        SELECT 'account:' || organization.id || ':' || seed.code, organization.id, seed.code, seed.name,
-         seed.type, seed.group_name, seed.normal, 0, 0, 1, 0, 0, 1, seed.system_role,
+         seed.type, seed.group_name, seed.normal, 0, 0, 1, seed.is_cash, seed.is_bank, 1, seed.system_role,
          seed.tax_role, 'local', datetime('now'), datetime('now')
        FROM organizations organization CROSS JOIN (
-         SELECT '1510' code, 'Accumulated Depreciation' name, 'ASSET' type, 'ACCUMULATED_DEPRECIATION' group_name, 'credit' normal, 'ACCUMULATED_DEPRECIATION' system_role, NULL tax_role
-         UNION ALL SELECT '2140', 'TDS Payable', 'LIABILITY', 'TAX_LIABILITY', 'credit', 'TDS_PAYABLE', 'TDS_PAYABLE'
-         UNION ALL SELECT '2150', 'TCS Payable', 'LIABILITY', 'TAX_LIABILITY', 'credit', 'TCS_PAYABLE', 'TCS_PAYABLE'
-         UNION ALL SELECT '4210', 'Gain on Asset Disposal', 'INCOME', 'OTHER_INCOME', 'credit', 'ASSET_DISPOSAL_GAIN', NULL
-         UNION ALL SELECT '6090', 'Depreciation Expense', 'EXPENSE', 'DEPRECIATION', 'debit', 'DEPRECIATION_EXPENSE', NULL
-         UNION ALL SELECT '6100', 'Loss on Asset Disposal', 'EXPENSE', 'OTHER_EXPENSE', 'debit', 'ASSET_DISPOSAL_LOSS', NULL
+         SELECT '1000' code, 'Cash' name, 'ASSET' type, 'CASH' group_name, 'debit' normal, 1 is_cash, 0 is_bank, 'CASH' system_role, NULL tax_role
+         UNION ALL SELECT '1010', 'Bank', 'ASSET', 'BANK', 'debit', 0, 1, 'BANK', NULL
+         UNION ALL SELECT '1100', 'Accounts Receivable', 'ASSET', 'RECEIVABLE', 'debit', 0, 0, 'ACCOUNTS_RECEIVABLE', NULL
+         UNION ALL SELECT '1200', 'Inventory', 'ASSET', 'INVENTORY', 'debit', 0, 0, 'INVENTORY', NULL
+         UNION ALL SELECT '1300', 'Other Current Assets', 'ASSET', 'CURRENT_ASSET', 'debit', 0, 0, 'OTHER_CURRENT_ASSETS', NULL
+         UNION ALL SELECT '1310', 'Advances to Suppliers', 'ASSET', 'CURRENT_ASSET', 'debit', 0, 0, 'SUPPLIER_ADVANCES', NULL
+         UNION ALL SELECT '1500', 'Fixed Assets', 'ASSET', 'FIXED_ASSET', 'debit', 0, 0, 'FIXED_ASSETS', NULL
+         UNION ALL SELECT '1510', 'Accumulated Depreciation', 'ASSET', 'ACCUMULATED_DEPRECIATION', 'credit', 0, 0, 'ACCUMULATED_DEPRECIATION', NULL
+         UNION ALL SELECT '2000', 'Accounts Payable', 'LIABILITY', 'PAYABLE', 'credit', 0, 0, 'ACCOUNTS_PAYABLE', NULL
+         UNION ALL SELECT '2010', 'Advances from Customers', 'LIABILITY', 'CURRENT_LIABILITY', 'credit', 0, 0, 'CUSTOMER_ADVANCES', NULL
+         UNION ALL SELECT '2100', 'Output CGST', 'LIABILITY', 'TAX_LIABILITY', 'credit', 0, 0, 'OUTPUT_CGST', 'OUTPUT_CGST'
+         UNION ALL SELECT '2110', 'Output SGST', 'LIABILITY', 'TAX_LIABILITY', 'credit', 0, 0, 'OUTPUT_SGST', 'OUTPUT_SGST'
+         UNION ALL SELECT '2120', 'Output IGST', 'LIABILITY', 'TAX_LIABILITY', 'credit', 0, 0, 'OUTPUT_IGST', 'OUTPUT_IGST'
+         UNION ALL SELECT '2130', 'Output Cess', 'LIABILITY', 'TAX_LIABILITY', 'credit', 0, 0, 'OUTPUT_CESS', 'OUTPUT_CESS'
+         UNION ALL SELECT '2140', 'TDS Payable', 'LIABILITY', 'TAX_LIABILITY', 'credit', 0, 0, 'TDS_PAYABLE', 'TDS_PAYABLE'
+         UNION ALL SELECT '2150', 'TCS Payable', 'LIABILITY', 'TAX_LIABILITY', 'credit', 0, 0, 'TCS_PAYABLE', 'TCS_PAYABLE'
+         UNION ALL SELECT '2190', 'Other Current Liabilities', 'LIABILITY', 'CURRENT_LIABILITY', 'credit', 0, 0, 'OTHER_CURRENT_LIABILITIES', NULL
+         UNION ALL SELECT '2200', 'Input CGST', 'ASSET', 'CURRENT_ASSET', 'debit', 0, 0, 'INPUT_CGST', 'INPUT_CGST'
+         UNION ALL SELECT '2210', 'Input SGST', 'ASSET', 'CURRENT_ASSET', 'debit', 0, 0, 'INPUT_SGST', 'INPUT_SGST'
+         UNION ALL SELECT '2220', 'Input IGST', 'ASSET', 'CURRENT_ASSET', 'debit', 0, 0, 'INPUT_IGST', 'INPUT_IGST'
+         UNION ALL SELECT '2230', 'Input Cess', 'ASSET', 'CURRENT_ASSET', 'debit', 0, 0, 'INPUT_CESS', 'INPUT_CESS'
+         UNION ALL SELECT '3000', 'Capital', 'EQUITY', 'CAPITAL', 'credit', 0, 0, 'CAPITAL', NULL
+         UNION ALL SELECT '3100', 'Retained Earnings / Opening Equity', 'EQUITY', 'CAPITAL', 'credit', 0, 0, 'OPENING_EQUITY', NULL
+         UNION ALL SELECT '3200', 'Drawings', 'EQUITY', 'CAPITAL', 'debit', 0, 0, 'DRAWINGS', NULL
+         UNION ALL SELECT '4000', 'Sales', 'INCOME', 'SALES_INCOME', 'credit', 0, 0, 'SALES', NULL
+         UNION ALL SELECT '4200', 'Other Income', 'INCOME', 'OTHER_INCOME', 'credit', 0, 0, 'OTHER_INCOME', NULL
+         UNION ALL SELECT '4210', 'Gain on Asset Disposal', 'INCOME', 'OTHER_INCOME', 'credit', 0, 0, 'ASSET_DISPOSAL_GAIN', NULL
+         UNION ALL SELECT '5000', 'Cost of Goods Sold', 'EXPENSE', 'COGS', 'debit', 0, 0, 'COGS', NULL
+         UNION ALL SELECT '5100', 'Discount Allowed / Sales Discount', 'EXPENSE', 'DIRECT_EXPENSE', 'debit', 0, 0, 'SALES_DISCOUNT', NULL
+         UNION ALL SELECT '5200', 'Freight / Delivery Expense', 'EXPENSE', 'DIRECT_EXPENSE', 'debit', 0, 0, 'FREIGHT_EXPENSE', NULL
+         UNION ALL SELECT '5300', 'Purchases / Direct Expense', 'EXPENSE', 'DIRECT_EXPENSE', 'debit', 0, 0, 'PURCHASES', NULL
+         UNION ALL SELECT '6000', 'Miscellaneous Expenses', 'EXPENSE', 'INDIRECT_EXPENSE', 'debit', 0, 0, 'MISCELLANEOUS_EXPENSES', NULL
+         UNION ALL SELECT '6010', 'Rent', 'EXPENSE', 'INDIRECT_EXPENSE', 'debit', 0, 0, 'RENT_EXPENSE', NULL
+         UNION ALL SELECT '6020', 'Electricity', 'EXPENSE', 'INDIRECT_EXPENSE', 'debit', 0, 0, 'ELECTRICITY_EXPENSE', NULL
+         UNION ALL SELECT '6030', 'Salary / Wages', 'EXPENSE', 'INDIRECT_EXPENSE', 'debit', 0, 0, 'SALARY_EXPENSE', NULL
+         UNION ALL SELECT '6040', 'Fuel', 'EXPENSE', 'INDIRECT_EXPENSE', 'debit', 0, 0, 'FUEL_EXPENSE', NULL
+         UNION ALL SELECT '6050', 'Advertising', 'EXPENSE', 'INDIRECT_EXPENSE', 'debit', 0, 0, 'ADVERTISING_EXPENSE', NULL
+         UNION ALL SELECT '6060', 'Repairs', 'EXPENSE', 'INDIRECT_EXPENSE', 'debit', 0, 0, 'REPAIRS_EXPENSE', NULL
+         UNION ALL SELECT '6070', 'Internet / Communication', 'EXPENSE', 'INDIRECT_EXPENSE', 'debit', 0, 0, 'COMMUNICATION_EXPENSE', NULL
+         UNION ALL SELECT '6080', 'Professional Fees', 'EXPENSE', 'INDIRECT_EXPENSE', 'debit', 0, 0, 'PROFESSIONAL_FEES', NULL
+         UNION ALL SELECT '6090', 'Depreciation Expense', 'EXPENSE', 'DEPRECIATION', 'debit', 0, 0, 'DEPRECIATION_EXPENSE', NULL
+         UNION ALL SELECT '6100', 'Loss on Asset Disposal', 'EXPENSE', 'OTHER_EXPENSE', 'debit', 0, 0, 'ASSET_DISPOSAL_LOSS', NULL
+         UNION ALL SELECT '6990', 'Round Off / Rounding Adjustment', 'EXPENSE', 'INDIRECT_EXPENSE', 'debit', 0, 0, 'ROUND_OFF', NULL
       ) seed WHERE organization.deleted_at IS NULL`,
       `UPDATE chart_of_accounts SET cash_flow_classification=CASE
          WHEN system_role IN ('FIXED_ASSETS','ACCUMULATED_DEPRECIATION','DEPRECIATION_EXPENSE','ASSET_DISPOSAL_GAIN','ASSET_DISPOSAL_LOSS') THEN 'INVESTING'

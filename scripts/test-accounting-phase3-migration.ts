@@ -69,6 +69,16 @@ try {
   `)
   for (const migration of localMigrations.filter((candidate) => candidate.version > 17 && candidate.version <= 21)) apply(source, migration.version)
   assert.equal(scalar(source, "PRAGMA user_version"), 21)
+  // Reproduce an installed legacy business whose runtime-created chart only had
+  // the original five foundational ledgers. Schema 22 must repair the complete
+  // system chart during upgrade, before any accounting screen is opened.
+  source.exec(`UPDATE chart_of_accounts SET is_system=0
+    WHERE organization_id='org:phase3-migration'
+      AND system_role NOT IN ('CASH','BANK','ACCOUNTS_RECEIVABLE','INVENTORY','ACCOUNTS_PAYABLE');
+    DELETE FROM chart_of_accounts
+    WHERE organization_id='org:phase3-migration'
+      AND system_role NOT IN ('CASH','BANK','ACCOUNTS_RECEIVABLE','INVENTORY','ACCOUNTS_PAYABLE')`)
+  assert.equal(scalar(source, "SELECT COUNT(*) FROM chart_of_accounts WHERE organization_id='org:phase3-migration' AND system_role IS NOT NULL"), 5)
   const before = preservedSnapshot(source)
   source.close()
 

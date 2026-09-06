@@ -10,6 +10,7 @@ Professional Accounting Phase 3.
 - Corrected custom-period Profit & Loss movement, preserved unclassified Cash Flow movements instead of guessing, and made Balance Sheet imbalance a visible critical integrity error rather than an inserted balancing value.
 - Hardened accounting and statutory imports against traversal-style names, path-bearing metadata, oversized inputs, invalid hashes, and excessive rows; native backup/restore integrity now validates Phase 3 relationships.
 - Added deterministic schema 21-to-22 migration, golden-company totals, generated journal invariants, rollback injection, reconciliation, performance, route, packaged desktop, and cross-platform release-gate coverage.
+- Hardened schema 22 upgrades to repair legacy businesses with a partial system Chart of Accounts to the complete 43-ledger chart before the first accounting screen opens.
 
 This candidate is not publicly published. Existing download and updater metadata remains pinned to the published 0.3.0 artifacts until matching 0.3.1 platform artifacts, platform acceptance, and production trust requirements are complete.
 
