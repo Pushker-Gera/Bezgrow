@@ -1,4 +1,19 @@
-# Bezgrow 0.3.0
+# Bezgrow 0.3.1
+
+Professional Accounting Phase 3.
+
+- Extended the existing local SQLite double-entry ledger with financial-year/business/voucher-type numbering for sales, purchases, receipts, payments, expenses, notes, openings, adjustments, fixed assets, TDS, and TCS; number advancement remains atomic with posting.
+- Added fixed-asset categories and registers, SLM/WDV schedules with explicit projected-versus-posted state, depreciation journals, and disposal/write-off accounting with genuine gain or loss.
+- Added effective-dated configurable TDS/TCS rules, threshold/PAN validation, accrual and collection journals, payable registers, and challan-linked settlement vouchers without hard-coded filing claims.
+- Added GST return preparation states, GSTR-2A/2B import and reconciliation, and honest E-Invoice/E-Way Bill preparation boundaries that remain `NOT_CONFIGURED` until a real provider is configured.
+- Added cost-centre, department, and project allocations; budget-versus-actual reporting; bank-statement imports and confirm-only match suggestions; CA/auditor workspaces; immutable accounting audit events; comparative reports; deterministic insights; party statements; and accounting search.
+- Corrected custom-period Profit & Loss movement, preserved unclassified Cash Flow movements instead of guessing, and made Balance Sheet imbalance a visible critical integrity error rather than an inserted balancing value.
+- Hardened accounting and statutory imports against traversal-style names, path-bearing metadata, oversized inputs, invalid hashes, and excessive rows; native backup/restore integrity now validates Phase 3 relationships.
+- Added deterministic schema 21-to-22 migration, golden-company totals, generated journal invariants, rollback injection, reconciliation, performance, route, packaged desktop, and cross-platform release-gate coverage.
+
+This candidate is not publicly published. Existing download and updater metadata remains pinned to the published 0.3.0 artifacts until matching 0.3.1 platform artifacts, platform acceptance, and production trust requirements are complete.
+
+## Previous 0.3.0 notes
 
 Phase 1 core accounting foundation.
 

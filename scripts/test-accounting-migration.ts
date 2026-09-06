@@ -76,7 +76,7 @@ try {
     financialYears: count(db, "SELECT COUNT(*) count FROM financial_years WHERE organization_id = 'org:migration'"),
     invoices: count(db, "SELECT COUNT(*) count FROM sales_invoices WHERE organization_id = 'org:migration'"),
     movements: count(db, "SELECT COUNT(*) count FROM stock_movements WHERE organization_id = 'org:migration'"),
-  }, migrationSnapshot, "Reopening an already-upgraded 0.3.0 database must not duplicate accounting or ERP state.")
+  }, migrationSnapshot, "Reopening an already-upgraded 0.3.1 database must not duplicate accounting or ERP state.")
 
   const insertVoucher = db.prepare(`INSERT INTO accounting_vouchers (
     id, organization_id, voucher_number, voucher_type, voucher_date, total_debit, total_credit,
