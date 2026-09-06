@@ -20,12 +20,19 @@ const buildIdentityPath = join(appPath, "Contents", "Resources", "next-server", 
 const cycles = Number(valueAfter("cycles", "20"))
 const expectedStalePid = Number(valueAfter("expect-stale-pid", "0"))
 const skipNativeClose = process.argv.includes("--skip-native-close")
-const dataRoot = join(homedir(), "Library", "Application Support", "com.bezgrow.erp")
+const bundleIdentifier = valueAfter("bundle-id", "com.bezgrow.erp")
+if (!/^[A-Za-z0-9.-]+$/.test(bundleIdentifier)) throw new Error("--bundle-id contains unsupported characters.")
+const dataRoot = join(homedir(), "Library", "Application Support", bundleIdentifier)
 const runtimeStatePath = join(dataRoot, "Runtime", "runtime.json")
 const databasePath = join(dataRoot, "bezgrow-offline.db")
 const deviceIdPath = join(dataRoot, "Installation", "device-id")
 const startupLogPath = join(dataRoot, "Logs", "bezgrow-startup.log")
 const preferredPort = 43124
+const accountingViewSource = readFileSync(join(root, "lib", "accounting", "views.ts"), "utf8")
+const accountingRouteIds = [...accountingViewSource.matchAll(/\{ id: "([a-z0-9-]+)", label:/g)].map((match) => match[1])
+if (accountingRouteIds.length < 40 || new Set(accountingRouteIds).size !== accountingRouteIds.length) {
+  throw new Error("Accounting route enumeration is incomplete or contains duplicates.")
+}
 
 if (!existsSync(binaryPath)) throw new Error(`Packaged Bezgrow binary is missing: ${binaryPath}`)
 if (!existsSync(buildIdentityPath)) throw new Error(`Packaged build identity is missing: ${buildIdentityPath}`)
@@ -84,17 +91,19 @@ const runtimeHealth = async (runtime) => {
     health.serverPid === runtime.serverPid
 }
 
-const accountingRouteHealth = async (runtime) => {
-  const response = await fetch(`http://127.0.0.1:${runtime.port}/dashboard/accounting/purchases`, {
-    redirect: "manual",
-    signal: AbortSignal.timeout(3000),
-  })
-  if (response.status >= 500) throw new Error(`Accounting purchases route returned ${response.status}.`)
-  const body = await response.text()
-  if (/This page could not be displayed/i.test(body)) {
-    throw new Error("Accounting purchases route rendered the page recovery state.")
+const accountingRouteHealth = async (runtime, routeIds = ["purchases"]) => {
+  for (const routeId of routeIds) {
+    const response = await fetch(`http://127.0.0.1:${runtime.port}/dashboard/accounting/${routeId}`, {
+      redirect: "manual",
+      signal: AbortSignal.timeout(3000),
+    })
+    if (response.status < 200 || response.status >= 400) throw new Error(`Accounting ${routeId} route returned ${response.status}.`)
+    const body = await response.text()
+    if (/This page could not be displayed/i.test(body)) {
+      throw new Error(`Accounting ${routeId} route rendered the page recovery state.`)
+    }
   }
-  return response.status >= 200 && response.status < 400
+  return true
 }
 
 function sqliteSnapshot() {
@@ -144,7 +153,7 @@ function assertPersistence(before, after) {
   }
 }
 
-async function launch() {
+async function launch({ enumerateAccountingRoutes = false } = {}) {
   const child = spawn(binaryPath, [], { cwd: dirname(binaryPath), stdio: "ignore" })
   await waitUntil(() => {
     if (!existsSync(runtimeStatePath)) return false
@@ -153,7 +162,7 @@ async function launch() {
   }, 20_000, `Bezgrow shell ${child.pid} did not establish runtime ownership.`)
   const runtime = readRuntime()
   await waitUntil(() => runtimeHealth(runtime), 10_000, `Bezgrow runtime ${runtime.serverPid} did not pass authenticated health.`)
-  await waitUntil(() => accountingRouteHealth(runtime), 10_000, "Packaged Accounting purchases route did not render successfully.")
+  await waitUntil(() => accountingRouteHealth(runtime, enumerateAccountingRoutes ? accountingRouteIds : undefined), 30_000, "Packaged Accounting routes did not render successfully.")
   const owners = listenerPids(runtime.port)
   if (owners.length !== 1 || owners[0] !== runtime.serverPid) {
     throw new Error(`Runtime port ${runtime.port} owners ${owners.join(",")} did not match server PID ${runtime.serverPid}.`)
@@ -164,7 +173,7 @@ async function launch() {
 }
 
 async function quitNormally(active, cause = "Apple-event quit") {
-  const result = spawnSync("/usr/bin/osascript", ["-e", 'tell application id "com.bezgrow.erp" to quit'], { encoding: "utf8", timeout: 10_000 })
+  const result = spawnSync("/usr/bin/osascript", ["-e", `tell application id "${bundleIdentifier}" to quit`], { encoding: "utf8", timeout: 10_000 })
   if (result.status !== 0) throw new Error(`${cause} failed: ${result.stderr.trim()}`)
   await verifyStopped(active, cause)
 }
@@ -228,7 +237,7 @@ async function unrelatedPortCollision() {
 const before = persistenceSnapshot()
 if (before.sqlite.exists && before.sqlite.integrity !== "ok") throw new Error(`SQLite was not healthy before testing: ${before.sqlite.integrity}`)
 
-let first = await launch()
+let first = await launch({ enumerateAccountingRoutes: true })
 if (expectedStalePid) {
   if (processExists(expectedStalePid)) throw new Error(`Verified legacy stale process ${expectedStalePid} survived recovery.`)
   await waitUntil(() => {
@@ -259,6 +268,8 @@ if (existsSync(runtimeStatePath)) throw new Error("Transient runtime metadata re
 console.log(JSON.stringify({
   status: "macos-packaged-lifecycle-ok",
   cycles,
+  bundleIdentifier,
+  accountingRoutes: accountingRouteIds.length,
   singleInstance: "ok",
   nativeWindowClose: skipNativeClose ? "skipped-macos-accessibility-permission" : "full-exit-ok",
   forceKillRecovery: "ok",
