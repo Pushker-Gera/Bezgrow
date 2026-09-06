@@ -20,6 +20,7 @@ const buildIdentityPath = join(appPath, "Contents", "Resources", "next-server", 
 const cycles = Number(valueAfter("cycles", "20"))
 const expectedStalePid = Number(valueAfter("expect-stale-pid", "0"))
 const skipNativeClose = process.argv.includes("--skip-native-close")
+const preserveExistingPortOwner = process.argv.includes("--preserve-existing-port-owner")
 const bundleIdentifier = valueAfter("bundle-id", "com.bezgrow.erp")
 if (!/^[A-Za-z0-9.-]+$/.test(bundleIdentifier)) throw new Error("--bundle-id contains unsupported characters.")
 const dataRoot = join(homedir(), "Library", "Application Support", bundleIdentifier)
@@ -68,6 +69,10 @@ const listenerPids = (port) => {
   const result = spawnSync("/usr/sbin/lsof", ["-nP", "-t", `-iTCP:${port}`, "-sTCP:LISTEN"], { encoding: "utf8" })
   if (result.status !== 0 && result.status !== 1) throw new Error(`lsof failed for port ${port}.`)
   return result.stdout.split(/\s+/).filter(Boolean).map(Number)
+}
+const initialPreferredPortOwners = listenerPids(preferredPort)
+if (preserveExistingPortOwner && initialPreferredPortOwners.length === 0) {
+  throw new Error("--preserve-existing-port-owner requires an existing listener on the preferred port.")
 }
 const portIsFree = (port) => new Promise((resolvePort) => {
   const server = createServer()
@@ -218,6 +223,16 @@ async function forceKillAndRecover() {
 }
 
 async function unrelatedPortCollision() {
+  if (preserveExistingPortOwner) {
+    const active = await launch()
+    if (active.runtime.port === preferredPort) throw new Error("Bezgrow navigated to the existing unrelated preferred-port listener.")
+    await quitNormally(active, "existing authenticated fallback quit")
+    const currentOwners = listenerPids(preferredPort)
+    if (initialPreferredPortOwners.some((pid) => !currentOwners.includes(pid))) {
+      throw new Error("The pre-existing preferred-port owner was not preserved through QA shutdown.")
+    }
+    return
+  }
   if (!await portIsFree(preferredPort)) throw new Error(`Cannot create unrelated-port fixture because ${preferredPort} is occupied.`)
   const fixture = spawn(process.execPath, ["-e", `require('node:net').createServer(()=>{}).listen(${preferredPort},'127.0.0.1')`], { stdio: "ignore" })
   try {
@@ -262,7 +277,8 @@ await unrelatedPortCollision()
 
 const after = persistenceSnapshot()
 assertPersistence(before, after)
-if (!await portIsFree(preferredPort)) throw new Error(`Preferred port ${preferredPort} remained occupied after the lifecycle matrix.`)
+if (!preserveExistingPortOwner && !await portIsFree(preferredPort)) throw new Error(`Preferred port ${preferredPort} remained occupied after the lifecycle matrix.`)
+if (preserveExistingPortOwner && initialPreferredPortOwners.some((pid) => !listenerPids(preferredPort).includes(pid))) throw new Error("Existing preferred-port ownership changed during lifecycle testing.")
 if (existsSync(runtimeStatePath)) throw new Error("Transient runtime metadata remained after the lifecycle matrix.")
 
 console.log(JSON.stringify({
@@ -274,7 +290,8 @@ console.log(JSON.stringify({
   nativeWindowClose: skipNativeClose ? "skipped-macos-accessibility-permission" : "full-exit-ok",
   forceKillRecovery: "ok",
   unrelatedPortFallback: "authenticated-and-owner-preserved",
-  preferredPortReleased: true,
+  preferredPortReleased: !preserveExistingPortOwner,
+  existingPortOwnerPreserved: preserveExistingPortOwner,
   orphanServers: 0,
   sqliteIntegrity: after.sqlite.integrity,
   sqliteCounts: after.sqlite.counts,
