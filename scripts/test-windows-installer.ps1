@@ -195,6 +195,28 @@ function Get-InstalledSchemaVersion {
   return [int]"$schema"
 }
 
+function Assert-InstalledAccountingRoutes([int]$Port) {
+  $routes = @(
+    "/dashboard/accounting",
+    "/dashboard/accounting/purchases",
+    "/dashboard/accounting/gst-return-preparation",
+    "/dashboard/accounting/trial-balance",
+    "/dashboard/accounting/balance-sheet"
+  )
+  foreach ($route in $routes) {
+    $response = Invoke-WebRequest `
+      -Uri "http://127.0.0.1:$Port$route" `
+      -UseBasicParsing `
+      -SkipHttpErrorCheck
+    if ($response.StatusCode -ne 200) {
+      throw "Installed accounting route $route returned HTTP $($response.StatusCode)."
+    }
+    if ($response.Content -match "This page could not be displayed") {
+      throw "Installed accounting route $route rendered the generic recovery state."
+    }
+  }
+}
+
 function Test-BezgrowWindowControls([System.Diagnostics.Process]$ApplicationProcess, [int]$Cycle) {
   Wait-Until {
     $ApplicationProcess.Refresh()
@@ -393,6 +415,7 @@ function Invoke-AppLaunchCycle(
   if ($response.StatusCode -lt 200 -or $response.StatusCode -ge 500) {
     throw "Launch cycle $Cycle local route returned HTTP $($response.StatusCode)."
   }
+  Assert-InstalledAccountingRoutes $port
   $newBrowserIds = @(
     Get-ExternalBrowserProcessIds |
       Where-Object { $beforeBrowserIds -notcontains $_ }
@@ -535,7 +558,7 @@ Invoke-AppLaunchCycle 4 -LaunchPath $desktopShortcut -ExpectedSchema 22
 Invoke-InstalledSqliteCrud "verify" "22"
 
 Write-SmokeDiagnostics "All installer smoke checks completed successfully." $null
-Write-Host "windows-installer-smoke-ok cycles=4 start_menu=ok desktop_shortcut=ok console_windows=none fixed_port=43124 health=ok route=ok sqlite_crud=ok accounting_schema=22 accounting_defaults=43 accounting_migration_idempotent=ok historical_invoice_backpost=none license_persistence=ok offline=ok runtime_recovery=ok window_controls=ok external_browser=none orphan_processes=0 previous_version_upgrade=$(-not [string]::IsNullOrWhiteSpace($previousInstaller)) update_preservation=ok uninstall_preservation=ok reinstall=ok"
+Write-Host "windows-installer-smoke-ok cycles=4 start_menu=ok desktop_shortcut=ok console_windows=none fixed_port=43124 health=ok route=ok accounting_routes=overview,purchases,gst-return-preparation,trial-balance,balance-sheet sqlite_crud=ok accounting_schema=22 accounting_defaults=43 accounting_migration_idempotent=ok historical_invoice_backpost=none license_persistence=ok offline=ok runtime_recovery=ok window_controls=ok external_browser=none orphan_processes=0 previous_version_upgrade=$(-not [string]::IsNullOrWhiteSpace($previousInstaller)) update_preservation=ok uninstall_preservation=ok reinstall=ok"
 } catch {
   Write-SmokeDiagnostics "Installer smoke failed: $($_.Exception.Message)" $null
   throw

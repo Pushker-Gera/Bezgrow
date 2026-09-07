@@ -129,6 +129,10 @@ assert.match(installerTest, /visibleConsoles[\s\S]*MainWindowHandle -ne \[IntPtr
 assert.match(installerTest, /finally[\s\S]*Get-Process -Name "Bezgrow"[\s\S]*Get-BezgrowNodeProcesses/, "Installer QA must clean the application and managed server after every failure path.")
 assert.match(installerTest, /update-preservation-test[\s\S]*\/UPDATE[\s\S]*Uninstall removed Bezgrow user data/, "Installer QA must verify update and uninstall data preservation.")
 assert.match(installerTest, /bundled server[\s\S]*\/login[\s\S]*authoritative SQLite database/i, "Installer QA must launch the installed app and verify its local server and database.")
+for (const route of ["/dashboard/accounting", "/dashboard/accounting/purchases", "/dashboard/accounting/gst-return-preparation", "/dashboard/accounting/trial-balance", "/dashboard/accounting/balance-sheet"]) {
+  assert.ok(installerTest.includes(`\"${route}\"`), `Installer QA must request the packaged accounting route ${route}.`)
+}
+assert.match(installerTest, /Assert-InstalledAccountingRoutes[\s\S]*This page could not be displayed/, "Installed accounting routes must reject the generic recovery state.")
 assert.match(installerTest, /orphan bundled Node process/i, "Installer QA must reject orphaned background server processes.")
 assert.match(installerTest, /Stop-Process[\s\S]*Bundled runtime supervisor restored the ERP window/, "Installer QA must prove recovery after the embedded server is terminated.")
 assert.match(installerTest, /ShowWindowAsync[\s\S]*IsIconic[\s\S]*IsZoomed/, "Installer QA must exercise minimize, maximize, and restore.")

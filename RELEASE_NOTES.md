@@ -14,7 +14,7 @@ Professional Accounting Phase 3.
 - Removed generated runtime placeholder files from packaged desktop resources so Finder metadata cannot invalidate strict signature verification after copying the app from a macOS disk image.
 - Fixed prepared Windows packaging provenance validation so those two intentional placeholder deletions no longer make an otherwise clean, identity-matched build fail; every other tracked change still blocks packaging.
 
-This candidate is not publicly published. Existing download and updater metadata remains pinned to the published 0.3.0 artifacts until matching 0.3.1 platform artifacts, platform acceptance, and production trust requirements are complete.
+Release policy: public download and updater metadata may advance from 0.3.0 only after matching 0.3.1 macOS and Windows artifacts from the same source commit pass the cross-platform publication gates. The 0.3.1 manual-install channel remains explicitly unsigned and unnotarized until production trust credentials are available.
 
 ## Previous 0.3.0 notes
 
