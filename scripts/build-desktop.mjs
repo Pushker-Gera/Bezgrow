@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { hasUnexpectedTrackedChanges } from "./desktop-source-status.mjs";
 
 const root = dirname(dirname(fileURLToPath(import.meta.url)));
 const packageJson = JSON.parse(readFileSync(join(root, "package.json"), "utf8"));
@@ -11,10 +12,15 @@ const gitResult = spawnSync("git", ["rev-parse", "HEAD"], { cwd: root, encoding:
 const gitHead = (gitResult.stdout || "").trim();
 const sourceStatusResult = spawnSync(
   "git",
-  ["status", "--porcelain", "--untracked-files=no"],
+  ["status", "--porcelain=v1", "-z", "--untracked-files=no"],
   { cwd: root, encoding: "utf8" }
 );
-const sourceTreeDirty = sourceStatusResult.status !== 0 || sourceStatusResult.stdout.trim().length > 0;
+const sourceTreeDirty =
+  sourceStatusResult.status !== 0 ||
+  hasUnexpectedTrackedChanges(
+    sourceStatusResult.stdout,
+    process.env.BEZGROW_DESKTOP_PREPARED === "1"
+  );
 const preparedBuildIdentityPath = join(root, "desktop-runtime", "next-server", "public", "desktop-build.json");
 const preparedBuildIdentity = process.env.BEZGROW_DESKTOP_PREPARED === "1"
   ? JSON.parse(readFileSync(preparedBuildIdentityPath, "utf8"))

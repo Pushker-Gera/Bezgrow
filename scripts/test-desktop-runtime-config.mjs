@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { existsSync, readFileSync } from "node:fs";
+import { hasUnexpectedTrackedChanges } from "./desktop-source-status.mjs";
 
 function read(path) {
   return readFileSync(path, "utf8");
@@ -89,6 +90,12 @@ assert.match(prepare, /\.standalone-stale-[\s\S]*rmSync/, "Desktop prepare must 
 assert.match(desktopBuild, /rmSync\(join\(releaseRoot, "bundle"\)/, "Desktop packaging must remove prior installer staging output.");
 assert.match(desktopBuild, /desktop-build\.json[\s\S]*BEZGROW_DESKTOP_PREPARED[\s\S]*preparedBuildIdentity\?\.gitCommit[\s\S]*preparedBuildIdentity\?\.builtAt/, "Prepared-mode packaging must compile the native app from the exact embedded web build identity.");
 assert.match(desktopBuild, /preparedBuildIdentity\.gitCommit !== gitHead[\s\S]*preparedBuildIdentity\.sourceTreeDirty !== false[\s\S]*sourceTreeDirty/, "Prepared-mode packaging must reject stale or dirty embedded resources.");
+assert.equal(hasUnexpectedTrackedChanges("", true), false, "A clean prepared tree must remain clean.");
+assert.equal(hasUnexpectedTrackedChanges(" D desktop-runtime/next-server/.gitkeep\0 D desktop-runtime/node/.gitkeep\0", true), false, "Prepared-mode packaging may ignore the two intentional runtime placeholder deletions.");
+assert.equal(hasUnexpectedTrackedChanges(" M scripts/build-desktop.mjs\0", true), true, "Prepared-mode packaging must reject tracked source edits.");
+assert.equal(hasUnexpectedTrackedChanges(" D package.json\0", true), true, "Prepared-mode packaging must reject unrelated deletions.");
+assert.equal(hasUnexpectedTrackedChanges(" M desktop-runtime/node/.gitkeep\0", true), true, "Prepared-mode packaging must not ignore a modified placeholder.");
+assert.equal(hasUnexpectedTrackedChanges(" D desktop-runtime/node/.gitkeep\0", false), true, "Non-prepared packaging must not ignore placeholder deletions.");
 assert.match(prepare, /BEZGROW_DESKTOP_NODE_BINARY/, "Cross-architecture Windows builds must bundle the matching Node runtime.");
 assert.match(prepare, /serverSource\s*=\s*join\(root,\s*"\.next",\s*"server"\)/, "Desktop prepare must read .next/server assets.");
 assert.match(prepare, /"chunks"/, "Desktop prepare must copy server chunks into standalone output.");
