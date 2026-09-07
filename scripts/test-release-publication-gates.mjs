@@ -20,6 +20,8 @@ assert.match(publisher, /Cross-platform publication requires a complete genuine 
 assert.match(publisher, /Cross-platform publication requires genuine Windows NSIS and MSI sets/, "Publication input verification must require the Windows cohort.")
 assert.match(workflow, /Compute release checksums[\s\S]*Verify genuine publication inputs[\s\S]*Create or update GitHub Release/, "Checksums and installer bytes must pass before GitHub Release mutation.")
 assert.match(workflow, /Create or update GitHub Release[\s\S]*Verify uploaded digests and public installer URLs[\s\S]*Write verified website release metadata/, "Public URLs and uploaded digests must pass before website metadata advances.")
+assert.match(workflow, /RELEASE_NOTES_TEXT:\s*\$\{\{ steps\.release\.outputs\.notes \}\}[\s\S]*--release-notes \"\$RELEASE_NOTES_TEXT\"/, "Release notes must cross the GitHub-expression boundary through the environment so shell metacharacters remain inert data.")
+assert.doesNotMatch(workflow, /--release-notes \"\$\{\{/, "Release notes must never be interpolated directly into a shell program.")
 assert.match(workflow, /verify-release-publication-inputs\.mjs/, "The release workflow must execute the publication input verifier.")
 assert.match(publisher, /\["nsis", "msi"\]/, "Publication must require both NSIS and MSI records.")
 assert.match(publisher, /Recorded Windows artifact SHA-256 mismatch/, "Publication must compare Windows provenance checksums.")

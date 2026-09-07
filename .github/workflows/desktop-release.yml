@@ -933,24 +933,33 @@ jobs:
 
       - name: Write verified website release metadata
         if: steps.release.outputs.draft != 'true'
+        env:
+          RELEASE_TAG: ${{ steps.release.outputs.tag }}
+          RELEASE_VERSION: ${{ steps.release.outputs.version }}
+          RELEASE_CHANNEL: ${{ steps.release.outputs.channel }}
+          RELEASE_NOTES_TEXT: ${{ steps.release.outputs.notes }}
+          RELEASE_MINIMUM_VERSION: ${{ steps.release.outputs.minimum_version }}
+          RELEASE_MANDATORY_AFTER: ${{ inputs.mandatory_after }}
+          RELEASE_BUILD_COMMIT: ${{ github.sha }}
+          RELEASE_WORKFLOW_RUN_ID: ${{ github.run_id }}
         shell: bash
         run: |
-          TAG="${{ steps.release.outputs.tag }}"
-          VERSION="${{ steps.release.outputs.version }}"
+          TAG="$RELEASE_TAG"
+          VERSION="$RELEASE_VERSION"
           BASE_URL="https://github.com/$REPOSITORY/releases/download/$TAG"
           MANIFEST_ARGS=(
             --version "$VERSION"
             --replace "true"
-            --channel "${{ steps.release.outputs.channel }}"
-            --release-notes "${{ steps.release.outputs.notes }}"
-            --minimum-supported-version "${{ steps.release.outputs.minimum_version }}"
+            --channel "$RELEASE_CHANNEL"
+            --release-notes "$RELEASE_NOTES_TEXT"
+            --minimum-supported-version "$RELEASE_MINIMUM_VERSION"
             --minimum-supported-windows-version "Windows 10 version 1809 (64-bit)"
-            --mandatory-after "${{ inputs.mandatory_after }}"
+            --mandatory-after "$RELEASE_MANDATORY_AFTER"
             --publication-status "published"
             --publication-mode "cross-platform"
             --updater-compatibility "tauri-v2"
-            --build-commit "${{ github.sha }}"
-            --workflow-run-id "${{ github.run_id }}"
+            --build-commit "$RELEASE_BUILD_COMMIT"
+            --workflow-run-id "$RELEASE_WORKFLOW_RUN_ID"
           )
 
           MAC_DMG="$(find release-artifacts/mac -maxdepth 1 -name "Bezgrow-${VERSION}-*.dmg" -print -quit 2>/dev/null || true)"
@@ -960,7 +969,7 @@ jobs:
             MAC_SIGNED="$(tr -d '\r\n' < release-artifacts/mac/mac-signing-status.txt)"
             MAC_NOTARIZED="$(tr -d '\r\n' < release-artifacts/mac/mac-notarization-status.txt)"
             MAC_BUILD_TIMESTAMP="$(node -p "require('./release-artifacts/mac/mac-build.json').builtAt")"
-            MAC_CHANNEL="${{ steps.release.outputs.channel }}"
+            MAC_CHANNEL="$RELEASE_CHANNEL"
             MANIFEST_ARGS+=(
               --mac-url "$BASE_URL/$MAC_DMG_NAME"
               --mac-file "$MAC_DMG"
@@ -989,7 +998,7 @@ jobs:
             WINDOWS_SIGNING="$(tr -d '\r\n' < "$WINDOWS_DIR/windows-signing-status.txt")"
             WINDOWS_BUILD_TIMESTAMP="$(node -p "require('./release-artifacts/windows-x64/windows-build.json').builtAt")"
             WINDOWS_SIGNED=false
-            WINDOWS_CHANNEL="${{ steps.release.outputs.channel }}"
+            WINDOWS_CHANNEL="$RELEASE_CHANNEL"
             if [ "$WINDOWS_SIGNING" = "valid" ]; then WINDOWS_SIGNED=true; fi
             WINDOWS_EXE="$(find "$WINDOWS_DIR" -maxdepth 1 -name 'Bezgrow-Setup-*-x64.exe' -print -quit)"
             WINDOWS_MSI="$(find "$WINDOWS_DIR" -maxdepth 1 -name 'Bezgrow-*-x64.msi' -print -quit)"
