@@ -19,6 +19,7 @@ import {
   setOfflineMeta,
 } from "@/lib/offline/db"
 import type { WorkspaceBootstrapPayload } from "@/lib/workspaceBootstrapClient"
+import { getLocalDatabaseService } from "@/lib/offline/local/service"
 
 type DataRow = Record<string, unknown> & { id?: string }
 
@@ -27,6 +28,7 @@ const DEVICE_STORAGE_KEY = "bezgrow:device-id"
 const DEVICE_SECRET_KEY = "bezgrow-device-id"
 const LICENSE_SECRET_KEY = "bezgrow-offline-license-key"
 const PUBLIC_KEY = normalizeLicenseEnvKey(process.env.NEXT_PUBLIC_BEZGROW_LICENSE_PUBLIC_KEY || "")
+const localDatabaseService = getLocalDatabaseService()
 export const REMOVE_LICENSE_CONFIRMATION = "REMOVE LICENCE"
 
 let deviceIdPromise: Promise<string> | null = null
@@ -39,10 +41,17 @@ type DeviceCheckinResponse = {
   licenseStatus?: string | null
   authoritative?: boolean
   refreshedLicenseKey?: string | null
+  serverTime?: string | null
 }
 
 function nowIso() {
   return new Date().toISOString()
+}
+
+function newestIsoCheckpoint(...values: unknown[]) {
+  return values
+    .filter((value): value is string => typeof value === "string" && Number.isFinite(Date.parse(value)))
+    .sort((left, right) => Date.parse(right) - Date.parse(left))[0] || null
 }
 
 function stringValue(value: unknown, fallback = "") {
@@ -53,6 +62,13 @@ function dateEnd(value: string, graceDays = 0) {
   const date = new Date(`${value.slice(0, 10)}T23:59:59.999`)
   date.setDate(date.getDate() + graceDays)
   return date
+}
+
+function signedValidityEnd(payload: LicensePayload) {
+  const precise = payload.valid_until ? new Date(payload.valid_until) : null
+  return precise && !Number.isNaN(precise.getTime())
+    ? precise
+    : dateEnd(payload.expiry_date, payload.grace_period_days)
 }
 
 function normalizedArchitecture(value: unknown) {
@@ -160,8 +176,16 @@ async function readLicenseRows(organizationId: string) {
   return [...organizationRows, ...globalRows]
 }
 
-function licenseRowFromPayload(payload: LicensePayload, licenseKey: string, signatureText: string, status = "active") {
-  const graceUntil = dateEnd(payload.expiry_date, payload.grace_period_days).toISOString()
+function payloadLocalStatus(payload: LicensePayload) {
+  if (payload.entitlement_status === "trialing") return "trial"
+  if (["active", "grace", "expired", "cancelled", "revoked", "suspended"].includes(String(payload.entitlement_status))) {
+    return String(payload.entitlement_status)
+  }
+  return "active"
+}
+
+function licenseRowFromPayload(payload: LicensePayload, licenseKey: string, signatureText: string, status = payloadLocalStatus(payload)) {
+  const graceUntil = signedValidityEnd(payload).toISOString()
   return {
     id: payload.license_id,
     organization_id: payload.business_id,
@@ -183,9 +207,18 @@ function licenseRowFromPayload(payload: LicensePayload, licenseKey: string, sign
     issued_at: payload.issued_at,
     expires_at: payload.expiry_date,
     grace_until: graceUntil,
-    last_verified_at: nowIso(),
+    last_verified_at: payload.server_verified_at || payload.issued_at,
     signature: signatureText,
     notes: payload.notes || null,
+    entitlement_id: payload.entitlement_id || null,
+    entitlement_source: payload.entitlement_source || null,
+    entitlement_status: payload.entitlement_status || null,
+    subscription_id: payload.subscription_id || null,
+    trial_started_at: payload.trial_started_at || null,
+    trial_ends_at: payload.trial_ends_at || null,
+    valid_from: payload.valid_from || null,
+    valid_until: payload.valid_until || null,
+    server_verified_at: payload.server_verified_at || null,
     sync_status: "synced",
     created_at: nowIso(),
     updated_at: nowIso(),
@@ -263,23 +296,35 @@ async function installRefreshedLicenseKey(current: ReturnType<typeof parseLicens
     refreshed.payload.business_id
   )
 
-  const row = licenseRowFromPayload(refreshed.payload, refreshed.licenseKey, refreshed.signatureText, "active")
-  const targets = [...new Set([refreshed.payload.business_id, workspaceOrganizationId(), "global"].filter(Boolean))]
-  for (const organizationId of targets) {
-    const rows = await getOfflineData<DataRow[]>(organizationId, "license", []).catch(() => [])
-    await putOfflineData(
-      organizationId,
-      "license",
-      [{ ...row, organization_id: organizationId }, ...rows.filter((entry) => entry.id !== refreshed.payload.license_id)]
-    )
-    await logLicenseEvent(
-      organizationId,
-      "LICENSE_REFRESHED",
-      "Installed a newer server-signed licence after authoritative online verification.",
-      refreshed.payload.license_id
-    )
+  const previousLicenseKey = await readDesktopSecret(LICENSE_SECRET_KEY)
+  if (!(await writeDesktopSecret(LICENSE_SECRET_KEY, refreshed.licenseKey))) {
+    throw new Error("The refreshed signed entitlement could not be saved to the operating system credential store.")
   }
-  await writeDesktopSecret(LICENSE_SECRET_KEY, refreshed.licenseKey)
+  localDatabaseService.setNativeEntitlementKey(refreshed.licenseKey)
+
+  try {
+    const row = licenseRowFromPayload(refreshed.payload, refreshed.licenseKey, refreshed.signatureText)
+    const targets = [...new Set([refreshed.payload.business_id, workspaceOrganizationId(), "global"].filter(Boolean))]
+    for (const organizationId of targets) {
+      const rows = await getOfflineData<DataRow[]>(organizationId, "license", []).catch(() => [])
+      await putOfflineData(
+        organizationId,
+        "license",
+        [{ ...row, organization_id: organizationId }, ...rows.filter((entry) => entry.id !== refreshed.payload.license_id)]
+      )
+      await logLicenseEvent(
+        organizationId,
+        "LICENSE_REFRESHED",
+        "Installed a newer server-signed licence after authoritative online verification.",
+        refreshed.payload.license_id
+      )
+    }
+  } catch (error) {
+    if (previousLicenseKey) await writeDesktopSecret(LICENSE_SECRET_KEY, previousLicenseKey)
+    else await deleteDesktopSecret(LICENSE_SECRET_KEY).catch(() => undefined)
+    localDatabaseService.setNativeEntitlementKey(previousLicenseKey)
+    throw error
+  }
   await cacheWorkspaceBootstrap(workspaceFromLicense(refreshed.payload))
 }
 
@@ -290,8 +335,9 @@ async function restoreLicenseRowsFromDesktopSecret(deviceId: string) {
   try {
     const parsed = parseLicenseInput(licenseKey)
     if (parsed.payload.device_id !== deviceId) return []
-    if (Date.now() > dateEnd(parsed.payload.expiry_date, parsed.payload.grace_period_days).getTime()) return []
     if (!(await verifyLicenseSignature(parsed, PUBLIC_KEY))) return []
+
+    localDatabaseService.setNativeEntitlementKey(parsed.licenseKey)
 
     await provisionAppLockFromLicense(
       parsed.payload.app_lock,
@@ -419,7 +465,7 @@ export async function restoreLicensedWorkspaceContext() {
     return null
   })
   const status = await getLocalLicenseStatus("global")
-  if (!status.allowed || !status.license) return null
+  if (!status.license) return null
 
   const cachedWorkspace = migrated?.workspace || getCachedWorkspaceBootstrap()
   const workspace = cachedWorkspace?.success ? cachedWorkspace : workspaceFromStoredLicense(status.license)
@@ -490,6 +536,7 @@ export async function reportActivatedDevice(
       requestId: result?.requestId || null,
       authoritativeStatus: result?.authoritative ? normalizeAuthoritativeStatus(result.licenseStatus) : null,
       code: result?.code || null,
+      serverTime: result?.serverTime || null,
     }
   }
   if (result.refreshedLicenseKey) {
@@ -501,6 +548,7 @@ export async function reportActivatedDevice(
     requestId: result.requestId || null,
     authoritativeStatus: normalizeAuthoritativeStatus(result.licenseStatus),
     code: result.code || null,
+    serverTime: result.serverTime || null,
   }
 }
 
@@ -516,9 +564,9 @@ function normalizeAuthoritativeStatus(value: unknown) {
   return null
 }
 
-async function persistAuthoritativeLicenseStatus(licenseId: string, status: string, businessId: string) {
+async function persistAuthoritativeLicenseStatus(licenseId: string, status: string, businessId: string, serverTime?: string | null) {
   const targets = [...new Set([businessId, workspaceOrganizationId(), "global"].filter(Boolean))]
-  const verifiedAt = nowIso()
+  const verifiedAt = serverTime && Number.isFinite(Date.parse(serverTime)) ? serverTime : nowIso()
   for (const organizationId of targets) {
     const rows = await getOfflineData<DataRow[]>(organizationId, "license", []).catch(() => [])
     if (!rows.some((row) => row.id === licenseId)) continue
@@ -526,7 +574,14 @@ async function persistAuthoritativeLicenseStatus(licenseId: string, status: stri
       organizationId,
       "license",
       rows.map((row) => row.id === licenseId
-        ? { ...row, status, last_verified_at: verifiedAt, last_seen_at: verifiedAt, updated_at: verifiedAt }
+        ? {
+            ...row,
+            status,
+            last_verified_at: newestIsoCheckpoint(row.last_verified_at, verifiedAt),
+            server_verified_at: newestIsoCheckpoint(row.server_verified_at, serverTime),
+            last_seen_at: nowIso(),
+            updated_at: nowIso(),
+          }
         : row)
     )
     await logLicenseEvent(
@@ -551,7 +606,7 @@ export async function revalidateLocalLicenseWithControlPlane(
   const parsed = parseLicenseInput(licenseKey)
   const check = await reportActivatedDevice(parsed)
   if ("authoritativeStatus" in check && check.authoritativeStatus) {
-    await persistAuthoritativeLicenseStatus(parsed.payload.license_id, check.authoritativeStatus, parsed.payload.business_id)
+    await persistAuthoritativeLicenseStatus(parsed.payload.license_id, check.authoritativeStatus, parsed.payload.business_id, check.serverTime)
   }
   return { check, snapshot: await localLicenseSnapshot(organizationId) }
 }
@@ -584,7 +639,7 @@ export async function activateOfflineLicense(input: unknown) {
     throw new Error("License signature is invalid.")
   }
 
-  if (Date.now() > dateEnd(parsed.payload.expiry_date, parsed.payload.grace_period_days).getTime()) {
+  if (Date.now() >= signedValidityEnd(parsed.payload).getTime()) {
     await logLicenseEvent("global", "LICENSE_EXPIRED_IMPORT", "Rejected expired license import.", parsed.payload.license_id)
     throw new Error("This license is already expired.")
   }
@@ -595,8 +650,23 @@ export async function activateOfflineLicense(input: unknown) {
     parsed.payload.license_id,
     parsed.payload.business_id
   )
-  await writeActivatedLicense(parsed.payload, parsed.licenseKey, parsed.signatureText)
-  await writeDesktopSecret(LICENSE_SECRET_KEY, parsed.licenseKey)
+  const previousLicenseKey = await readDesktopSecret(LICENSE_SECRET_KEY)
+  if (!(await writeDesktopSecret(LICENSE_SECRET_KEY, parsed.licenseKey))) {
+    throw new Error("The signed entitlement could not be saved to the operating system credential store.")
+  }
+  localDatabaseService.setNativeEntitlementKey(parsed.licenseKey)
+  try {
+    await writeActivatedLicense(
+      parsed.payload,
+      parsed.licenseKey,
+      parsed.signatureText,
+    )
+  } catch (error) {
+    if (previousLicenseKey) await writeDesktopSecret(LICENSE_SECRET_KEY, previousLicenseKey)
+    else await deleteDesktopSecret(LICENSE_SECRET_KEY).catch(() => undefined)
+    localDatabaseService.setNativeEntitlementKey(previousLicenseKey)
+    throw error
+  }
   await createLocalWorkspaceFromLicense(parsed.payload)
   // Online reporting is deliberately best-effort and runs only after the
   // signed license has been accepted and persisted locally. A network or
@@ -611,7 +681,8 @@ export async function activateOfflineLicense(input: unknown) {
     await persistAuthoritativeLicenseStatus(
       parsed.payload.license_id,
       activationCheck.authoritativeStatus,
-      parsed.payload.business_id
+      parsed.payload.business_id,
+      "serverTime" in activationCheck ? activationCheck.serverTime : null,
     )
     const revalidated = await getLocalLicenseStatus(parsed.payload.business_id)
     if (!revalidated.allowed) throw new Error(revalidated.reason)
@@ -620,7 +691,7 @@ export async function activateOfflineLicense(input: unknown) {
     license: parsed.payload,
     status: "active",
     expires_at: parsed.payload.expiry_date,
-    grace_until: dateEnd(parsed.payload.expiry_date, parsed.payload.grace_period_days).toISOString(),
+    grace_until: signedValidityEnd(parsed.payload).toISOString(),
   }
 }
 
@@ -631,14 +702,15 @@ async function touchLicense(organizationId: string, result: LicensePolicyResult)
   await putOfflineData(
     organizationId,
     "license",
-    rows.map((row) => (row.id === result.license?.id ? { ...row, last_verified_at: nowIso(), last_seen_at: nowIso(), updated_at: nowIso() } : row))
+    rows.map((row) => (row.id === result.license?.id ? { ...row, last_seen_at: nowIso(), updated_at: nowIso() } : row))
   ).catch(() => undefined)
 }
 
 export async function getLocalLicenseStatus(organizationId = workspaceOrganizationId() || "global") {
   const deviceId = await getOrCreateDeviceId()
   const storedRows = await readLicenseRows(organizationId)
-  let rows = await verifyStoredLicenseRows(storedRows, { publicKey: PUBLIC_KEY, deviceId })
+  const expectedBusinessId = organizationId && organizationId !== "global" ? organizationId : null
+  let rows = await verifyStoredLicenseRows(storedRows, { publicKey: PUBLIC_KEY, deviceId, expectedBusinessId })
   const connectivity = typeof navigator !== "undefined" && navigator.onLine === false ? "offline" : "unknown"
   let status = evaluateStoredLicense(rows, { deviceId, connectivity })
   const authoritativeLocalStatus = stringValue(status.license?.status).toLowerCase()
@@ -646,7 +718,7 @@ export async function getLocalLicenseStatus(organizationId = workspaceOrganizati
   if (!status.allowed && canRestoreFromSecret) {
     const restoredRows = await restoreLicenseRowsFromDesktopSecret(deviceId)
     if (restoredRows.length) {
-      rows = await verifyStoredLicenseRows([...restoredRows, ...rows], { publicKey: PUBLIC_KEY, deviceId })
+      rows = await verifyStoredLicenseRows([...restoredRows, ...rows], { publicKey: PUBLIC_KEY, deviceId, expectedBusinessId })
       status = evaluateStoredLicense(rows, { deviceId, connectivity })
     }
   }
@@ -672,8 +744,8 @@ export async function reconcileLocalAppLockCredential(
   organizationId = workspaceOrganizationId() || "global",
 ) {
   const snapshot = await localLicenseSnapshot(organizationId)
-  if (!snapshot.allowed || !snapshot.license) {
-    return { reconciled: false, reason: "no-valid-licence" as const, snapshot }
+  if (!snapshot.license) {
+    return { reconciled: false, reason: "no-signed-licence" as const, snapshot }
   }
 
   const licenseKey = stringValue(snapshot.license.license_key)
@@ -830,6 +902,7 @@ export async function removeLocalLicenseFromDevice(confirmation: string) {
   }
 
   await deleteDesktopSecret(LICENSE_SECRET_KEY)
+  localDatabaseService.setNativeEntitlementKey(null)
   clearDesktopAuthMarker()
   return { device_id: deviceId, removed: true }
 }

@@ -11,8 +11,8 @@ import PlatformAdminLauncher from "@/components/desktop/PlatformAdminLauncher"
 import LocalDatabaseRecovery from "@/components/offline/LocalDatabaseRecovery"
 import { AppLockGate } from "@/components/security/AppLockGate"
 import { isTauriRuntimeAsync } from "@/lib/desktop/tauri"
-import { getLocalDatabaseService } from "@/lib/offline/local/service"
-import { localLicenseSnapshot, restoreLicensedWorkspaceContext, revalidateLocalLicenseWithControlPlane } from "@/lib/offline/local/license"
+import { localLicenseSnapshot, revalidateLocalLicenseWithControlPlane } from "@/lib/offline/local/license"
+import { canContinueReadOnly, resolveDesktopStartupState, STARTUP_STATES } from "@/lib/startup/state-machine"
 import { FinancialYearProvider, FinancialYearScopedContent, FinancialYearSelector, FinancialYearViewingBanner } from "@/components/financial-years/FinancialYearContext"
 
 const navItems = [
@@ -64,6 +64,7 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
     const [online, setOnline] = useState(true)
     const [canShowAdmin, setCanShowAdmin] = useState(false)
     const [desktopDatabase, setDesktopDatabase] = useState<DesktopDatabaseState>({ status: "initializing" })
+    const [readOnlyReason, setReadOnlyReason] = useState("")
     const startupStartedRef = useRef(false)
     const initialPathRef = useRef(pathname || "/dashboard")
 
@@ -76,43 +77,23 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
             try {
                 const desktopRuntime = await isTauriRuntimeAsync().catch(() => false)
                 if (desktopRuntime) {
-                    try {
-                        await getLocalDatabaseService().ensureReady()
-                        if (!cancelled) setDesktopDatabase({ status: "database-ready" })
-                    } catch (error) {
-                        if (!cancelled) {
-                            setDesktopDatabase({
-                                status: "failed",
-                                message: error instanceof Error ? error.message : "Bezgrow local database could not start.",
-                            })
-                        }
+                    const startup = await resolveDesktopStartupState(initialPathRef.current)
+                    if (startup.redirectTo) { router.replace(startup.redirectTo); return }
+                    if (startup.state === STARTUP_STATES.recoveryRequired) {
+                        if (!cancelled) setDesktopDatabase({ status: "failed", message: startup.reason || "Bezgrow local startup could not be completed." })
                         return
                     }
-
-                    const restoredWorkspace = await restoreLicensedWorkspaceContext().catch((error) => {
-                        console.warn("Desktop license workspace restore warning:", error)
-                        return null
-                    })
-                    const organizationId = restoredWorkspace?.organization?.id || restoredWorkspace?.membership?.organization_id || undefined
-                    const license = await localLicenseSnapshot(organizationId).catch((error) => {
-                        console.warn("Desktop license validation warning:", error)
-                        return null
-                    })
-                    if (!license?.allowed) {
-                        router.replace(`/offline?next=${encodeURIComponent(initialPathRef.current)}`)
-                        return
-                    }
-                    if (!cancelled) setDesktopDatabase({ status: "license-valid" })
-
+                    const restoredWorkspace = startup.workspace
                     if (restoredWorkspace?.success) {
-                        setOrganizationId(organizationId || "")
+                        setOrganizationId(startup.organizationId || "")
                         if (restoredWorkspace.organization?.name) setBusinessName(restoredWorkspace.organization.name)
-                        setOwnerEmail(restoredWorkspace.user?.email || "licensed@bezgrow.local")
+                        setOwnerEmail(restoredWorkspace.user?.email || "local@bezgrow.invalid")
                         setCanShowAdmin(false)
+                        if (startup.state === STARTUP_STATES.readOnlyExpired) setReadOnlyReason(startup.reason || "Subscription inactive. Write actions are locked.")
                         if (!cancelled) setDesktopDatabase({ status: "business-ready" })
                         return
                     }
-                    router.replace(`/offline?next=${encodeURIComponent(initialPathRef.current)}`)
+                    router.replace("/create-business")
                     return
                 } else if (!cancelled) {
                     setDesktopDatabase({ status: "browser-local-only" })
@@ -158,9 +139,11 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
                 const snapshot = remote && navigator.onLine
                     ? (await revalidateLocalLicenseWithControlPlane()).snapshot
                     : await localLicenseSnapshot()
-                if (!cancelled && !snapshot.allowed) {
-                    router.replace(`/offline?reason=license_${snapshot.status}&next=${encodeURIComponent(initialPathRef.current)}`)
+                if (!cancelled && !snapshot.allowed && !canContinueReadOnly(snapshot.status)) {
+                    router.replace(`/subscription?reason=${encodeURIComponent(snapshot.status)}&next=${encodeURIComponent(initialPathRef.current)}`)
+                    return
                 }
+                if (!cancelled) setReadOnlyReason(snapshot.allowed ? "" : snapshot.reason)
             } catch (error) {
                 // A transient control-plane failure never disables a locally
                 // valid signed licence. Local expiry remains checked below.
@@ -231,7 +214,7 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
     return (
         <AppLockGate businessName={businessName}>
         <FinancialYearProvider organizationId={organizationId}>
-        <div className="responsive-shell flex h-dvh max-h-dvh overflow-hidden bg-black text-white">
+        <div className="responsive-shell flex h-dvh max-h-dvh overflow-hidden bg-black text-white" data-entitlement-mode={readOnlyReason ? "read-only" : "write-enabled"}>
             <FormKeyboardNavigation />
             <aside className="hidden w-[292px] shrink-0 border-r border-white/10 bg-[#060909] p-5 lg:flex lg:flex-col">
                 <div className="inventory-sheen rounded-[30px] border border-white/10 bg-white/[0.035] p-5">
@@ -272,6 +255,7 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
             </aside>
 
             <div className="flex min-w-0 flex-1 flex-col overflow-hidden">
+                {readOnlyReason && <div role="status" className="shrink-0 border-b border-amber-300/20 bg-amber-300/10 px-4 py-2 text-center text-xs font-bold text-amber-100">Read-only mode — {readOnlyReason} <Link href="/subscription" className="ml-2 underline">Manage subscription</Link></div>}
                 <header className="z-30 hidden shrink-0 border-b border-white/10 bg-black/80 px-3 py-3 backdrop-blur-xl sm:px-5 sm:py-4 lg:block lg:px-8">
                     <div className="flex items-center justify-between gap-3">
                         <DesktopBackButton fallback="/dashboard" />

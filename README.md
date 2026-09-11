@@ -60,8 +60,8 @@ If keys are missing, invalid format, or mismatched, `/admin/settings` shows a cl
 
 Supabase migrations after the local-first cutover define only the platform control plane. Historical ERP migrations are legacy schema history and must not be used to restore cloud ERP routes. Before applying the guarded cloud-ERP cleanup migration, create and verify the protected export and confirm all required rows are present in SQLite.
 
-The current Platform Administration migration history is `2026082402`; its
-backward-compatible application-facing readiness contract remains `2026082401`.
+The current Platform Administration and Phase 1 subscription migration history is
+`2026090810`; its application-facing readiness contract is `2026090810`.
 Starting
 from the complete `2026072701` control plane, apply these additive migrations in
 filename order:
@@ -77,6 +77,7 @@ filename order:
 20260822030000_atomic_desktop_release_state.sql
 20260824010000_app_lock_password_reset.sql
 20260824020000_admin_control_plane_chain_repair.sql
+20260908101925_phase1_trial_entitlements.sql
 ```
 
 Do not skip migrations even when a later schema-version row is already present.

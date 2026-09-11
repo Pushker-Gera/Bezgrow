@@ -49,7 +49,8 @@ use windows_sys::Win32::{
 #[cfg(not(debug_assertions))]
 use std::net::{TcpListener, TcpStream};
 
-use ed25519_dalek::{Signer, SigningKey};
+use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
+use ed25519_dalek::{Signature, Signer, SigningKey, Verifier, VerifyingKey};
 use image::{GenericImageView, ImageFormat};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -88,6 +89,8 @@ const NATIVE_BUILD_TIMESTAMP: &str = env!("BEZGROW_BUILD_TIMESTAMP");
 const LOCAL_DATABASE_NAME: &str = "bezgrow-offline.db";
 const WINDOWS_APP_DATA_DIR: &str = "Bezgrow";
 const INSTALLATION_DIRECTORY: &str = "Installation";
+const LICENSE_PUBLIC_KEY: Option<&str> = option_env!("BEZGROW_LICENSE_PUBLIC_KEY");
+const ENTITLEMENT_CLOCK_WATERMARK_FILENAME: &str = "entitlement-clock-watermark";
 const DEVICE_ID_FILENAME: &str = "device-id";
 const INSTALLATION_SEED_FILENAME: &str = "installation-seed";
 const PLATFORM_ADMIN_SIGNING_KEY_PREFIX: &str = "platform-admin-device-signing-key";
@@ -1242,6 +1245,8 @@ struct DesktopSqlStatement {
     bind_values: Vec<serde_json::Value>,
     #[serde(default)]
     ignore_duplicate_column: bool,
+    #[serde(default)]
+    license_key: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -1844,6 +1849,7 @@ fn valid_platform_admin_proof_path(path_and_query: &str) -> bool {
         && path_and_query.len() <= 2_048
         && (path_and_query == "/api/admin/session"
             || path_and_query.starts_with("/api/admin/")
+            || path_and_query == "/api/entitlements/onboard"
             || path_and_query == "/api/platform-admin/device/authorize"
             || path_and_query == "/api/platform-admin/device/status")
 }
@@ -4079,6 +4085,269 @@ fn statement_preview(query: &str) -> String {
         .collect()
 }
 
+#[derive(Deserialize)]
+struct NativeEntitlementPayload {
+    business_id: String,
+    device_id: String,
+    platform: Option<String>,
+    architecture: Option<String>,
+    expiry_date: String,
+    grace_period_days: Option<i64>,
+    valid_until: Option<String>,
+    entitlement_status: Option<String>,
+    signature_algorithm: Option<String>,
+}
+
+fn sql_target_table(query: &str) -> Option<String> {
+    let normalized = query
+        .replace(['\n', '\r', '\t', '(', ')', ','], " ")
+        .to_ascii_lowercase();
+    let tokens = normalized.split_whitespace().collect::<Vec<_>>();
+    for (index, token) in tokens.iter().enumerate() {
+        let candidate = match *token {
+            "insert" | "replace" => tokens[index + 1..]
+                .iter()
+                .position(|value| *value == "into")
+                .and_then(|offset| tokens.get(index + offset + 2)),
+            "update" => tokens.get(index + 1),
+            "delete" => tokens[index + 1..]
+                .iter()
+                .position(|value| *value == "from")
+                .and_then(|offset| tokens.get(index + offset + 2)),
+            _ => None,
+        };
+        if let Some(table) = candidate {
+            return table
+                .trim_matches(|character| matches!(character, '`' | '"' | '\'' | '[' | ']' | ';'))
+                .rsplit('.')
+                .next()
+                .map(str::to_string);
+        }
+    }
+    None
+}
+
+fn is_mutating_sql(query: &str) -> bool {
+    let normalized = query.trim_start().to_ascii_lowercase();
+    ["insert", "replace", "update", "delete", "with"]
+        .iter()
+        .any(|prefix| normalized.starts_with(prefix))
+}
+
+fn is_unrestricted_metadata_table(table: &str) -> bool {
+    matches!(
+        table,
+        "schema_migrations" | "offline_meta" | "local_audit_logs" | "backup_manifest" | "onboarding_attempts"
+    )
+}
+
+fn requires_signed_metadata_entitlement(table: &str) -> bool {
+    matches!(
+        table,
+        "license_state" | "device_activations" | "local_account_bindings"
+    )
+}
+
+fn is_safe_accounting_schema_upgrade(statement: &DesktopSqlStatement, table: &str) -> bool {
+    if table != "accounting_settings" || !statement.bind_values.is_empty() {
+        return false;
+    }
+    let compact = statement
+        .query
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .to_ascii_lowercase();
+    compact.starts_with("update accounting_settings set accounting_version = max(accounting_version,")
+}
+
+fn is_global_device_metadata(statement: &DesktopSqlStatement, table: &str) -> bool {
+    table == "business_settings"
+        && statement.bind_values.iter().any(|value| value.as_str() == Some("global"))
+        && statement.bind_values.iter().any(|value| {
+            value
+                .as_str()
+                .is_some_and(|text| text.starts_with("meta:global:"))
+        })
+}
+
+fn decode_native_entitlement(license_key: &str) -> Result<NativeEntitlementPayload, String> {
+    let public_key = LICENSE_PUBLIC_KEY
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| "This Bezgrow build does not contain the entitlement verification key.".to_string())?;
+    let parts = license_key.trim().split('.').collect::<Vec<_>>();
+    if parts.len() != 3 || parts[0] != "BZG-LIC-v1" {
+        return Err("The signed local entitlement has an invalid format.".to_string());
+    }
+    let payload_bytes = URL_SAFE_NO_PAD
+        .decode(parts[1])
+        .map_err(|_| "The signed local entitlement payload is invalid.".to_string())?;
+    let signature_bytes = URL_SAFE_NO_PAD
+        .decode(parts[2])
+        .map_err(|_| "The signed local entitlement signature is invalid.".to_string())?;
+    let public_key_bytes = URL_SAFE_NO_PAD
+        .decode(public_key)
+        .map_err(|_| "This Bezgrow build contains an invalid entitlement verification key.".to_string())?;
+    let public_key_array: [u8; 32] = public_key_bytes
+        .try_into()
+        .map_err(|_| "This Bezgrow build contains an invalid entitlement verification key.".to_string())?;
+    let signature = Signature::from_slice(&signature_bytes)
+        .map_err(|_| "The signed local entitlement signature is invalid.".to_string())?;
+    VerifyingKey::from_bytes(&public_key_array)
+        .map_err(|_| "This Bezgrow build contains an invalid entitlement verification key.".to_string())?
+        .verify(&payload_bytes, &signature)
+        .map_err(|_| "The signed local entitlement could not be verified.".to_string())?;
+    let payload: NativeEntitlementPayload = serde_json::from_slice(&payload_bytes)
+        .map_err(|_| "The signed local entitlement payload is invalid.".to_string())?;
+    if payload.signature_algorithm.as_deref() != Some("ed25519") {
+        return Err("The signed local entitlement uses an unsupported signature algorithm.".to_string());
+    }
+    Ok(payload)
+}
+
+fn entitlement_deadline(payload: &NativeEntitlementPayload) -> Result<time::OffsetDateTime, String> {
+    use time::format_description::well_known::Rfc3339;
+    if let Some(value) = payload.valid_until.as_deref().filter(|value| !value.trim().is_empty()) {
+        return time::OffsetDateTime::parse(value, &Rfc3339)
+            .map_err(|_| "The signed local entitlement has an invalid access deadline.".to_string());
+    }
+    let legacy_end = format!("{}T23:59:59Z", payload.expiry_date);
+    let expiry = time::OffsetDateTime::parse(&legacy_end, &Rfc3339)
+        .map_err(|_| "The signed local entitlement has an invalid expiry date.".to_string())?;
+    Ok(expiry + time::Duration::days(payload.grace_period_days.unwrap_or(0).max(0)))
+}
+
+fn native_platform_name() -> &'static str {
+    if cfg!(target_os = "windows") { "windows" } else { "macos" }
+}
+
+fn native_architecture_name() -> &'static str {
+    if cfg!(target_arch = "aarch64") { "arm64" } else { "x86_64" }
+}
+
+fn enforce_native_entitlement_clock<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> Result<(), String> {
+    let directory = managed_data_directory(app, INSTALLATION_DIRECTORY)?;
+    fs::create_dir_all(&directory)
+        .map_err(|error| format!("Unable to prepare the entitlement clock watermark: {error}"))?;
+    let path = directory.join(ENTITLEMENT_CLOCK_WATERMARK_FILENAME);
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_err(|_| "The system clock is earlier than the supported range.".to_string())?
+        .as_secs();
+    let previous = if path.exists() {
+        let value = fs::read_to_string(&path)
+            .map_err(|error| format!("Unable to read the entitlement clock watermark: {error}"))?;
+        Some(value.trim().parse::<u64>()
+            .map_err(|_| "The entitlement clock watermark is invalid. Use recovery before making changes.".to_string())?)
+    } else {
+        None
+    };
+    if previous.is_some_and(|value| now.saturating_add(600) < value) {
+        return Err("System clock rollback detected. Connect to Bezgrow to verify the entitlement before making changes.".to_string());
+    }
+    if previous.is_none_or(|value| now > value.saturating_add(60)) {
+        let mut watermark = OpenOptions::new()
+            .create(true)
+            .write(true)
+            .truncate(true)
+            .open(&path)
+            .map_err(|error| format!("Unable to update the entitlement clock watermark: {error}"))?;
+        watermark
+            .write_all(now.to_string().as_bytes())
+            .and_then(|()| watermark.sync_all())
+            .map_err(|error| format!("Unable to finalize the entitlement clock watermark: {error}"))?;
+    }
+    Ok(())
+}
+
+async fn database_has_business(connection: &mut SqliteConnection) -> Result<bool, String> {
+    let organizations_table: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='organizations'",
+    )
+    .fetch_one(&mut *connection)
+    .await
+    .map_err(|error| format!("Unable to inspect local business authorization: {error}"))?;
+    if organizations_table == 0 {
+        return Ok(false);
+    }
+    let count: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM organizations WHERE id <> 'global' AND deleted_at IS NULL",
+    )
+    .fetch_one(&mut *connection)
+    .await
+    .map_err(|error| format!("Unable to inspect local business authorization: {error}"))?;
+    Ok(count > 0)
+}
+
+async fn authorize_desktop_statement<R: tauri::Runtime>(
+    app: &tauri::AppHandle<R>,
+    connection: &mut SqliteConnection,
+    statement: &DesktopSqlStatement,
+    business_exists_before_transaction: bool,
+) -> Result<(), String> {
+    if !is_mutating_sql(&statement.query) {
+        return Ok(());
+    }
+    let table = sql_target_table(&statement.query)
+        .ok_or_else(|| "Bezgrow blocked an unrecognized local database mutation.".to_string())?;
+    if is_unrestricted_metadata_table(&table)
+        || is_safe_accounting_schema_upgrade(statement, &table)
+        || is_global_device_metadata(statement, &table)
+    {
+        return Ok(());
+    }
+    // A clean device may create its first empty business and accounting seed
+    // in one native transaction. Once a business exists, every operational
+    // mutation is cryptographically gated below.
+    if !business_exists_before_transaction {
+        return Ok(());
+    }
+    let license_key = statement
+        .license_key
+        .as_deref()
+        .filter(|value| !value.trim().is_empty())
+        .ok_or_else(|| "Your Bezgrow entitlement does not allow business changes on this device.".to_string())?;
+    let payload = decode_native_entitlement(license_key)?;
+    let device_path = managed_data_directory(app, INSTALLATION_DIRECTORY)?.join(DEVICE_ID_FILENAME);
+    let installed_device_id = read_persisted_device_id(&device_path)?
+        .ok_or_else(|| "The Bezgrow installation Device ID is unavailable.".to_string())?;
+    if payload.device_id != installed_device_id {
+        return Err("This entitlement belongs to another Bezgrow installation.".to_string());
+    }
+    if payload.platform.as_deref().is_some_and(|value| value != native_platform_name()) {
+        return Err("This entitlement belongs to another operating system.".to_string());
+    }
+    if payload.architecture.as_deref().is_some_and(|value| {
+        let normalized = if matches!(value, "x64" | "amd64") { "x86_64" } else { value };
+        normalized != native_architecture_name()
+    }) {
+        return Err("This entitlement belongs to another processor architecture.".to_string());
+    }
+    let matching_business: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM organizations WHERE id = ? AND id <> 'global' AND deleted_at IS NULL",
+    )
+    .bind(&payload.business_id)
+    .fetch_one(&mut *connection)
+    .await
+    .map_err(|error| format!("Unable to verify the entitled local business: {error}"))?;
+    if matching_business != 1 {
+        return Err("This entitlement belongs to another local business.".to_string());
+    }
+    if requires_signed_metadata_entitlement(&table) {
+        return Ok(());
+    }
+    if matches!(
+        payload.entitlement_status.as_deref(),
+        Some("expired" | "cancelled" | "revoked" | "suspended")
+    ) || time::OffsetDateTime::now_utc() >= entitlement_deadline(&payload)?
+    {
+        return Err("Your Bezgrow trial has ended. Business data remains available in read-only mode.".to_string());
+    }
+    enforce_native_entitlement_clock(app)?;
+    Ok(())
+}
+
 async fn execute_desktop_statement(
     connection: &mut SqliteConnection,
     statement: &DesktopSqlStatement,
@@ -4233,6 +4502,8 @@ async fn desktop_execute<R: tauri::Runtime>(
         .map_err(|error| {
             format!("Unable to open the authoritative desktop SQLite database for a write: {error}")
         })?;
+    let business_exists = database_has_business(&mut connection).await?;
+    authorize_desktop_statement(&app, &mut connection, &statement, business_exists).await?;
 
     match execute_desktop_statement(&mut connection, &statement).await {
         Ok(rows_affected) => Ok(rows_affected),
@@ -4282,6 +4553,26 @@ async fn desktop_execute_transaction<R: tauri::Runtime>(
 ) -> Result<DesktopTransactionResult, String> {
     let _operation = begin_critical_operation(&app)?;
     let database_path = local_database_path(&app)?;
+    if !statements.is_empty() {
+        let options = SqliteConnectOptions::new()
+            .filename(&database_path)
+            .create_if_missing(false)
+            .foreign_keys(true)
+            .journal_mode(SqliteJournalMode::Wal)
+            .synchronous(SqliteSynchronous::Full)
+            .busy_timeout(std::time::Duration::from_secs(5));
+        let mut authorization_connection = SqliteConnection::connect_with(&options)
+            .await
+            .map_err(|error| format!("Unable to open SQLite for native entitlement authorization: {error}"))?;
+        let business_exists = database_has_business(&mut authorization_connection).await?;
+        for statement in &statements {
+            authorize_desktop_statement(&app, &mut authorization_connection, statement, business_exists).await?;
+        }
+        authorization_connection
+            .close()
+            .await
+            .map_err(|error| format!("Unable to finish native entitlement authorization: {error}"))?;
+    }
     match execute_transaction_at_path(&database_path, &statements).await {
         Ok(result) => Ok(result),
         Err(error) => {
@@ -4390,7 +4681,19 @@ mod database_transaction_tests {
             query: query.to_string(),
             bind_values,
             ignore_duplicate_column: false,
+            license_key: None,
         }
+    }
+
+    #[test]
+    fn native_write_classifier_covers_operational_mutations() {
+        assert_eq!(sql_target_table("INSERT OR REPLACE INTO sales_invoices (id) VALUES (?)").as_deref(), Some("sales_invoices"));
+        assert_eq!(sql_target_table("UPDATE chart_of_accounts SET account_name=? WHERE id=?").as_deref(), Some("chart_of_accounts"));
+        assert_eq!(sql_target_table("DELETE FROM products WHERE id=?").as_deref(), Some("products"));
+        assert_eq!(sql_target_table("WITH pending AS (SELECT 1) UPDATE inventory_items SET stock=0").as_deref(), Some("inventory_items"));
+        assert!(is_mutating_sql("WITH pending AS (SELECT 1) UPDATE inventory_items SET stock=0"));
+        assert!(!is_unrestricted_metadata_table("products"));
+        assert!(requires_signed_metadata_entitlement("license_state"));
     }
 
     #[test]

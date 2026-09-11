@@ -127,8 +127,50 @@ export async function getAppLockStatus() {
   return {
     enabled: Boolean(credential),
     credentialId: credential?.credential_id || null,
+    businessId: credential?.business_id || null,
+    licenseId: credential?.license_id || null,
     locallyChangedAt: credential?.locally_changed_at || null,
   }
+}
+
+/** Create the device-local App Lock chosen by the business owner.
+ * Entitlement state is intentionally not consulted: App Lock protects local
+ * privacy and remains usable when a trial or subscription is expired.
+ */
+export function createLocalAppPassword(input: {
+  password: string
+  deviceId: string
+  licenseId: string
+  businessId: string
+}) {
+  return serializeCredentialMutation(async () => {
+    const policyError = appPasswordPolicyError(input.password)
+    if (policyError) throw new Error(policyError)
+    if (await readCredential()) throw new Error("App Lock is already configured on this device.")
+    const salt = crypto.getRandomValues(new Uint8Array(16))
+    const issuedAt = new Date().toISOString()
+    const credential: AppLockCredential = {
+      version: 1,
+      algorithm: APP_LOCK_ALGORITHM,
+      iterations: APP_LOCK_ITERATIONS,
+      salt: appLockBytesToBase64Url(salt),
+      verifier: "",
+      device_id: input.deviceId,
+      credential_id: crypto.randomUUID(),
+      issued_at: issuedAt,
+      reset_authorization: null,
+      license_id: input.licenseId,
+      business_id: input.businessId,
+      installed_at: issuedAt,
+      locally_changed_at: issuedAt,
+      applied_reset_authorization_id: null,
+    }
+    credential.verifier = await deriveAppLockVerifier(input.password, credential)
+    await writeCredential(credential)
+    await writeWatermark(credential)
+    window.dispatchEvent(new Event(APP_LOCK_CREDENTIAL_CHANGED_EVENT))
+    return { credentialId: credential.credential_id }
+  })
 }
 
 export async function getAppLockDiagnostics(options: { unlocked?: boolean } = {}) {

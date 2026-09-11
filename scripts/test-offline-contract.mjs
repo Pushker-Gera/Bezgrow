@@ -12,6 +12,7 @@ const localErp = read("lib/offline/local/erp.ts");
 const adapters = read("lib/offline/local/adapters.ts");
 const schema = read("lib/offline/local/schema.ts");
 const dashboardLayout = read("app/dashboard/layout.tsx");
+const startupState = read("lib/startup/state-machine.ts");
 const offlinePage = read("app/offline/page.tsx");
 const recovery = read("components/offline/LocalDatabaseRecovery.tsx");
 const proxy = read("proxy.ts");
@@ -37,13 +38,14 @@ for (const table of ["database_health", "license_state", "device_activations", "
 
 const indexes = schema.match(/CREATE INDEX IF NOT EXISTS/g) || [];
 assert.ok(indexes.length >= 40, `Expected broad offline indexes; found ${indexes.length}.`);
-assert.match(schema, /LOCAL_DB_VERSION\s*=\s*22/, "Local DB version should reflect the current normalized schema.");
+assert.match(schema, /LOCAL_DB_VERSION\s*=\s*23/, "Local DB version should reflect the current normalized schema.");
 
 assert.match(dashboardLayout, /LocalDatabaseRecovery/, "Dashboard must render the local database recovery screen.");
-assert.match(dashboardLayout, /getLocalDatabaseService\(\)\.ensureReady\(\)/, "Dashboard must await the authoritative startup manager.");
-assert.doesNotMatch(dashboardLayout, /integrityReport\(\)/, "Dashboard navigation must not repeat a full integrity check.");
+assert.match(dashboardLayout, /resolveDesktopStartupState\(/, "Dashboard must await the deterministic desktop startup state machine.");
+assert.match(startupState, /getLocalDatabaseService\(\)\.ensureReady\(\)/, "The startup state machine must await the authoritative local database manager.");
+assert.doesNotMatch(startupState, /integrityReport\(\)/, "Dashboard startup must not repeat a full integrity check.");
 assert.match(dashboardLayout, /startupStartedRef/, "Dashboard startup guard must run only once.");
-assert.match(dashboardLayout, /restoreLicensedWorkspaceContext\(\)/, "Dashboard must restore licensed desktop workspace before redirect decisions.");
+assert.match(startupState, /restoreLicensedWorkspaceContext\(\)/, "The startup state machine must restore licensed desktop workspace before redirect decisions.");
 assert.match(dashboardLayout, /status: "initializing" \| "database-ready" \| "license-valid" \| "business-ready"/, "Dashboard must keep explicit desktop startup phases.");
 assert.match(offlinePage, /LocalDatabaseRecovery/, "Offline activation must render the local database recovery screen.");
 assert.match(offlinePage, /integrityReport\(\)/, "Offline activation must verify local database integrity before writes.");
@@ -56,9 +58,9 @@ assert.doesNotMatch(recovery, /license_key|SUPABASE|PASSWORD|PRIVATE_KEY/i, "Dia
 assert.match(proxy, /BEZGROW_DESKTOP_BUILD === "1"/, "Proxy must distinguish packaged desktop from ordinary localhost web.");
 assert.match(proxy, /localDesktopHost && desktopServerBuild && protectedRoute[\s\S]*NextResponse\.next\(\{ headers: privateHeaders \}\)/, "Packaged desktop protected routes must reach the client license guard with private-route headers.");
 assert.match(proxy, /X-Robots-Tag": "noindex, nofollow, noarchive"/, "Private desktop ERP routes must remain excluded from search indexing.");
-assert.match(startupRedirect, /ensureReady\(\)/, "Startup redirect must wait for local database readiness.");
+assert.match(startupRedirect, /resolveDesktopStartupState\(/, "Startup redirect must delegate to the authoritative desktop startup state machine.");
 assert.doesNotMatch(startupRedirect, /integrityReport\(\)/, "Startup redirect must not repeat a full integrity check.");
-assert.match(startupRedirect, /restoreLicensedWorkspaceContext\(\)/, "Startup redirect must restore licensed workspace before deciding.");
+assert.match(startupState, /restoreLicensedWorkspaceContext\(\)/, "Startup redirect state resolution must restore licensed workspace before deciding.");
 assert.match(loginPage, /ensureReady\(\)/, "Login startup check must wait for local database readiness.");
 assert.doesNotMatch(loginPage, /integrityReport\(\)/, "Login startup must not repeat a full integrity check.");
 assert.match(loginPage, /restoreLicensedWorkspaceContext\(\)/, "Login startup check must restore licensed workspace before deciding.");

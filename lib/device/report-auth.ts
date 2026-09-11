@@ -137,6 +137,44 @@ export async function authenticateDeviceReport(
       await recordFailure(request, requestId, input.deviceId, "registered_platform_mismatch")
       return { ok: false, status: 403, error: "License platform registration does not match.", requestId, code: "license_invalid", licenseStatus: "invalid" }
     }
+
+    const entitlementResult = await adminSupabase
+      .from("entitlements")
+      .select("id,subscription_id,source,status,valid_until")
+      .eq("license_id", parsed.payload.license_id)
+      .maybeSingle()
+    if (entitlementResult.error && !["42P01", "PGRST205"].includes(entitlementResult.error.code || "")) {
+      await recordFailure(request, requestId, input.deviceId, "entitlement_lookup_unavailable")
+      return { ok: false, status: 503, error: "Entitlement verification is temporarily unavailable.", requestId }
+    }
+    const entitlement = entitlementResult.data
+    if (entitlement?.source === "self_service_trial") {
+      const terminalStatus = ["cancelled", "revoked", "suspended", "expired"].includes(String(entitlement.status))
+      const expiresAt = Date.parse(String(entitlement.valid_until || ""))
+      const expired = Number.isFinite(expiresAt) && Date.now() >= expiresAt
+      if (expired && entitlement.status !== "expired") {
+        const timestamp = new Date().toISOString()
+        await Promise.all([
+          adminSupabase.from("entitlements").update({ status: "expired", server_verified_at: timestamp, updated_at: timestamp }).eq("id", entitlement.id),
+          adminSupabase.from("licenses").update({ status: "expired", updated_at: timestamp }).eq("id", parsed.payload.license_id),
+          entitlement.subscription_id
+            ? adminSupabase.from("subscriptions").update({ status: "payment_required", updated_at: timestamp }).eq("id", entitlement.subscription_id).eq("status", "trialing")
+            : Promise.resolve({ error: null }),
+        ])
+      }
+      if (terminalStatus || expired || entitlement.status === "pending_signature") {
+        const status = expired ? "expired" : String(entitlement.status)
+        await recordFailure(request, requestId, input.deviceId, `entitlement_${status}`)
+        return {
+          ok: false,
+          status: 403,
+          error: status === "expired" ? "The free trial has ended." : `Entitlement is ${status.replaceAll("_", " ")}.`,
+          requestId,
+          code: "license_inactive",
+          licenseStatus: status,
+        }
+      }
+    }
     const effectiveStatus = effectiveLicenseStatus(licenseResult.data)
     if (!["active", "trial", "expiring", "grace_period"].includes(effectiveStatus)) {
       await recordFailure(request, requestId, input.deviceId, effectiveStatus)

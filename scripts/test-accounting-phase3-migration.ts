@@ -83,7 +83,7 @@ try {
   `)
   // Reproduce an installed legacy business whose runtime-created chart only had
   // the original five foundational ledgers and no initialization record.
-  // Schema 22 must repair both before any accounting screen is opened.
+  // The accounting migration must repair both before any accounting screen is opened.
   source.exec(`UPDATE chart_of_accounts SET is_system=0
     WHERE organization_id='org:phase3-migration'
       AND system_role NOT IN ('CASH','BANK','ACCOUNTS_RECEIVABLE','INVENTORY','ACCOUNTS_PAYABLE');
@@ -99,12 +99,12 @@ try {
   copyFileSync(productionPath, upgradeCopyPath)
   upgraded = new DatabaseSync(upgradeCopyPath)
   upgraded.exec("PRAGMA foreign_keys=ON")
-  apply(upgraded, 22)
+  for (const migration of localMigrations.filter((candidate) => candidate.version > 21)) apply(upgraded, migration.version)
   assert.equal(scalar(upgraded, "PRAGMA user_version"), LOCAL_DB_VERSION)
   assert.deepEqual(preservedSnapshot(upgraded), before, "Phase 3 migration must preserve every representative Phase 1/2 and control-plane row byte-for-byte.")
 
   const phaseThreeTables = ["accounting_voucher_series", "accounting_dimensions", "accounting_dimension_allocations", "accounting_budgets", "fixed_asset_categories", "fixed_assets", "fixed_asset_depreciation", "fixed_asset_disposals", "tax_rules", "tax_transactions", "gst_return_periods", "gst_import_batches", "gst_import_records", "gst_reconciliations", "statutory_integrations", "e_invoice_preparations", "e_way_bill_preparations", "bank_statement_imports", "bank_statement_lines", "bank_statement_matches", "accounting_audit_events"]
-  for (const table of phaseThreeTables) assert.equal(scalar(upgraded, "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name=?", table), 1, `${table} must exist after schema 21 → 22.`)
+  for (const table of phaseThreeTables) assert.equal(scalar(upgraded, "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name=?", table), 1, `${table} must exist after upgrading schema 21 to the current version.`)
   assert.equal(scalar(upgraded, "SELECT COUNT(*) FROM chart_of_accounts WHERE organization_id='org:phase3-migration' AND system_role IS NOT NULL"), 43)
   assert.equal(scalar(upgraded, "SELECT COUNT(*) FROM accounting_settings WHERE organization_id='org:phase3-migration'"), 1)
   assert.deepEqual({ ...upgraded.prepare(`SELECT accounting_version,activation_date,opening_date,historical_policy,

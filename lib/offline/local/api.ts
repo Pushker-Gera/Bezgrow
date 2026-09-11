@@ -2,7 +2,6 @@
 
 import { isDesktopRuntime, isTauriRuntimeAsync } from "@/lib/desktop/tauri"
 import { createOfflineId, getCachedWorkspaceBootstrap, getOfflineData, putOfflineData, type OfflineAction, type OfflineCollection } from "@/lib/offline/db"
-import { isLicenseRestrictedEndpoint } from "@/lib/license/policy"
 import { localFirstRepositoryAdapter } from "@/lib/offline/local/adapters"
 import {
   createCreditNote,
@@ -1981,7 +1980,9 @@ export async function localApiFetch(input: RequestInfo | URL, init: RequestInit 
 
     const organizationId = await organizationIdFor(url, body)
     if (!organizationId) return { handled: false, response: null }
-    if (isLicenseRestrictedEndpoint(url.pathname, method)) {
+    const mutation = !["GET", "HEAD", "OPTIONS"].includes(method)
+    const readOnlySafeMutation = url.pathname === "/api/backup/verify"
+    if (mutation && !readOnlySafeMutation) {
       await assertLocalWriteAllowed(organizationId, url.pathname)
     }
     if (method === "POST" && body) await applyDatedMutationFinancialYear(url.pathname, body, organizationId)

@@ -31,6 +31,15 @@ export type LicensePayload = {
   issuer_public_key?: string | null
   app_lock?: AppLockProvisioning | null
   notes?: string | null
+  entitlement_id?: string | null
+  entitlement_source?: "self_service_trial" | "legacy_license" | "paid_subscription" | "support_override" | string | null
+  entitlement_status?: "trialing" | "active" | "grace" | "expired" | "cancelled" | "revoked" | "suspended" | string | null
+  subscription_id?: string | null
+  trial_started_at?: string | null
+  trial_ends_at?: string | null
+  valid_from?: string | null
+  valid_until?: string | null
+  server_verified_at?: string | null
 }
 
 export type ParsedLicenseKey = {
@@ -172,7 +181,9 @@ function assertPayload(value: unknown): LicensePayload {
     license_id: String(payload.license_id),
     customer_id: String(payload.customer_id),
     customer_name: String(payload.customer_name),
-    customer_email: payload.customer_email ? String(payload.customer_email) : null,
+    ...(payload.customer_email !== undefined
+      ? { customer_email: payload.customer_email ? String(payload.customer_email) : null }
+      : {}),
     business_id: String(payload.business_id),
     business_name: String(payload.business_name),
     device_id: String(payload.device_id),
@@ -199,15 +210,30 @@ function assertPayload(value: unknown): LicensePayload {
       : {}),
     issued_by_admin: String(payload.issued_by_admin),
     issued_at: String(payload.issued_at),
-    signature_algorithm: payload.signature_algorithm ? String(payload.signature_algorithm) : undefined,
-    issuer_key_id: payload.issuer_key_id ? String(payload.issuer_key_id) : undefined,
-    issuer_public_key: payload.issuer_public_key ? String(payload.issuer_public_key) : undefined,
+    ...(payload.signature_algorithm !== undefined
+      ? { signature_algorithm: payload.signature_algorithm ? String(payload.signature_algorithm) : null }
+      : {}),
+    ...(payload.issuer_key_id !== undefined
+      ? { issuer_key_id: payload.issuer_key_id ? String(payload.issuer_key_id) : null }
+      : {}),
+    ...(payload.issuer_public_key !== undefined
+      ? { issuer_public_key: payload.issuer_public_key ? String(payload.issuer_public_key) : null }
+      : {}),
     // Optional signed fields must remain absent when they were absent from the
     // original payload. Adding `app_lock: null` here invalidated every genuine
     // licence issued before App Lock was introduced because signature
     // verification canonicalizes this parsed object.
     ...(payload.app_lock !== undefined ? { app_lock: payload.app_lock } : {}),
-    notes: payload.notes ? String(payload.notes) : null,
+    ...(payload.notes !== undefined ? { notes: payload.notes ? String(payload.notes) : null } : {}),
+    ...(payload.entitlement_id !== undefined ? { entitlement_id: payload.entitlement_id ? String(payload.entitlement_id) : null } : {}),
+    ...(payload.entitlement_source !== undefined ? { entitlement_source: payload.entitlement_source ? String(payload.entitlement_source) : null } : {}),
+    ...(payload.entitlement_status !== undefined ? { entitlement_status: payload.entitlement_status ? String(payload.entitlement_status) : null } : {}),
+    ...(payload.subscription_id !== undefined ? { subscription_id: payload.subscription_id ? String(payload.subscription_id) : null } : {}),
+    ...(payload.trial_started_at !== undefined ? { trial_started_at: payload.trial_started_at ? String(payload.trial_started_at) : null } : {}),
+    ...(payload.trial_ends_at !== undefined ? { trial_ends_at: payload.trial_ends_at ? String(payload.trial_ends_at) : null } : {}),
+    ...(payload.valid_from !== undefined ? { valid_from: payload.valid_from ? String(payload.valid_from) : null } : {}),
+    ...(payload.valid_until !== undefined ? { valid_until: payload.valid_until ? String(payload.valid_until) : null } : {}),
+    ...(payload.server_verified_at !== undefined ? { server_verified_at: payload.server_verified_at ? String(payload.server_verified_at) : null } : {}),
   }
 }
 

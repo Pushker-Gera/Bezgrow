@@ -8,7 +8,7 @@ import type { StoredLicenseRow } from "@/lib/license/policy"
  */
 export async function verifyStoredLicenseRows(
   rows: StoredLicenseRow[],
-  options: { publicKey: string; deviceId?: string | null }
+  options: { publicKey: string; deviceId?: string | null; expectedBusinessId?: string | null }
 ) {
   const verified: StoredLicenseRow[] = []
   const seen = new Set<string>()
@@ -19,6 +19,7 @@ export async function verifyStoredLicenseRows(
     try {
       const parsed = parseLicenseInput(licenseKey)
       if (options.deviceId && parsed.payload.device_id !== options.deviceId) continue
+      if (options.expectedBusinessId && parsed.payload.business_id !== options.expectedBusinessId) continue
       if (row.id && row.id !== parsed.payload.license_id) continue
       if (!(await verifyLicenseSignature(parsed, options.publicKey))) continue
       if (seen.has(parsed.payload.license_id)) continue
@@ -39,6 +40,16 @@ export async function verifyStoredLicenseRows(
         issued_by_admin: parsed.payload.issued_by_admin,
         issued_at: parsed.payload.issued_at,
         signature: parsed.signatureText,
+        entitlement_id: parsed.payload.entitlement_id,
+        entitlement_source: parsed.payload.entitlement_source,
+        entitlement_status: parsed.payload.entitlement_status,
+        subscription_id: parsed.payload.subscription_id,
+        trial_started_at: parsed.payload.trial_started_at,
+        trial_ends_at: parsed.payload.trial_ends_at,
+        valid_from: parsed.payload.valid_from,
+        valid_until: parsed.payload.valid_until,
+        last_verified_at: newestCheckpoint(row.last_verified_at, parsed.payload.server_verified_at, parsed.payload.issued_at),
+        server_verified_at: newestCheckpoint(row.server_verified_at, parsed.payload.server_verified_at),
       })
     } catch {
       // Invalid persisted rows are ignored and cannot authorize local writes.
@@ -46,4 +57,10 @@ export async function verifyStoredLicenseRows(
   }
 
   return verified
+}
+
+function newestCheckpoint(...values: unknown[]) {
+  return values
+    .filter((value): value is string => typeof value === "string" && Number.isFinite(Date.parse(value)))
+    .sort((left, right) => Date.parse(right) - Date.parse(left))[0] || null
 }

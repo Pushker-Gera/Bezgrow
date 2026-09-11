@@ -7,7 +7,10 @@ export function ok<T extends ApiMeta>(payload: T, init?: ResponseInit) {
 }
 
 export function fail(message = "Request failed.", status = 400, meta?: ApiMeta) {
-  return NextResponse.json({ success: false, error: message, ...meta }, { status })
+  return NextResponse.json(
+    { success: false, error: message, ...meta },
+    { status, headers: { "Cache-Control": "no-store" } },
+  )
 }
 
 export function serverFail() {

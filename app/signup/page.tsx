@@ -1,226 +1,32 @@
 "use client"
 
-import { useEffect, useRef, useState } from "react"
+import Link from "next/link"
+import { useEffect } from "react"
 import { useRouter } from "next/navigation"
 import { BezgrowLogoMark } from "@/components/brand/BezgrowLogoMark"
+import PlatformAdminLauncher from "@/components/desktop/PlatformAdminLauncher"
+import { isTauriRuntimeAsync } from "@/lib/desktop/tauri"
 import { resolveStartupRedirect } from "@/lib/auth/startup-redirect"
 
+/** Account creation belongs to the resumable business-onboarding transaction. */
 export default function SignupPage() {
+  const router = useRouter()
 
-    const router = useRouter()
+  useEffect(() => {
+    let active = true
+    void (async () => {
+      const desktop = await isTauriRuntimeAsync().catch(() => false)
+      if (!active) return
+      if (!desktop) {
+        router.replace("/download?erp=desktop_local_only")
+        return
+      }
+      const existing = await resolveStartupRedirect("/dashboard").catch(() => null)
+      if (!active) return
+      router.replace(existing || "/create-business")
+    })()
+    return () => { active = false }
+  }, [router])
 
-    const [fullName, setFullName] = useState("")
-    const [businessName, setBusinessName] = useState("")
-    const [email, setEmail] = useState("")
-    const [password, setPassword] = useState("")
-    const [termsAccepted, setTermsAccepted] = useState(false)
-    const [loading, setLoading] = useState(false)
-    const [checkingSession, setCheckingSession] = useState(true)
-    const [statusMessage, setStatusMessage] = useState("")
-    const [errorMessage, setErrorMessage] = useState("")
-    const sessionCheckStarted = useRef(false)
-
-    useEffect(() => {
-        if (sessionCheckStarted.current) return
-        sessionCheckStarted.current = true
-        let active = true
-
-        queueMicrotask(() => {
-            resolveStartupRedirect("/dashboard")
-                .then((redirectPath) => {
-                    if (!active) return
-                    if (redirectPath) {
-                        window.location.replace(redirectPath)
-                        return
-                    }
-                    setCheckingSession(false)
-                })
-                .catch(() => {
-                    if (active) setCheckingSession(false)
-                })
-        })
-
-        return () => {
-            active = false
-        }
-    }, [])
-
-    async function signup() {
-
-        try {
-
-            setLoading(true)
-            setStatusMessage("")
-            setErrorMessage("")
-
-            if (!navigator.onLine) {
-                setErrorMessage("Internet required to create your account. You can activate the desktop app with a license after setup.")
-                setLoading(false)
-                return
-            }
-
-            const cleanFullName = fullName.trim()
-            const cleanBusinessName = businessName.trim()
-            const cleanEmail = email.trim()
-
-            if (!cleanFullName || !cleanBusinessName || !cleanEmail || !password) {
-                setErrorMessage("Please fill all fields")
-                setLoading(false)
-                return
-            }
-
-            if (password.length < 8 || !/[A-Za-z]/.test(password) || !/[0-9]/.test(password)) {
-                setErrorMessage("Password must be at least 8 characters and include a letter and number.")
-                setLoading(false)
-                return
-            }
-
-            if (!termsAccepted) {
-                setErrorMessage("Please accept the terms and privacy policy.")
-                setLoading(false)
-                return
-            }
-
-            const response = await fetch("/api/auth/register", {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({
-                    fullName: cleanFullName,
-                    businessName: cleanBusinessName,
-                    email: cleanEmail,
-                    password,
-                    termsAccepted,
-                }),
-            })
-
-            const result = await response.json()
-
-            if (!response.ok) {
-                setErrorMessage(result.error || result.message || "Account could not be created.")
-                setLoading(false)
-                return
-            }
-
-            setStatusMessage("Account created. Activate Bezgrow with your license key.")
-
-            setTimeout(() => {
-                router.push("/offline")
-            }, 1500)
-
-        } catch {
-
-            setErrorMessage("Something went wrong")
-
-        } finally {
-
-            setLoading(false)
-
-        }
-
-    }
-
-    if (checkingSession) {
-        return (
-            <div className="inventory-grid-bg flex min-h-dvh items-center justify-center px-3 py-5 text-white sm:px-5 sm:py-8">
-                <div className="w-full max-w-md rounded-[22px] border border-white/10 bg-neutral-950/85 p-5 shadow-[0_28px_120px_rgba(0,0,0,0.45)] backdrop-blur-xl sm:rounded-[28px] sm:p-8">
-                    <div className="mb-5 flex items-center gap-3">
-                        <BezgrowLogoMark className="h-10 w-10" size={40} priority />
-                        <span className="text-base font-black">Bezgrow</span>
-                    </div>
-                    <h1 className="text-2xl font-black">Opening Bezgrow</h1>
-                    <p className="mt-2 text-sm leading-6 text-gray-400">Checking your saved session.</p>
-                </div>
-            </div>
-        )
-    }
-
-    return (
-        <div className="inventory-grid-bg flex min-h-dvh items-center justify-center px-3 py-5 text-white sm:px-5 sm:py-8">
-
-            <div className="w-full max-w-md rounded-[22px] border border-white/10 bg-neutral-950/85 p-5 shadow-[0_28px_120px_rgba(0,0,0,0.45)] backdrop-blur-xl sm:rounded-[28px] sm:p-8">
-
-                <div className="mb-5 flex items-center gap-3">
-                    <BezgrowLogoMark className="h-10 w-10" size={40} priority />
-                    <span className="text-base font-black">Bezgrow</span>
-                </div>
-
-                <h1 className="mb-2 text-2xl font-bold sm:text-3xl">Create Account</h1>
-
-                <p className="mb-5 text-sm leading-6 text-gray-400 sm:mb-6">
-                    Create your business account. Your admin-issued license unlocks Bezgrow on this device.
-                </p>
-
-                {statusMessage && (
-                    <div className="bg-green-900 border border-green-600 text-green-300 p-3 rounded mb-4 text-sm">
-                        {statusMessage}
-                    </div>
-                )}
-
-                {errorMessage && (
-                    <div className="bg-red-950/70 border border-red-500/60 text-red-200 p-3 rounded mb-4 text-sm">
-                        {errorMessage}
-                    </div>
-                )}
-
-                <input
-                    type="text"
-                    placeholder="Full Name"
-                    value={fullName}
-                    className="mb-4 min-h-12 w-full rounded-lg border border-gray-700 bg-black p-3 outline-none focus:border-cyan-300"
-                    onChange={(e) => setFullName(e.target.value)}
-                />
-
-                <input
-                    type="text"
-                    placeholder="Business Name"
-                    value={businessName}
-                    className="mb-4 min-h-12 w-full rounded-lg border border-gray-700 bg-black p-3 outline-none focus:border-cyan-300"
-                    onChange={(e) => setBusinessName(e.target.value)}
-                />
-
-                <input
-                    type="email"
-                    placeholder="Business Email"
-                    value={email}
-                    className="mb-4 min-h-12 w-full rounded-lg border border-gray-700 bg-black p-3 outline-none focus:border-cyan-300"
-                    onChange={(e) => setEmail(e.target.value)}
-                />
-
-                <input
-                    type="password"
-                    placeholder="Create Password"
-                    value={password}
-                    className="mb-2 min-h-12 w-full rounded-lg border border-gray-700 bg-black p-3 outline-none focus:border-cyan-300"
-                    onChange={(e) => setPassword(e.target.value)}
-                />
-                <p className="mb-6 text-xs leading-5 text-gray-500">
-                    Use at least 8 characters with one letter and one number.
-                </p>
-
-                <label className="mb-6 flex items-start gap-3 text-sm leading-5 text-gray-400">
-                    <input
-                        type="checkbox"
-                        checked={termsAccepted}
-                        onChange={(e) => setTermsAccepted(e.target.checked)}
-                        className="mt-1"
-                    />
-                    <span>I agree to the terms, privacy policy, and license-based access process.</span>
-                </label>
-
-                <button
-                    onClick={signup}
-                    disabled={loading}
-                    className="min-h-12 w-full rounded-lg bg-white py-3 font-semibold text-black disabled:opacity-50"
-                >
-                    {loading ? "Creating Account..." : "Create Account"}
-                </button>
-
-                <p className="mt-4 text-center text-sm text-gray-500">
-                    Already have a license key? Open the activation page after creating your account.
-                </p>
-
-            </div>
-
-        </div>
-    )
+  return <main className="flex min-h-dvh items-center justify-center bg-[#020505] px-5 text-white"><section className="w-full max-w-md rounded-[30px] border border-white/10 bg-white/[0.04] p-8 text-center"><BezgrowLogoMark className="mx-auto h-14 w-14" size={56} priority /><h1 className="mt-5 text-3xl font-black">Opening business setup</h1><p className="mt-3 text-sm leading-6 text-neutral-400">Your Bezgrow account, local business, and 30-day trial are created together so an interrupted setup can resume safely.</p><Link href="/create-business" className="mt-7 flex min-h-12 items-center justify-center rounded-2xl bg-cyan-300 px-5 font-black text-black">Continue</Link><PlatformAdminLauncher className="mt-3" /></section></main>
 }

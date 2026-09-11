@@ -63,6 +63,7 @@ type DesktopSqlStatement = {
   query: string
   bindValues: SqlValue[]
   ignoreDuplicateColumn?: boolean
+  licenseKey?: string | null
 }
 
 type DesktopTransactionResult = {
@@ -138,6 +139,19 @@ export class LocalDatabaseService {
   private transactionTail: Promise<void> = Promise.resolve()
   private startupAttempts = 0
   private recentOperationErrors: OperationDiagnostic[] = []
+  private nativeLicenseKey: string | null | undefined
+
+  setNativeEntitlementKey(licenseKey: string | null) {
+    this.nativeLicenseKey = licenseKey?.trim() || null
+  }
+
+  private async getNativeEntitlementKey() {
+    if (this.nativeLicenseKey !== undefined) return this.nativeLicenseKey
+    this.nativeLicenseKey = await invokeTauri<string | null>("read_secret", {
+      key: "bezgrow-offline-license-key",
+    }).catch(() => null)
+    return this.nativeLicenseKey
+  }
 
   async isAvailable() {
     return isDesktopRuntime()
@@ -376,15 +390,14 @@ export class LocalDatabaseService {
 
     this.primaryConnectionPromise = this.withTemporaryLockRetry(async () => {
       const authoritativeConnection: SqlExecutor = {
-        execute: (query, bindValues = []) =>
-          this.withTemporaryLockRetry(() =>
+        execute: async (query, bindValues = []) => {
+          const licenseKey = await this.getNativeEntitlementKey()
+          return this.withTemporaryLockRetry(() =>
             invokeTauri<number>("desktop_execute", {
-              statement: {
-                query,
-                bindValues,
-              },
+              statement: { query, bindValues, licenseKey },
             })
-          ),
+          )
+        },
         select: <T>(query: string, bindValues: SqlValue[] = []) =>
           this.withTemporaryLockRetry(() =>
             invokeTauri<T[]>("desktop_select", {
@@ -416,9 +429,10 @@ export class LocalDatabaseService {
 
   private async executeNativeTransaction(statements: DesktopSqlStatement[]) {
     if (statements.length === 0) return { statements: 0, rowsAffected: 0 }
+    const licenseKey = await this.getNativeEntitlementKey()
     return this.withTemporaryLockRetry(() =>
       invokeTauri<DesktopTransactionResult>("desktop_execute_transaction", {
-        statements,
+        statements: statements.map((statement) => ({ ...statement, licenseKey })),
       })
     )
   }

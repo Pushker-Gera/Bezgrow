@@ -79,7 +79,7 @@ export async function GET(request: Request) {
     const rows = result.data || []
     const customerIds = rows.map((row) => row.platform_customer_id).filter(Boolean)
     const businessIds = rows.map((row) => row.id)
-    const [customers, licenses, devices] = await Promise.all([
+    const [customers, licenses, devices, entitlements, subscriptions] = await Promise.all([
       customerIds.length
         ? adminSupabase.from("platform_customers").select("id,name,email").in("id", customerIds)
         : Promise.resolve({ data: [], error: null }),
@@ -96,8 +96,14 @@ export async function GET(request: Request) {
             .select("id,platform_business_id,device_id,last_reported_at")
             .in("platform_business_id", businessIds)
         : Promise.resolve({ data: [], error: null }),
+      businessIds.length
+        ? adminSupabase.from("entitlements").select("id,platform_business_id,subscription_id,source,status,trial_started_at,trial_ends_at,valid_until,server_verified_at").in("platform_business_id", businessIds).order("created_at", { ascending: false })
+        : Promise.resolve({ data: [], error: null }),
+      businessIds.length
+        ? adminSupabase.from("subscriptions").select("id,platform_business_id,plan_code,status,current_period_start,current_period_end,trial_started_at,trial_ends_at,provider").in("platform_business_id", businessIds).order("created_at", { ascending: false })
+        : Promise.resolve({ data: [], error: null }),
     ])
-    if (customers.error || licenses.error || devices.error) {
+    if (customers.error || licenses.error || devices.error || entitlements.error || subscriptions.error) {
       return adminFail(context, "Business metadata relationships failed to load.", 500)
     }
 
@@ -117,18 +123,38 @@ export async function GET(request: Request) {
         deviceMap.set(device.platform_business_id, device)
       }
     }
+    const entitlementMap = new Map<string, Record<string, unknown>>()
+    for (const entitlement of entitlements.data || []) {
+      if (entitlement.platform_business_id && !entitlementMap.has(entitlement.platform_business_id)) entitlementMap.set(entitlement.platform_business_id, entitlement)
+    }
+    const subscriptionMap = new Map<string, Record<string, unknown>>()
+    for (const subscription of subscriptions.data || []) {
+      if (subscription.platform_business_id && !subscriptionMap.has(subscription.platform_business_id)) subscriptionMap.set(subscription.platform_business_id, subscription)
+    }
 
-    const data = rows.map((business) => ({
+    const data = rows.map((business) => {
+      const entitlement = entitlementMap.get(business.id) || null
+      const subscription = subscriptionMap.get(business.id) || null
+      return {
         ...business,
         customer: customerMap.get(business.platform_customer_id) || null,
         license: licenseMap.get(business.id) || null,
         device: deviceMap.get(business.id) || null,
+        entitlement,
+        subscription,
+        entitlement_source: entitlement?.source || null,
+        entitlement_status: entitlement?.status || null,
+        trial_started_at: entitlement?.trial_started_at || subscription?.trial_started_at || null,
+        trial_ends_at: entitlement?.trial_ends_at || subscription?.trial_ends_at || null,
+        subscription_status: subscription?.status || null,
+        subscription_plan_code: subscription?.plan_code || null,
         local_data_state:
           business.cloud_backup_enabled
             ? "ERP local-only; backup customer-controlled"
             : "Local-only",
         last_reported_label: deviceMap.get(business.id)?.last_reported_at || "Never",
-      }))
+      }
+    })
     if (exportMode) {
       return csvResponse(
         `bezgrow-platform-businesses-${new Date().toISOString().slice(0, 10)}.csv`,
@@ -138,6 +164,12 @@ export async function GET(request: Request) {
           "business_name",
           "plan_name",
           "status",
+          "entitlement_source",
+          "entitlement_status",
+          "trial_started_at",
+          "trial_ends_at",
+          "subscription_status",
+          "subscription_plan_code",
           "platform",
           "app_version",
           "update_channel",

@@ -21,6 +21,7 @@ const FORWARDED_HEADERS = [
 ]
 const ALLOWED_CONTROL_PLANE_PATHS = [
   "/api/auth/",
+  "/api/entitlements/",
   "/api/desktop-auth/",
   "/api/license/verify",
   "/api/devices/checkin",
@@ -71,6 +72,9 @@ async function proxyRequest(request: Request) {
 
   const target = new URL(apiPath, cloudOrigin())
   const headers = new Headers()
+  // The packaged desktop server is the same-origin caller from the user's
+  // perspective. Preserve that guarantee for upstream CSRF validation.
+  headers.set("origin", target.origin)
 
   FORWARDED_HEADERS.forEach((name) => {
     const value = request.headers.get(name)

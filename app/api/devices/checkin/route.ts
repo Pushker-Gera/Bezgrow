@@ -99,6 +99,7 @@ export async function POST(request: Request) {
         code: auth.code || "device_report_rejected",
         licenseStatus: auth.licenseStatus || null,
         authoritative: Boolean(auth.licenseStatus),
+        serverTime: new Date().toISOString(),
       },
       { status: auth.status, headers: { "Cache-Control": "no-store", "X-Request-Id": auth.requestId } }
     )

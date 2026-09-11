@@ -2,9 +2,12 @@
 
 import { useEffect, useMemo, useRef, useState } from "react"
 import { useRouter } from "next/navigation"
+import Link from "next/link"
 import { useDebounce } from "use-debounce"
 import AppUpdatesPanel from "@/components/AppUpdatesPanel"
 import DesktopDiagnosticsPanel from "@/components/settings/DesktopDiagnosticsPanel"
+import PlatformAdminLauncher from "@/components/desktop/PlatformAdminLauncher"
+import SubscriptionSummary from "@/components/settings/SubscriptionSummary"
 import { FinancialYearManagement } from "@/components/financial-years/FinancialYearManagement"
 import { loadStoredPrintSettings, persistPrintSettings, readStoredPrintSettings, saveStoredPrintSettings } from "@/components/print/settings/defaults"
 import type { PrintFormat, PrintSettings } from "@/components/print/types"
@@ -814,6 +817,11 @@ export default function SettingsPage() {
           </div>
         )}
 
+        <section className="flex flex-col justify-between gap-5 rounded-[32px] border border-cyan-300/20 bg-cyan-300/[0.055] p-6 sm:flex-row sm:items-center">
+          <div><p className="text-xs font-black uppercase tracking-[0.18em] text-cyan-200">Subscription & entitlement</p><SubscriptionSummary organizationId={organizationId} /><p className="mt-2 text-sm leading-6 text-neutral-400">View the signed trial deadline, refresh entitlement state, or continue safely in read-only mode after expiry.</p></div>
+          <Link href="/subscription" className="flex min-h-12 shrink-0 items-center justify-center rounded-2xl bg-cyan-300 px-6 font-black text-black">Manage subscription</Link>
+        </section>
+
         <section className="grid grid-cols-1 gap-6 2xl:grid-cols-[1fr,420px]">
           <div className="space-y-6">
             <div className="rounded-[36px] border border-white/10 bg-white/[0.035] p-7 backdrop-blur-2xl" data-enter-navigation="true">
@@ -1165,6 +1173,7 @@ export default function SettingsPage() {
                   onChange={(event) => void restoreBackup(event.target.files?.[0] || null)}
                 />
               </div>
+              <PlatformAdminLauncher className="mt-3" />
             </div>
 
             <div className="rounded-[36px] border border-white/10 bg-white/[0.035] p-7 backdrop-blur-2xl">

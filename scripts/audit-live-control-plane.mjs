@@ -16,8 +16,8 @@ const supabase = createClient(supabaseUrl, serviceRoleKey, {
 const readiness = await supabase.rpc("admin_control_plane_current_schema_status")
 if (readiness.error) throw readiness.error
 assert.equal(readiness.data?.ready, true, JSON.stringify(readiness.data?.missing || {}))
-assert.equal(readiness.data?.expectedVersion, 2026082401)
-assert.ok(Number(readiness.data?.actualVersion) >= 2026082402)
+assert.equal(readiness.data?.expectedVersion, 2026090810)
+assert.ok(Number(readiness.data?.actualVersion) >= 2026090810)
 
 const areas = {
   licenses: [

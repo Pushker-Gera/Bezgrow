@@ -5,6 +5,7 @@ import { useCallback, useEffect, useState } from "react"
 import type { Session } from "@supabase/supabase-js"
 import { useRouter } from "next/navigation"
 import { BezgrowLogoMark } from "@/components/brand/BezgrowLogoMark"
+import PlatformAdminLauncher from "@/components/desktop/PlatformAdminLauncher"
 import { completeDesktopAuthCallback } from "@/lib/desktop/auth-callback"
 import {
     isDesktopExplicitlyLoggedOut,
@@ -588,6 +589,8 @@ export default function LoginPage() {
                         ? "Online-only platform access. Customer ERP data remains local."
                         : "Secure access for your business account."}
                 </p>
+
+                {!adminLoginView && <PlatformAdminLauncher className="mt-4" />}
 
             </form>
 

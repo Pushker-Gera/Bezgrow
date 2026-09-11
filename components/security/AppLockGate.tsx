@@ -8,6 +8,7 @@ import {
   APP_LOCK_CREDENTIAL_CHANGED_EVENT,
   APP_LOCK_EVENT,
   APP_LOCK_PROVISIONING_STATUS_EVENT,
+  createLocalAppPassword,
   getAppLockStatus,
   readAutoLockDelay,
   type AppLockProvisioningStatus,
@@ -20,7 +21,6 @@ import {
   type AppLockState,
 } from "@/lib/app-lock/state"
 import {
-  activateOfflineLicense,
   localLicenseSnapshot,
   reconcileLocalAppLockCredential,
   revalidateLocalLicenseWithControlPlane,
@@ -51,16 +51,17 @@ function throttleDelay(attempts: number) {
 export function AppLockGate({ businessName, children }: { businessName: string; children: ReactNode }) {
   const [gate, setGate] = useState<GateState>("CHECKING")
   const [password, setPassword] = useState("")
+  const [setupPassword, setSetupPassword] = useState("")
+  const [setupConfirmation, setSetupConfirmation] = useState("")
   const [showPassword, setShowPassword] = useState(false)
   const [capsLock, setCapsLock] = useState(false)
   const [error, setError] = useState("")
   const [submitting, setSubmitting] = useState(false)
-  const [refreshing, setRefreshing] = useState(false)
+  const [, setRefreshing] = useState(false)
   const [provisioningStatus, setProvisioningStatus] = useState("Checking for app-access credential…")
   const [blockedUntil, setBlockedUntil] = useState(0)
   const [now, setNow] = useState(Date.now())
   const passwordRef = useRef<HTMLInputElement | null>(null)
-  const fileInputRef = useRef<HTMLInputElement | null>(null)
   const refreshRunningRef = useRef(false)
   const lastAutomaticRefreshRef = useRef(0)
   const mountedRef = useRef(false)
@@ -69,12 +70,11 @@ export function AppLockGate({ businessName, children }: { businessName: string; 
   const loadCredentialState = useCallback(async () => {
     const revision = credentialRevisionRef.current
     try {
-      const [status, snapshot] = await Promise.all([getAppLockStatus(), localLicenseSnapshot()])
+      const status = await getAppLockStatus()
       if (!mountedRef.current || revision !== credentialRevisionRef.current) return
-      const next = appLockStateFrom({ licenceValid: snapshot.allowed, credentialExists: status.enabled })
+      const next = appLockStateFrom({ licenceValid: true, credentialExists: status.enabled })
       setBlockedUntil(readThrottle().blockedUntil)
       setGate(next)
-      if (!snapshot.allowed) setProvisioningStatus(snapshot.reason || "The local licence is not valid.")
       return next
     } catch (cause) {
       if (!mountedRef.current || revision !== credentialRevisionRef.current) return
@@ -117,13 +117,8 @@ export function AppLockGate({ businessName, children }: { businessName: string; 
         })
       }
 
-      const [status, snapshot] = await Promise.all([getAppLockStatus(), localLicenseSnapshot()])
+      const status = await getAppLockStatus()
       if (!mountedRef.current) return
-      if (!snapshot.allowed) {
-        setGate(APP_LOCK_STATES.noValidLicence)
-        setProvisioningStatus(snapshot.reason || "The local licence is not valid.")
-        return
-      }
       if (status.enabled) {
         setProvisioningStatus("App Lock ready.")
         // An unchanged credential does not interrupt an unlocked workspace.
@@ -136,12 +131,12 @@ export function AppLockGate({ businessName, children }: { businessName: string; 
       setProvisioningStatus(
         localReconciliationError
           || (checkStatus === "offline"
-          ? "Connect to the internet to receive a new administrator-authorized credential."
+          ? "Choose an App Password to protect this local workspace."
           : checkStatus === "network_error"
           ? "The control plane could not be reached. Check the connection and try again."
           : checkStatus === "rejected"
-            ? "The licence refresh was not accepted. Import the latest signed licence or contact support."
-            : "No app-access credential is available yet. Ask the administrator to authorize a reset, then refresh again."),
+            ? "The entitlement refresh was not accepted. You can still configure App Lock locally."
+            : "Choose an App Password to protect this local workspace."),
       )
     } catch (cause) {
       if (!mountedRef.current) return
@@ -323,33 +318,35 @@ export function AppLockGate({ businessName, children }: { businessName: string; 
     }
   }
 
-  async function importLicence(file: File | null) {
-    if (!file || refreshRunningRef.current) return
-    refreshRunningRef.current = true
-    setRefreshing(true)
+  async function configureAppLock(event: FormEvent) {
+    event.preventDefault()
+    if (setupPassword !== setupConfirmation) {
+      setError("App Passwords do not match.")
+      return
+    }
+    setSubmitting(true)
     setError("")
-    setProvisioningStatus("Verifying the signed licence…")
     try {
-      const text = await file.text()
-      let input: unknown = text
-      try {
-        input = JSON.parse(text)
-      } catch {
-        // Plain signed licence keys are accepted directly.
+      const snapshot = await localLicenseSnapshot()
+      const license = snapshot.license as Record<string, unknown> | null | undefined
+      await createLocalAppPassword({
+        password: setupPassword,
+        deviceId: snapshot.device_id,
+        licenseId: String(license?.id || "local-app-lock"),
+        businessId: String(license?.business_id || license?.organization_id || "global"),
+      })
+      const businessId = String(license?.business_id || license?.organization_id || "global")
+      if (businessId !== "global") {
+        const { markOnboardingComplete } = await import("@/lib/onboarding/local")
+        await markOnboardingComplete(businessId).catch(() => undefined)
       }
-      await activateOfflineLicense(input)
-      const status = await getAppLockStatus()
-      if (!status.enabled) throw new Error("The imported licence does not contain an app-access credential.")
-      setProvisioningStatus("App Lock ready.")
+      setSetupPassword("")
+      setSetupConfirmation("")
       setGate(APP_LOCK_STATES.locked)
     } catch (cause) {
-      const message = cause instanceof Error ? cause.message : "The licence could not be imported."
-      setError(message)
-      setProvisioningStatus(message)
+      setError(cause instanceof Error ? cause.message : "App Lock could not be configured.")
     } finally {
-      refreshRunningRef.current = false
-      setRefreshing(false)
-      if (fileInputRef.current) fileInputRef.current.value = ""
+      setSubmitting(false)
     }
   }
 
@@ -371,60 +368,28 @@ export function AppLockGate({ businessName, children }: { businessName: string; 
         {gate === "CHECKING" ? (
           <div className="py-16 text-center text-sm font-semibold text-neutral-400">Securing this workspace…</div>
         ) : gate === APP_LOCK_STATES.provisioningRequired ? (
-          <div className="mt-8">
+          <form className="mt-8" onSubmit={configureAppLock}>
             <h1 className="text-2xl font-black">App Lock setup required</h1>
             <p className="mt-4 text-sm leading-6 text-neutral-400">
-              This device has not yet received its app-access password credential.
+              Choose a device-local App Password. It is separate from your account password and subscription.
             </p>
             <div role="status" className="mt-5 rounded-2xl border border-cyan-300/20 bg-cyan-300/[0.06] px-4 py-3 text-sm leading-6 text-cyan-100">
               {provisioningStatus}
             </div>
-            <div className="mt-5 grid gap-3 sm:grid-cols-2">
-              <button
-                type="button"
-                disabled={refreshing}
-                onClick={() => void refreshAppLock(true)}
-                className="min-h-12 rounded-2xl bg-cyan-300 px-4 text-sm font-black text-black disabled:cursor-wait disabled:opacity-50"
-              >
-                {refreshing ? "Refreshing…" : "Refresh App Lock"}
-              </button>
-              <button
-                type="button"
-                disabled={refreshing}
-                onClick={() => fileInputRef.current?.click()}
-                className="min-h-12 rounded-2xl border border-white/15 bg-white/[0.06] px-4 text-sm font-black disabled:cursor-wait disabled:opacity-50"
-              >
-                Import / Refresh Licence
-              </button>
-              <input
-                ref={fileInputRef}
-                type="file"
-                accept="application/json,.json,.lic,.txt"
-                className="hidden"
-                onChange={(event) => void importLicence(event.target.files?.[0] || null)}
-              />
-            </div>
+            <label className="mt-5 block text-sm font-bold" htmlFor="new-app-lock-password">App Password</label>
+            <input id="new-app-lock-password" type="password" autoComplete="new-password" value={setupPassword} onChange={(event) => setSetupPassword(event.target.value)} className="mt-2 h-14 w-full rounded-2xl border border-white/10 bg-black px-4 outline-none focus:border-cyan-300/50" />
+            <label className="mt-4 block text-sm font-bold" htmlFor="confirm-app-lock-password">Confirm App Password</label>
+            <input id="confirm-app-lock-password" type="password" autoComplete="new-password" value={setupConfirmation} onChange={(event) => setSetupConfirmation(event.target.value)} className="mt-2 h-14 w-full rounded-2xl border border-white/10 bg-black px-4 outline-none focus:border-cyan-300/50" />
+            <p className="mt-3 text-xs leading-5 text-neutral-500">Use at least 6 letters and numbers, or a numeric PIN. It is stored in the OS credential store.</p>
+            <button type="submit" disabled={submitting} className="mt-5 min-h-12 w-full rounded-2xl bg-cyan-300 px-4 text-sm font-black text-black disabled:opacity-50">
+              {submitting ? "Securing workspace…" : "Create App Lock"}
+            </button>
             {error && <p role="alert" className="mt-3 text-sm leading-5 text-red-200">{error}</p>}
-          </div>
+          </form>
         ) : gate === APP_LOCK_STATES.noValidLicence ? (
           <div className="mt-8">
-            <h1 className="text-2xl font-black">Licence refresh required</h1>
-            <p className="mt-4 text-sm leading-6 text-neutral-400">{provisioningStatus}</p>
-            <button
-              type="button"
-              disabled={refreshing}
-              onClick={() => fileInputRef.current?.click()}
-              className="mt-5 min-h-12 w-full rounded-2xl bg-white px-4 text-sm font-black text-black disabled:opacity-50"
-            >
-              Import / Refresh Licence
-            </button>
-            <input
-              ref={fileInputRef}
-              type="file"
-              accept="application/json,.json,.lic,.txt"
-              className="hidden"
-              onChange={(event) => void importLicence(event.target.files?.[0] || null)}
-            />
+            <h1 className="text-2xl font-black">App Lock unavailable</h1>
+            <p className="mt-4 text-sm leading-6 text-neutral-400">Retry local App Lock setup.</p>
           </div>
         ) : gate === "FAILED" ? (
           <div className="mt-8">

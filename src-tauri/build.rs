@@ -3,6 +3,8 @@ fn main() {
     println!("cargo:rerun-if-env-changed=BEZGROW_UPDATER_PUBLIC_KEY");
     println!("cargo:rerun-if-env-changed=BEZGROW_BUILD_COMMIT");
     println!("cargo:rerun-if-env-changed=BEZGROW_BUILD_TIMESTAMP");
+    println!("cargo:rerun-if-env-changed=BEZGROW_LICENSE_PUBLIC_KEY");
+    println!("cargo:rerun-if-env-changed=NEXT_PUBLIC_BEZGROW_LICENSE_PUBLIC_KEY");
     let build_commit = std::env::var("BEZGROW_BUILD_COMMIT")
         .ok()
         .filter(|value| value.len() == 40 && value.bytes().all(|byte| byte.is_ascii_hexdigit()))
@@ -13,6 +15,19 @@ fn main() {
         .unwrap_or_else(|| "development".to_string());
     println!("cargo:rustc-env=BEZGROW_BUILD_COMMIT={build_commit}");
     println!("cargo:rustc-env=BEZGROW_BUILD_TIMESTAMP={build_timestamp}");
+    if let Some(public_key) = std::env::var("BEZGROW_LICENSE_PUBLIC_KEY")
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .or_else(|| {
+            std::env::var("NEXT_PUBLIC_BEZGROW_LICENSE_PUBLIC_KEY")
+                .ok()
+                .map(|value| value.trim().to_string())
+                .filter(|value| !value.is_empty())
+        })
+    {
+        println!("cargo:rustc-env=BEZGROW_LICENSE_PUBLIC_KEY={public_key}");
+    }
     if std::env::var("BEZGROW_UPDATER_PUBLIC_KEY")
         .map(|value| !value.trim().is_empty())
         .unwrap_or(false)

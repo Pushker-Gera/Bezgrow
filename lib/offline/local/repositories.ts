@@ -1353,6 +1353,15 @@ export class LicenseRepository extends TableRepository {
       last_verified_at: text(row, ["last_verified_at"]),
       signature: text(row, ["signature"]),
       device_limit: sqlValue(row.device_limit),
+      entitlement_id: text(row, ["entitlement_id"]),
+      entitlement_source: text(row, ["entitlement_source"]),
+      entitlement_status: text(row, ["entitlement_status"]),
+      subscription_id: text(row, ["subscription_id"]),
+      trial_started_at: text(row, ["trial_started_at"]),
+      trial_ends_at: text(row, ["trial_ends_at"]),
+      valid_from: text(row, ["valid_from"]),
+      valid_until: text(row, ["valid_until"]),
+      server_verified_at: text(row, ["server_verified_at"]),
     }))
   }
 }

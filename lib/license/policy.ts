@@ -12,6 +12,15 @@ export type StoredLicenseRow = Record<string, unknown> & {
   last_verified_at?: string | null
   allowed_features?: string | null
   issued_at?: string | null
+  entitlement_id?: string | null
+  entitlement_source?: string | null
+  entitlement_status?: string | null
+  subscription_id?: string | null
+  trial_started_at?: string | null
+  trial_ends_at?: string | null
+  valid_from?: string | null
+  valid_until?: string | null
+  server_verified_at?: string | null
 }
 
 export type LicensePolicyStatus =
@@ -28,7 +37,10 @@ export type LicensePolicyStatus =
   | "clock_rollback"
 
 export type LicensePolicyResult = {
+  /** Backwards-compatible alias for canWrite. */
   allowed: boolean
+  canRead?: boolean
+  canWrite?: boolean
   status: LicensePolicyStatus
   reason: string
   license?: StoredLicenseRow | null
@@ -187,8 +199,10 @@ export function evaluateStoredLicense(
   if (!license) {
     return {
       allowed: false,
+      canRead: false,
+      canWrite: false,
       status: "not_activated",
-      reason: "Activation required. Enter a valid Bezgrow license to use write actions.",
+      reason: "A signed Bezgrow entitlement is required before business changes can be made.",
       license: null,
       allowedFeatures: [],
     }
@@ -201,6 +215,8 @@ export function evaluateStoredLicense(
   if (deviceId && licenseDeviceId && deviceId !== licenseDeviceId) {
     return {
       allowed: false,
+      canRead: true,
+      canWrite: false,
       status: "device_mismatch",
       reason: "This license was issued for another device.",
       license,
@@ -211,6 +227,8 @@ export function evaluateStoredLicense(
   if (status === "device_mismatch") {
     return {
       allowed: false,
+      canRead: true,
+      canWrite: false,
       status: "device_mismatch",
       reason: "This licence is no longer authorized for this device.",
       license,
@@ -221,6 +239,8 @@ export function evaluateStoredLicense(
   if (status === "revoked") {
     return {
       allowed: false,
+      canRead: true,
+      canWrite: false,
       status: "revoked",
       reason: "Bezgrow licence revoked. Reactivation or a replacement licence is required.",
       license,
@@ -231,6 +251,8 @@ export function evaluateStoredLicense(
   if (status === "cancelled" || status === "canceled" || status === "suspended") {
     return {
       allowed: false,
+      canRead: true,
+      canWrite: false,
       status: "cancelled",
       reason: "Bezgrow licence cancelled. Renew or reactivate the licence to continue write actions.",
       license,
@@ -241,6 +263,8 @@ export function evaluateStoredLicense(
   if (status === "invalid" || status === "replaced") {
     return {
       allowed: false,
+      canRead: true,
+      canWrite: false,
       status: "invalid",
       reason: status === "replaced" ? "This licence key has been replaced." : "Licence validation failed. Reactivation is required.",
       license,
@@ -251,6 +275,8 @@ export function evaluateStoredLicense(
   if (status === "tampered") {
     return {
       allowed: false,
+      canRead: true,
+      canWrite: false,
       status: "tampered",
       reason: "License validation failed. Reactivation is required.",
       license,
@@ -258,10 +284,17 @@ export function evaluateStoredLicense(
     }
   }
 
-  const lastVerified = parseDate(license.last_verified_at)
+  const lastVerifiedCandidates = [
+    parseDate(license.last_verified_at),
+    parseDate(license.server_verified_at),
+    parseDate(license.last_seen_at),
+  ].filter((value): value is Date => Boolean(value))
+  const lastVerified = lastVerifiedCandidates.sort((left, right) => right.getTime() - left.getTime())[0] || null
   if (lastVerified && now.getTime() + 10 * 60 * 1000 < lastVerified.getTime()) {
     return {
       allowed: false,
+      canRead: true,
+      canWrite: false,
       status: "clock_rollback",
       reason: "System clock rollback detected. Reactivation is required.",
       license,
@@ -269,10 +302,12 @@ export function evaluateStoredLicense(
     }
   }
 
-  const expiry = parseDate(license.expiry_date || license.expires_at)
+  const expiry = parseDate(license.valid_until || license.expiry_date || license.expires_at)
   if (!expiry) {
     return {
       allowed: false,
+      canRead: true,
+      canWrite: false,
       status: "tampered",
       reason: "License expiry is missing or invalid.",
       license,
@@ -282,11 +317,13 @@ export function evaluateStoredLicense(
 
   const explicitGrace = parseDate(license.grace_until)
   const graceUntil = explicitGrace || addDays(expiry, numberValue(license.grace_period_days))
-  if (now.getTime() > graceUntil.getTime()) {
+  if (now.getTime() >= graceUntil.getTime()) {
     return {
       allowed: false,
+      canRead: true,
+      canWrite: false,
       status: "expired",
-      reason: "License expired. Import a renewed license to unlock billing and inventory actions.",
+      reason: "Your 30-day Bezgrow free trial has ended. Your business data remains safely stored on this computer.",
       license,
       expiresAt: expiry.toISOString(),
       graceUntil: graceUntil.toISOString(),
@@ -297,6 +334,8 @@ export function evaluateStoredLicense(
   if (status && status !== "active" && status !== "trial" && status !== "grace") {
     return {
       allowed: false,
+      canRead: true,
+      canWrite: false,
       status: "invalid",
       reason: "License status is invalid.",
       license,
@@ -306,9 +345,11 @@ export function evaluateStoredLicense(
     }
   }
 
-  const inGrace = now.getTime() > expiry.getTime()
+  const inGrace = now.getTime() >= expiry.getTime()
   return {
     allowed: true,
+    canRead: true,
+    canWrite: true,
     status: inGrace ? "grace_period" : options.connectivity === "offline" ? "offline_valid_cached" : "valid",
     reason: inGrace
       ? "License is inside the grace period."

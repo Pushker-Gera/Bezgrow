@@ -107,7 +107,8 @@ export default function BusinessesPage() {
             render: (row) => {
               const license = (row.license || {}) as Record<string, unknown>
               const device = (row.device || {}) as Record<string, unknown>
-              return <div><StatusPill value={license.effective_status || "not licensed"} /><p className="mt-2 text-xs">{displayValue(license.id, "No license")}</p><p className="mt-1 text-xs text-neutral-500">{displayValue(device.device_id, "No device")}</p></div>
+              const entitlement = (row.entitlement || {}) as Record<string, unknown>
+              return <div><StatusPill value={entitlement.status || license.effective_status || "not licensed"} /><p className="mt-2 text-xs">{displayValue(entitlement.source, "Legacy licence")}</p><p className="mt-1 text-xs text-neutral-500">Trial ends: {formatAdminDate(entitlement.trial_ends_at)}</p><p className="mt-1 text-xs text-neutral-500">{displayValue(device.device_id, "No device")}</p></div>
             },
           },
           {

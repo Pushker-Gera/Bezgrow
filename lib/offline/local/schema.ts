@@ -1,6 +1,6 @@
 "use client"
 
-export const LOCAL_DB_VERSION = 22
+export const LOCAL_DB_VERSION = 23
 export const LOCAL_DB_URL = "sqlite:bezgrow-offline.db"
 
 export const normalizedTables = [
@@ -84,6 +84,8 @@ export const normalizedTables = [
   "print_templates",
   "license_state",
   "device_activations",
+  "local_account_bindings",
+  "onboarding_attempts",
   "local_audit_logs",
   "backup_manifest",
   "offline_sync_queue",
@@ -2995,6 +2997,58 @@ export const localMigrations: Array<{ version: number; name: string; sql: string
       ...closedFinancialYearMutationTriggers("tax_transactions", "tax_transaction"),
       ...closedFinancialYearMutationTriggers("fixed_asset_depreciation", "fixed_asset_depreciation"),
       ...closedFinancialYearMutationTriggers("fixed_asset_disposals", "fixed_asset_disposal"),
+    ],
+  },
+  {
+    version: 23,
+    name: "phase1_self_service_trial_entitlements",
+    sql: [
+      "ALTER TABLE organizations ADD COLUMN owner_name TEXT",
+      "ALTER TABLE organizations ADD COLUMN owner_phone TEXT",
+      "ALTER TABLE organizations ADD COLUMN postal_code TEXT",
+      "ALTER TABLE organizations ADD COLUMN pan TEXT",
+      "ALTER TABLE organizations ADD COLUMN gst_registered INTEGER NOT NULL DEFAULT 0",
+      "ALTER TABLE organizations ADD COLUMN platform_customer_id TEXT",
+      "ALTER TABLE organizations ADD COLUMN platform_business_id TEXT",
+      "ALTER TABLE license_state ADD COLUMN entitlement_id TEXT",
+      "ALTER TABLE license_state ADD COLUMN entitlement_source TEXT",
+      "ALTER TABLE license_state ADD COLUMN entitlement_status TEXT",
+      "ALTER TABLE license_state ADD COLUMN subscription_id TEXT",
+      "ALTER TABLE license_state ADD COLUMN trial_started_at TEXT",
+      "ALTER TABLE license_state ADD COLUMN trial_ends_at TEXT",
+      "ALTER TABLE license_state ADD COLUMN valid_from TEXT",
+      "ALTER TABLE license_state ADD COLUMN valid_until TEXT",
+      "ALTER TABLE license_state ADD COLUMN server_verified_at TEXT",
+      `CREATE TABLE IF NOT EXISTS local_account_bindings (
+        id TEXT PRIMARY KEY,
+        organization_id TEXT NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+        account_user_id TEXT NOT NULL,
+        account_email TEXT NOT NULL,
+        platform_customer_id TEXT NOT NULL,
+        platform_business_id TEXT NOT NULL,
+        subscription_id TEXT,
+        entitlement_id TEXT NOT NULL,
+        device_id TEXT NOT NULL,
+        bound_at TEXT NOT NULL,
+        last_verified_at TEXT,
+        UNIQUE (organization_id),
+        UNIQUE (entitlement_id),
+        UNIQUE (device_id)
+      )`,
+      `CREATE TABLE IF NOT EXISTS onboarding_attempts (
+        id TEXT PRIMARY KEY,
+        organization_id TEXT NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+        idempotency_key TEXT NOT NULL UNIQUE,
+        stage text NOT NULL CHECK (stage IN ('LOCAL_READY', 'ACCOUNT_READY', 'ENTITLEMENT_READY', 'APP_LOCK_REQUIRED', 'COMPLETED')),
+        owner_email TEXT NOT NULL,
+        request_json TEXT NOT NULL,
+        last_error TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        completed_at TEXT
+      )`,
+      "CREATE INDEX IF NOT EXISTS idx_onboarding_attempts_stage ON onboarding_attempts (stage, updated_at DESC)",
+      "CREATE INDEX IF NOT EXISTS idx_local_account_bindings_account ON local_account_bindings (account_user_id, organization_id)",
     ],
   },
 ]

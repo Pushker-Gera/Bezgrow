@@ -22,7 +22,7 @@ const localApi = readFileSync(path.join(root, "lib/offline/local/api.ts"), "utf8
 const views = readFileSync(path.join(root, "lib/accounting/views.ts"), "utf8")
 const dynamicRoute = readFileSync(path.join(root, "app/dashboard/accounting/[view]/page.tsx"), "utf8")
 const native = readFileSync(path.join(root, "src-tauri/src/lib.rs"), "utf8")
-assert.match(schema, /LOCAL_DB_VERSION = 22/)
+assert.match(schema, /LOCAL_DB_VERSION = 23/)
 for (const table of ["payment_allocations", "party_advances", "advance_allocations", "bank_reconciliations", "accounting_period_locks", "gst_transaction_classifications", "purchase_attachments"]) assert.match(schema, new RegExp(`CREATE TABLE IF NOT EXISTS ${table}`))
 for (const table of ["accounting_voucher_series", "accounting_dimensions", "accounting_budgets", "fixed_assets", "fixed_asset_depreciation", "tax_rules", "tax_transactions", "gst_return_periods", "gst_reconciliations", "statutory_integrations", "bank_statement_imports", "accounting_audit_events"]) assert.match(schema, new RegExp(`CREATE TABLE IF NOT EXISTS ${table}`))
 for (const endpoint of ["/api/purchases/reverse", "/api/accounting/reference-data", "/api/accounting/advances/apply", "/api/accounting/bank-reconciliation/save", "/api/accounting/period-lock", "/api/accounting/period-unlock"]) assert.match(localApi, new RegExp(endpoint.replaceAll("/", "\\/")))
